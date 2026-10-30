@@ -17,7 +17,7 @@ use crate::checkpoints::{
     Checkpoint, TreeVerification, checkpoint_hash, same_tree_head, signature_crypto_violation,
     unauthorized_signature,
 };
-use crate::history::ActivationFold;
+use crate::history::{ActivationFold, ordered_row_misplaced};
 use crate::keys::{KeyTriple, apply_key_claims};
 use crate::merkle::{Digest, Frontier, audit_leaf_hash};
 use crate::role_rebindings::RebindingFold;
@@ -28,6 +28,8 @@ pub(crate) struct PrefixVerifier<'a> {
     /// How many checkpoints have been checked and held.
     held: usize,
     frontier: Frontier,
+    /// Rows from before the order: with any, an activation must follow.
+    legacy_rows: u64,
     keys: HashSet<KeyTriple>,
     failure: Option<TreeVerification>,
     /// The activation once its first row is met, and the first fault in
@@ -48,6 +50,7 @@ impl<'a> PrefixVerifier<'a> {
             anchor,
             held: 0,
             frontier: Frontier::default(),
+            legacy_rows: 0,
             keys: HashSet::new(),
             failure: anchor.and_then(|a| anchor_failure(checkpoints, a)),
             activation: None,
@@ -75,6 +78,13 @@ impl<'a> PrefixVerifier<'a> {
             {
                 self.activation_fault = Some(format!("{}: {fault}", row.transition_id));
             }
+        } else if row.operations.is_none() {
+            self.legacy_rows += 1;
+        } else if self.activation_fault.is_none()
+            && let Some(why) =
+                ordered_row_misplaced(row, self.legacy_rows, self.activation.as_ref())
+        {
+            self.activation_fault = Some(format!("{}: {why}", row.transition_id));
         }
         self.frontier.push(leaf);
         apply_key_claims(&mut self.keys, row);

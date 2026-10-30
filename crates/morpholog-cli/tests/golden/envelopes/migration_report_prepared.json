@@ -3,7 +3,7 @@
     "audit_bytes": 3726000128,
     "baseline_bytes": 83660004,
     "estimated_preparation_ms": 37800,
-    "estimated_writer_pause_ms": 4270,
+    "estimated_writer_pause_ms": 4360,
     "legacy_rows": 3000000,
     "legacy_rows_prepared": 2900000,
     "live_claims": 300000,

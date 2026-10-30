@@ -9,9 +9,10 @@ mod common;
 
 use common::{commit_entry, reset_db, test_pool};
 use morpholog_core::ClaimInstance;
+use morpholog_core::EvalValue;
 use morpholog_postgres::{
-    CHUNK_BYTES, CHUNK_CLAIMS, PgError, PgPool, VerifyOutcome, read_claims_at, testing,
-    verify_replay, write_activation_record_with,
+    CHUNK_BYTES, CHUNK_CLAIMS, Operation, OperationKind, PgError, PgPool, VerifyOutcome,
+    arguments_hash, read_claims_at, testing, verify_replay, write_activation_record_with,
 };
 use morpholog_test_support::subj;
 use uuid::Uuid;
@@ -173,15 +174,16 @@ async fn the_baseline_is_written_in_chunks_the_record_names() {
 }
 
 /// Wide claims meet the byte cap before the claim cap: a chunk closes
-/// early and the next claim opens the next one. A claim no chunk can hold
-/// is refused, and the cutover with it.
+/// early and the next claim opens the next one, through many fetches of
+/// at most a chunk's worth. A claim no chunk can hold is refused, and the
+/// cutover with it.
 #[tokio::test]
 async fn the_byte_cap_closes_a_chunk_early() {
     let pool = test_pool().await;
     common::drain_open_transactions(&pool).await;
     testing::reset_before_activation(&pool).await.unwrap();
-    for i in 0..5u32 {
-        legacy_claim(&pool, &format!("{i}{}", "k".repeat(300)), i).await;
+    for i in 0..13u32 {
+        legacy_claim(&pool, &format!("{i:02}{}", "k".repeat(300)), i).await;
     }
     let refused = activate_with(&pool, CHUNK_CLAIMS, 100).await.unwrap_err();
     assert!(
@@ -196,15 +198,99 @@ async fn the_byte_cap_closes_a_chunk_early() {
     activate_with(&pool, CHUNK_CLAIMS, 900).await.unwrap();
     let rows = first_order(&pool).await;
     let sizes: Vec<i32> = rows.iter().map(|(_, _, n)| *n).collect();
-    assert_eq!(sizes, [2, 2, 1, 0], "{rows:?}");
-    assert_eq!(rows[3].0, "morpholog.activate");
+    assert_eq!(sizes, [2, 2, 2, 2, 2, 2, 1, 0], "{rows:?}");
+    assert_eq!(rows[7].0, "morpholog.activate");
     assert!(matches!(
         verify_replay(&pool, &mut |_| {}).await.unwrap(),
         VerifyOutcome::Consistent {
-            transitions: 9,
-            claims: 5
+            transitions: 21,
+            claims: 13
         }
     ));
+}
+
+/// The cap is the serialised array's exact size: two claims whose array
+/// is the cap fit one chunk; one byte less splits them.
+#[tokio::test]
+async fn the_byte_cap_is_the_arrays_exact_size() {
+    let pool = test_pool().await;
+    common::drain_open_transactions(&pool).await;
+    testing::reset_before_activation(&pool).await.unwrap();
+    let a = legacy_claim(&pool, "a", 0).await;
+    let b = legacy_claim(&pool, "b", 1).await;
+    let op = |k: &str, by: Uuid| Operation {
+        op: OperationKind::Ins,
+        predicate: "X".into(),
+        args: vec![subj(k)],
+        asserted_in: Some(by),
+    };
+    let exact = serde_json::to_vec(&[op("a", a), op("b", b)]).unwrap().len();
+
+    activate_with(&pool, CHUNK_CLAIMS, exact).await.unwrap();
+    let sizes: Vec<i32> = first_order(&pool)
+        .await
+        .iter()
+        .map(|(_, _, n)| *n)
+        .collect();
+    assert_eq!(sizes, [2, 0]);
+
+    testing::reset_before_activation(&pool).await.unwrap();
+    let a = legacy_claim(&pool, "a", 0).await;
+    let b = legacy_claim(&pool, "b", 1).await;
+    let exact = serde_json::to_vec(&[op("a", a), op("b", b)]).unwrap().len();
+    activate_with(&pool, CHUNK_CLAIMS, exact - 1).await.unwrap();
+    let sizes: Vec<i32> = first_order(&pool)
+        .await
+        .iter()
+        .map(|(_, _, n)| *n)
+        .collect();
+    assert_eq!(sizes, [1, 1, 0]);
+}
+
+/// The verifier's key for a claim is the table's: `arguments_hash` as
+/// PostgreSQL computes it, over every kind of value and the characters
+/// its JSON output escapes.
+#[tokio::test]
+async fn the_verifiers_claim_key_is_the_tables() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let shapes: Vec<Vec<EvalValue>> = [
+        serde_json::json!([{"type": "subject", "value": "plain"}]),
+        serde_json::json!([{"type": "subject", "value": "q\"uote \\ back\nnew\ttab \u{1} é ☃"}]),
+        serde_json::json!([{"type": "decimal", "value": "-12.50"}, {"type": "bool", "value": true}]),
+        serde_json::json!([{"type": "date", "value": "2026-02-28"}, {"type": "timestamp", "value": "2026-10-24T14:00:00Z"}]),
+        serde_json::json!([{"type": "duration", "value": "PT6H"}]),
+        serde_json::json!([{"type": "quantity", "value": {"amount": "25000", "unit": "USD"}}]),
+        serde_json::json!([{"type": "collection", "value": [{"type": "subject", "value": "z"}, {"type": "collection", "value": []}]}]),
+        serde_json::json!([]),
+    ]
+    .into_iter()
+    .map(|v| serde_json::from_value(v).unwrap())
+    .collect();
+    let claims: Vec<ClaimInstance> = shapes
+        .iter()
+        .enumerate()
+        .map(|(i, args)| ClaimInstance {
+            predicate: format!("P{i}").into(),
+            args: args.clone(),
+        })
+        .collect();
+    common::seed_claims(&pool, &claims).await;
+    let stored: Vec<(String, serde_json::Value, Vec<u8>)> = sqlx::query_as(
+        "SELECT predicate_name, arguments, arguments_hash FROM morpholog.claims ORDER BY predicate_name",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored.len(), shapes.len());
+    for (predicate, arguments, hash) in stored {
+        let args: Vec<EvalValue> = serde_json::from_value(arguments).unwrap();
+        assert_eq!(
+            arguments_hash(&args).unwrap().to_vec(),
+            hash,
+            "{predicate}: {args:?}"
+        );
+    }
 }
 
 /// A table with no claims activates with the record alone, at ordinal 0,

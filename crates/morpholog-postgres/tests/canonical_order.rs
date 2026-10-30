@@ -324,17 +324,8 @@ async fn the_activation_record_is_the_one_its_prefix_implies() {
         panic!("the record is gone");
     };
     let details: Vec<&str> = conflicts.iter().map(|c| c.detail.as_str()).collect();
-    assert_eq!(details.len(), 2, "{details:?}");
-    assert!(
-        details
-            .iter()
-            .any(|d| d.contains("no activation record between")),
-        "{details:?}"
-    );
-    assert!(
-        details.iter().any(|d| d.contains("and no record")),
-        "{details:?}"
-    );
+    assert_eq!(details.len(), 1, "{details:?}");
+    assert!(details[0].contains("and no record"), "{details:?}");
 }
 
 /// What the order does not promise. A reads X and passes its gate; B

@@ -22,6 +22,7 @@ mod attestation;
 mod audit;
 mod audit_pages;
 mod checkpoints;
+mod claim_key;
 mod claims;
 mod compiled;
 #[cfg(test)]
@@ -82,6 +83,8 @@ pub use checkpoints::{
     load_checkpoint, verify_audit_tree, verify_audit_tree_under, verify_audit_tree_with_chain,
     with_anchor_signatures,
 };
+#[doc(hidden)]
+pub use claim_key::arguments_hash;
 pub use claims::{
     ClaimFilter, ClaimRead, StoredShape, list_claims, list_claims_for_predicates,
     list_claims_where, load_scoped_state, read_claims, read_claims_for_predicates,

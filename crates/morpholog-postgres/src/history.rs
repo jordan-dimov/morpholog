@@ -15,6 +15,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::claim_key::arguments_hash;
+
 use morpholog_core::{ClaimInstance, PredicateName};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
@@ -35,20 +37,38 @@ pub struct ReplayConflict {
 }
 
 /// The activation's rows as every verifier holds them, live and offline:
-/// their shape, their places, and the record's commitment to the legacy
-/// prefix and the chunks. Structure only, in state that does not grow
-/// with the baseline beyond a fingerprint per claim; whether the baseline
-/// is the right one is the live check's question.
+/// their shape, their places, the baseline's order by the claims table's
+/// own key `(predicate_name, arguments_hash)`, strictly increasing across
+/// every chunk, and the record's commitment to the legacy prefix and the
+/// chunks. Structure only, in state that does not grow with the baseline;
+/// whether the baseline is the right one is the live check's question.
 pub(crate) struct ActivationFold {
     legacy_len: u64,
     legacy_root: Hash,
     chunks: u64,
     claims: u64,
     digest: Sha256,
-    last_predicate: Option<PredicateName>,
-    seen: HashSet<[u8; 16]>,
+    last_key: Option<(PredicateName, Hash)>,
     last_row: Uuid,
     complete: bool,
+}
+
+/// Why an ordinary ordered row is out of place: inside the activation's
+/// order, or after legacy rows that no activation ended. A database
+/// `init` creates has neither legacy rows nor an activation, and its
+/// ordinary rows begin at order 1.
+pub(crate) fn ordered_row_misplaced(
+    row: &AuditRow,
+    legacy_rows: u64,
+    activation: Option<&ActivationFold>,
+) -> Option<&'static str> {
+    if row.audit_order == Some(1) && activation.is_some() {
+        Some("an ordinary row inside the activation's order")
+    } else if legacy_rows > 0 && activation.is_none() {
+        Some("ordered after legacy rows with no activation record between")
+    } else {
+        None
+    }
 }
 
 impl ActivationFold {
@@ -60,8 +80,7 @@ impl ActivationFold {
             chunks: 0,
             claims: 0,
             digest: Sha256::new(),
-            last_predicate: None,
-            seen: HashSet::new(),
+            last_key: None,
             last_row: Uuid::nil(),
             complete: false,
         }
@@ -131,22 +150,35 @@ impl ActivationFold {
             );
         }
         for op in operations {
-            if let Some(last) = &self.last_predicate
-                && op.predicate < *last
-            {
-                faults.push(format!(
-                    "baseline claims out of order: {} after {last}",
-                    op.predicate
-                ));
+            let key = match arguments_hash(&op.args) {
+                Ok(hash) => (op.predicate.clone(), hash),
+                Err(why) => {
+                    faults.push(format!(
+                        "the baseline claim {} {} has no key: {why}",
+                        op.predicate,
+                        serde_json::to_string(&op.args)?
+                    ));
+                    continue;
+                }
+            };
+            if let Some(last) = &self.last_key {
+                match key.cmp(last) {
+                    std::cmp::Ordering::Greater => {}
+                    std::cmp::Ordering::Equal => faults.push(format!(
+                        "the baseline holds {} {} twice",
+                        op.predicate,
+                        serde_json::to_string(&op.args)?
+                    )),
+                    std::cmp::Ordering::Less => faults.push(format!(
+                        "baseline claims out of order: {} {} after {} {}",
+                        op.predicate,
+                        serde_json::to_string(&op.args)?,
+                        last.0,
+                        hex::encode(last.1)
+                    )),
+                }
             }
-            self.last_predicate = Some(op.predicate.clone());
-            if !self.seen.insert(fingerprint(op)?) {
-                faults.push(format!(
-                    "the baseline holds {} {} twice",
-                    op.predicate,
-                    serde_json::to_string(&op.args)?
-                ));
-            }
+            self.last_key = Some(key);
         }
         self.digest.update(leaf);
         self.chunks += 1;
@@ -198,18 +230,6 @@ impl ActivationFold {
     }
 }
 
-/// A claim's identity in sixteen bytes, for the uniqueness check.
-fn fingerprint(op: &Operation) -> Result<[u8; 16], serde_json::Error> {
-    let mut hasher = Sha256::new();
-    hasher.update(op.predicate.as_str().as_bytes());
-    hasher.update([0]);
-    hasher.update(serde_json::to_vec(&op.args)?);
-    let hash: Hash = hasher.finalize().into();
-    let mut short = [0u8; 16];
-    short.copy_from_slice(&hash[..16]);
-    Ok(short)
-}
-
 #[derive(Default)]
 pub(crate) struct HistoryCheck {
     /// The replayed claims, each with the transition that admitted it.
@@ -220,6 +240,8 @@ pub(crate) struct HistoryCheck {
     activation: Option<(ActivationFold, HashMap<ClaimInstance, Uuid>)>,
     /// Ordered rows have begun: after the record, or without one.
     activated: bool,
+    /// The missing activation was reported once.
+    reported_missing: bool,
     rows: i64,
     legacy_disagreement: Option<LegacyDisagreement>,
     conflicts: Vec<ReplayConflict>,
@@ -281,9 +303,14 @@ impl HistoryCheck {
                         "a migration attestation on a row that is not the activation record".into(),
                     );
                 }
-                if self.legacy.len() > 0 && !self.activated {
-                    faults
-                        .push("ordered after legacy rows with no activation record between".into());
+                if let Some(why) = ordered_row_misplaced(
+                    row,
+                    self.legacy.len() as u64,
+                    self.activation.as_ref().map(|(fold, _)| fold),
+                ) && !self.reported_missing
+                {
+                    faults.push(why.into());
+                    self.reported_missing = self.activation.is_none();
                     self.activated = true;
                 }
                 if !follows_the_proposal(row, operations)? {
@@ -579,7 +606,7 @@ mod tests {
             ("holds X [] twice", |r| {
                 r.operations.as_mut().unwrap().push(ins("X", 1))
             }),
-            ("out of order: A after X", |r| {
+            ("out of order: A [] after X", |r| {
                 r.operations.as_mut().unwrap().push(ins("A", 1))
             }),
         ];
@@ -639,6 +666,83 @@ mod tests {
         let found = conflicts(&[legacy, chunk, activation, naming]);
         assert_eq!(found.len(), 1, "{found:?}");
         assert_names(&found, "which only the baseline may");
+    }
+
+    /// Two claims of one predicate in the key order the claims table
+    /// keeps, `(predicate_name, arguments_hash)`, lower first.
+    fn ordered_pair() -> (Operation, Operation) {
+        let mut ops: Vec<Operation> = ["a", "b"]
+            .into_iter()
+            .map(|k| Operation {
+                asserted_in: Some(Uuid::from_u128(1)),
+                ..Operation::new(
+                    OperationKind::Ins,
+                    &ClaimInstance {
+                        predicate: "X".into(),
+                        args: vec![EvalValue::Subject(k.into())],
+                    },
+                )
+            })
+            .collect();
+        ops.sort_by_key(|op| arguments_hash(&op.args).unwrap());
+        let hi = ops.pop().unwrap();
+        (ops.pop().unwrap(), hi)
+    }
+
+    /// The baseline's order is the table's whole key, so two claims of one
+    /// predicate reversed are out of order, within a chunk and across two.
+    #[test]
+    fn same_predicate_claims_reversed_are_out_of_order() {
+        let legacy = AuditRow {
+            asserted_claims: vec![claim("X")],
+            ..row(1, "admit_x")
+        };
+        let (lo, hi) = ordered_pair();
+        let one = |ops: Vec<Operation>, ordinal: u32| AuditRow {
+            operations: Some(ops),
+            ..control(
+                2 + u128::from(ordinal),
+                BASELINE,
+                ordinal,
+                legacy.committed_at,
+            )
+        };
+        let in_order = [one(vec![lo.clone(), hi.clone()], 0)];
+        let rec = record(std::slice::from_ref(&legacy), &in_order, 9);
+        assert!(conflicts(&[legacy.clone(), in_order[0].clone(), rec]).is_empty());
+
+        let within = [one(vec![hi.clone(), lo.clone()], 0)];
+        let rec = record(std::slice::from_ref(&legacy), &within, 9);
+        let found = conflicts(&[legacy.clone(), within[0].clone(), rec]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_names(&found, "out of order");
+
+        let across = [one(vec![hi], 0), one(vec![lo], 1)];
+        let rec = record(std::slice::from_ref(&legacy), &across, 9);
+        let found = conflicts(&[legacy, across[0].clone(), across[1].clone(), rec]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_names(&found, "out of order");
+    }
+
+    /// An ordinary row inside the activation's order is out of place.
+    #[test]
+    fn an_ordinary_row_inside_the_activation_is_a_fault() {
+        let (legacy, chunk, activation) = history();
+        let intruder = AuditRow {
+            transition_id: Uuid::from_u128(8),
+            transformation_name: "admit_y".into(),
+            attestation: Some(AuditAttestation::Gateway {
+                authenticated_by: "w".into(),
+                authenticated_by_oid: None,
+            }),
+            arguments: Vec::new(),
+            parameters: Some(Vec::new()),
+            act_ordinal: Some(2),
+            ..activation.clone()
+        };
+        let found = conflicts(&[legacy, chunk, activation, intruder]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_names(&found, "inside the activation's order");
     }
 
     /// The baseline keeps each claim's own admitter; a chunk's id never

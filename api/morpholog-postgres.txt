@@ -2891,6 +2891,7 @@ pub async fn morpholog_postgres::activation_preflight(&sqlx_postgres::PgPool) ->
 pub async fn morpholog_postgres::apply_migrations(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::apply_migrations_paused(&sqlx_postgres::PgPool, morpholog_postgres::MigrateMode, &morpholog_postgres::LockPolicy, impl core::future::future::Future<Output = ()>) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::apply_migrations_with(&sqlx_postgres::PgPool, morpholog_postgres::MigrateMode, &morpholog_postgres::LockPolicy) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
+pub fn morpholog_postgres::arguments_hash(&[morpholog_core::state::EvalValue]) -> core::result::Result<[u8; 32], alloc::string::String>
 pub async fn morpholog_postgres::attach_witness(&sqlx_postgres::PgPool, i64, &morpholog_postgres::Digest, morpholog_postgres::Witness) -> core::result::Result<morpholog_postgres::Checkpoint, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::audit_cursor_for(&mut sqlx_postgres::connection::PgConnection, uuid::Uuid) -> core::result::Result<morpholog_postgres::AuditPosition, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::audit_resume_watermark<'e, E>(E) -> core::result::Result<u64, morpholog_postgres::PgError> where E: sqlx_core::executor::Executor<'e, Database = sqlx_postgres::database::Postgres>

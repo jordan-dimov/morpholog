@@ -45,7 +45,9 @@ pub(crate) const PARAMETERS: [&str; 4] = [
 pub const CHUNK_CLAIMS: usize = 10_000;
 pub const CHUNK_BYTES: usize = 4 << 20;
 
-/// Claims fetched per statement while a chunk is built.
+/// Claims fetched per statement while a chunk is built, at most; a
+/// statement also stops at the chunk's byte bound, so a fetch never holds
+/// more than one chunk's worth of claims whatever their width.
 const FETCH: i64 = 1024;
 
 /// The digest the record names for its baseline: over the chunk rows'
@@ -121,7 +123,9 @@ pub async fn write_activation_record_with(
             .map_err(|_| PgError::InvalidState(format!("role oid {} is not a u32", login.oid)))?,
     };
 
-    // One chunk in memory at a time: claims stream in by primary key and
+    // One chunk in memory at a time: claims stream in by primary key, a
+    // statement bringing at most a chunk's worth of bytes (its first row
+    // always, so a claim too wide for any chunk is met and refused), and
     // go straight into the chunk being built.
     let mut chunks: Vec<Hash> = Vec::new();
     let mut chunk = Chunk::default();
@@ -130,18 +134,30 @@ pub async fn write_activation_record_with(
         let (name, hash) = after.clone().unzip();
         let page = sqlx::query!(
             r#"SELECT predicate_name, arguments, arguments_hash, asserted_in
-               FROM morpholog.claims
-               WHERE (predicate_name, arguments_hash) > (coalesce($1, ''), coalesce($2, ''::bytea))
-               ORDER BY predicate_name, arguments_hash
-               LIMIT $3"#,
+               FROM (SELECT predicate_name, arguments, arguments_hash, asserted_in,
+                            row_number() OVER w AS n,
+                            sum(octet_length(arguments::text)) OVER w AS bytes
+                     FROM (SELECT predicate_name, arguments, arguments_hash, asserted_in
+                           FROM morpholog.claims
+                           WHERE (predicate_name, arguments_hash)
+                                 > (coalesce($1, ''), coalesce($2, ''::bytea))
+                           ORDER BY predicate_name, arguments_hash
+                           LIMIT $3) page
+                     WINDOW w AS (ORDER BY predicate_name, arguments_hash
+                                  ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)) bounded
+               WHERE n = 1 OR bytes <= $4
+               ORDER BY n"#,
             name,
             hash,
             FETCH,
+            chunk_bytes as i64,
         )
         .fetch_all(&mut **tx)
         .await
         .map_err(classify_checked_query)?;
-        let short = (page.len() as i64) < FETCH;
+        if page.is_empty() {
+            break;
+        }
         for claim in page {
             after = Some((claim.predicate_name.clone(), claim.arguments_hash));
             let op = Operation {
@@ -150,14 +166,17 @@ pub async fn write_activation_record_with(
                 args: serde_json::from_value(claim.arguments)?,
                 asserted_in: Some(claim.asserted_in),
             };
+            // The array's bytes: each operation and a separator, plus one,
+            // since two brackets stand where the last separator would.
             let size = serde_json::to_vec(&op)?.len() + 1;
-            if !chunk.operations.is_empty() && chunk.bytes + size > chunk_bytes {
+            if !chunk.operations.is_empty() && chunk.bytes + size + 1 > chunk_bytes {
                 chunks.push(chunk.write(tx, &writer, chunks.len()).await?);
                 chunk = Chunk::default();
             }
             if chunk.operations.is_empty() && size + 1 > chunk_bytes {
                 return Err(PgError::InvalidState(format!(
-                    "a claim of {size} bytes does not fit a baseline chunk of {chunk_bytes} bytes"
+                    "a claim of {} bytes does not fit a baseline chunk of {chunk_bytes} bytes",
+                    size + 1
                 )));
             }
             chunk.bytes += size;
@@ -166,9 +185,6 @@ pub async fn write_activation_record_with(
                 chunks.push(chunk.write(tx, &writer, chunks.len()).await?);
                 chunk = Chunk::default();
             }
-        }
-        if short {
-            break;
         }
     }
     if !chunk.operations.is_empty() {
@@ -207,7 +223,7 @@ impl Writer {
 #[derive(Default)]
 struct Chunk {
     operations: Vec<Operation>,
-    /// The serialised size of `operations`, brackets excepted.
+    /// The serialised size of `operations` as an array, less one byte.
     bytes: usize,
 }
 

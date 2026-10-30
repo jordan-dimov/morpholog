@@ -703,6 +703,62 @@ mod activation {
         );
     }
 
+    /// An ordinary ordered row, as a writer after the migration leaves it.
+    fn ordinary(i: usize, order: u64, ordinal: u32) -> AuditRow {
+        serde_json::from_value(serde_json::json!({
+            "transition_id": format!("00000000-0000-0000-0000-{:012x}", i + 1),
+            "transformation_name": "post",
+            "arguments": [],
+            "actor": { "type": "subject", "value": "alex" },
+            "invariant_epoch": 1,
+            "invariants_checked": [],
+            "asserted_claims": [],
+            "retracted_claims": [],
+            "emitted_intents": [],
+            "committed_at": "2026-06-24T00:02:00Z",
+            "attestation": { "mode": "gateway", "authenticated_by": "alex" },
+            "parameters": [],
+            "model_hash": format!("sha256:{}", "d".repeat(64)),
+            "semantics_version": 1,
+            "drawn_subjects": [],
+            "audit_order": order,
+            "act_ordinal": ordinal,
+            "ordered_at": "2026-06-24T00:02:00Z",
+            "operations": [],
+        }))
+        .unwrap()
+    }
+
+    /// Legacy rows, then ordered rows with no activation between: the
+    /// tree is consistent, and only the activation check names it.
+    #[test]
+    fn ordered_rows_after_legacy_ones_need_an_activation() {
+        let (k1, k2) = (
+            SigningKey::from_bytes(&[1; 32]),
+            SigningKey::from_bytes(&[2; 32]),
+        );
+        let mut rows = history(&k1, &k2);
+        rows.push(ordinary(ROWS, 2, 0));
+        let cps = chain(&rows, &[rows.len()]);
+        faulty(
+            streamed(&rows, &cps, None),
+            "ordered after legacy rows with no activation record between",
+        );
+    }
+
+    #[test]
+    fn an_ordinary_row_inside_the_activation_is_faulty() {
+        let (k1, k2) = (
+            SigningKey::from_bytes(&[1; 32]),
+            SigningKey::from_bytes(&[2; 32]),
+        );
+        let mut rows = history(&k1, &k2);
+        rows.extend(activation(&rows.clone()));
+        rows.push(ordinary(ROWS + 2, 1, 2));
+        let cps = chain(&rows, &[rows.len()]);
+        faulty(streamed(&rows, &cps, None), "inside the activation's order");
+    }
+
     #[test]
     fn a_tampered_tree_outranks_the_activations_shape() {
         let (k1, k2) = (
