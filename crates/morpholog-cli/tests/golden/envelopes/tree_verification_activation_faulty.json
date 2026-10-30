@@ -1,0 +1,4 @@
+{
+  "detail": "00000000-0000-0000-0000-000000000003: the activation record does not name the 3 legacy rows before it and its 1 baseline chunks",
+  "status": "activation_faulty"
+}

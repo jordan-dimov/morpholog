@@ -1096,24 +1096,24 @@ fn another_format_is_unsupported_not_malformed() {
         }) => assert_eq!(written_by.as_deref(), Some("0.0.0")),
         other => panic!("expected format 13 to be unsupported, got {other:?}"),
     }
-    let newer = b"{\"pack_format_version\": 19, \"pack_kind\": \"prefix\", \
+    let newer = b"{\"pack_format_version\": 20, \"pack_kind\": \"prefix\", \
                   \"morpholog_version\": \"9.9.9\", \"from_the_future\": true}\nnot json\n";
     match stream_verdict(newer, None) {
         Err(PackError::Unsupported {
-            pack_format_version: 19,
+            pack_format_version: 20,
             written_by,
         }) => assert_eq!(written_by.as_deref(), Some("9.9.9")),
-        other => panic!("expected format 19 to be unsupported, got {other:?}"),
+        other => panic!("expected format 20 to be unsupported, got {other:?}"),
     }
     let message = PackError::Unsupported {
-        pack_format_version: 19,
+        pack_format_version: 20,
         written_by: Some("9.9.9".into()),
     }
     .to_string();
     assert!(
-        message.contains("reads formats 17 and 18")
+        message.contains("reads formats 17 and 19")
             && message.contains("names Morpholog 9.9.9")
-            && message.contains("a release that reads format 19"),
+            && message.contains("a release that reads format 20"),
         "{message}"
     );
     let message = PackError::Unsupported {

@@ -393,6 +393,7 @@ pub async fn coverage_replay(
                 asserted_claims: asserted_json,
                 retracted_claims: retracted_json,
                 operations,
+                act_ordinal,
                 ..
             } = row;
             let asserted: Vec<ClaimInstance> = serde_json::from_value(asserted_json)?;
@@ -401,11 +402,12 @@ pub async fn coverage_replay(
                 operations.map(serde_json::from_value).transpose()?;
             let kind = EffectKind::of(
                 &transformation_name,
+                Some(act_ordinal.cast_unsigned()),
                 &retracted,
                 &asserted,
                 operations.as_deref(),
             );
-            let activation = matches!(kind, EffectKind::Activation { .. });
+            let activation = kind.is_control();
             let delta: std::collections::BTreeSet<PredicateName> = retracted
                 .iter()
                 .chain(asserted.iter())

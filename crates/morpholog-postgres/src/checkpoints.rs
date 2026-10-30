@@ -189,6 +189,11 @@ pub enum TreeVerification {
         purpose: String,
         public_key: String,
     },
+    /// The activation's rows are not the shape the migration writes: a
+    /// chunk out of place or malformed, the record missing or naming
+    /// another legacy prefix or other chunks. The tree is otherwise
+    /// intact; the log contradicts itself about how the order began.
+    ActivationFaulty { detail: String },
     /// The verifier requires signatures, the tree is otherwise intact, but
     /// this checkpoint is unsigned. A policy verdict the verifier opts
     /// into, not tampering: unsigned checkpoints are valid by default.

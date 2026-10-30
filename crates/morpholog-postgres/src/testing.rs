@@ -38,7 +38,7 @@ pub async fn reset_before_activation(pool: &sqlx::PgPool) -> Result<(), crate::P
     tx.commit().await.map_err(classify)
 }
 
-/// Turn the ordering trigger back on and write the activation record over
+/// Turn the ordering trigger back on and write the activation over
 /// the rows already in the log, as migration 27 does.
 pub async fn activate(pool: &sqlx::PgPool) -> Result<(), crate::PgError> {
     use crate::error::classify;

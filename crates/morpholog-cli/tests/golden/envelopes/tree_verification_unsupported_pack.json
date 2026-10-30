@@ -1,7 +1,7 @@
 {
-  "detail": "unsupported pack format 19: this verifier reads formats 17 and 18 only; the manifest names Morpholog 9.9.9 as its writer; verify it with a release that reads format 19",
-  "pack_format_version": 19,
-  "reads": 18,
+  "detail": "unsupported pack format 20: this verifier reads formats 17 and 19 only; the manifest names Morpholog 9.9.9 as its writer; verify it with a release that reads format 20",
+  "pack_format_version": 20,
+  "reads": 19,
   "status": "unsupported_pack",
   "written_by": "9.9.9"
 }

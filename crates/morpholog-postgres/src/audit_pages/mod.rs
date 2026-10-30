@@ -55,7 +55,7 @@ impl Keyset {
 
 /// The columns a claims replay folds: the claim arrays, the operations
 /// and the coordinates, plus the transformation name coverage attributes
-/// by and the activation record is known by.
+/// by and the activation's rows are known by.
 pub(crate) struct ReplayRow {
     pub(crate) transition_id: Uuid,
     pub(crate) transformation_name: String,

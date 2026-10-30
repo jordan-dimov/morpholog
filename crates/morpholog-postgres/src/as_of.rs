@@ -170,6 +170,27 @@ async fn settled_target(
     transition_id: Uuid,
 ) -> Result<AuditPosition, PgError> {
     let target = audit_cursor_for(&mut *conn, transition_id).await?;
+    if target.audit_order == 1 {
+        let row = sqlx::query!(
+            r#"SELECT transformation_name = 'morpholog.baseline' AS "is_chunk!",
+                      (SELECT transition_id FROM morpholog.audit
+                        WHERE transformation_name = 'morpholog.activate') AS "record"
+               FROM morpholog.audit WHERE transition_id = $1"#,
+            transition_id
+        )
+        .fetch_one(&mut *conn)
+        .await
+        .map_err(classify_checked_query)?;
+        if row.is_chunk {
+            let record = row.record.ok_or_else(|| {
+                PgError::InvalidState("a baseline chunk without an activation record".into())
+            })?;
+            return Err(PgError::BaselineChunk {
+                chunk: transition_id,
+                record,
+            });
+        }
+    }
     settled(target, audit_resume_watermark(&mut *conn).await?)
 }
 
@@ -224,6 +245,7 @@ pub(crate) async fn reconstruct_inner(
                 transition_id: row.transition_id,
                 kind: EffectKind::of(
                     &row.transformation_name,
+                    Some(row.act_ordinal.cast_unsigned()),
                     &retracted,
                     &asserted,
                     operations.as_deref(),

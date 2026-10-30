@@ -267,9 +267,9 @@ async fn the_claims_table_names_the_transition_replay_names() {
 }
 
 /// The activation record must be the one its legacy prefix implies: a
-/// baseline edited to launder a claim away no longer matches its digest,
-/// and removing the record leaves ordered rows straight after legacy
-/// ones.
+/// baseline chunk edited to launder a claim away no longer matches the
+/// record's digest, and removing the record leaves the chunk without it
+/// and ordered rows straight after legacy ones.
 #[tokio::test]
 async fn the_activation_record_is_the_one_its_prefix_implies() {
     let pool = test_pool().await;
@@ -290,7 +290,7 @@ async fn the_activation_record_is_the_one_its_prefix_implies() {
     assert!(matches!(
         verdict(&pool).await,
         VerifyOutcome::Consistent {
-            transitions: 3,
+            transitions: 4,
             claims: 2
         }
     ));
@@ -305,7 +305,7 @@ async fn the_activation_record_is_the_one_its_prefix_implies() {
         &pool,
         "BEGIN;
          UPDATE morpholog.audit SET operations = '[]'
-          WHERE transformation_name = 'morpholog.activate';
+          WHERE transformation_name = 'morpholog.baseline';
          DELETE FROM morpholog.claims WHERE arguments @> '[{\"value\": \"a\"}]';
          COMMIT;",
     )
@@ -313,26 +313,27 @@ async fn the_activation_record_is_the_one_its_prefix_implies() {
     let found = conflicts(verdict(&pool).await);
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].0, activation);
-    assert!(found[0].1.contains("its own baseline"), "{found:?}");
+    assert!(found[0].1.contains("baseline chunks"), "{found:?}");
 
     execute(
         &pool,
         "DELETE FROM morpholog.audit WHERE transformation_name = 'morpholog.activate'",
     )
     .await;
-    let VerifyOutcome::Divergent {
-        only_in_replay,
-        conflicts,
-        ..
-    } = verdict(&pool).await
-    else {
+    let VerifyOutcome::Divergent { conflicts, .. } = verdict(&pool).await else {
         panic!("the record is gone");
     };
-    assert_eq!(only_in_replay, vec![x("a")]);
-    assert_eq!(conflicts.len(), 1, "{conflicts:?}");
+    let details: Vec<&str> = conflicts.iter().map(|c| c.detail.as_str()).collect();
+    assert_eq!(details.len(), 2, "{details:?}");
     assert!(
-        conflicts[0].detail.contains("no activation record"),
-        "{conflicts:?}"
+        details
+            .iter()
+            .any(|d| d.contains("no activation record between")),
+        "{details:?}"
+    );
+    assert!(
+        details.iter().any(|d| d.contains("and no record")),
+        "{details:?}"
     );
 }
 

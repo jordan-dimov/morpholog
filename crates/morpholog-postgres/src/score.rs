@@ -90,7 +90,7 @@ fn fold_rows<'a>(
         }
         // Read the effective delta before the state advances in place,
         // so no per-row snapshot is needed.
-        if row.is_activation() {
+        if row.is_control() {
             row.effect().apply_to(replay);
             continue;
         }

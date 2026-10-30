@@ -204,8 +204,9 @@ async fn a_database_the_last_release_wrote_upgrades_and_verifies() {
         morpholog_postgres::head_version(),
         "{migrated}"
     );
-    // The legacy rows, the activation record, then the new write.
-    for (report, rows) in [(&verified, 4), (&verified_after, 5)] {
+    // The legacy rows, the baseline chunk and the activation record, then
+    // the new write.
+    for (report, rows) in [(&verified, 5), (&verified_after, 6)] {
         assert_eq!(report["passes"], true, "{report}");
         assert_eq!(report["replay"]["status"], "consistent", "{report}");
         assert_eq!(report["tree"]["status"], "intact", "{report}");
@@ -224,8 +225,8 @@ async fn a_database_the_last_release_wrote_upgrades_and_verifies() {
     assert_eq!(written["status"], "committed");
 
     // A pack of the whole history now: the old checkpoint keeps its root,
-    // the activation record is the first ordered row, and the new write
-    // follows it under the next order.
+    // the activation's chunk and record are the first order, and the new
+    // write follows them under the next order.
     let new_pack = lines(&exported_after.stdout);
     let manifest = &new_pack[0];
     assert_eq!(
@@ -235,22 +236,28 @@ async fn a_database_the_last_release_wrote_upgrades_and_verifies() {
     assert_eq!(manifest["checkpoint_count"], 2, "{manifest}");
     assert_eq!(new_pack[1], old_pack[1], "the old checkpoint is unchanged");
     let rows = &new_pack[3..];
-    assert_eq!(rows.len(), 5);
+    assert_eq!(rows.len(), 6);
     assert_eq!(&rows[..3], &old_pack[2..], "the legacy rows are unchanged");
     assert!(rows[..3].iter().all(|r| r.get("audit_order").is_none()));
-    assert_eq!(rows[3]["transformation_name"], "morpholog.activate");
+    assert_eq!(rows[3]["transformation_name"], "morpholog.baseline");
     assert_eq!(
         (&rows[3]["audit_order"], &rows[3]["act_ordinal"]),
         (&1.into(), &0.into())
     );
-    assert_eq!(rows[4]["transformation_name"], "admit_x");
-    assert_eq!(rows[4]["audit_order"], 2, "the new write is ordered");
+    assert_eq!(rows[4]["transformation_name"], "morpholog.activate");
+    assert_eq!(
+        (&rows[4]["audit_order"], &rows[4]["act_ordinal"]),
+        (&1.into(), &1.into())
+    );
+    assert_eq!(rows[4]["operations"], serde_json::json!([]));
+    assert_eq!(rows[5]["transformation_name"], "admit_x");
+    assert_eq!(rows[5]["audit_order"], 2, "the new write is ordered");
     assert_eq!(offline_after["passes"], true, "{offline_after}");
     assert_eq!(
         offline_after["verdict"]["status"], "intact",
         "{offline_after}"
     );
-    assert_eq!(offline_after["verdict"]["tree_size"], 5, "{offline_after}");
+    assert_eq!(offline_after["verdict"]["tree_size"], 6, "{offline_after}");
     let stderr = String::from_utf8_lossy(&refused.stderr);
     assert!(
         !refused.status.success() && stderr.contains("older than the database"),

@@ -327,6 +327,7 @@ pub(crate) fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
         | PgError::CutoverRefused { .. }
         | PgError::TransitionNotFound(_)
         | PgError::TransitionNotSettled(_)
+        | PgError::BaselineChunk { .. }
         | PgError::TransitionNotCovered { .. }
         | PgError::NoTransitionAtOrBefore(_)
         | PgError::ActorPolicyDeclaration { .. }

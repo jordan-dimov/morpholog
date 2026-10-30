@@ -62,6 +62,7 @@ pub mod wire_time;
 mod witnesses;
 
 // The whole public surface, flat at the crate root.
+pub use activation::{CHUNK_BYTES, CHUNK_CLAIMS, write_activation_record_with};
 pub use actor_policy::{
     AUTHORITY_PREDICATE, PolicyDeclarationError, RESTRICTED_PREDICATE, validate_declarations,
 };
@@ -119,9 +120,9 @@ pub use pack::{
     verify_pack, verify_prefix_stream, verify_selective, verify_window,
 };
 pub use preparation::{
-    ActivationPreflight, BASELINE_LIMIT_BYTES, Census, FrontierProgress, LockPolicy,
-    MIGRATION_LOCK_KEY, PreparationState, activation_preflight, activation_preflight_within,
-    census, census_paused, frontier_pass_with, legacy_root_full_scan,
+    ActivationPreflight, Census, FrontierProgress, LockPolicy, MIGRATION_LOCK_KEY,
+    PreparationState, activation_preflight, census, census_paused, frontier_pass_with,
+    legacy_root_full_scan,
 };
 pub use program::{InvariantPlan, PgProgram};
 pub use propose::{

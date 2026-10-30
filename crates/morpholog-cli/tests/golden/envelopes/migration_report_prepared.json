@@ -2,9 +2,8 @@
   "activation_preflight": {
     "audit_bytes": 3726000128,
     "baseline_bytes": 83660004,
-    "baseline_limit_bytes": 268435455,
     "estimated_preparation_ms": 37800,
-    "estimated_writer_pause_ms": 4960,
+    "estimated_writer_pause_ms": 4270,
     "legacy_rows": 3000000,
     "legacy_rows_prepared": 2900000,
     "live_claims": 300000,

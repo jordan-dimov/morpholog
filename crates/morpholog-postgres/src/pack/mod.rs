@@ -39,7 +39,7 @@ use crate::txn::{TxIsolation, begin_isolated_tx};
 /// refuses a format it does not read by name before reading a row. A
 /// change to what a pack carries, a row field among it, moves this number
 /// once, for every kind.
-pub const PACK_FORMAT: u32 = 18;
+pub const PACK_FORMAT: u32 = 19;
 /// The older format this binary still reads. It was written before the
 /// log had one order, so its rows are legacy rows only.
 pub const LEGACY_PACK_FORMAT: u32 = 17;

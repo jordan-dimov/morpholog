@@ -71,11 +71,21 @@ const CHECKS: [(&str, &str, &str); 3] = [
     ),
     (
         "audit_activation_attested",
-        "(transformation_name = 'morpholog.activate') = (attestation ->> 'mode' = 'migration')",
-        "CHECK (((transformation_name = 'morpholog.activate'::text) \
-         = ((attestation ->> 'mode'::text) = 'migration'::text)))",
+        "(transformation_name IN ('morpholog.activate', 'morpholog.baseline')) \
+         = (attestation ->> 'mode' = 'migration')",
+        "CHECK (((transformation_name = ANY (ARRAY['morpholog.activate'::text, \
+         'morpholog.baseline'::text])) = ((attestation ->> 'mode'::text) = 'migration'::text)))",
     ),
 ];
+
+/// The one shape an existing constraint may have besides its own: the
+/// attestation check as a build before the baseline chunks wrote it. A
+/// database prepared by that build has it replaced, not refused.
+const SUPERSEDED: [(&str, &str); 1] = [(
+    "audit_activation_attested",
+    "CHECK (((transformation_name = 'morpholog.activate'::text) \
+     = ((attestation ->> 'mode'::text) = 'migration'::text)))",
+)];
 
 /// The columns, as the catalog describes them once added.
 const COLUMNS: [(&str, &str); 4] = [
@@ -115,17 +125,14 @@ const PROGRESS_SQL: &str = "CREATE TABLE IF NOT EXISTS morpholog.migration_progr
     PRIMARY KEY (version, step)
 )";
 
-/// PostgreSQL's cap on the bytes of a JSONB array's elements, which is
-/// what the activation record's baseline is.
-pub const BASELINE_LIMIT_BYTES: i64 = (1 << 28) - 1;
-
 /// Measured on 2026-10-30 (release build, laptop): preparation scans
 /// about 0.6 us per audit row for its schema steps and 12 us per row for
 /// the frontier; the cutover's legacy tail 11.5 us per row and its
-/// baseline 12.7 us per live claim, the record's serialisation included.
+/// baseline 10.4 us per live claim, the chunks' serialisation and leaf
+/// hashing included.
 const PREPARATION_NS_PER_ROW: i64 = 12_600;
 const PAUSE_NS_PER_ROW: i64 = 11_500;
-const PAUSE_NS_PER_CLAIM: i64 = 12_700;
+const PAUSE_NS_PER_CLAIM: i64 = 10_400;
 
 /// How a brief ACCESS EXCLUSIVE lock is taken: with a short timeout and
 /// bounded retries, so a request never queues behind a long-running
@@ -187,10 +194,9 @@ pub struct ActivationPreflight {
     pub legacy_rows_prepared: i64,
     pub audit_bytes: i64,
     pub live_claims: i64,
-    /// The bytes the baseline's JSONB elements would take, as PostgreSQL
-    /// counts them against `baseline_limit_bytes`.
+    /// The bytes the baseline chunks will take as JSONB, an estimate of
+    /// how much the evidence grows.
     pub baseline_bytes: i64,
-    pub baseline_limit_bytes: i64,
     pub estimated_preparation_ms: i64,
     pub estimated_writer_pause_ms: i64,
     /// Why the cutover is refused now; empty when it may proceed.
@@ -427,6 +433,7 @@ async fn step_constraints(
     policy: &LockPolicy,
 ) -> Result<serde_json::Value, PgError> {
     let mut added = Vec::new();
+    let mut replaced = Vec::new();
     let mut validated = Vec::new();
     for (name, expression, expected) in CHECKS {
         // `shape!`: pg_get_constraintdef is never null for a constraint row.
@@ -440,12 +447,23 @@ async fn step_constraints(
         .fetch_optional(pool)
         .await
         .map_err(classify_checked_query)?;
-        let valid = match state {
+        let existing = match state {
             Some(row) => {
                 let shape = row.shape.strip_suffix(" NOT VALID").unwrap_or(&row.shape);
-                same_shape(&format!("constraint {name}"), expected, shape)?;
-                row.validated
+                if SUPERSEDED.contains(&(name, shape)) {
+                    let sql = format!("ALTER TABLE morpholog.audit DROP CONSTRAINT {name}");
+                    with_brief_lock(pool, policy, &sql).await?;
+                    replaced.push(name);
+                    None
+                } else {
+                    same_shape(&format!("constraint {name}"), expected, shape)?;
+                    Some(row.validated)
+                }
             }
+            None => None,
+        };
+        let valid = match existing {
+            Some(validated) => validated,
             None => {
                 let sql = format!(
                     "ALTER TABLE morpholog.audit ADD CONSTRAINT {name} CHECK ({expression}) NOT VALID"
@@ -465,7 +483,7 @@ async fn step_constraints(
             validated.push(name);
         }
     }
-    Ok(serde_json::json!({ "added": added, "validated": validated }))
+    Ok(serde_json::json!({ "added": added, "replaced": replaced, "validated": validated }))
 }
 
 async fn step_indexes(pool: &PgPool) -> Result<serde_json::Value, PgError> {
@@ -817,16 +835,6 @@ pub(crate) async fn clear_progress(
 
 /// The preflight for a database on which migration 27 is pending.
 pub async fn activation_preflight(pool: &PgPool) -> Result<ActivationPreflight, PgError> {
-    activation_preflight_within(pool, BASELINE_LIMIT_BYTES).await
-}
-
-/// The preflight against a stated baseline limit: the test seam for the
-/// refusal a real limit needs a million claims to reach.
-#[doc(hidden)]
-pub async fn activation_preflight_within(
-    pool: &PgPool,
-    baseline_limit_bytes: i64,
-) -> Result<ActivationPreflight, PgError> {
     let steps_done = steps_done(pool).await?;
     let state = match steps_done.len() {
         0 => PreparationState::Pending,
@@ -862,15 +870,7 @@ pub async fn activation_preflight_within(
         false => 0,
     };
     let remaining = (audit.rows - prepared).max(0);
-    let mut refusals = census(pool).await?.refusals();
-    if claims.bytes >= baseline_limit_bytes {
-        refusals.push(format!(
-            "the baseline of {} live claims would take {} bytes as JSONB, over the \
-             {} byte limit of one activation record; this register cannot activate \
-             under this release",
-            claims.claims, claims.bytes, baseline_limit_bytes
-        ));
-    }
+    let refusals = census(pool).await?.refusals();
     Ok(ActivationPreflight {
         state,
         steps_done,
@@ -879,7 +879,6 @@ pub async fn activation_preflight_within(
         audit_bytes: audit.bytes,
         live_claims: claims.claims,
         baseline_bytes: claims.bytes,
-        baseline_limit_bytes,
         estimated_preparation_ms: audit.rows * PREPARATION_NS_PER_ROW / 1_000_000,
         estimated_writer_pause_ms: (remaining * PAUSE_NS_PER_ROW
             + claims.claims * PAUSE_NS_PER_CLAIM)

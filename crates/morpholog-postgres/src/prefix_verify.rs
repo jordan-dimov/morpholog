@@ -4,10 +4,11 @@
 //!
 //! What a failure outranks is fixed: the anchor first, then each
 //! checkpoint in chain order (its link, then its root, then its
-//! signatures), then signing-key authority, which counts only once the
-//! whole tree is intact. The first failure found is kept; nothing found
-//! later replaces it. What the input itself must look like (row order, row
-//! count, a non-empty chain) belongs to the caller.
+//! signatures), then the activation's shape, then signing-key authority,
+//! which counts only once the whole tree is intact. The first failure
+//! found is kept; nothing found later replaces it. What the input itself
+//! must look like (row order, row count, a non-empty chain) belongs to
+//! the caller.
 
 use std::collections::HashSet;
 
@@ -16,6 +17,7 @@ use crate::checkpoints::{
     Checkpoint, TreeVerification, checkpoint_hash, same_tree_head, signature_crypto_violation,
     unauthorized_signature,
 };
+use crate::history::ActivationFold;
 use crate::keys::{KeyTriple, apply_key_claims};
 use crate::merkle::{Digest, Frontier, audit_leaf_hash};
 use crate::role_rebindings::RebindingFold;
@@ -28,6 +30,10 @@ pub(crate) struct PrefixVerifier<'a> {
     frontier: Frontier,
     keys: HashSet<KeyTriple>,
     failure: Option<TreeVerification>,
+    /// The activation once its first row is met, and the first fault in
+    /// its shape.
+    activation: Option<ActivationFold>,
+    activation_fault: Option<String>,
     unauthorized: Option<TreeVerification>,
     anchor_unauthorized: Option<TreeVerification>,
     rebindings: RebindingFold,
@@ -44,6 +50,8 @@ impl<'a> PrefixVerifier<'a> {
             frontier: Frontier::default(),
             keys: HashSet::new(),
             failure: anchor.and_then(|a| anchor_failure(checkpoints, a)),
+            activation: None,
+            activation_fault: None,
             unauthorized: None,
             anchor_unauthorized: None,
             rebindings: RebindingFold::default(),
@@ -56,6 +64,18 @@ impl<'a> PrefixVerifier<'a> {
     /// not a verdict: it has no leaf to judge.
     pub(crate) fn push(&mut self, row: &AuditRow) -> Result<(), serde_json::Error> {
         let leaf = audit_leaf_hash(row)?;
+        if row.is_control() {
+            // The rows before the activation's first are its legacy prefix.
+            let fold = self
+                .activation
+                .get_or_insert_with(|| ActivationFold::begin(&self.frontier));
+            let faults = fold.push(row, leaf)?;
+            if self.activation_fault.is_none()
+                && let Some(fault) = faults.into_iter().next()
+            {
+                self.activation_fault = Some(format!("{}: {fault}", row.transition_id));
+            }
+        }
         self.frontier.push(leaf);
         apply_key_claims(&mut self.keys, row);
         self.rebindings.observe(row);
@@ -68,23 +88,31 @@ impl<'a> PrefixVerifier<'a> {
         let unreached = self.checkpoints.get(self.held);
         let prev_hash = self.held_hash();
         let rows = self.frontier.len();
-        let verdict =
-            match (self.failure, unreached) {
-                (Some(failure), _) => failure,
-                (None, Some(cp)) => {
-                    chain_failure(cp, prev_hash).unwrap_or_else(|| TreeVerification::Tampered {
-                        tree_size: cp.tree_size,
-                        recorded_root: cp.root_hash,
-                        recomputed_root: format!("only {rows} rows present"),
-                    })
-                }
-                (None, None) => self.unauthorized.or(self.anchor_unauthorized).unwrap_or(
-                    TreeVerification::Intact {
-                        checkpoints: self.checkpoints.len(),
-                        tree_size: self.checkpoints.last().map_or(0, |c| c.tree_size),
-                    },
-                ),
-            };
+        let verdict = match (self.failure, unreached) {
+            (Some(failure), _) => failure,
+            (None, Some(cp)) => {
+                chain_failure(cp, prev_hash).unwrap_or_else(|| TreeVerification::Tampered {
+                    tree_size: cp.tree_size,
+                    recorded_root: cp.root_hash,
+                    recomputed_root: format!("only {rows} rows present"),
+                })
+            }
+            (None, None) => self
+                .activation_fault
+                .or_else(|| {
+                    self.activation
+                        .as_ref()
+                        .and_then(ActivationFold::incomplete)
+                        .map(|(id, detail)| format!("{id}: {detail}"))
+                })
+                .map(|detail| TreeVerification::ActivationFaulty { detail })
+                .or(self.unauthorized)
+                .or(self.anchor_unauthorized)
+                .unwrap_or(TreeVerification::Intact {
+                    checkpoints: self.checkpoints.len(),
+                    tree_size: self.checkpoints.last().map_or(0, |c| c.tree_size),
+                }),
+        };
         (verdict, self.rebindings)
     }
 

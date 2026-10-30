@@ -19,9 +19,9 @@ use std::time::Duration;
 
 use common::{recreate_roles, reset_db, session_is_superuser, test_pool};
 use morpholog_postgres::{
-    BASELINE_LIMIT_BYTES, LockPolicy, MIGRATION_LOCK_KEY, MigrateMode, PgError,
-    activation_preflight_within, apply_migrations_with, census, census_paused, frontier_pass_with,
-    legacy_root_full_scan, migration_status,
+    LockPolicy, MIGRATION_LOCK_KEY, MigrateMode, PgError, activation_preflight,
+    apply_migrations_with, census, census_paused, frontier_pass_with, legacy_root_full_scan,
+    migration_status,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -356,9 +356,7 @@ async fn the_frontier_equals_a_full_scan_and_resumes_from_what_it_saved() {
     .await;
     let interrupted = frontier_pass_with(&pool, 32, Some(2)).await.unwrap();
     assert_eq!(interrupted.legacy_rows_prepared, 32, "{interrupted:?}");
-    let partial = activation_preflight_within(&pool, BASELINE_LIMIT_BYTES)
-        .await
-        .unwrap();
+    let partial = activation_preflight(&pool).await.unwrap();
     assert_eq!(
         (partial.state, partial.legacy_rows_prepared),
         (morpholog_postgres::PreparationState::Preparing, 32),
@@ -373,9 +371,7 @@ async fn the_frontier_equals_a_full_scan_and_resumes_from_what_it_saved() {
     let (rows, root) = legacy_root_full_scan(&pool).await.unwrap();
     assert_eq!((rows, root.as_str()), (100, resumed.legacy_root.as_str()));
 
-    let preflight = activation_preflight_within(&pool, BASELINE_LIMIT_BYTES)
-        .await
-        .unwrap();
+    let preflight = activation_preflight(&pool).await.unwrap();
     assert_eq!(preflight.legacy_rows, 100);
     assert_eq!(preflight.legacy_rows_prepared, 100);
     assert_eq!(
@@ -511,9 +507,7 @@ async fn a_malformed_saved_frontier_is_refused_not_reset() {
         apply_migrations_with(&pool, MigrateMode::Complete, &LockPolicy::default())
             .await
             .map(|_| ()),
-        activation_preflight_within(&pool, BASELINE_LIMIT_BYTES)
-            .await
-            .map(|_| ()),
+        activation_preflight(&pool).await.map(|_| ()),
     ] {
         match result.unwrap_err() {
             PgError::InvalidState(message) => {
@@ -821,7 +815,7 @@ async fn the_census_refuses_a_prepared_transaction_before_or_during_it() {
 }
 
 #[tokio::test]
-async fn the_preflight_names_the_baseline_ceiling() {
+async fn the_preflight_estimates_the_baseline_bytes() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     common::seed_claims(
@@ -838,21 +832,48 @@ async fn the_preflight_names_the_baseline_ceiling() {
         ],
     )
     .await;
-    let roomy = activation_preflight_within(&pool, BASELINE_LIMIT_BYTES)
-        .await
-        .unwrap();
-    assert_eq!(roomy.live_claims, 2);
-    assert!(roomy.baseline_bytes > 0);
-    assert!(
-        !roomy.refusals.iter().any(|r| r.contains("byte limit")),
-        "{roomy:?}"
+    let preflight = activation_preflight(&pool).await.unwrap();
+    assert_eq!(preflight.live_claims, 2);
+    assert!(preflight.baseline_bytes > 0);
+    assert!(preflight.refusals.is_empty(), "{preflight:?}");
+}
+
+/// A database prepared by the build before the baseline chunks holds the
+/// attestation constraint over the record alone. Preparation replaces
+/// that one known shape and records it; any other shape under the name
+/// is still refused.
+#[tokio::test]
+async fn the_constraint_of_the_build_before_the_chunks_is_replaced() {
+    let Some((pool, admin, name)) = baseline_database("superseded").await else {
+        return;
+    };
+    ddl(
+        &pool,
+        "ALTER TABLE morpholog.audit ADD CONSTRAINT audit_activation_attested CHECK \
+         ((transformation_name = 'morpholog.activate') = (attestation ->> 'mode' = 'migration'))"
+            .to_string(),
+    )
+    .await;
+    let prepared = prepare(&pool).await;
+    let preflight = prepared.activation_preflight.expect("a preflight");
+    assert_eq!(preflight.state, morpholog_postgres::PreparationState::Ready);
+    let shape: String = sqlx::query_scalar(
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint
+         WHERE conrelid = 'morpholog.audit'::regclass AND conname = 'audit_activation_attested'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(shape.contains("'morpholog.baseline'::text"), "{shape}");
+    let steps = steps_recorded(&pool).await;
+    let (_, detail) = steps
+        .iter()
+        .find(|(step, _)| step == "constraints")
+        .expect("the constraints step is recorded");
+    assert_eq!(
+        detail["replaced"],
+        serde_json::json!(["audit_activation_attested"]),
+        "{detail}"
     );
-    let cramped = activation_preflight_within(&pool, 1).await.unwrap();
-    assert!(
-        cramped
-            .refusals
-            .iter()
-            .any(|r| r.contains("over the 1 byte limit")),
-        "{cramped:?}"
-    );
+    drop_database(pool, admin, &name).await;
 }

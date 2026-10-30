@@ -1117,14 +1117,21 @@ class TamperEvidence(unittest.TestCase):
             with self.assertRaises(envelopes.EnvelopeError):
                 envelopes.AuditRow.from_json(row)
 
-    def test_the_activation_record_carries_its_migration_and_its_baseline(self):
+    def test_the_activation_carries_its_migration_and_its_baseline(self):
+        chunk = envelopes.AuditRow.from_json(golden("audit_row_baseline_chunk.json"))
+        assert chunk.attestation is not None and chunk.ordering is not None
+        self.assertEqual(chunk.transformation_name, "morpholog.baseline")
+        self.assertEqual(chunk.attestation.mode, "migration")
+        self.assertEqual((chunk.ordering.audit_order, chunk.ordering.act_ordinal), (1, 0))
+        self.assertIsNotNone(chunk.ordering.operations[0].asserted_in)
         row = envelopes.AuditRow.from_json(golden("audit_row_activation.json"))
         assert row.attestation is not None and row.ordering is not None
         self.assertEqual(row.transformation_name, "morpholog.activate")
         self.assertEqual(row.attestation.mode, "migration")
         self.assertEqual(row.attestation.authenticated_by_oid, 10)
-        self.assertEqual(row.ordering.audit_order, 1)
-        self.assertIsNotNone(row.ordering.operations[0].asserted_in)
+        self.assertEqual((row.ordering.audit_order, row.ordering.act_ordinal), (1, 1))
+        self.assertEqual(row.ordering.operations, [])
+        self.assertEqual(len(row.arguments), 4)
         unidentified = golden("audit_row_activation.json")
         unidentified["attestation"].pop("authenticated_by_oid")
         with self.assertRaises(envelopes.EnvelopeError):
@@ -1234,6 +1241,7 @@ class TamperEvidence(unittest.TestCase):
             ("tree_verification_chain_broken.json", envelopes.TreeChainBroken),
             ("tree_verification_anchor_mismatch.json", envelopes.TreeAnchorMismatch),
             ("tree_verification_malformed_pack.json", envelopes.TreeMalformedPack),
+            ("tree_verification_activation_faulty.json", envelopes.TreeActivationFaulty),
             ("tree_verification_unsupported_pack.json", envelopes.TreeUnsupportedPack),
             ("tree_verification_signature_invalid.json", envelopes.TreeSignatureInvalid),
             ("tree_verification_unauthorized_key.json", envelopes.TreeUnauthorizedKey),
@@ -1244,7 +1252,7 @@ class TamperEvidence(unittest.TestCase):
 
     def test_prefix_pack_manifest(self):
         manifest = envelopes.PrefixPackManifest.from_json(golden("prefix_pack_manifest.json"))
-        self.assertEqual(manifest.pack_format_version, 18)
+        self.assertEqual(manifest.pack_format_version, 19)
         self.assertEqual(manifest.pack_kind, "prefix")
         self.assertEqual(manifest.morpholog_version, "0.0.0")
         self.assertEqual(manifest.checkpoint_count, 1)
@@ -1266,7 +1274,7 @@ class TamperEvidence(unittest.TestCase):
 
     def test_window_evidence_pack_with_proofs(self):
         pack = envelopes.WindowEvidencePack.from_json(golden("window_evidence_pack.json"))
-        self.assertEqual(pack.manifest.pack_format_version, 18)
+        self.assertEqual(pack.manifest.pack_format_version, 19)
         self.assertEqual(pack.manifest.pack_kind, "window")
         self.assertIsInstance(pack.from_checkpoint, envelopes.Checkpoint)
         self.assertIsInstance(pack.to_checkpoint, envelopes.Checkpoint)
@@ -1276,7 +1284,7 @@ class TamperEvidence(unittest.TestCase):
 
     def test_selective_evidence_pack_and_every_verdict(self):
         pack = envelopes.SelectiveEvidencePack.from_json(golden("selective_evidence_pack.json"))
-        self.assertEqual(pack.manifest.pack_format_version, 18)
+        self.assertEqual(pack.manifest.pack_format_version, 19)
         self.assertEqual(pack.manifest.pack_kind, "selective")
         self.assertIsInstance(pack.checkpoint, envelopes.Checkpoint)
         self.assertEqual(len(pack.rows), len(pack.inclusion_proofs))
