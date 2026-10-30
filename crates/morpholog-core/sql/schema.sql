@@ -460,7 +460,8 @@ CREATE TABLE audit (
     -- The row operations the commit performed on the claims table, in
     -- execution order: `del`, `ins` or `noop`. The activation record's
     -- are the baseline.
-    operations           jsonb        CHECK (jsonb_typeof(operations) = 'array'),
+    operations           jsonb        CONSTRAINT audit_operations_array
+                                      CHECK (jsonb_typeof(operations) = 'array'),
     CONSTRAINT audit_order_all_or_none CHECK (
         (operations IS NULL) = (audit_order = 0)
         AND (operations IS NULL) = (ordered_at IS NULL)
@@ -763,6 +764,17 @@ CREATE TABLE morpholog_read.derived_claims (
 
 CREATE INDEX derived_claims_generation_predicate
     ON morpholog_read.derived_claims (refresh_id, predicate_name);
+
+-- Progress of a migration that prepares in steps before its own
+-- transaction: one row per completed step. The runner reads it to resume
+-- and deletes a migration's rows when it records the migration.
+CREATE TABLE morpholog.migration_progress (
+    version    int         NOT NULL,
+    step       text        NOT NULL,
+    detail     jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (version, step)
+);
 
 -- The canonical audit order (migration 27).
 CREATE SEQUENCE morpholog.audit_order_seq CACHE 1;

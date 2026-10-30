@@ -86,6 +86,7 @@ CASES = {
     "outbox_update_lease_lost.json": ("outbox_update", E.OutboxUpdate.from_json),
     "migration_report_behind.json": ("migration_report", E.MigrationReport.from_json),
     "migration_report_applied.json": ("migration_report", E.MigrationReport.from_json),
+    "migration_report_prepared.json": ("migration_report", E.MigrationReport.from_json),
     "migration_report_ahead.json": ("migration_report", E.MigrationReport.from_json),
     "migration_report_below_baseline.json": ("migration_report", E.MigrationReport.from_json),
     "migration_report_below_baseline_no_record.json": (

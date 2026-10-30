@@ -216,6 +216,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+      # The 2PC census test needs prepared transactions, which the image
+      # disables; the setting takes a restart.
+      - name: Allow prepared transactions
+        run: |
+          docker exec ${{ job.services.postgres.id }} psql -U postgres -c "ALTER SYSTEM SET max_prepared_transactions = 5"
+          docker restart ${{ job.services.postgres.id }}
+          until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres; do sleep 1; done
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -265,6 +272,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+      # The 2PC census test needs prepared transactions, which the image
+      # disables; the setting takes a restart.
+      - name: Allow prepared transactions
+        run: |
+          docker exec ${{ job.services.postgres.id }} psql -U postgres -c "ALTER SYSTEM SET max_prepared_transactions = 5"
+          docker restart ${{ job.services.postgres.id }}
+          until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres; do sleep 1; done
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -351,6 +365,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+      # The 2PC census test needs prepared transactions, which the image
+      # disables; the setting takes a restart.
+      - name: Allow prepared transactions
+        run: |
+          docker exec ${{ job.services.postgres.id }} psql -U postgres -c "ALTER SYSTEM SET max_prepared_transactions = 5"
+          docker restart ${{ job.services.postgres.id }}
+          until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres; do sleep 1; done
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -430,6 +451,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+      # The 2PC census test needs prepared transactions, which the image
+      # disables; the setting takes a restart.
+      - name: Allow prepared transactions
+        run: |
+          docker exec ${{ job.services.postgres.id }} psql -U postgres -c "ALTER SYSTEM SET max_prepared_transactions = 5"
+          docker restart ${{ job.services.postgres.id }}
+          until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres; do sleep 1; done
 
       - name: Install stable toolchain with llvm-tools
         uses: dtolnay/rust-toolchain@stable

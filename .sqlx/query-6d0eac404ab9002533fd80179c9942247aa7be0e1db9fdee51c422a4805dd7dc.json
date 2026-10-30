@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT coalesce(min(xact_start), now()) AS \"horizon!\",\n                  count(*) FILTER (WHERE query = '<insufficient privilege>') AS \"hidden!\"\n           FROM pg_stat_activity\n           WHERE datname = current_database()\n             AND pid <> pg_backend_pid()\n             AND backend_type IS DISTINCT FROM 'autovacuum worker'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "horizon!",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "hidden!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "6d0eac404ab9002533fd80179c9942247aa7be0e1db9fdee51c422a4805dd7dc"
+}

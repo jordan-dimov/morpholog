@@ -392,8 +392,13 @@ pub(crate) struct MigrateArgs {
     pub(crate) db: DatabaseArgs,
     /// Report what is pending and change nothing. Exits non-zero when the
     /// database is behind, so a deploy step can gate on it.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "prepare")]
     pub(crate) check: bool,
+    /// Do everything except the one step that pauses writers: apply the
+    /// plain migrations and every preparation step of the staged one,
+    /// then stop with it pending. A later plain `migrate` completes it.
+    #[arg(long)]
+    pub(crate) prepare: bool,
 }
 
 /// `inspect rejections`: the log, newest first, bounded.

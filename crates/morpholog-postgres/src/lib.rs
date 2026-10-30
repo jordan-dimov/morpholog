@@ -40,6 +40,7 @@ mod migrations;
 mod outbox;
 mod pack;
 mod prefix_verify;
+mod preparation;
 mod program;
 mod propose;
 mod provision;
@@ -98,8 +99,8 @@ pub use indexes::{
 };
 pub use merkle::{Digest, DigestError};
 pub use migrations::{
-    BASELINE_VERSION, BelowBaseline, MigrationRef, MigrationReport, apply_migrations, head_version,
-    migration_status, require_current_schema,
+    BASELINE_VERSION, BelowBaseline, MigrateMode, MigrationRef, MigrationReport, apply_migrations,
+    apply_migrations_with, head_version, migration_status, require_current_schema,
 };
 pub use outbox::{
     CompensationSpec, Deliverer, DeliveryOutcome, OutboxRow, OutboxStatus, OutboxUpdate,
@@ -115,6 +116,10 @@ pub use pack::{
     WindowStart, WindowVerification, begin_prefix_export, document_pack_head, export_pack,
     export_selective, export_window, pack_role_rebindings, read_prefix_stream, streamed_pack_head,
     verify_pack, verify_prefix_stream, verify_selective, verify_window,
+};
+pub use preparation::{
+    ActivationPreflight, BASELINE_LIMIT_BYTES, Census, LockPolicy, PreparationState,
+    activation_preflight, activation_preflight_within, census, census_paused,
 };
 pub use program::{InvariantPlan, PgProgram};
 pub use propose::{

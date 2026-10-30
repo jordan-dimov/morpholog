@@ -1422,6 +1422,27 @@
             "recorded": { "type": "integer" },
             "upgrade_with": { "type": "string" }
           }
+        },
+        "activation_preflight": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "state", "steps_done", "legacy_rows", "audit_bytes", "live_claims",
+            "baseline_bytes", "baseline_limit_bytes", "estimated_preparation_ms",
+            "estimated_writer_pause_ms", "refusals"
+          ],
+          "properties": {
+            "state": { "type": "string", "enum": ["pending", "preparing", "ready"] },
+            "steps_done": { "type": "array", "items": { "type": "string" } },
+            "legacy_rows": { "type": "integer", "minimum": 0 },
+            "audit_bytes": { "type": "integer", "minimum": 0 },
+            "live_claims": { "type": "integer", "minimum": 0 },
+            "baseline_bytes": { "type": "integer", "minimum": 0 },
+            "baseline_limit_bytes": { "type": "integer", "minimum": 1 },
+            "estimated_preparation_ms": { "type": "integer", "minimum": 0 },
+            "estimated_writer_pause_ms": { "type": "integer", "minimum": 0 },
+            "refusals": { "type": "array", "items": { "type": "string" } }
+          }
         }
       }
     },

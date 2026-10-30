@@ -7,12 +7,16 @@
 
 use anyhow::Context;
 use morpholog_postgres::{
-    MigrationReport, PgError, PgPool, apply_migrations, deployment_roles, migration_status,
-    other_sessions, single_connection_pool, with_default_user,
+    LockPolicy, MigrateMode, MigrationReport, PgError, PgPool, activation_preflight,
+    apply_migrations_with, deployment_roles, migration_status, other_sessions,
+    single_connection_pool, with_default_user,
 };
 
 use crate::MigrateArgs;
 use crate::commands::{AlreadyReported, print_json, warn_if_roles_shared};
+
+/// The migration that prepares in steps before its own transaction.
+const STAGED_VERSION: i32 = 27;
 
 pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
     // One connection, so the sessions census never counts this command's
@@ -21,13 +25,18 @@ pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
         .await
         .context("failed to connect to PostgreSQL")?;
 
-    let before = match migration_status(&pool).await {
+    let mut before = match migration_status(&pool).await {
         // Only `--check` reports this state; `migrate` has nothing to apply.
         Err(PgError::SchemaBelowBaseline { recorded, .. }) if args.check => {
             MigrationReport::below_baseline(recorded)
         }
         status => status.context("reading the database's migration state failed")?,
     };
+    // The staged migration's cost and refusals, asked only when it is
+    // pending: the preflight scans the claims table.
+    if args.check && before.pending.iter().any(|p| p.version == STAGED_VERSION) {
+        before.activation_preflight = Some(activation_preflight(&pool).await?);
+    }
     if !before.pending.is_empty() {
         warn_about_other_sessions(&pool).await?;
     }
@@ -35,7 +44,11 @@ pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
         // Ask the whole report, not just `pending`. A database ahead of
         // this binary has nothing pending but is not ready: an older binary
         // cannot know whether a newer migration still fits it.
-        let ready = before.is_current();
+        let ready = before.is_current()
+            && before
+                .activation_preflight
+                .as_ref()
+                .is_none_or(|p| p.refusals.is_empty());
         print_json(&before)?;
         if !ready {
             // The report is already on stdout, so the caller sees what is
@@ -45,7 +58,12 @@ pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let report = apply_migrations(&pool)
+    let mode = if args.prepare {
+        MigrateMode::Prepare
+    } else {
+        MigrateMode::Complete
+    };
+    let report = apply_migrations_with(&pool, mode, &LockPolicy::default())
         .await
         .context("applying migrations failed")?;
     // Also with nothing to apply: a restore can land a current database

@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"prepared!\" FROM pg_prepared_xacts\n           WHERE database = current_database()",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "prepared!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a4f0f372100138fc4e28bf07f8df31c7c9a0c2edf432e7b439dd1890c9a98506"
+}

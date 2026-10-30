@@ -136,6 +136,20 @@ morpholog provision indexes a.morph b.morph                  # 6. every programm
 # 7. start every process on the new binary
 ```
 
+One migration, the canonical audit order, does most of its work before
+the step that pauses writers: new columns, constraints and indexes are
+added with the database in service, in steps that resume if interrupted,
+and only the last transaction holds a lock, one that waits for writers and
+lets readers carry on. On a large history that pause is seconds, in
+proportion to the audit rows and live claims. `migrate --check` reports it
+beforehand under `activation_preflight`: where the preparation stands, the
+estimated preparation time and writer pause, and anything that refuses the
+cutover now (a prepared transaction left open, a session this login cannot
+see, or a baseline too large for one record). To take the long part out of
+the window, run `migrate --prepare` ahead of it; it stops with the
+migration still pending and `--check` saying `ready`, and the plain
+`migrate` in the window does only the cutover.
+
 To rehearse, migrate a copy first (`createdb -T live rehearsal`). A copy holds the same grants as its source, so `migrate` on it warns that this deployment's roles also hold privileges in the source database. For a copy that is expected, and no reason to move roles. Drop the copy before you migrate the live database, or that migrate warns about the copy too.
 
 Step 6 provisions. `provision indexes --check` asks the same question and changes nothing, so it belongs at deployment or service start, before the first write is accepted: a programme running unprovisioned is refused there instead of found by its latency.

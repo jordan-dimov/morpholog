@@ -11,6 +11,9 @@
 //! the file records the ledger up to the baseline, so none is pending.
 
 use crate::error::{PgError, classify, classify_checked_query};
+use crate::preparation::{
+    ActivationPreflight, LockPolicy, activation_preflight, clear_progress, prepare_canonical_order,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
@@ -46,10 +49,21 @@ pub(crate) const MIGRATIONS: &[(i32, &str, &str)] = &[
     ),
 ];
 
-/// The migration after whose script the runner writes the activation
-/// record, in the same transaction: the record's legacy root comes from
-/// the Rust leaf encoder.
-const ACTIVATION_VERSION: i32 = 27;
+/// Whether `migrate` stops before the one transaction that pauses writers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MigrateMode {
+    /// Apply everything, the cutover included.
+    Complete,
+    /// Apply the plain migrations and every preparation step of the
+    /// staged one, then stop with it still pending: `migrate --prepare`.
+    Prepare,
+}
+
+/// The staged migration: prepared in steps outside any long lock
+/// (`preparation`), then one transaction that runs its script, writes the
+/// activation record (the legacy root comes from the Rust leaf encoder)
+/// and records it.
+const ACTIVATION_VERSION: i32 = crate::preparation::CANONICAL_ORDER_VERSION;
 
 /// The newest migration this binary carries.
 pub fn head_version() -> i32 {
@@ -89,6 +103,11 @@ pub struct MigrationReport {
     /// is pending then, since this binary can apply nothing to it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub below_baseline: Option<BelowBaseline>,
+    /// Present while the staged migration is pending: where its
+    /// preparation stands, what its cutover would cost, and what refuses
+    /// it. Absent once the database is current.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_preflight: Option<ActivationPreflight>,
 }
 
 /// A database an older release made, which a binary of release
@@ -113,6 +132,7 @@ impl MigrationReport {
             applied: Vec::new(),
             pending: Vec::new(),
             unknown: Vec::new(),
+            activation_preflight: None,
             below_baseline: Some(BelowBaseline {
                 baseline: BASELINE_VERSION,
                 recorded,
@@ -257,25 +277,50 @@ pub async fn migration_status(pool: &PgPool) -> Result<MigrationReport, PgError>
         pending,
         unknown,
         below_baseline: None,
+        activation_preflight: None,
     })
 }
 
 /// Apply every migration the database has not recorded, in order, then
 /// re-apply the privilege floor to the roles the database records.
 ///
-/// Each migration runs in its own transaction with its record, so a
+/// Each plain migration runs in its own transaction with its record, so a
 /// failure part-way leaves the earlier versions applied and recorded,
-/// never a half-migrated database claiming to be current.
+/// never a half-migrated database claiming to be current. The staged
+/// migration prepares first, in idempotent steps outside any long lock,
+/// then runs its own transaction the same way.
 pub async fn apply_migrations(pool: &PgPool) -> Result<MigrationReport, PgError> {
+    apply_migrations_with(pool, MigrateMode::Complete, &LockPolicy::default()).await
+}
+
+pub async fn apply_migrations_with(
+    pool: &PgPool,
+    mode: MigrateMode,
+    policy: &LockPolicy,
+) -> Result<MigrationReport, PgError> {
     let before = migration_status(pool).await?;
     // Migrating a database that is ahead would apply nothing and report
     // success, although an unseen migration may have broken this binary.
     refuse_if_ahead(&before)?;
     crate::require_deployment_roles(pool).await?;
     let mut applied = Vec::new();
+    let mut preflight = None;
     for &(version, name, sql) in MIGRATIONS {
         if !before.pending.iter().any(|p| p.version == version) {
             continue;
+        }
+        if version == ACTIVATION_VERSION {
+            prepare_canonical_order(pool, policy).await?;
+            let checked = activation_preflight(pool).await?;
+            if mode == MigrateMode::Prepare {
+                preflight = Some(checked);
+                break;
+            }
+            if !checked.refusals.is_empty() {
+                return Err(PgError::CutoverRefused {
+                    reasons: checked.refusals,
+                });
+            }
         }
         let mut tx = pool.begin().await.map_err(classify)?;
         sqlx::raw_sql(sql)
@@ -284,6 +329,7 @@ pub async fn apply_migrations(pool: &PgPool) -> Result<MigrationReport, PgError>
             .map_err(classify)?;
         if version == ACTIVATION_VERSION {
             crate::activation::write_activation_record(&mut tx).await?;
+            clear_progress(&mut tx).await?;
         }
         sqlx::query!(
             "INSERT INTO morpholog.schema_migrations (version, name)
@@ -313,6 +359,7 @@ pub async fn apply_migrations(pool: &PgPool) -> Result<MigrationReport, PgError>
         pending: after.pending,
         unknown: after.unknown,
         below_baseline: None,
+        activation_preflight: preflight,
     })
 }
 

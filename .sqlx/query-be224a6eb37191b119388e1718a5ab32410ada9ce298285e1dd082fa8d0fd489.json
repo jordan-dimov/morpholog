@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT a.attname AS \"name!\",\n                  format_type(a.atttypid, a.atttypmod)\n                      || CASE WHEN a.attnotnull THEN ' NOT NULL' ELSE '' END\n                      || coalesce(' DEFAULT ' || pg_get_expr(d.adbin, d.adrelid), '') AS \"shape!\"\n           FROM pg_attribute a\n           LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum\n           WHERE a.attrelid = 'morpholog.audit'::regclass\n             AND a.attname = ANY($1)\n             AND NOT a.attisdropped",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_attribute",
+            "name": "attname"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "shape!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "NameArray"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "be224a6eb37191b119388e1718a5ab32410ada9ce298285e1dd082fa8d0fd489"
+}

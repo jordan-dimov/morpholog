@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT step FROM morpholog.migration_progress WHERE version = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "step",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.migration_progress",
+            "name": "step"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2fe9c9d6190dbe3d5c689ef02cbc863b628b57618ef31117035f9285f203a921"
+}

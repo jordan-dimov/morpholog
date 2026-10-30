@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT i.indisvalid AS \"valid!\",\n                      'ON ' || tn.nspname || '.' || t.relname\n                          || CASE WHEN i.indisunique THEN ' UNIQUE ' ELSE ' ' END\n                          || am.amname || ' ('\n                          || (SELECT string_agg(pg_get_indexdef(i.indexrelid, k, true), ', ' ORDER BY k)\n                              FROM generate_series(1, i.indnatts) AS k)\n                          || ')'\n                          || coalesce(' WHERE ' || pg_get_expr(i.indpred, i.indrelid), '') AS \"shape!\"\n               FROM pg_index i\n               JOIN pg_class c ON c.oid = i.indexrelid\n               JOIN pg_namespace n ON n.oid = c.relnamespace\n               JOIN pg_am am ON am.oid = c.relam\n               JOIN pg_class t ON t.oid = i.indrelid\n               JOIN pg_namespace tn ON tn.oid = t.relnamespace\n               WHERE n.nspname = 'morpholog' AND c.relname = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "valid!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_index",
+            "name": "indisvalid"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "shape!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Name"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "cedfff8bd667f633869eff6e6b6fd7cc7c8bfbbb54eb84f781dfd5fbd8836a3d"
+}
