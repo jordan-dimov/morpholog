@@ -3,7 +3,8 @@
 //! ACCESS EXCLUSIVE lock they need is bounded, and the census the cutover
 //! rests on fails closed: a session this login cannot see, or a prepared
 //! transaction, refuses it, whether the transaction was prepared before
-//! the census or during it.
+//! the census or during it. An object of another shape under a name a
+//! step owns is refused by name, never changed.
 //!
 //! Schema-changing tests work in a database they create and drop.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -181,6 +182,78 @@ async fn preparation_is_idempotent_and_repairs_what_it_owns() {
     .unwrap();
     assert_eq!(activations, 1);
     assert!(steps_recorded(&pool).await.is_empty());
+    drop_database(pool, admin, &name).await;
+}
+
+#[tokio::test]
+async fn an_object_of_another_shape_under_a_migration_name_is_refused() {
+    let Some((pool, admin, name)) = baseline_database("shape").await else {
+        return;
+    };
+    // Someone's column, constraint or index under one of the migration's
+    // names: the right kind of object with another definition. Each
+    // refuses naming the object and what was found, the step that met it
+    // is not recorded, and removing it lets the run go on.
+    let intruders = [
+        (
+            "columns",
+            "morpholog.audit.audit_order",
+            "ALTER TABLE morpholog.audit ADD COLUMN audit_order bigint NOT NULL DEFAULT 7",
+            "ALTER TABLE morpholog.audit DROP COLUMN audit_order",
+            "DEFAULT 7",
+        ),
+        (
+            "columns",
+            "morpholog.audit.operations",
+            "ALTER TABLE morpholog.audit ADD COLUMN operations text",
+            "ALTER TABLE morpholog.audit DROP COLUMN operations",
+            "`text`",
+        ),
+        (
+            "constraints",
+            "constraint audit_order_all_or_none",
+            "ALTER TABLE morpholog.audit ADD CONSTRAINT audit_order_all_or_none CHECK (true)",
+            "ALTER TABLE morpholog.audit DROP CONSTRAINT audit_order_all_or_none",
+            "CHECK (true)",
+        ),
+        (
+            "indexes",
+            "index morpholog.audit_one_activation",
+            "CREATE INDEX audit_one_activation ON morpholog.audit (transformation_name) \
+             WHERE transformation_name = 'morpholog.activate'",
+            "DROP INDEX morpholog.audit_one_activation",
+            "ON morpholog.audit btree",
+        ),
+        (
+            "indexes",
+            "index morpholog.audit_canonical",
+            "CREATE INDEX audit_canonical ON morpholog.audit (committed_at)",
+            "DROP INDEX morpholog.audit_canonical",
+            "btree (committed_at)",
+        ),
+    ];
+    for (step, object, plant, remove, found) in intruders {
+        ddl(&pool, plant.to_string()).await;
+        let err = apply_migrations_with(&pool, MigrateMode::Prepare, &LockPolicy::default())
+            .await
+            .expect_err(object);
+        match &err {
+            PgError::ObjectDiffers { object: named, .. } => assert_eq!(named, object, "{err}"),
+            other => panic!("{object}: {other}"),
+        }
+        assert!(err.to_string().contains(found), "{err}");
+        assert!(
+            !steps_recorded(&pool).await.iter().any(|(s, _)| s == step),
+            "{step} is not recorded while it refuses"
+        );
+        ddl(&pool, remove.to_string()).await;
+    }
+    let prepared = apply_migrations_with(&pool, MigrateMode::Prepare, &LockPolicy::default())
+        .await
+        .unwrap();
+    let preflight = prepared.activation_preflight.expect("a preflight");
+    assert_eq!(preflight.state, morpholog_postgres::PreparationState::Ready);
+    assert!(preflight.refusals.is_empty(), "{preflight:?}");
     drop_database(pool, admin, &name).await;
 }
 

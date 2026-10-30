@@ -3,8 +3,9 @@
 //! order's functions) runs with the database in service, and the one
 //! transaction that pauses writers holds only EXCLUSIVE locks. Every
 //! step is idempotent and checks the objects it owns, so a run resumes
-//! after a crash or a hand change by rerunning; completed steps are
-//! recorded in `morpholog.migration_progress` for reporting.
+//! after a crash or a hand change by rerunning; an object of another
+//! shape under one of its names is refused, never changed. Completed
+//! steps are recorded in `morpholog.migration_progress` for reporting.
 //!
 //! The preflight says what the cutover would cost and refuses it while a
 //! fact it depends on cannot be established: a prepared transaction, a
@@ -28,38 +29,59 @@ const OBJECTS_SQL: &str = include_str!("../sql/migrations/027/objects.sql");
 
 /// The check constraints, added `NOT VALID` (a brief ACCESS EXCLUSIVE
 /// lock, no scan) and validated afterwards (a scan under a lock that
-/// blocks neither reads nor writes).
-const CHECKS: [(&str, &str); 3] = [
+/// blocks neither reads nor writes). Beside each expression, the shape
+/// the catalog gives it back in, which an existing constraint under the
+/// name must match.
+const CHECKS: [(&str, &str, &str); 3] = [
     (
         "audit_operations_array",
         "jsonb_typeof(operations) = 'array'",
+        "CHECK ((jsonb_typeof(operations) = 'array'::text))",
     ),
     (
         "audit_order_all_or_none",
         "(operations IS NULL) = (audit_order = 0) \
          AND (operations IS NULL) = (ordered_at IS NULL) \
          AND (audit_order > 0 OR act_ordinal = 0)",
+        "CHECK ((((operations IS NULL) = (audit_order = 0)) \
+         AND ((operations IS NULL) = (ordered_at IS NULL)) \
+         AND ((audit_order > 0) OR (act_ordinal = 0))))",
     ),
     (
         "audit_activation_attested",
         "(transformation_name = 'morpholog.activate') = (attestation ->> 'mode' = 'migration')",
+        "CHECK (((transformation_name = 'morpholog.activate'::text) \
+         = ((attestation ->> 'mode'::text) = 'migration'::text)))",
     ),
+];
+
+/// The columns, as the catalog describes them once added.
+const COLUMNS: [(&str, &str); 4] = [
+    ("audit_order", "bigint NOT NULL DEFAULT 0"),
+    ("act_ordinal", "integer NOT NULL DEFAULT 0"),
+    ("ordered_at", "timestamp with time zone"),
+    ("operations", "jsonb"),
 ];
 
 /// The indexes, built `CONCURRENTLY`: two scans each, no lock a reader or
 /// writer notices. A build that fails leaves an invalid index behind,
 /// which `IF NOT EXISTS` would keep; it is dropped and rebuilt instead.
-const INDEXES: [(&str, &str); 2] = [
+/// Beside each statement, the shape the catalog describes the index by:
+/// table, uniqueness, method, keys and predicate.
+const INDEXES: [(&str, &str, &str); 2] = [
     (
         "audit_one_activation",
         "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS audit_one_activation \
          ON morpholog.audit (transformation_name) \
          WHERE transformation_name = 'morpholog.activate'",
+        "ON morpholog.audit UNIQUE btree (transformation_name) \
+         WHERE (transformation_name = 'morpholog.activate'::text)",
     ),
     (
         "audit_canonical",
         "CREATE INDEX CONCURRENTLY IF NOT EXISTS audit_canonical \
          ON morpholog.audit (audit_order, act_ordinal, committed_at, transition_id)",
+        "ON morpholog.audit btree (audit_order, act_ordinal, committed_at, transition_id)",
     ),
 ];
 
@@ -316,16 +338,51 @@ fn first_line(sql: &str) -> String {
         .to_string()
 }
 
+/// An existing object under a name the migration owns must have the
+/// shape the migration would give it; another shape is someone else's
+/// object, refused rather than changed.
+fn same_shape(object: &str, expected: &str, found: &str) -> Result<(), PgError> {
+    if found == expected {
+        Ok(())
+    } else {
+        Err(PgError::ObjectDiffers {
+            object: object.to_string(),
+            expected: expected.to_string(),
+            found: found.to_string(),
+        })
+    }
+}
+
 async fn step_columns(pool: &PgPool, policy: &LockPolicy) -> Result<serde_json::Value, PgError> {
-    let missing = sqlx::query_scalar!(
-        r#"SELECT count(*) AS "missing!" FROM unnest(ARRAY['audit_order', 'act_ordinal', 'ordered_at', 'operations']) AS wanted(name)
-           WHERE NOT EXISTS (
-               SELECT 1 FROM pg_attribute
-               WHERE attrelid = 'morpholog.audit'::regclass AND attname = wanted.name AND NOT attisdropped)"#
+    let names: Vec<String> = COLUMNS
+        .iter()
+        .map(|(name, _)| (*name).to_string())
+        .collect();
+    // `shape!`: format_type is never null for a live column.
+    let present = sqlx::query!(
+        r#"SELECT a.attname AS "name!",
+                  format_type(a.atttypid, a.atttypmod)
+                      || CASE WHEN a.attnotnull THEN ' NOT NULL' ELSE '' END
+                      || coalesce(' DEFAULT ' || pg_get_expr(d.adbin, d.adrelid), '') AS "shape!"
+           FROM pg_attribute a
+           LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+           WHERE a.attrelid = 'morpholog.audit'::regclass
+             AND a.attname = ANY($1)
+             AND NOT a.attisdropped"#,
+        &names
     )
-    .fetch_one(pool)
+    .fetch_all(pool)
     .await
     .map_err(classify_checked_query)?;
+    let mut missing = 0;
+    for (name, expected) in COLUMNS {
+        match present.iter().find(|c| c.name == name) {
+            Some(column) => {
+                same_shape(&format!("morpholog.audit.{name}"), expected, &column.shape)?;
+            }
+            None => missing += 1,
+        }
+    }
     if missing == 0 {
         return Ok(serde_json::json!({ "attempts": 0 }));
     }
@@ -339,9 +396,12 @@ async fn step_constraints(
 ) -> Result<serde_json::Value, PgError> {
     let mut added = Vec::new();
     let mut validated = Vec::new();
-    for (name, expression) in CHECKS {
+    for (name, expression, expected) in CHECKS {
+        // `shape!`: pg_get_constraintdef is never null for a constraint row.
         let state = sqlx::query!(
-            r#"SELECT convalidated AS "validated!" FROM pg_constraint
+            r#"SELECT convalidated AS "validated!",
+                      pg_get_constraintdef(oid) AS "shape!"
+               FROM pg_constraint
                WHERE conrelid = 'morpholog.audit'::regclass AND conname = $1"#,
             name
         )
@@ -349,7 +409,11 @@ async fn step_constraints(
         .await
         .map_err(classify_checked_query)?;
         let valid = match state {
-            Some(row) => row.validated,
+            Some(row) => {
+                let shape = row.shape.strip_suffix(" NOT VALID").unwrap_or(&row.shape);
+                same_shape(&format!("constraint {name}"), expected, shape)?;
+                row.validated
+            }
             None => {
                 let sql = format!(
                     "ALTER TABLE morpholog.audit ADD CONSTRAINT {name} CHECK ({expression}) NOT VALID"
@@ -375,11 +439,24 @@ async fn step_constraints(
 async fn step_indexes(pool: &PgPool) -> Result<serde_json::Value, PgError> {
     let mut built = Vec::new();
     let mut rebuilt = Vec::new();
-    for (name, create) in INDEXES {
+    for (name, create, expected) in INDEXES {
+        // `shape!`: every part is non-null for an index row (the predicate
+        // is coalesced away).
         let state = sqlx::query!(
-            r#"SELECT i.indisvalid AS "valid!" FROM pg_index i
+            r#"SELECT i.indisvalid AS "valid!",
+                      'ON ' || tn.nspname || '.' || t.relname
+                          || CASE WHEN i.indisunique THEN ' UNIQUE ' ELSE ' ' END
+                          || am.amname || ' ('
+                          || (SELECT string_agg(pg_get_indexdef(i.indexrelid, k, true), ', ' ORDER BY k)
+                              FROM generate_series(1, i.indnatts) AS k)
+                          || ')'
+                          || coalesce(' WHERE ' || pg_get_expr(i.indpred, i.indrelid), '') AS "shape!"
+               FROM pg_index i
                JOIN pg_class c ON c.oid = i.indexrelid
                JOIN pg_namespace n ON n.oid = c.relnamespace
+               JOIN pg_am am ON am.oid = c.relam
+               JOIN pg_class t ON t.oid = i.indrelid
+               JOIN pg_namespace tn ON tn.oid = t.relnamespace
                WHERE n.nspname = 'morpholog' AND c.relname = $1"#,
             name
         )
@@ -387,8 +464,11 @@ async fn step_indexes(pool: &PgPool) -> Result<serde_json::Value, PgError> {
         .await
         .map_err(classify_checked_query)?;
         match state {
-            Some(row) if row.valid => continue,
-            Some(_) => {
+            Some(row) => {
+                same_shape(&format!("index morpholog.{name}"), expected, &row.shape)?;
+                if row.valid {
+                    continue;
+                }
                 sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
                     "DROP INDEX CONCURRENTLY morpholog.{name}"
                 )))

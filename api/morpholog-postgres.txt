@@ -585,6 +585,10 @@ pub morpholog_postgres::PgError::LockNotAcquired::statement: alloc::string::Stri
 pub morpholog_postgres::PgError::NoCheckpoint
 pub morpholog_postgres::PgError::NoProgramNamed
 pub morpholog_postgres::PgError::NoTransitionAtOrBefore(jiff::timestamp::Timestamp)
+pub morpholog_postgres::PgError::ObjectDiffers
+pub morpholog_postgres::PgError::ObjectDiffers::expected: alloc::string::String
+pub morpholog_postgres::PgError::ObjectDiffers::found: alloc::string::String
+pub morpholog_postgres::PgError::ObjectDiffers::object: alloc::string::String
 pub morpholog_postgres::PgError::ProgramNamedTwice(alloc::string::String)
 pub morpholog_postgres::PgError::RejectionLogFailure(alloc::boxed::Box<morpholog_postgres::PgError>)
 pub morpholog_postgres::PgError::SchemaAhead

@@ -85,6 +85,19 @@ pub enum PgError {
          has finished"
     )]
     LockNotAcquired { statement: String, attempts: u32 },
+    /// A preparation step found an object under a name it owns with
+    /// another shape: someone else's column, constraint or index. The
+    /// step refuses rather than change it; preparation stopped there.
+    #[error(
+        "migration 27 needs {object} as `{expected}` but the database has `{found}`; \
+         preparation stopped before it. Drop or rename that object, then rerun \
+         `morpholog migrate`"
+    )]
+    ObjectDiffers {
+        object: String,
+        expected: String,
+        found: String,
+    },
     /// The cutover of migration 27 would rest on a fact this login cannot
     /// establish, or would write a record the database cannot hold. Each
     /// reason names its remedy.
