@@ -134,60 +134,62 @@ async fn the_scoped_load_orders_by_the_key() {
     );
 }
 
-/// Every audit walk pages the `(committed_at, transition_id)` index in
-/// order, and each bound is an index condition in the generic prepared
-/// plan. Behind flags in one query the bounds would become a filter, so
-/// each bound has its own query. The texts are hand-kept copies of
-/// `audit_pages::replay_page` and `list_audit_rows_page`.
+/// Every audit walk pages the canonical-order index in order, and each
+/// bound is an index condition in the generic prepared plan. Behind flags
+/// in one query the bounds would become a filter, so each bound has its
+/// own query. The texts are hand-kept copies of `audit_pages::replay_page`
+/// and `list_audit_rows_page`.
 #[tokio::test]
 async fn every_audit_walk_is_an_index_walk_with_its_bounds_as_index_conditions() {
     let pool = test_pool().await;
-    let replay = "SELECT transition_id, transformation_name, asserted_claims, retracted_claims, committed_at FROM morpholog.audit";
-    let full = "SELECT transition_id, transformation_name, arguments, actor, invariant_epoch, invariants_checked, asserted_claims, retracted_claims, emitted_intents, committed_at, attestation, parameters FROM morpholog.audit";
-    let order = "ORDER BY committed_at, transition_id LIMIT $1";
-    let (at, id) = (
+    let replay = "SELECT transition_id, transformation_name, asserted_claims, retracted_claims, committed_at, audit_order, act_ordinal, operations FROM morpholog.audit";
+    let full = "SELECT transition_id, transformation_name, arguments, actor, invariant_epoch, invariants_checked, asserted_claims, retracted_claims, emitted_intents, committed_at, attestation, parameters, model_hash, semantics_version, drawn_subjects, audit_order, act_ordinal, ordered_at, operations FROM morpholog.audit";
+    let order = "ORDER BY audit_order, act_ordinal, committed_at, transition_id LIMIT $1";
+    let key = "(audit_order, act_ordinal, committed_at, transition_id)";
+    let (at, id, n, k, h) = (
         "'2026-06-01T00:00:00Z'::timestamptz",
         "'01900000-0000-7000-8000-000000000001'::uuid",
+        "'3'::bigint",
+        "'0'::integer",
+        "'5'::bigint",
     );
-    let after = "ROW(committed_at, transition_id) > ROW($2, $3)";
+    let after = |o: &str, a: &str| format!("ROW{key} > ROW(${o}, ${a}, $2, $3)");
     let mentions_at = r#"jsonb_path_exists(jsonb_build_array(arguments, asserted_claims, retracted_claims, emitted_intents), '$.** ? (@.type == "subject" && @.value == $s)', $"#;
     let vars = r#"'{"s":"x"}'::jsonb"#;
-    let cases: Vec<(String, String, Vec<&str>)> = vec![
+    let cases: Vec<(String, String, Vec<String>)> = vec![
         (format!("{replay} {order}"), "1024".into(), vec![]),
         (
-            format!("{replay} WHERE (committed_at, transition_id) > ($2, $3) {order}"),
-            format!("1024, {at}, {id}"),
-            vec![after],
+            format!("{replay} WHERE {key} > ($4, $5, $2, $3) {order}"),
+            format!("1024, {at}, {id}, {n}, {k}"),
+            vec![after("4", "5")],
         ),
         (
-            format!("{replay} WHERE (committed_at, transition_id) <= ($2, $3) {order}"),
-            format!("1024, {at}, {id}"),
-            vec!["ROW(committed_at, transition_id) <= ROW($2, $3)"],
+            format!("{replay} WHERE {key} <= ($4, $5, $2, $3) {order}"),
+            format!("1024, {at}, {id}, {n}, {k}"),
+            vec![format!("ROW{key} <= ROW($4, $5, $2, $3)")],
         ),
         (
             format!(
-                "{replay} WHERE (committed_at, transition_id) > ($2, $3) AND (committed_at, transition_id) <= ($4, $5) {order}"
+                "{replay} WHERE {key} > ($6, $7, $2, $3) AND {key} <= ($8, $9, $4, $5) {order}"
             ),
-            format!("1024, {at}, {id}, {at}, {id}"),
-            vec![after, "ROW(committed_at, transition_id) <= ROW($4, $5)"],
+            format!("1024, {at}, {id}, {at}, {id}, {n}, {k}, {n}, {k}"),
+            vec![after("6", "7"), format!("ROW{key} <= ROW($8, $9, $4, $5)")],
         ),
         (format!("{full} {order}"), "1024".into(), vec![]),
         (
-            format!("{full} WHERE (committed_at, transition_id) > ($2, $3) {order}"),
-            format!("1024, {at}, {id}"),
-            vec![after],
+            format!("{full} WHERE {key} > ($4, $5, $2, $3) {order}"),
+            format!("1024, {at}, {id}, {n}, {k}"),
+            vec![after("4", "5")],
         ),
         (
-            format!("{full} WHERE committed_at < $2 {order}"),
-            format!("1024, {at}"),
-            vec!["committed_at < $2"],
+            format!("{full} WHERE audit_order < $2 {order}"),
+            format!("1024, {h}"),
+            vec!["audit_order < $2".into()],
         ),
         (
-            format!(
-                "{full} WHERE (committed_at, transition_id) > ($2, $3) AND committed_at < $4 {order}"
-            ),
-            format!("1024, {at}, {id}, {at}"),
-            vec![after, "committed_at < $4"],
+            format!("{full} WHERE {key} > ($5, $6, $2, $3) AND audit_order < $4 {order}"),
+            format!("1024, {at}, {id}, {h}, {n}, {k}"),
+            vec![after("5", "6"), "audit_order < $4".into()],
         ),
         // The `--mentions` statements: the same walk and bounds, the
         // subject test a filter on each row, never a second scan.
@@ -197,35 +199,33 @@ async fn every_audit_walk_is_an_index_walk_with_its_bounds_as_index_conditions()
             vec![],
         ),
         (
-            format!(
-                "{full} WHERE (committed_at, transition_id) > ($2, $3) AND {mentions_at}4) {order}"
-            ),
-            format!("1024, {at}, {id}, {vars}"),
-            vec![after],
+            format!("{full} WHERE {key} > ($5, $6, $2, $3) AND {mentions_at}4) {order}"),
+            format!("1024, {at}, {id}, {vars}, {n}, {k}"),
+            vec![after("5", "6")],
         ),
         (
-            format!("{full} WHERE committed_at < $2 AND {mentions_at}3) {order}"),
-            format!("1024, {at}, {vars}"),
-            vec!["committed_at < $2"],
+            format!("{full} WHERE audit_order < $2 AND {mentions_at}3) {order}"),
+            format!("1024, {h}, {vars}"),
+            vec!["audit_order < $2".into()],
         ),
         (
             format!(
-                "{full} WHERE (committed_at, transition_id) > ($2, $3) AND committed_at < $4 AND {mentions_at}5) {order}"
+                "{full} WHERE {key} > ($6, $7, $2, $3) AND audit_order < $4 AND {mentions_at}5) {order}"
             ),
-            format!("1024, {at}, {id}, {at}, {vars}"),
-            vec![after, "committed_at < $4"],
+            format!("1024, {at}, {id}, {h}, {vars}, {n}, {k}"),
+            vec![after("6", "7"), "audit_order < $4".into()],
         ),
     ];
     for (sql, args, bounds) in &cases {
         let (nodes, conds) = plan(&pool, sql, Some(args)).await;
         assert!(
-            nodes.iter().any(|n| n.ends_with("audit_committed_at")),
-            "must walk audit_committed_at: {nodes:?} for {sql}"
+            nodes.iter().any(|n| n.ends_with("audit_canonical")),
+            "must walk audit_canonical: {nodes:?} for {sql}"
         );
         assert!(!sorts(&nodes), "must not sort: {nodes:?} for {sql}");
         for bound in bounds {
             assert!(
-                conds.iter().any(|c| c.contains(bound)),
+                conds.iter().any(|c| c.contains(bound.as_str())),
                 "`{bound}` must be an index condition, got {conds:?} for {sql}"
             );
         }
@@ -235,12 +235,12 @@ async fn every_audit_walk_is_an_index_walk_with_its_bounds_as_index_conditions()
     // filter, so this test can tell the difference.
     let (_, conds) = plan(
         &pool,
-        &format!("{replay} WHERE ($4 OR (committed_at, transition_id) > ($2, $3)) {order}"),
-        Some(&format!("1024, {at}, {id}, false")),
+        &format!("{replay} WHERE ($6 OR {key} > ($4, $5, $2, $3)) {order}"),
+        Some(&format!("1024, {at}, {id}, {n}, {k}, false")),
     )
     .await;
     assert!(
-        !conds.iter().any(|c| c.contains(after)),
+        !conds.iter().any(|c| c.contains(&after("4", "5"))),
         "a flagged bound must not show as an index condition: {conds:?}"
     );
 }

@@ -32,14 +32,17 @@ const NODE_PREFIX: u8 = 0x01;
 /// version, never a silent change to historical roots. The row's own
 /// content picks the version: no attestation is V1, an attestation is V2,
 /// an attestation plus parameter names is V3, those plus the model hash is
-/// V4, and those plus the semantics version is V5. A verifier needs no
-/// side channel, and moving a field across that line changes the leaf.
+/// V4, those plus the semantics version is V5, those plus the drawn
+/// subjects is V6, and those plus the canonical order and the operations
+/// is V7. A verifier needs no side channel, and moving a field across
+/// that line changes the leaf.
 const LEAF_FORMAT_V1: u8 = 1;
 const LEAF_FORMAT_V2: u8 = 2;
 const LEAF_FORMAT_V3: u8 = 3;
 const LEAF_FORMAT_V4: u8 = 4;
 const LEAF_FORMAT_V5: u8 = 5;
 const LEAF_FORMAT_V6: u8 = 6;
+const LEAF_FORMAT_V7: u8 = 7;
 
 /// A 32-byte SHA-256 digest.
 pub(crate) type Hash = [u8; 32];
@@ -229,11 +232,15 @@ fn canonical_leaf_bytes(row: &AuditRow) -> Result<Vec<u8>, serde_json::Error> {
         // semantics version too, V5: V4's fields plus the version as a u32
         // in little-endian, so the row commits to the contract that decided
         // it. With the drawn subjects too, V6: V5's fields plus the draws,
-        // so the row commits to every input its act read. The shape check
-        // above refuses any of these on a lower rung.
+        // so the row commits to every input its act read. With the order
+        // too, V7: V6's fields plus the order, the act ordinal, the ordered
+        // timestamp and the operations, so the row commits to its place in
+        // the log and to what its commit did. The shape check above refuses
+        // any of these on a lower rung.
         (Some(attestation), Some(parameters)) => {
             buf.push(
                 match (&row.model_hash, row.semantics_version, &row.drawn_subjects) {
+                    _ if row.operations.is_some() => LEAF_FORMAT_V7,
                     (Some(_), Some(_), Some(_)) => LEAF_FORMAT_V6,
                     (Some(_), Some(_), None) => LEAF_FORMAT_V5,
                     (Some(_), None, _) => LEAF_FORMAT_V4,
@@ -252,6 +259,17 @@ fn canonical_leaf_bytes(row: &AuditRow) -> Result<Vec<u8>, serde_json::Error> {
             }
             if let Some(drawn) = &row.drawn_subjects {
                 push_field(&mut buf, &drawn_subjects_bytes(drawn));
+            }
+            if let (Some(order), Some(ordinal), Some(at), Some(operations)) = (
+                row.audit_order,
+                row.act_ordinal,
+                row.ordered_at,
+                &row.operations,
+            ) {
+                push_field(&mut buf, &order.to_le_bytes());
+                push_field(&mut buf, &ordinal.to_le_bytes());
+                push_field(&mut buf, &committed_at_micros(at).to_le_bytes());
+                push_field(&mut buf, &serde_json::to_vec(operations)?);
             }
         }
     }

@@ -43,6 +43,10 @@ fn fixed_row() -> AuditRow {
         model_hash: None,
         semantics_version: None,
         drawn_subjects: None,
+        audit_order: None,
+        act_ordinal: None,
+        ordered_at: None,
+        operations: None,
     }
 }
 
@@ -669,6 +673,10 @@ fn an_unknown_audit_row_field_is_malformed() {
 fn drawing_fixed_row(drawn: &[&str]) -> AuditRow {
     AuditRow {
         drawn_subjects: Some(drawn.iter().map(|s| Subject::from(*s)).collect()),
+        audit_order: None,
+        act_ordinal: None,
+        ordered_at: None,
+        operations: None,
         ..semantics_fixed_row()
     }
 }

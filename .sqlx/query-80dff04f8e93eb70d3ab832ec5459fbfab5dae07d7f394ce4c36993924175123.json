@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT session_user::text AS \"name!\", r.oid::int8 AS \"oid!\"\n           FROM pg_catalog.pg_roles r WHERE r.rolname = session_user",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "oid!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "80dff04f8e93eb70d3ab832ec5459fbfab5dae07d7f394ce4c36993924175123"
+}

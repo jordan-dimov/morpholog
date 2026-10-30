@@ -29,13 +29,15 @@ const SENTINEL_HASH: &str =
 /// Like `common::reset_db_and_read_cache`, but also drops the generated
 /// `morpholog_views` and the `analytics` schema a test renames into.
 async fn reset(pool: &PgPool) {
-    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-        "{}; TRUNCATE morpholog_read.derived_claims, morpholog_read.derived_active, \
+    morpholog_postgres::testing::reset_database(pool)
+        .await
+        .expect("reset");
+    sqlx::raw_sql(
+        "TRUNCATE morpholog_read.derived_claims, morpholog_read.derived_active, \
                   morpholog_read.derived_refreshes CASCADE; \
          DROP SCHEMA IF EXISTS morpholog_views CASCADE; \
          DROP SCHEMA IF EXISTS analytics CASCADE;",
-        morpholog_postgres::testing::RESET_SQL
-    )))
+    )
     .execute(pool)
     .await
     .expect("reset");

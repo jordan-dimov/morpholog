@@ -982,11 +982,38 @@ fn subjects_history() -> Vec<AuditRow> {
     rows
 }
 
-/// Every row shape the log has ever written travels under the one format,
-/// streamed or read whole, and the manifest's head survives the reading.
+/// The whole ladder, then rows in the one canonical order: a batch of two
+/// acts under one order, then a later order.
+fn ordered_history() -> Vec<AuditRow> {
+    let mut rows = subjects_history();
+    let last = rows[rows.len() - 1].clone();
+    let newest: Vec<AuditRow> = [(1, 0), (1, 1), (2, 0)]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (order, ordinal))| {
+            let committed_at: jiff::Timestamp =
+                format!("2026-06-24T00:03:{i:02}Z").parse().unwrap();
+            AuditRow {
+                transition_id: uuid::Uuid::from_u128(0x300 + i as u128),
+                committed_at,
+                audit_order: Some(order),
+                act_ordinal: Some(ordinal),
+                ordered_at: Some(committed_at),
+                operations: Some(Vec::new()),
+                ..last.clone()
+            }
+        })
+        .collect();
+    rows.extend(newest);
+    rows
+}
+
+/// Every row shape the log has ever written travels under the current
+/// format, streamed or read whole, and the manifest's head survives the
+/// reading.
 #[test]
-fn one_format_carries_every_row_shape() {
-    let rows = subjects_history();
+fn the_current_format_carries_every_row_shape() {
+    let rows = ordered_history();
     let stream = streamed_pack_of(&rows, PACK_FORMAT);
     assert!(matches!(
         stream_verdict(&stream, None),
@@ -1002,6 +1029,60 @@ fn one_format_carries_every_row_shape() {
     ));
 }
 
+/// A pack written before the log had one order still verifies, and holds
+/// legacy rows only: an ordered row under that format is no pack its
+/// writer produced, streamed or read whole.
+#[test]
+fn a_legacy_format_pack_verifies_and_carries_legacy_rows_only() {
+    let legacy = streamed_pack_of(&subjects_history(), LEGACY_PACK_FORMAT);
+    assert!(matches!(
+        stream_verdict(&legacy, None),
+        Ok(TreeVerification::Intact { .. })
+    ));
+    let pack = read_prefix_stream(&legacy[..]).unwrap();
+    assert_eq!(pack.manifest.pack_format_version, LEGACY_PACK_FORMAT);
+    assert!(matches!(
+        verify_pack(&pack, None),
+        Ok(TreeVerification::Intact { .. })
+    ));
+
+    let ordered = ordered_history();
+    stream_malformed(
+        &streamed_pack_of(&ordered, LEGACY_PACK_FORMAT),
+        "carries legacy rows only",
+    );
+    let mut document = read_prefix_stream(&streamed_pack_of(&ordered, PACK_FORMAT)[..]).unwrap();
+    document.manifest.pack_format_version = LEGACY_PACK_FORMAT;
+    malformed("carries legacy rows only", &document);
+
+    // The window and selective kinds hold the same line.
+    for (rows, legal) in [(subjects_history(), true), (ordered, false)] {
+        let leaves: Vec<Hash> = rows.iter().map(|r| audit_leaf_hash(r).unwrap()).collect();
+        let from = real_checkpoint(&leaves, 1, None);
+        let to = real_checkpoint(&leaves, rows.len(), Some(&from));
+        let mut window = assemble_window_pack(&rows, from, to.clone()).unwrap();
+        window.manifest.pack_format_version = LEGACY_PACK_FORMAT;
+        let last = rows[rows.len() - 1].transition_id;
+        let mut selective = assemble_selective_pack(&rows, to, &[last]).unwrap();
+        selective.manifest.pack_format_version = LEGACY_PACK_FORMAT;
+        for verdict in [
+            verify_window(&window, None).map(|_| ()),
+            verify_selective(&selective, None).map(|_| ()),
+        ] {
+            match verdict {
+                Ok(()) => assert!(legal),
+                Err(PackError::Malformed { detail }) => {
+                    assert!(
+                        !legal && detail.contains("carries legacy rows only"),
+                        "{detail}"
+                    );
+                }
+                Err(other) => panic!("{other:?}"),
+            }
+        }
+    }
+}
+
 /// A pack of another format, older or newer, is refused by name before a
 /// row is read, naming the writer its manifest claims. The head is read
 /// leniently: a newer format may carry fields this binary has never seen.
@@ -1015,22 +1096,24 @@ fn another_format_is_unsupported_not_malformed() {
         }) => assert_eq!(written_by.as_deref(), Some("0.0.0")),
         other => panic!("expected format 13 to be unsupported, got {other:?}"),
     }
-    let newer = b"{\"pack_format_version\": 18, \"pack_kind\": \"prefix\", \
+    let newer = b"{\"pack_format_version\": 19, \"pack_kind\": \"prefix\", \
                   \"morpholog_version\": \"9.9.9\", \"from_the_future\": true}\nnot json\n";
     match stream_verdict(newer, None) {
         Err(PackError::Unsupported {
-            pack_format_version: 18,
+            pack_format_version: 19,
             written_by,
         }) => assert_eq!(written_by.as_deref(), Some("9.9.9")),
-        other => panic!("expected format 18 to be unsupported, got {other:?}"),
+        other => panic!("expected format 19 to be unsupported, got {other:?}"),
     }
     let message = PackError::Unsupported {
-        pack_format_version: 18,
+        pack_format_version: 19,
         written_by: Some("9.9.9".into()),
     }
     .to_string();
     assert!(
-        message.contains("reads format 17") && message.contains("names Morpholog 9.9.9"),
+        message.contains("reads formats 17 and 18")
+            && message.contains("names Morpholog 9.9.9")
+            && message.contains("a release that reads format 19"),
         "{message}"
     );
     let message = PackError::Unsupported {

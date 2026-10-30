@@ -540,11 +540,25 @@ async fn verify_detects_an_out_of_band_edit() {
 async fn checkpoint_covering_a_withheld_transition_prints_the_coded_refusal() {
     reset_db().await;
     let pool = PgPool::connect(&database_url()).await.unwrap();
-    // An older transaction still open stands in for a writer in flight:
-    // the horizon trails it, so a transition committed after it is
+    // A writer that drew its order and is still in flight: the horizon
+    // stops at that order, so a transition committed after it is
     // withheld from the stable prefix.
     let mut older = pool.begin().await.unwrap();
-    sqlx::query("SELECT 1").execute(&mut *older).await.unwrap();
+    sqlx::query(
+        "INSERT INTO morpholog.audit (
+            transition_id, transformation_name, arguments, actor,
+            invariant_epoch, invariants_checked,
+            asserted_claims, retracted_claims, emitted_intents,
+            attestation, parameters, model_hash, semantics_version, drawn_subjects,
+            operations
+         ) VALUES (gen_random_uuid(), 'in_flight', '[]',
+                   '{\"type\":\"subject\",\"value\":\"w\"}', 1, '[]', '[]', '[]', '[]',
+                   '{\"mode\":\"gateway\",\"authenticated_by\":\"test\"}', '[]',
+                   'sha256:' || repeat('0', 64), 1, '[]', '[]')",
+    )
+    .execute(&mut *older)
+    .await
+    .unwrap();
     let withheld = post_balanced_entry("c1", 100);
 
     let id = withheld.to_string();
@@ -564,7 +578,8 @@ async fn checkpoint_covering_a_withheld_transition_prints_the_coded_refusal() {
         .unwrap();
     assert_eq!(recorded, 0, "a refusal records nothing");
 
-    older.commit().await.unwrap();
+    // The older writer finishes by rolling back, so it leaves no row.
+    older.rollback().await.unwrap();
     let (status, stdout, stderr) = run_cli(&["audit", "checkpoint", "--covering", &id]);
     assert!(
         status.success(),
@@ -874,7 +889,7 @@ async fn the_pin_never_masks_a_sparse_packs_intrinsic_verdict() {
     let mut malformed = tempfile::NamedTempFile::new().unwrap();
     std::io::Write::write_all(
         &mut malformed,
-        br#"{"manifest": {"pack_format_version": 17, "pack_kind": "window", "morpholog_version": "0.0.0"}}"#,
+        br#"{"manifest": {"pack_format_version": 18, "pack_kind": "window", "morpholog_version": "0.0.0"}}"#,
     )
     .unwrap();
     let malformed_path = malformed.path().to_str().unwrap();
@@ -1247,8 +1262,11 @@ async fn evidence_verify_names_a_format_it_does_not_read() {
         assert_eq!(verdict["written_by"], written_by, "got: {stdout}");
         let detail = verdict["detail"].as_str().unwrap();
         assert!(
-            detail.contains(&format!("reads format {reads}")),
-            "the detail names the format this binary reads: {detail}"
+            detail.contains(&format!(
+                "reads formats {} and {reads}",
+                morpholog_postgres::LEGACY_PACK_FORMAT
+            )),
+            "the detail names the formats this binary reads: {detail}"
         );
     }
 }
@@ -1273,8 +1291,8 @@ async fn evidence_verify_on_a_readable_but_invalid_pack_is_a_malformed_verdict()
     // A kind this binary does not read, under the format it does, in
     // either spelling: malformed, naming the kind.
     for text in [
-        r#"{"manifest": {"pack_format_version": 17, "pack_kind": "ledger", "morpholog_version": "0.0.0"}}"#.to_string(),
-        "{\"pack_format_version\": 17, \"pack_kind\": \"ledger\", \"morpholog_version\": \"0.0.0\"}\n{}\n".to_string(),
+        r#"{"manifest": {"pack_format_version": 18, "pack_kind": "ledger", "morpholog_version": "0.0.0"}}"#.to_string(),
+        "{\"pack_format_version\": 18, \"pack_kind\": \"ledger\", \"morpholog_version\": \"0.0.0\"}\n{}\n".to_string(),
     ] {
         let packfile = temp_file(text.as_bytes());
         let (status, stdout, _stderr) =
@@ -1299,7 +1317,7 @@ async fn evidence_verify_refuses_a_pack_whose_hash_is_not_a_digest() {
     std::io::Write::write_all(
         &mut packfile,
         format!(
-            r#"{{"manifest": {{"pack_format_version": 17, "pack_kind": "prefix", "morpholog_version": "0.0.0", "root_hash": "{uppercase}"}}}}"#
+            r#"{{"manifest": {{"pack_format_version": 18, "pack_kind": "prefix", "morpholog_version": "0.0.0", "root_hash": "{uppercase}"}}}}"#
         )
             .as_bytes(),
     )
@@ -1876,54 +1894,6 @@ predicate Solo(only_id: Subject)
         stderr.contains("skew"),
         "the error names the skew; got: {stderr}"
     );
-}
-
-// `--writer-role` reaches both commands that use the watermark. The test
-// role is a superuser, so the role check passes trivially here; it is
-// tested properly in morpholog-postgres.
-#[tokio::test(flavor = "current_thread")]
-async fn inspect_audit_writer_role_assertion_streams_the_tail() {
-    reset_db().await;
-    post_balanced_entry("entry_001", 100);
-    let me = common::session_user(&database_url()).await;
-
-    let (status, stdout, stderr) = run_cli(&["inspect", "audit", "--writer-role", &me]);
-    assert!(status.success(), "asserted tail should stream; {stderr}");
-    let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
-    assert_eq!(
-        lines.len(),
-        1,
-        "one committed transition, one line: {stdout}"
-    );
-    let row: Value = serde_json::from_str(lines[0]).unwrap();
-    assert_eq!(row["transformation_name"], "post_simple_entry");
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn inspect_audit_unknown_writer_role_is_refused_as_a_typo() {
-    reset_db().await;
-    let (status, _stdout, stderr) =
-        run_cli(&["inspect", "audit", "--writer-role", "no_such_role_cli_209"]);
-    assert!(!status.success(), "an unknown asserted role must refuse");
-    assert!(
-        stderr.contains("no_such_role_cli_209"),
-        "the refusal names the role: {stderr}"
-    );
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn checkpoint_accepts_the_writer_assertion() {
-    reset_db().await;
-    post_balanced_entry("entry_001", 100);
-    let me = common::session_user(&database_url()).await;
-
-    let (status, stdout, stderr) = run_cli(&["audit", "checkpoint", "--writer-role", &me]);
-    assert!(
-        status.success(),
-        "asserted checkpoint should commit; {stderr}"
-    );
-    let outcome: Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(outcome["status"], "created", "{stdout}");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -4605,7 +4575,8 @@ async fn a_pack_larger_than_the_verifiers_memory_still_verifies() {
         "INSERT INTO morpholog.audit (
             transition_id, transformation_name, arguments, actor, invariant_epoch,
             invariants_checked, asserted_claims, retracted_claims, emitted_intents,
-            attestation, parameters, model_hash, semantics_version, drawn_subjects)
+            attestation, parameters, model_hash, semantics_version, drawn_subjects,
+            operations)
          SELECT gen_random_uuid(), 'note',
                 jsonb_build_array(jsonb_build_object(
                     'type', 'subject', 'value', repeat(md5(i::text), 128))),
@@ -4613,7 +4584,7 @@ async fn a_pack_larger_than_the_verifiers_memory_still_verifies() {
                 '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
                 '{\"mode\":\"gateway\",\"authenticated_by\":\"test\"}'::jsonb,
                 '[\"note\"]'::jsonb,
-                'sha256:' || repeat('0', 64), 1, '[]'::jsonb
+                'sha256:' || repeat('0', 64), 1, '[]'::jsonb, '[]'::jsonb
          FROM generate_series(1, $1) AS i",
     )
     .bind(ROWS)

@@ -1097,6 +1097,39 @@ class TamperEvidence(unittest.TestCase):
             with self.assertRaises(envelopes.EnvelopeError):
                 envelopes.AuditRow.from_json(row)
 
+    def test_an_audit_row_records_its_order_and_its_operations(self):
+        row = envelopes.AuditRow.from_json(golden("audit_row_ordered.json"))
+        assert row.ordering is not None
+        self.assertEqual((row.ordering.audit_order, row.ordering.act_ordinal), (7, 1))
+        self.assertEqual([op.op for op in row.ordering.operations], ["del", "noop"])
+        self.assertIsNone(row.ordering.operations[0].asserted_in)
+        self.assertIsNone(
+            envelopes.AuditRow.from_json(golden("audit_row_drawn_subjects.json")).ordering
+        )
+        for tamper in (
+            lambda r: r.pop("operations"),
+            lambda r: r.pop("drawn_subjects"),
+            lambda r: r.__setitem__("audit_order", 0),
+            lambda r: r["operations"][0].__setitem__("op", "upsert"),
+        ):
+            row = golden("audit_row_ordered.json")
+            tamper(row)
+            with self.assertRaises(envelopes.EnvelopeError):
+                envelopes.AuditRow.from_json(row)
+
+    def test_the_activation_record_carries_its_migration_and_its_baseline(self):
+        row = envelopes.AuditRow.from_json(golden("audit_row_activation.json"))
+        assert row.attestation is not None and row.ordering is not None
+        self.assertEqual(row.transformation_name, "morpholog.activate")
+        self.assertEqual(row.attestation.mode, "migration")
+        self.assertEqual(row.attestation.authenticated_by_oid, 10)
+        self.assertEqual(row.ordering.audit_order, 1)
+        self.assertIsNotNone(row.ordering.operations[0].asserted_in)
+        unidentified = golden("audit_row_activation.json")
+        unidentified["attestation"].pop("authenticated_by_oid")
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.AuditRow.from_json(unidentified)
+
     def test_a_present_null_is_malformed_on_its_own_rung(self):
         # Absent is the only spelling for "not on this rung". Each case is
         # a row whose other fields are lawful, so only the null is at stake.
@@ -1106,6 +1139,7 @@ class TamperEvidence(unittest.TestCase):
             ("audit_row_model_hash.json", "model_hash"),
             ("audit_row_semantics_version.json", "semantics_version"),
             ("audit_row_drawn_subjects.json", "drawn_subjects"),
+            ("audit_row_ordered.json", "operations"),
         ):
             row = golden(golden_name)
             envelopes.AuditRow.from_json(row)
@@ -1146,8 +1180,18 @@ class TamperEvidence(unittest.TestCase):
         self.assertIsInstance(report.replay, envelopes.ReplayDivergent)
         self.assertEqual(report.replay.only_in_claims_table[0].predicate, "EveryKind")
         self.assertEqual(report.replay.only_in_replay, [])
+        self.assertIn("finds no such claim", report.replay.conflicts[0].detail)
         self.assertIsInstance(report.tree, envelopes.TreeTampered)
         self.assertNotEqual(report.tree.recorded_root, report.tree.recomputed_root)
+
+    def test_verify_report_indeterminate(self):
+        report = envelopes.VerifyReport.from_json(golden("verify_report_indeterminate.json"))
+        self.assertIsInstance(report.replay, envelopes.ReplayIndeterminate)
+        self.assertFalse(report.passes)
+        baseline = report.replay.legacy_only_in_baseline[0]
+        replay = report.replay.legacy_only_in_replay[0]
+        self.assertEqual((baseline.predicate, baseline.args), (replay.predicate, replay.args))
+        self.assertNotEqual(baseline.asserted_in, replay.asserted_in)
 
     def test_checkpoint_outcomes(self):
         created = envelopes.parse_checkpoint_outcome(golden("checkpoint_created.json"))
@@ -1200,7 +1244,7 @@ class TamperEvidence(unittest.TestCase):
 
     def test_prefix_pack_manifest(self):
         manifest = envelopes.PrefixPackManifest.from_json(golden("prefix_pack_manifest.json"))
-        self.assertEqual(manifest.pack_format_version, 17)
+        self.assertEqual(manifest.pack_format_version, 18)
         self.assertEqual(manifest.pack_kind, "prefix")
         self.assertEqual(manifest.morpholog_version, "0.0.0")
         self.assertEqual(manifest.checkpoint_count, 1)
@@ -1222,7 +1266,7 @@ class TamperEvidence(unittest.TestCase):
 
     def test_window_evidence_pack_with_proofs(self):
         pack = envelopes.WindowEvidencePack.from_json(golden("window_evidence_pack.json"))
-        self.assertEqual(pack.manifest.pack_format_version, 17)
+        self.assertEqual(pack.manifest.pack_format_version, 18)
         self.assertEqual(pack.manifest.pack_kind, "window")
         self.assertIsInstance(pack.from_checkpoint, envelopes.Checkpoint)
         self.assertIsInstance(pack.to_checkpoint, envelopes.Checkpoint)
@@ -1232,7 +1276,7 @@ class TamperEvidence(unittest.TestCase):
 
     def test_selective_evidence_pack_and_every_verdict(self):
         pack = envelopes.SelectiveEvidencePack.from_json(golden("selective_evidence_pack.json"))
-        self.assertEqual(pack.manifest.pack_format_version, 17)
+        self.assertEqual(pack.manifest.pack_format_version, 18)
         self.assertEqual(pack.manifest.pack_kind, "selective")
         self.assertIsInstance(pack.checkpoint, envelopes.Checkpoint)
         self.assertEqual(len(pack.rows), len(pack.inclusion_proofs))

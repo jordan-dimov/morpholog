@@ -31,11 +31,11 @@ use morpholog_core::{
 use morpholog_postgres::{
     AtomicAct, AuditRow, AuditedInvariantCheck, Checkpoint, CheckpointOutcome, CheckpointWitnesses,
     OutboxRow, PackVerdict, PackVerificationReport, PgAtomicOutcome, PgProposalOutcome,
-    PrefixPackManifest, RebindingScope, RoleRebinding, RoleRebindings, RowInclusionProof,
-    SelectiveEvidencePack, SelectivePackManifest, SelectiveVerification, TreeHeadSignature,
-    TreeVerification, VerifyOutcome, VerifyReport, ViewsVerification, WindowEvidencePack,
-    WindowPackManifest, WindowVerification, WitnessScheme, WitnessStanding, WitnessVerdict,
-    WitnessesReport,
+    PrefixPackManifest, RebindingScope, ReplayConflict, RoleRebinding, RoleRebindings,
+    RowInclusionProof, SelectiveEvidencePack, SelectivePackManifest, SelectiveVerification,
+    TreeHeadSignature, TreeVerification, VerifyOutcome, VerifyReport, ViewsVerification,
+    WindowEvidencePack, WindowPackManifest, WindowVerification, WitnessScheme, WitnessStanding,
+    WitnessVerdict, WitnessesReport,
 };
 use morpholog_postgres::{
     CheckpointMatch, Completeness, Evaluation, EvaluationReceipt, ProgramMatch, ReceiptCheckpoint,
@@ -1219,6 +1219,10 @@ fn audit_rows_serialize_as_pinned() {
         model_hash: None,
         semantics_version: None,
         drawn_subjects: None,
+        audit_order: None,
+        act_ordinal: None,
+        ordered_at: None,
+        operations: None,
     };
     assert_golden("audit_row.json", &to_value(&row));
 
@@ -1286,12 +1290,75 @@ fn audit_rows_serialize_as_pinned() {
         &to_value(&subjects_recording),
     );
 
+    // The row as written now: also its place in the canonical order and
+    // what its commit did to the claims table.
+    let ordered = AuditRow {
+        audit_order: Some(7),
+        act_ordinal: Some(1),
+        ordered_at: Some(
+            "2026-06-01T12:00:00.000250Z"
+                .parse::<jiff::Timestamp>()
+                .unwrap(),
+        ),
+        operations: Some(vec![
+            morpholog_postgres::Operation {
+                op: morpholog_postgres::OperationKind::Del,
+                predicate: kitchen_sink_claim().predicate,
+                args: kitchen_sink_claim().args,
+                asserted_in: None,
+            },
+            morpholog_postgres::Operation {
+                op: morpholog_postgres::OperationKind::Noop,
+                predicate: kitchen_sink_claim().predicate,
+                args: kitchen_sink_claim().args,
+                asserted_in: None,
+            },
+        ]),
+        ..subjects_recording.clone()
+    };
+    assert_golden("audit_row_ordered.json", &to_value(&ordered));
+
+    // The activation record: a control record the migration wrote, whose
+    // operations are the baseline, each claim with the transition that
+    // admitted it.
+    let activation = AuditRow {
+        transformation_name: "morpholog.activate".into(),
+        arguments: vec![
+            EvalValue::Decimal(3.into()),
+            EvalValue::Subject(Subject::from(format!("sha256:{}", "a".repeat(64)))),
+            EvalValue::Subject(Subject::from(format!("sha256:{}", "b".repeat(64)))),
+        ],
+        invariants_checked: vec![],
+        asserted_claims: vec![],
+        emitted_intents: vec![],
+        attestation: Some(morpholog_postgres::AuditAttestation::Migration {
+            authenticated_by: "deployer".to_string(),
+            authenticated_by_oid: 10,
+        }),
+        parameters: Some(vec![
+            "legacy_tree_size".to_string(),
+            "legacy_root".to_string(),
+            "baseline_digest".to_string(),
+        ]),
+        drawn_subjects: Some(vec![]),
+        audit_order: Some(1),
+        act_ordinal: Some(0),
+        operations: Some(vec![morpholog_postgres::Operation {
+            op: morpholog_postgres::OperationKind::Ins,
+            predicate: kitchen_sink_claim().predicate,
+            args: kitchen_sink_claim().args,
+            asserted_in: Some(sample_uuid()),
+        }]),
+        ..ordered.clone()
+    };
+    assert_golden("audit_row_activation.json", &to_value(&activation));
+
     // The --named form replaces the claim arrays with named claims and
     // leaves the rest unchanged, via the binary's own projection. Built
     // from the row as written now, so the named schema is held to every
     // rung.
     let named = morpholog_cli::envelopes::audit_row_named(
-        &subjects_recording,
+        &ordered,
         vec![morpholog_cli::envelopes::NamedClaim {
             args: [
                 ("account_id".to_string(), serde_json::json!("acct_1")),
@@ -1993,6 +2060,10 @@ fn sample_audit_row() -> AuditRow {
         model_hash: None,
         semantics_version: None,
         drawn_subjects: None,
+        audit_order: None,
+        act_ordinal: None,
+        ordered_at: None,
+        operations: None,
     }
 }
 
@@ -2079,6 +2150,10 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
             replay: VerifyOutcome::Divergent {
                 only_in_claims_table: vec![kitchen_sink_claim()],
                 only_in_replay: vec![],
+                conflicts: vec![ReplayConflict {
+                    transition_id: uuid::Uuid::from_u128(0x0193_0000_0000_7000_8000_0000_0000_0007),
+                    detail: "del EveryKind [] finds no such claim".to_string(),
+                }],
             },
             views: None,
             witnesses: None,
@@ -2088,6 +2163,30 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
                 tree_size: 2,
                 recorded_root: format!("sha256:{}", "a".repeat(64)).parse().unwrap(),
                 recomputed_root: format!("sha256:{}", "c".repeat(64)),
+            },
+        }),
+    );
+    assert_golden(
+        "verify_report_indeterminate.json",
+        &to_value(&VerifyReport {
+            replay: VerifyOutcome::Indeterminate {
+                transitions: 4,
+                claims: 1,
+                legacy_only_in_baseline: vec![morpholog_postgres::ClaimRead {
+                    claim: kitchen_sink_claim(),
+                    asserted_in: uuid::Uuid::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0002),
+                }],
+                legacy_only_in_replay: vec![morpholog_postgres::ClaimRead {
+                    claim: kitchen_sink_claim(),
+                    asserted_in: uuid::Uuid::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0001),
+                }],
+            },
+            views: None,
+            witnesses: None,
+            role_rebindings: RoleRebindings::NotEvaluated,
+            tree: TreeVerification::Intact {
+                checkpoints: 1,
+                tree_size: 4,
             },
         }),
     );
@@ -2295,7 +2394,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
     assert_golden_bytes(
         "prefix_pack_manifest.json",
         &PrefixPackManifest {
-            pack_format_version: 17,
+            pack_format_version: 18,
             pack_kind: "prefix".into(),
             morpholog_version: "0.0.0".into(),
             tree_size: 2,
@@ -2330,7 +2429,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
     assert_golden(
         "tree_verification_unsupported_pack.json",
         &to_value(&TreeVerification::unsupported_pack(
-            18,
+            19,
             Some("9.9.9".into()),
         )),
     );
@@ -2371,7 +2470,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         "window_evidence_pack.json",
         &to_value(&WindowEvidencePack {
             manifest: WindowPackManifest {
-                pack_format_version: 17,
+                pack_format_version: 18,
                 pack_kind: "window".into(),
                 morpholog_version: "0.0.0".into(),
                 from_tree_size: 2,
@@ -2452,7 +2551,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         "selective_evidence_pack.json",
         &to_value(&SelectiveEvidencePack {
             manifest: SelectivePackManifest {
-                pack_format_version: 17,
+                pack_format_version: 18,
                 pack_kind: "selective".into(),
                 morpholog_version: "0.0.0".into(),
                 tree_size: 3,
@@ -3075,6 +3174,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ),
         ("verify_report_consistent.json", "verify_report"),
         ("verify_report_divergent.json", "verify_report"),
+        ("verify_report_indeterminate.json", "verify_report"),
         ("verify_report_with_views.json", "verify_report"),
         ("views_verification_intact.json", "views_verification"),
         ("views_verification_tampered.json", "views_verification"),

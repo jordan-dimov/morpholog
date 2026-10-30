@@ -272,6 +272,7 @@ pub async fn move_deployment_roles(
     let (w, r) = (quote_ident(from.writer()), quote_ident(from.reader()));
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "REVOKE ALL ON ALL TABLES IN SCHEMA morpholog, morpholog_read FROM {w}, {r}; \
+         REVOKE ALL ON ALL FUNCTIONS IN SCHEMA morpholog FROM {w}, {r}; \
          REVOKE ALL ON SCHEMA morpholog, morpholog_read FROM {w}, {r};"
     )))
     .execute(&mut *tx)
@@ -346,7 +347,8 @@ async fn beyond_the_floor(
                          pg_describe_object(d.classid, d.objid, d.objsubid)) AS "finding!"
            FROM deps d
            WHERE NOT (d.deptype = 'a' AND d.objsubid = 0
-                      AND d.classid IN ('pg_class'::regclass, 'pg_namespace'::regclass))
+                      AND d.classid IN ('pg_class'::regclass, 'pg_namespace'::regclass,
+                                        'pg_proc'::regclass))
            UNION ALL
            SELECT format('`%s` holds %s%s on %s', d.old_name, a.privilege_type,
                          CASE WHEN a.is_grantable THEN ' with grant option' ELSE '' END,
@@ -368,6 +370,17 @@ async fn beyond_the_floor(
            WHERE d.deptype = 'a' AND d.objsubid = 0 AND a.grantee = d.old_oid
              AND (a.is_grantable OR NOT EXISTS (
                    SELECT 1 FROM aclexplode(ns.nspacl) b
+                   WHERE b.grantee = d.new_oid AND b.privilege_type = a.privilege_type))
+           UNION ALL
+           SELECT format('`%s` holds %s%s on %s', d.old_name, a.privilege_type,
+                         CASE WHEN a.is_grantable THEN ' with grant option' ELSE '' END,
+                         pg_describe_object(d.classid, d.objid, 0))
+           FROM deps d
+           JOIN pg_proc f ON d.classid = 'pg_proc'::regclass AND f.oid = d.objid
+           CROSS JOIN LATERAL aclexplode(f.proacl) a
+           WHERE d.deptype = 'a' AND d.objsubid = 0 AND a.grantee = d.old_oid
+             AND (a.is_grantable OR NOT EXISTS (
+                   SELECT 1 FROM aclexplode(f.proacl) b
                    WHERE b.grantee = d.new_oid AND b.privilege_type = a.privilege_type))
            ORDER BY 1"#,
         from.writer(),

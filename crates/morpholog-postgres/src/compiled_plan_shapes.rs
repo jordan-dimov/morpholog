@@ -40,8 +40,7 @@ use crate::indexes::provision_indexes;
 use crate::program::PgProgram;
 
 async fn reset(pool: &PgPool) {
-    sqlx::raw_sql(crate::testing::RESET_SQL)
-        .execute(pool)
+    crate::testing::reset_database(pool)
         .await
         .expect("truncate");
     let ours: Vec<String> = sqlx::query_scalar(

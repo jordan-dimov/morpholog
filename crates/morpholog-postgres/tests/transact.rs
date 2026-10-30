@@ -135,15 +135,29 @@ async fn later_acts_see_earlier_acts_and_the_audit_keeps_act_order() {
         "ids increase in act order: {ids:?}"
     );
 
-    // Canonical replay order is (committed_at, transition_id); every act
-    // shares the transaction's committed_at, so the ids carry the order.
-    let replayed: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT transition_id FROM morpholog.audit ORDER BY committed_at, transition_id",
+    // The batch draws one order and its acts take ordinals in act order,
+    // which is the canonical replay order.
+    let replayed: Vec<(Uuid, i64, i32)> = sqlx::query_as(
+        "SELECT transition_id, audit_order, act_ordinal FROM morpholog.audit
+         ORDER BY audit_order, act_ordinal, committed_at, transition_id",
     )
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert_eq!(replayed, ids, "audit replay order is act order");
+    assert_eq!(
+        replayed.iter().map(|r| r.0).collect::<Vec<_>>(),
+        ids,
+        "audit replay order is act order"
+    );
+    assert!(
+        replayed.iter().all(|r| r.1 == replayed[0].1),
+        "one order for the batch: {replayed:?}"
+    );
+    assert_eq!(
+        replayed.iter().map(|r| r.2).collect::<Vec<_>>(),
+        (0..ids.len() as i32).collect::<Vec<_>>(),
+        "ordinals in act order"
+    );
     let stamps: i64 = count(
         &pool,
         "SELECT count(DISTINCT committed_at) FROM morpholog.audit",

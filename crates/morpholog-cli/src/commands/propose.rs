@@ -322,13 +322,9 @@ pub(crate) fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
         | PgError::SchemaAhead { .. }
         | PgError::SchemaBelowBaseline { .. }
         | PgError::TransitionNotFound(_)
+        | PgError::TransitionNotSettled(_)
         | PgError::TransitionNotCovered { .. }
         | PgError::NoTransitionAtOrBefore(_)
-        | PgError::StatVisibility { .. }
-        | PgError::WriterRoleUnknown { .. }
-        | PgError::WriterAssertionIncomplete { .. }
-        | PgError::WriterSessionsHidden { .. }
-        | PgError::WriterAssertionEmpty
         | PgError::ActorPolicyDeclaration { .. }
         | PgError::UnknownTransformation { .. }
         | PgError::NoCheckpoint

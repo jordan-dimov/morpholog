@@ -57,8 +57,7 @@ pub async fn test_pool() -> PgPool {
 /// own rows.
 pub async fn reset_db(pool: &PgPool) {
     drain_open_transactions(pool).await;
-    sqlx::query(morpholog_postgres::testing::RESET_SQL)
-        .execute(pool)
+    morpholog_postgres::testing::reset_database(pool)
         .await
         .expect("failed to truncate test DB");
 }
@@ -67,11 +66,13 @@ pub async fn reset_db(pool: &PgPool) {
 /// tests that exercise the derived read cache or SQL views; do not make
 /// this the default reset - everything else uses [`reset_db`].
 pub async fn reset_db_and_read_cache(pool: &PgPool) {
-    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-        "{}; TRUNCATE morpholog_read.derived_claims, morpholog_read.derived_active, \
+    morpholog_postgres::testing::reset_database(pool)
+        .await
+        .expect("reset");
+    sqlx::raw_sql(
+        "TRUNCATE morpholog_read.derived_claims, morpholog_read.derived_active, \
                   morpholog_read.derived_refreshes CASCADE;",
-        morpholog_postgres::testing::RESET_SQL
-    )))
+    )
     .execute(pool)
     .await
     .expect("reset");
@@ -331,7 +332,7 @@ async fn checkpoint_at(
     use morpholog_postgres::CheckpointOutcome::{Created, NoNewRows};
     for attempt in 0..3 {
         drain_open_transactions(pool).await;
-        match morpholog_postgres::create_checkpoint(pool, signer, None, None)
+        match morpholog_postgres::create_checkpoint(pool, signer, None)
             .await
             .unwrap()
         {
@@ -404,12 +405,13 @@ pub async fn insert_in_flight_audit_row(conn: &mut sqlx::PgConnection, transitio
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
             asserted_claims, retracted_claims, emitted_intents,
-            attestation, parameters, model_hash, semantics_version, drawn_subjects
+            attestation, parameters, model_hash, semantics_version, drawn_subjects,
+            operations
          ) VALUES ($1, 'post', '[]'::jsonb,
                    '{\"type\":\"subject\",\"value\":\"in_flight\"}'::jsonb,
                    1, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
                    '{\"mode\":\"gateway\",\"authenticated_by\":\"test\"}'::jsonb,
-                   '[]'::jsonb, 'sha256:' || repeat('0', 64), 1, '[]'::jsonb)",
+                   '[]'::jsonb, 'sha256:' || repeat('0', 64), 1, '[]'::jsonb, '[]'::jsonb)",
     )
     .bind(transition_id)
     .execute(conn)
@@ -531,12 +533,13 @@ pub async fn insert_in_flight_audit_row_mentioning(
             transition_id, transformation_name, arguments, actor,
             invariant_epoch, invariants_checked,
             asserted_claims, retracted_claims, emitted_intents,
-            attestation, parameters, model_hash, semantics_version, drawn_subjects
+            attestation, parameters, model_hash, semantics_version, drawn_subjects,
+            operations
          ) VALUES ($1, 'post', jsonb_build_array(jsonb_build_object('type', 'subject', 'value', $2::text)),
                    '{\"type\":\"subject\",\"value\":\"in_flight\"}'::jsonb,
                    1, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
                    '{\"mode\":\"gateway\",\"authenticated_by\":\"test\"}'::jsonb,
-                   '[\"entry_id\"]'::jsonb, 'sha256:' || repeat('0', 64), 1, '[]'::jsonb)",
+                   '[\"entry_id\"]'::jsonb, 'sha256:' || repeat('0', 64), 1, '[]'::jsonb, '[]'::jsonb)",
     )
     .bind(transition_id)
     .bind(subject)

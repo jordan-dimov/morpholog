@@ -70,13 +70,14 @@ pub(crate) fn authorized_keys_as_of(rows: &[AuditRow], tree_size: i64) -> HashSe
 pub(crate) fn apply_key_claims(keys: &mut HashSet<KeyTriple>, row: &AuditRow) {
     for change in row.effect().changes() {
         match change {
+            Change::Reset => keys.clear(),
             Change::Retract(claim) => {
-                if let Some(triple) = key_triple(claim) {
+                if let Some(triple) = key_triple(&claim) {
                     keys.remove(&triple);
                 }
             }
             Change::Admit(claim) => {
-                if let Some(triple) = key_triple(claim) {
+                if let Some(triple) = key_triple(&claim) {
                     keys.insert(triple);
                 }
             }
@@ -124,6 +125,10 @@ mod tests {
             model_hash: None,
             semantics_version: None,
             drawn_subjects: None,
+            audit_order: None,
+            act_ordinal: None,
+            ordered_at: None,
+            operations: None,
         }
     }
 

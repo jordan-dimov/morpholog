@@ -640,16 +640,14 @@ class Session:
         self,
         after: str | None = None,
         *,
-        writer_roles: list[str] | None = None,
         mentions: str | None = None,
         limit: int | None = None,
     ) -> list[envelopes.AuditRow]:
         """The audit tail through the session, as on the one-shot client:
-        committed transitions in commit order, ``after`` resuming strictly
-        after a seen transition id, rows of writers still in flight
-        withheld for a later call and never skipped. ``writer_roles`` and
-        ``mentions`` as on the one-shot client, except that an empty
-        ``writer_roles`` is refused here rather than read as no assertion.
+        committed transitions in the canonical order, ``after`` resuming
+        strictly after a seen transition id, rows at or after the order of
+        a writer still in flight withheld for a later call and never
+        skipped. ``mentions`` as on the one-shot client.
 
         The answer arrives whole, not streamed, so a resident loop should
         pass ``limit``: at most that many rows come back, and the next call
@@ -659,20 +657,19 @@ class Session:
 
         A database that cannot give a sound resume horizon ends the
         session rather than answering with a short list."""
-        body = self._audit_body(after, False, writer_roles, mentions, limit)
+        body = self._audit_body(after, False, mentions, limit)
         return self._read_rows(body, envelopes.AuditRow.from_json)
 
     def audit_named(
         self,
         after: str | None = None,
         *,
-        writer_roles: list[str] | None = None,
         mentions: str | None = None,
         limit: int | None = None,
     ) -> list[envelopes.AuditRowNamed]:
         """``audit`` with asserted and retracted claims decoded by
         declared field name under the programme the session pinned."""
-        body = self._audit_body(after, True, writer_roles, mentions, limit)
+        body = self._audit_body(after, True, mentions, limit)
         return self._read_rows(body, envelopes.AuditRowNamed.from_json)
 
     def rejections(
@@ -720,7 +717,6 @@ class Session:
         self,
         after: str | None,
         named: bool,
-        writer_roles: list[str] | None,
         mentions: str | None,
         limit: int | None,
     ) -> dict[str, object]:
@@ -731,13 +727,6 @@ class Session:
             body["named"] = True
         if _subject(mentions) is not None:
             body["mentions"] = mentions
-        if writer_roles is not None:
-            if not writer_roles:
-                raise ValueError(
-                    "writer_roles asserts who writes audit; an empty list asserts nothing, "
-                    "so pass None for the default horizon"
-                )
-            body["writer_roles"] = list(writer_roles)
         if limit is not None:
             body["limit"] = limit
         return body

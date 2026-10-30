@@ -159,17 +159,22 @@ AuditRecord
   retracted_claims
   emitted_intents
   committed_at                   -- the writer's transaction START instant, not the
-                                    commit instant; (committed_at, transition_id) is
-                                    the stable total replay order every audit read
-                                    (verify, coverage, as-of, the inspect-audit tail)
-                                    orders by
+                                    commit instant
   attestation                    -- how the actor identity was established
   parameters                     -- the transformation's parameter names, one per argument
   model_hash                     -- the canonical hash of the whole programme that
                                     admitted the row (`morpholog hash`)
   semantics_version              -- the kernel semantics that decided it
   drawn_subjects                 -- the subjects `new Subject()` drew, in order
+  audit_order, act_ordinal       -- the transaction's place in the one order, and the
+                                    act's within it; with committed_at and transition_id,
+                                    the total replay order every audit read (verify,
+                                    coverage, as-of, the inspect-audit tail) orders by
+  ordered_at                     -- the server clock when the order was taken
+  operations                     -- what the commit did to the claims table, in order
 ```
+
+Rows from before the canonical order carry none of the last four. Replay reads them from the claims they proposed, which can differ from what their commit did when two writers overlapped. The activation record that ends them replaces the replayed state with the claims the table held, and every row after it applies its recorded operations. The order is taken when a transaction writes its first audit row, after it has read and written its claims, so it is the order of effects. It need not be the order in which serializable isolation placed the decisions: a transaction that read a claim before another removed it can commit after the removal and sort after it.
 
 ## Surface-to-IR mapping
 

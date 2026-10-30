@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT predicate_name, arguments, arguments_hash\n                     FROM morpholog.claims\n                     ORDER BY predicate_name, arguments_hash\n                     LIMIT $1",
+  "query": "SELECT predicate_name, arguments, arguments_hash, asserted_in\n                     FROM morpholog.claims\n                     ORDER BY predicate_name, arguments_hash\n                     LIMIT $1",
   "describe": {
     "columns": [
       {
@@ -35,6 +35,17 @@
             "name": "arguments_hash"
           }
         }
+      },
+      {
+        "ordinal": 3,
+        "name": "asserted_in",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "morpholog.claims",
+            "name": "asserted_in"
+          }
+        }
       }
     ],
     "parameters": {
@@ -45,8 +56,9 @@
     "nullable": [
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "a3b72a805990dfcae150a84ce2beb3443afab0cfcefe73421818aa1d4a38a559"
+  "hash": "68c02faf37bed67d6cc97fcebf5b9753792fa29cb8ccc10766e45837d665d7f2"
 }

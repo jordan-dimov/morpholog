@@ -1,6 +1,12 @@
 {
   "passes": false,
   "replay": {
+    "conflicts": [
+      {
+        "detail": "del EveryKind [] finds no such claim",
+        "transition_id": "01930000-0000-7000-8000-000000000007"
+      }
+    ],
     "only_in_claims_table": [
       {
         "args": [

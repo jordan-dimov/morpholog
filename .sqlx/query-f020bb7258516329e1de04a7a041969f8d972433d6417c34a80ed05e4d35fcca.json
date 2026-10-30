@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT transition_id, transformation_name,\n                        asserted_claims, retracted_claims, committed_at\n                 FROM morpholog.audit\n                 WHERE (committed_at, transition_id) <= ($2, $3)\n                 ORDER BY committed_at, transition_id\n                 LIMIT $1",
+  "query": "SELECT transition_id, transformation_name,\n                        asserted_claims, retracted_claims, committed_at, audit_order, act_ordinal,\n                        operations\n                 FROM morpholog.audit\n                 WHERE (audit_order, act_ordinal, committed_at, transition_id) > ($4, $5, $2, $3)\n                 ORDER BY audit_order, act_ordinal, committed_at, transition_id\n                 LIMIT $1",
   "describe": {
     "columns": [
       {
@@ -57,13 +57,48 @@
             "name": "committed_at"
           }
         }
+      },
+      {
+        "ordinal": 5,
+        "name": "audit_order",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "audit_order"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "act_ordinal",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "act_ordinal"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "operations",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "operations"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
         "Int8",
         "Timestamptz",
-        "Uuid"
+        "Uuid",
+        "Int8",
+        "Int4"
       ]
     },
     "nullable": [
@@ -71,8 +106,11 @@
       false,
       false,
       false,
-      false
+      false,
+      false,
+      false,
+      true
     ]
   },
-  "hash": "1bbc02c55155c995cc74fc9aa6f232efd5c0ba9343566f948bf79c706923d328"
+  "hash": "f020bb7258516329e1de04a7a041969f8d972433d6417c34a80ed05e4d35fcca"
 }

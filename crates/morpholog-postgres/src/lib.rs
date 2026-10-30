@@ -15,6 +15,7 @@ pub use sql_views::{RenderedViews, ViewRefusal, render_views};
 
 pub use sqlx::PgPool;
 
+mod activation;
 mod actor_policy;
 mod as_of;
 mod attestation;
@@ -29,6 +30,7 @@ mod compiled_differential;
 mod compiled_plan_shapes;
 mod derived;
 mod error;
+mod history;
 mod indexes;
 mod keys;
 #[cfg(test)]
@@ -68,8 +70,9 @@ pub use as_of::{
 };
 pub use attestation::{ActorAttestation, AuditAttestation, Proposal};
 pub use audit::{
-    AuditPosition, AuditRow, AuditTail, audit_cursor_for, audit_resume_watermark, begin_audit_tail,
-    list_audit_rows, list_audit_rows_page, list_audit_rows_page_mentioning,
+    AuditPosition, AuditRow, AuditTail, Operation, OperationKind, audit_cursor_for,
+    audit_resume_watermark, begin_audit_tail, list_audit_rows, list_audit_rows_page,
+    list_audit_rows_page_mentioning,
 };
 pub use checkpoints::{
     Checkpoint, CheckpointOutcome, CheckpointSigner, SignaturePolicy, SignaturePolicyViolation,
@@ -87,6 +90,7 @@ pub use compiled::fetch_diagnostic;
 pub use compiled::{CompileReason, CompileRefusal};
 pub use derived::{RefreshSummary, list_derived, list_derived_at, refresh_derived};
 pub use error::PgError;
+pub use history::ReplayConflict;
 pub use indexes::{
     IndexAction, IndexNeed, IndexPlanEntry, NeedKind, ProvisionReport, ProvisionedProgram,
     RequiredElsewhere, StatisticsAction, StatisticsPlanEntry, check_named_programs, plan_indexes,
@@ -105,8 +109,8 @@ pub use outbox::{
     process_one_outbox_row, record_compensation, release_outbox_claim,
 };
 pub use pack::{
-    EvidencePack, PACK_FORMAT, PackError, PackHead, PackKind, PackManifest, PrefixExport,
-    PrefixPackManifest, PrefixStreamReport, RowInclusionProof, SelectiveEvidencePack,
+    EvidencePack, LEGACY_PACK_FORMAT, PACK_FORMAT, PackError, PackHead, PackKind, PackManifest,
+    PrefixExport, PrefixPackManifest, PrefixStreamReport, RowInclusionProof, SelectiveEvidencePack,
     SelectivePackManifest, SelectiveVerification, WindowEvidencePack, WindowPackManifest,
     WindowStart, WindowVerification, begin_prefix_export, document_pack_head, export_pack,
     export_selective, export_window, pack_role_rebindings, read_prefix_stream, streamed_pack_head,

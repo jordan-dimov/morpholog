@@ -724,13 +724,41 @@
       }
     },
     "attestation": {
+      "oneOf": [
+        {
+          "description": "The login role of the proposing connection asserted the actor.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "authenticated_by"],
+          "properties": {
+            "mode": { "const": "gateway" },
+            "authenticated_by": { "type": "string" },
+            "authenticated_by_oid": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+          }
+        },
+        {
+          "description": "The login role that ran the migration that wrote the activation record. Only that record carries it.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "authenticated_by", "authenticated_by_oid"],
+          "properties": {
+            "mode": { "const": "migration" },
+            "authenticated_by": { "type": "string" },
+            "authenticated_by_oid": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+          }
+        }
+      ]
+    },
+    "audit_operation": {
+      "description": "One row operation a commit performed on the claims table: a delete, an insert, or an insert that found the claim already present. On the activation record's baseline, each insert names the transition that admitted the claim.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["mode", "authenticated_by"],
+      "required": ["op", "predicate", "args"],
       "properties": {
-        "mode": { "const": "gateway" },
-        "authenticated_by": { "type": "string" },
-        "authenticated_by_oid": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+        "op": { "enum": ["del", "ins", "noop"] },
+        "predicate": { "type": "string" },
+        "args": { "type": "array", "items": { "$ref": "#/$defs/tagged_value" } },
+        "asserted_in": { "type": "string", "format": "uuid" }
       }
     },
     "audit_row": {
@@ -799,12 +827,37 @@
           "description": "The subjects the act drew from `new Subject()`, in draw order; empty when it drew none. Absent on rows from before draws were recorded.",
           "type": "array",
           "items": { "type": "string" }
+        },
+        "audit_order": {
+          "description": "The order the row's transaction drew: the log's canonical order, before the act ordinal, the commit time and the id. Absent on rows from before the order existed, which come first.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "act_ordinal": {
+          "description": "The act's place within its transaction, from 0.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "ordered_at": {
+          "description": "The ordered timestamp, strictly increasing with the order.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "operations": {
+          "description": "What the commit did to the claims table, in execution order.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/audit_operation" }
         }
       },
       "dependentRequired": {
         "model_hash": ["attestation", "parameters"],
         "semantics_version": ["model_hash"],
-        "drawn_subjects": ["semantics_version"]
+        "drawn_subjects": ["semantics_version"],
+        "audit_order": ["drawn_subjects", "act_ordinal", "ordered_at", "operations"],
+        "act_ordinal": ["audit_order"],
+        "ordered_at": ["audit_order"],
+        "operations": ["audit_order"]
       }
     },
     "audit_row_named": {
@@ -873,12 +926,37 @@
           "description": "The subjects the act drew from `new Subject()`, in draw order; empty when it drew none. Absent on rows from before draws were recorded.",
           "type": "array",
           "items": { "type": "string" }
+        },
+        "audit_order": {
+          "description": "The order the row's transaction drew: the log's canonical order, before the act ordinal, the commit time and the id. Absent on rows from before the order existed, which come first.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "act_ordinal": {
+          "description": "The act's place within its transaction, from 0.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "ordered_at": {
+          "description": "The ordered timestamp, strictly increasing with the order.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "operations": {
+          "description": "What the commit did to the claims table, in execution order.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/audit_operation" }
         }
       },
       "dependentRequired": {
         "model_hash": ["attestation", "parameters"],
         "semantics_version": ["model_hash"],
-        "drawn_subjects": ["semantics_version"]
+        "drawn_subjects": ["semantics_version"],
+        "audit_order": ["drawn_subjects", "act_ordinal", "ordered_at", "operations"],
+        "act_ordinal": ["audit_order"],
+        "ordered_at": ["audit_order"],
+        "operations": ["audit_order"]
       }
     },
     "outbox_row": {
@@ -1607,11 +1685,35 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["status", "only_in_claims_table", "only_in_replay"],
+          "required": ["status", "transitions", "claims", "legacy_only_in_baseline", "legacy_only_in_replay"],
+          "properties": {
+            "status": { "const": "indeterminate" },
+            "transitions": { "type": "integer" },
+            "claims": { "type": "integer" },
+            "legacy_only_in_baseline": { "type": "array", "items": { "$ref": "#/$defs/claim_read" } },
+            "legacy_only_in_replay": { "type": "array", "items": { "$ref": "#/$defs/claim_read" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "only_in_claims_table", "only_in_replay", "conflicts"],
           "properties": {
             "status": { "const": "divergent" },
             "only_in_claims_table": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } },
-            "only_in_replay": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } }
+            "only_in_replay": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } },
+            "conflicts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["transition_id", "detail"],
+                "properties": {
+                  "transition_id": { "type": "string", "format": "uuid" },
+                  "detail": { "type": "string" }
+                }
+              }
+            }
           }
         }
       ]

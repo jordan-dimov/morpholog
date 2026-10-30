@@ -60,7 +60,10 @@ async fn a_commit_records_the_sessions_authenticated_role() {
     let AuditAttestation::Gateway {
         authenticated_by,
         authenticated_by_oid,
-    } = rows.last().unwrap().attestation.clone().expect("attested");
+    } = rows.last().unwrap().attestation.clone().expect("attested")
+    else {
+        panic!("a proposal is gateway-attested");
+    };
     assert_eq!(authenticated_by, session_user);
     // Which incarnation of the name: the role's OID when it committed.
     assert_eq!(authenticated_by_oid, Some(role_oid.0));
@@ -69,7 +72,10 @@ async fn a_commit_records_the_sessions_authenticated_role() {
 #[tokio::test]
 async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     let pool = test_pool().await;
-    reset_db(&pool).await;
+    common::drain_open_transactions(&pool).await;
+    morpholog_postgres::testing::reset_before_activation(&pool)
+        .await
+        .unwrap();
     let program = pg_program(double_entry_ledger::program());
 
     // The real order of an upgraded deployment: rows from before
@@ -155,6 +161,9 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     .execute(&pool)
     .await
     .unwrap();
+    // Then the canonical order: the activation record closes the legacy
+    // prefix, and every row after it is ordered and records operations.
+    morpholog_postgres::testing::activate(&pool).await.unwrap();
     propose_pg_with_test_actor(
         &pool,
         &program,
@@ -166,7 +175,7 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     .unwrap();
 
     // The whole history - legacy, attested, self-describing, naming its
-    // programme, naming its semantics, recording its draws - verifies as
+    // programme, naming its semantics, recording its draws, ordered - verifies as
     // one tree, live and offline, and the checkpoints taken before the
     // last boundaries keep the roots they had: verification recomputes
     // every stored checkpoint's root.
@@ -239,7 +248,7 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
         ),
         "a window across the semantics and subjects boundaries verifies"
     );
-    for row in [0, 3, 4, 5] {
+    for row in [0, 3, 4, 5, 6] {
         let selective =
             morpholog_postgres::export_selective(&pool, None, &[pack.rows[row].transition_id])
                 .await
@@ -250,7 +259,7 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
             morpholog_postgres::SelectiveVerification::Intact { .. }
         ));
     }
-    let regimes: Vec<[bool; 5]> = pack
+    let regimes: Vec<[bool; 6]> = pack
         .rows
         .iter()
         .map(|r| {
@@ -260,33 +269,35 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
                 r.model_hash.is_some(),
                 r.semantics_version.is_some(),
                 r.drawn_subjects.is_some(),
+                r.operations.is_some(),
             ]
         })
         .collect();
     assert_eq!(
         regimes,
         vec![
-            [false, false, false, false, false],
-            [true, false, false, false, false],
-            [true, true, false, false, false],
-            [true, true, true, false, false],
-            [true, true, true, true, false],
-            [true, true, true, true, true]
+            [false, false, false, false, false, false],
+            [true, false, false, false, false, false],
+            [true, true, false, false, false, false],
+            [true, true, true, false, false, false],
+            [true, true, true, true, false, false],
+            [true, true, true, true, true, true],
+            [true, true, true, true, true, true]
         ],
         "every encoding, in the real chronology"
     );
     assert_eq!(
-        pack.rows[5].drawn_subjects,
+        pack.rows[6].drawn_subjects,
         Some(Vec::new()),
         "an act that draws nothing records an empty list, not an absent one"
     );
     assert_eq!(
-        pack.rows[5].model_hash.as_deref(),
+        pack.rows[6].model_hash.as_deref(),
         Some(program.prepared().model_hash()),
         "the newest row names the programme that admitted it"
     );
     assert_eq!(
-        pack.rows[5].semantics_version,
+        pack.rows[6].semantics_version,
         Some(morpholog_core::SEMANTICS_VERSION),
         "and the semantics that decided it"
     );
@@ -296,7 +307,7 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
         .map(ToString::to_string)
         .collect();
     assert_eq!(
-        pack.rows[5].parameters.as_deref(),
+        pack.rows[6].parameters.as_deref(),
         Some(declared.as_slice()),
         "the stamped row names its own signature, in declaration order"
     );
@@ -304,7 +315,7 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     // A stamped name is evidence: edit one in the exported pack and the
     // tree no longer verifies.
     let mut edited = pack.clone();
-    edited.rows[5].parameters.as_mut().unwrap()[0] = "entry".to_string();
+    edited.rows[6].parameters.as_mut().unwrap()[0] = "entry".to_string();
     assert!(
         !matches!(
             verify_pack(&edited, None).unwrap(),
@@ -324,58 +335,23 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
         "names on an unattested row are no encoding"
     );
 
-    // After activation the database refuses an insert shaped like an
-    // earlier writer, so a stale binary cannot extend an older regime.
-    let refused = legacy_insert(&pool).await;
-    let err = refused.expect_err("an unattested insert must be refused after activation");
-    assert!(
-        err.to_string().contains("audit_attestation_required"),
-        "the refusal names the activation constraint: {err}"
-    );
-    // PostgreSQL reports the first failing check by constraint name, so
-    // an insert missing two later fields names either boundary.
-    let refused = attested_unstamped_insert(&pool).await;
-    let err = refused.expect_err("an unstamped insert must be refused after activation");
-    assert!(
-        [
-            "audit_model_hash_required",
-            "audit_parameters_required",
-            "audit_semantics_version_required",
-            "audit_drawn_subjects_required"
-        ]
-        .iter()
-        .any(|c| err.to_string().contains(c)),
-        "the refusal names an activation constraint: {err}"
-    );
-    let refused = named_unhashed_insert(&pool).await;
-    let err = refused.expect_err("an insert naming no programme must be refused after activation");
-    assert!(
-        [
-            "audit_model_hash_required",
-            "audit_semantics_version_required",
-            "audit_drawn_subjects_required"
-        ]
-        .iter()
-        .any(|c| err.to_string().contains(c)),
-        "the refusal names an activation constraint: {err}"
-    );
-    let refused = hashed_unversioned_insert(&pool).await;
-    let err = refused.expect_err("an insert naming no semantics must be refused after activation");
-    assert!(
-        [
-            "audit_semantics_version_required",
-            "audit_drawn_subjects_required"
-        ]
-        .iter()
-        .any(|c| err.to_string().contains(c)),
-        "the refusal names an activation constraint: {err}"
-    );
-    let refused = versioned_undrawn_insert(&pool).await;
-    let err = refused.expect_err("an insert recording no draws must be refused after activation");
-    assert!(
-        err.to_string().contains("audit_drawn_subjects_required"),
-        "the refusal names the activation constraint: {err}"
-    );
+    // After activation the database refuses an insert shaped like any
+    // earlier writer, so a stale binary cannot extend an older regime: the
+    // ordering trigger finds no operations before any constraint is read.
+    for (shape, refused) in [
+        ("unattested", legacy_insert(&pool).await),
+        ("unstamped", attested_unstamped_insert(&pool).await),
+        ("unhashed", named_unhashed_insert(&pool).await),
+        ("unversioned", hashed_unversioned_insert(&pool).await),
+        ("undrawn", versioned_undrawn_insert(&pool).await),
+    ] {
+        let err = refused.expect_err(shape);
+        assert!(
+            err.to_string()
+                .contains("written by a binary older than the database"),
+            "{shape}: {err}"
+        );
+    }
 }
 
 /// An audit insert shaped like the writer from before attestation

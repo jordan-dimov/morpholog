@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT morpholog.audit_watermark() AS \"horizon!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "horizon!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "7256429a27caed0cb975dc3368fe2224b012d7c2b4c4cdb5e241b519dc43c7eb"
+}

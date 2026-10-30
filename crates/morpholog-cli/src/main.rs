@@ -498,9 +498,6 @@ pub(crate) struct CheckpointArgs {
     #[arg(long, requires = "signing_key")]
     pub(crate) key_id: Option<String>,
 
-    #[command(flatten)]
-    pub(crate) writers: WriterRoleArgs,
-
     /// Also have an outside authority witness the new head:
     /// `rfc3161:<url>` posts a timestamp request for it to that RFC 3161
     /// authority and stores the exact response on the checkpoint, so a
@@ -1207,9 +1204,6 @@ pub(crate) struct InspectAuditArgs {
     /// `--after` and the resume watermark apply as without it.
     #[arg(long, value_name = "SUBJECT", value_parser = non_empty_subject)]
     pub(crate) mentions: Option<String>,
-
-    #[command(flatten)]
-    pub(crate) writers: WriterRoleArgs,
 }
 
 fn non_empty_subject(s: &str) -> Result<String, String> {
@@ -1293,30 +1287,6 @@ pub(crate) struct InspectClaimsArgs {
     /// replayed state.
     #[arg(long = "where", value_name = "FIELD=VALUE")]
     pub(crate) filter: Vec<String>,
-}
-
-/// The writer-set assertion both watermark consumers share
-/// (`inspect audit`, `audit checkpoint`).
-#[derive(clap::Args, Debug)]
-pub(crate) struct WriterRoleArgs {
-    /// Assert the session roles that write audit (repeatable), so the
-    /// resume horizon is computed over their sessions only - for
-    /// managed PostgreSQL, where the platform's own sessions are
-    /// hidden and `pg_read_all_stats` cannot be granted. The
-    /// assertion is verified against the catalog (every non-superuser
-    /// role that can write `morpholog.audit` must be asserted);
-    /// superuser writes are the residue the flag explicitly accepts,
-    /// and role grants, memberships, and login attributes must stay
-    /// unchanged until the command establishes its read snapshot.
-    #[arg(long = "writer-role", value_name = "ROLE")]
-    pub(crate) writer_role: Vec<String>,
-}
-
-impl WriterRoleArgs {
-    /// `None` when unasserted - the adapter's lossless-or-loud default.
-    pub(crate) fn as_writers(&self) -> Option<&[String]> {
-        (!self.writer_role.is_empty()).then_some(self.writer_role.as_slice())
-    }
 }
 
 /// Arguments for `inspect derived`.

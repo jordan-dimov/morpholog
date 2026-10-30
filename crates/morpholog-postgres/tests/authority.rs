@@ -14,10 +14,7 @@ use morpholog_postgres::{
 };
 
 mod common;
-use common::{
-    authorize_signing_key, drop_roles_if_present, recreate_roles, reset_db, retract_signing_key,
-    session_is_superuser, test_pool,
-};
+use common::{authorize_signing_key, reset_db, test_pool};
 
 const PURPOSE: &str = "audit_checkpoint_v1";
 
@@ -89,7 +86,7 @@ async fn signing_with_an_unauthorized_key_is_refused() {
         key: generate_signing_key(),
     };
     common::drain_open_transactions(&pool).await;
-    let err = create_checkpoint(&pool, Some(&interloper), None, None)
+    let err = create_checkpoint(&pool, Some(&interloper), None)
         .await
         .expect_err("signing with an unauthorised key must be refused, not produced");
     // Nothing withheld, so the refusal is about the key, not the horizon.
@@ -104,13 +101,11 @@ async fn an_unauthorised_key_with_a_withheld_authorisation_names_the_horizon() {
     let pool = test_pool().await;
     reset_db(&pool).await;
 
-    // An older transaction is still open when the key is authorised, so
-    // the authorisation is withheld from the checkpoint, not missing.
+    // A writer that drew an earlier order is still open when the key is
+    // authorised, so the authorisation is withheld from the checkpoint,
+    // not missing.
     let mut interferer = pool.begin().await.unwrap();
-    sqlx::query("SELECT transaction_timestamp()")
-        .execute(&mut *interferer)
-        .await
-        .unwrap();
+    common::insert_in_flight_audit_row(&mut interferer, uuid::Uuid::now_v7()).await;
 
     let key = generate_signing_key();
     authorize_signing_key(
@@ -125,7 +120,7 @@ async fn an_unauthorised_key_with_a_withheld_authorisation_names_the_horizon() {
         key,
     };
 
-    let err = create_checkpoint(&pool, Some(&signer), None, None)
+    let err = create_checkpoint(&pool, Some(&signer), None)
         .await
         .expect_err("the authorisation is above the horizon, so signing must refuse");
     match &err {
@@ -151,10 +146,7 @@ async fn an_unauthorised_key_with_a_withheld_authorisation_names_the_horizon() {
     // ends, the same signer succeeds.
     interferer.rollback().await.unwrap();
     common::drain_open_transactions(&pool).await;
-    match create_checkpoint(&pool, Some(&signer), None, None)
-        .await
-        .unwrap()
-    {
+    match create_checkpoint(&pool, Some(&signer), None).await.unwrap() {
         CheckpointOutcome::Created(c) => {
             assert_eq!(c.tree_size, 1);
             assert_eq!(c.signatures.len(), 1);
@@ -163,164 +155,6 @@ async fn an_unauthorised_key_with_a_withheld_authorisation_names_the_horizon() {
             panic!("expected a created signed checkpoint: {other:?}")
         }
     }
-}
-
-// A signing run sees a prefix the horizon may cut short, but its
-// signature attaches to the chain head, which may be past a revocation.
-// Authority must be judged at the head, or signing makes a checkpoint
-// `verify` rejects as UnauthorizedKey.
-#[tokio::test]
-async fn attaching_a_signature_resolves_authority_as_of_the_head_actually_signed() {
-    let pool = test_pool().await;
-    reset_db(&pool).await;
-    if !session_is_superuser(&pool).await {
-        // The checkpoint below relies on the asserted horizon ignoring
-        // our superuser interferer session.
-        eprintln!("skipping: needs a superuser test role");
-        return;
-    }
-    let roles = ["mtest303_idle"];
-    recreate_roles(&pool, &roles, &["CREATE ROLE mtest303_idle LOGIN"]).await;
-
-    // Authorise k1; an older transaction opens; then k1 is revoked, the
-    // revocation committing above that transaction's start.
-    let key = generate_signing_key();
-    let public_key = render_public_key(&key.verifying_key());
-    authorize_signing_key(&pool, "k1", PURPOSE, &public_key).await;
-
-    let mut interferer = pool.begin().await.unwrap();
-    sqlx::query("SELECT transaction_timestamp()")
-        .execute(&mut *interferer)
-        .await
-        .unwrap();
-
-    retract_signing_key(&pool, "k1", PURPOSE, &public_key).await;
-
-    // A checkpoint under the asserted horizon (which ignores the
-    // interferer) advances the head past the revocation.
-    let head = match create_checkpoint(&pool, None, Some(&["mtest303_idle".to_string()]), None)
-        .await
-        .unwrap()
-    {
-        CheckpointOutcome::Created(c) => c,
-        other @ CheckpointOutcome::NoNewRows(_) => {
-            panic!("expected a created checkpoint: {other:?}")
-        }
-    };
-    assert_eq!(
-        head.tree_size, 2,
-        "the head covers authorisation and revocation"
-    );
-
-    // Without the assertion the horizon trails the interferer, so the
-    // prefix (tree_size 1) shows k1 authorised. But the signature would
-    // attach to the head at 2, where k1 is revoked.
-    let signer = CheckpointSigner {
-        key_id: "k1".into(),
-        key,
-    };
-    let err = create_checkpoint(&pool, Some(&signer), None, None)
-        .await
-        .expect_err("signing must be judged against the head that receives the signature");
-    assert!(
-        matches!(err, PgError::SigningKeyUnauthorised { tree_size: 2, .. }),
-        "expected the refusal as of the head's own prefix, got: {err}"
-    );
-
-    // No unauthorised signature was attached: the tree still verifies.
-    interferer.rollback().await.unwrap();
-    assert!(matches!(
-        verify_audit_tree(&pool, None).await.unwrap(),
-        TreeVerification::Intact { .. }
-    ));
-    drop_roles_if_present(&pool, &roles).await;
-}
-
-// The mirror image: the key IS authorised, in a committed row past the
-// head that the held-back horizon keeps out of any checkpoint. The
-// refusal must blame the horizon, not tell the caller to fix the key.
-#[tokio::test]
-async fn an_authorisation_beyond_the_head_is_diagnosed_as_withheld_not_missing() {
-    let pool = test_pool().await;
-    reset_db(&pool).await;
-    if !session_is_superuser(&pool).await {
-        eprintln!("skipping: needs a superuser test role");
-        return;
-    }
-    let roles = ["mtest305_idle"];
-    recreate_roles(&pool, &roles, &["CREATE ROLE mtest305_idle LOGIN"]).await;
-
-    // An older transaction opens; an unrelated row commits; a checkpoint
-    // under the asserted horizon makes that row the head; then the key
-    // is authorised.
-    let mut interferer = pool.begin().await.unwrap();
-    sqlx::query("SELECT transaction_timestamp()")
-        .execute(&mut *interferer)
-        .await
-        .unwrap();
-    common::commit_entry(&pool, "e1").await;
-    let head = match create_checkpoint(&pool, None, Some(&["mtest305_idle".to_string()]), None)
-        .await
-        .unwrap()
-    {
-        CheckpointOutcome::Created(c) => c,
-        other @ CheckpointOutcome::NoNewRows(_) => {
-            panic!("expected a created checkpoint: {other:?}")
-        }
-    };
-    assert_eq!(head.tree_size, 1, "the unrelated row is the head");
-
-    let key = generate_signing_key();
-    authorize_signing_key(
-        &pool,
-        "k1",
-        PURPOSE,
-        &render_public_key(&key.verifying_key()),
-    )
-    .await;
-
-    // Without the assertion the prefix is empty and the head (tree_size
-    // 1) predates the authorisation, which is committed one row beyond.
-    // The refusal must say so, not blame the key.
-    let signer = CheckpointSigner {
-        key_id: "k1".into(),
-        key,
-    };
-    let err = create_checkpoint(&pool, Some(&signer), None, None)
-        .await
-        .expect_err("the head predates the authorisation, so signing must refuse");
-    match &err {
-        PgError::SigningKeyUnauthorisedAtTruncatedPrefix {
-            tree_size,
-            committed_beyond_horizon,
-            ..
-        } => {
-            assert_eq!(*tree_size, 1, "judged as of the head actually signable");
-            assert_eq!(
-                *committed_beyond_horizon, 1,
-                "exactly the authorisation row lies beyond the head"
-            );
-        }
-        other => panic!("expected the truncated-prefix diagnosis, got: {other}"),
-    }
-
-    // Once the interferer ends, the same signer checkpoints the suffix
-    // that authorises it.
-    interferer.rollback().await.unwrap();
-    common::drain_open_transactions(&pool).await;
-    match create_checkpoint(&pool, Some(&signer), None, None)
-        .await
-        .unwrap()
-    {
-        CheckpointOutcome::Created(c) => {
-            assert_eq!(c.tree_size, 2);
-            assert_eq!(c.signatures.len(), 1);
-        }
-        other @ CheckpointOutcome::NoNewRows(_) => {
-            panic!("expected a created signed checkpoint: {other:?}")
-        }
-    }
-    drop_roles_if_present(&pool, &roles).await;
 }
 
 #[tokio::test]

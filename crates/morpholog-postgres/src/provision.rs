@@ -506,9 +506,8 @@ pub(crate) async fn require_recorded_roles(
 /// particular `morpholog.audit` gets INSERT and SELECT only, so the log is
 /// append-only in the database even for the runtime's own role.
 ///
-/// Membership grants (and `pg_read_all_stats` for an audit-tailing
-/// reader) are left to the operator, so no secret or cluster-wide policy
-/// hides inside provisioning.
+/// Membership grants are left to the operator, so no secret or
+/// cluster-wide policy hides inside provisioning.
 pub async fn provision_least_privilege(
     pool: &PgPool,
     roles: &DeploymentRoles,
@@ -729,6 +728,11 @@ fn least_privilege_sql(writer: &str, reader: &str) -> String {
     );
     let _ = writeln!(out, "GRANT USAGE ON SCHEMA morpholog TO {w}, {r};");
     let _ = writeln!(out, "GRANT USAGE ON SCHEMA morpholog_read TO {w}, {r};");
+    // The resume horizon, which the tail and checkpoints both read.
+    let _ = writeln!(
+        out,
+        "GRANT EXECUTE ON FUNCTION morpholog.audit_watermark() TO {w}, {r};"
+    );
     // The write set: assert is INSERT, retract is DELETE (claims);
     // audit is append-only; the outbox lease and checkpoint co-sign
     // paths UPDATE; refresh derived owns the read cache.

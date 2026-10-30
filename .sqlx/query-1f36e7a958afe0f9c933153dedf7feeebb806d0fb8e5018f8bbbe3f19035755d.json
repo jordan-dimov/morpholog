@@ -1,0 +1,120 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT transition_id, transformation_name,\n                        asserted_claims, retracted_claims, committed_at, audit_order, act_ordinal,\n                        operations\n                 FROM morpholog.audit\n                 WHERE (audit_order, act_ordinal, committed_at, transition_id) > ($6, $7, $2, $3)\n                   AND (audit_order, act_ordinal, committed_at, transition_id) <= ($8, $9, $4, $5)\n                 ORDER BY audit_order, act_ordinal, committed_at, transition_id\n                 LIMIT $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "transition_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "transition_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "transformation_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "transformation_name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "asserted_claims",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "asserted_claims"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "retracted_claims",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "retracted_claims"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "committed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "committed_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "audit_order",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "audit_order"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "act_ordinal",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "act_ordinal"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "operations",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "operations"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Timestamptz",
+        "Uuid",
+        "Timestamptz",
+        "Uuid",
+        "Int8",
+        "Int4",
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "1f36e7a958afe0f9c933153dedf7feeebb806d0fb8e5018f8bbbe3f19035755d"
+}

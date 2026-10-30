@@ -446,6 +446,17 @@ async fn privileges_beyond_the_floor_refuse_the_move_instead_of_being_revoked() 
                 "function mv_probe()",
             ),
             (
+                format!(
+                    "GRANT EXECUTE ON FUNCTION morpholog.audit_watermark() TO {ow} \
+                     WITH GRANT OPTION"
+                ),
+                format!(
+                    "REVOKE GRANT OPTION FOR EXECUTE ON FUNCTION morpholog.audit_watermark() \
+                     FROM {ow}"
+                ),
+                "EXECUTE with grant option on function morpholog.audit_watermark()",
+            ),
+            (
                 format!("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO {or}"),
                 format!(
                     "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE SELECT ON TABLES FROM {or}"

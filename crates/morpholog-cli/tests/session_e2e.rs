@@ -89,7 +89,9 @@ fn stable(key: &str) -> Option<serde_json::Value> {
         "transition_id" | "rejection_id" | "asserted_in" => {
             Some(serde_json::json!("00000000-0000-0000-0000-000000000000"))
         }
-        "committed_at" | "rejected_at" => Some(serde_json::json!("2000-01-01T00:00:00Z")),
+        "committed_at" | "ordered_at" | "rejected_at" => {
+            Some(serde_json::json!("2000-01-01T00:00:00Z"))
+        }
         "authenticated_by" => Some(serde_json::json!("login")),
         "authenticated_by_oid" => Some(serde_json::json!(0)),
         "morpholog_version" => Some(serde_json::json!("0.0.0")),
@@ -646,8 +648,6 @@ async fn an_audit_read_resumes_after_its_last_row_and_bad_arguments_are_receipts
         serde_json::json!({"op": "audit", "after": "not-an-id"}),
         serde_json::json!({"op": "audit", "after": "00000000-0000-0000-0000-000000000000"}),
         serde_json::json!({"op": "audit", "mentions": ""}),
-        serde_json::json!({"op": "audit", "writer_roles": []}),
-        serde_json::json!({"op": "audit", "writer_roles": ["morpholog_ci_no_such_role"]}),
         serde_json::json!({"op": "audit", "limit": 0}),
         serde_json::json!({"op": "rejections", "mentions": ""}),
     ] {
@@ -656,6 +656,8 @@ async fn an_audit_read_resumes_after_its_last_row_and_bad_arguments_are_receipts
     }
     for misspelt in [
         serde_json::json!({"op": "audit", "afer": "x"}),
+        // The watermark needs no writer assertion any more.
+        serde_json::json!({"op": "audit", "writer_roles": ["morpholog_writer"]}),
         serde_json::json!({"op": "ping", "deep": true}),
     ] {
         let receipt = answer(&mut stdin, &recv, &misspelt);

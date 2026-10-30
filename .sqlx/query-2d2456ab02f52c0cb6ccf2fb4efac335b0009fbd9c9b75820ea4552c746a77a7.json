@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO morpholog.audit (\n            transition_id, transformation_name, arguments, actor,\n            invariant_epoch, invariants_checked,\n            asserted_claims, retracted_claims, emitted_intents, attestation,\n            parameters, model_hash, semantics_version, drawn_subjects, operations\n         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Jsonb",
+        "Jsonb",
+        "Int4",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Text",
+        "Int8",
+        "Jsonb",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2d2456ab02f52c0cb6ccf2fb4efac335b0009fbd9c9b75820ea4552c746a77a7"
+}

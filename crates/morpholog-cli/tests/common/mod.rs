@@ -68,8 +68,7 @@ pub async fn reset_db() {
     let pool = morpholog_postgres::PgPool::connect(&database_url())
         .await
         .expect("connect to test DB");
-    sqlx::query(morpholog_postgres::testing::RESET_SQL)
-        .execute(&pool)
+    morpholog_postgres::testing::reset_database(&pool)
         .await
         .expect("truncate");
 }

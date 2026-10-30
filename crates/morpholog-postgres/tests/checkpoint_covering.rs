@@ -48,7 +48,7 @@ async fn a_withheld_transition_is_refused_then_covered_once_the_older_writer_fin
     common::insert_in_flight_audit_row(&mut older, Uuid::now_v7()).await;
     let wanted = commit_row(&pool).await;
 
-    let err = create_checkpoint(&pool, None, None, Some(wanted))
+    let err = create_checkpoint(&pool, None, Some(wanted))
         .await
         .unwrap_err();
     assert!(
@@ -62,11 +62,7 @@ async fn a_withheld_transition_is_refused_then_covered_once_the_older_writer_fin
     );
 
     older.commit().await.unwrap();
-    let tree_size = created(
-        create_checkpoint(&pool, None, None, Some(wanted))
-            .await
-            .unwrap(),
-    );
+    let tree_size = created(create_checkpoint(&pool, None, Some(wanted)).await.unwrap());
     assert_eq!(
         tree_size, 2,
         "both rows are in the prefix once A has finished"
@@ -80,7 +76,7 @@ async fn an_id_the_log_does_not_hold_is_not_found_and_records_nothing() {
     commit_row(&pool).await;
 
     let unknown = Uuid::now_v7();
-    let err = create_checkpoint(&pool, None, None, Some(unknown))
+    let err = create_checkpoint(&pool, None, Some(unknown))
         .await
         .unwrap_err();
     assert!(
@@ -95,16 +91,9 @@ async fn a_head_that_already_covers_the_transition_is_returned_unchanged() {
     let pool = test_pool().await;
     reset_db(&pool).await;
     let wanted = commit_row(&pool).await;
-    let head = created(
-        create_checkpoint(&pool, None, None, Some(wanted))
-            .await
-            .unwrap(),
-    );
+    let head = created(create_checkpoint(&pool, None, Some(wanted)).await.unwrap());
 
-    match create_checkpoint(&pool, None, None, Some(wanted))
-        .await
-        .unwrap()
-    {
+    match create_checkpoint(&pool, None, Some(wanted)).await.unwrap() {
         CheckpointOutcome::NoNewRows(c) => assert_eq!(c.tree_size, head),
         CheckpointOutcome::Created(c) => panic!("the existing head already covered it: {c:?}"),
     }
@@ -133,11 +122,7 @@ async fn a_head_that_does_not_cover_the_transition_is_refused_with_nothing_new_t
         });
     }
     let (first, second) = (&signers[0], &signers[1]);
-    let head = created(
-        create_checkpoint(&pool, Some(first), None, None)
-            .await
-            .unwrap(),
-    );
+    let head = created(create_checkpoint(&pool, Some(first), None).await.unwrap());
 
     // Nothing new can be checkpointed while A is in flight, so a plain run
     // would return the head, and one with the second key would also sign
@@ -146,7 +131,7 @@ async fn a_head_that_does_not_cover_the_transition_is_refused_with_nothing_new_t
     common::insert_in_flight_audit_row(&mut older, Uuid::now_v7()).await;
     let wanted = commit_row(&pool).await;
     for signer in [Some(second), None] {
-        let err = create_checkpoint(&pool, signer, None, Some(wanted))
+        let err = create_checkpoint(&pool, signer, Some(wanted))
             .await
             .unwrap_err();
         assert!(
@@ -166,7 +151,7 @@ async fn a_head_that_does_not_cover_the_transition_is_refused_with_nothing_new_t
 
     older.commit().await.unwrap();
     let tree_size = created(
-        create_checkpoint(&pool, Some(second), None, Some(wanted))
+        create_checkpoint(&pool, Some(second), Some(wanted))
             .await
             .unwrap(),
     );

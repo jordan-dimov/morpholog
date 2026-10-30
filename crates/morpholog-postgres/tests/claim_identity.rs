@@ -148,6 +148,7 @@ async fn verify_pages_the_claims_table_by_its_key() {
         VerifyOutcome::Divergent {
             only_in_claims_table,
             only_in_replay,
+            ..
         } => {
             assert!(only_in_replay.is_empty());
             let mut seen = std::collections::HashSet::new();
@@ -160,6 +161,6 @@ async fn verify_pages_the_claims_table_by_its_key() {
                 "every row past the first page must be read exactly once"
             );
         }
-        VerifyOutcome::Consistent { .. } => panic!("rows beneath the audit log must diverge"),
+        other => panic!("rows beneath the audit log must diverge: {other:?}"),
     }
 }
