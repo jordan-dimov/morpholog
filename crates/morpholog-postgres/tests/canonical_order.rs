@@ -12,7 +12,10 @@ mod common;
 
 use common::{expect_committed, pg_program, propose_pg_as, reset_db, test_pool};
 use morpholog_core::{ClaimInstance, Program};
-use morpholog_postgres::{ClaimRead, PgPool, PgProgram, VerifyOutcome, testing, verify_replay};
+use morpholog_postgres::{
+    ClaimRead, PgError, PgPool, PgProgram, VerifyOutcome, begin_audit_tail, read_claims_at,
+    read_claims_at_for_predicates, testing, verify_replay,
+};
 use morpholog_test_support::subj;
 use uuid::Uuid;
 
@@ -480,6 +483,70 @@ async fn writers_queued_on_the_ordering_lock_do_not_conflict() {
         assert!(outcome.is_ok(), "{outcome:?}");
     }
 }
+
+/// A transition is a fixed boundary only once every transaction ordered
+/// before it has finished. A commit envelope hands its caller a
+/// transition while an earlier-ordered writer may still be open; a resume
+/// after it, or a read as of it, would then change its answer, or skip
+/// the earlier rows for good, once that writer commits.
+#[tokio::test]
+async fn a_transition_is_a_boundary_only_once_the_orders_before_it_are_final() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let pg = pg_program(program());
+    let a = act(&pool, &pg, "admit_x", "a").await;
+    let mut early = pool.begin().await.unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(EARLY_ROW))
+        .execute(&mut *early)
+        .await
+        .unwrap();
+    let b = act(&pool, &pg, "admit_x", "b").await;
+
+    let unsettled = |e: PgError| matches!(e, PgError::TransitionNotSettled(id) if id == b);
+    assert!(unsettled(read_claims_at(&pool, b).await.unwrap_err()));
+    assert!(unsettled(
+        read_claims_at_for_predicates(&pool, b, &[])
+            .await
+            .unwrap_err()
+    ));
+    assert!(unsettled(
+        begin_audit_tail(&pool, Some(b)).await.err().unwrap()
+    ));
+    assert_eq!(read_claims_at(&pool, a).await.unwrap().len(), 1);
+    assert!(begin_audit_tail(&pool, Some(a)).await.is_ok());
+
+    early.commit().await.unwrap();
+    let claims: Vec<ClaimInstance> = read_claims_at(&pool, b)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|read| read.claim)
+        .collect();
+    assert_eq!(claims, [x("a"), x("e"), x("b")]);
+    let mut tail = begin_audit_tail(&pool, Some(a)).await.unwrap();
+    let after_a: Vec<String> = tail
+        .next_page()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.transformation_name.to_string())
+        .collect();
+    assert_eq!(after_a, ["early", "admit_x"]);
+}
+
+/// An ordered row admitting `X(e)`, with the claim it inserts.
+const EARLY_ROW: &str = "INSERT INTO morpholog.audit (
+        transition_id, transformation_name, arguments, actor, invariant_epoch,
+        invariants_checked, asserted_claims, retracted_claims, emitted_intents, attestation,
+        parameters, model_hash, semantics_version, drawn_subjects, operations)
+     VALUES (gen_random_uuid(), 'early', '[]', '{\"type\": \"subject\", \"value\": \"w\"}', 1,
+        '[]', '[{\"predicate\": \"X\", \"args\": [{\"type\": \"subject\", \"value\": \"e\"}]}]',
+        '[]', '[]', '{\"mode\": \"gateway\", \"authenticated_by\": \"w\"}', '[]',
+        'sha256:' || repeat('d', 64), 1, '[]',
+        '[{\"op\": \"ins\", \"predicate\": \"X\", \"args\": [{\"type\": \"subject\", \"value\": \"e\"}]}]');
+     INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+     SELECT 'X', '[{\"type\": \"subject\", \"value\": \"e\"}]', transition_id
+       FROM morpholog.audit WHERE transformation_name = 'early'";
 
 const ORDERED_ROW: &str = "INSERT INTO morpholog.audit (
         transition_id, transformation_name, arguments, actor, invariant_epoch,

@@ -1,5 +1,5 @@
 use crate::audit::Operation;
-use crate::audit::audit_cursor_for;
+use crate::audit::{AuditPosition, audit_cursor_for, audit_resume_watermark, settled};
 use crate::audit_pages::ReplayPages;
 use crate::claims::ClaimRead;
 use crate::error::{PgError, classify, classify_checked_query};
@@ -55,14 +55,8 @@ async fn reconstruct_scoped(
     if predicates.is_empty() {
         // The "as of this committed transition" contract still
         // requires the target to exist, even with an empty footprint.
-        let target = sqlx::query!(
-            "SELECT transition_id FROM morpholog.audit WHERE transition_id = $1",
-            transition_id,
-        )
-        .fetch_optional(pool)
-        .await
-        .map_err(classify_checked_query)?;
-        target.ok_or(PgError::TransitionNotFound(transition_id))?;
+        let mut conn = pool.acquire().await.map_err(classify)?;
+        settled_target(&mut conn, transition_id).await?;
         return Ok(State::default());
     }
     let mut conn = pool.acquire().await.map_err(classify)?;
@@ -167,6 +161,18 @@ where
     row.map(|r| r.transition_id)
         .ok_or(PgError::NoTransitionAtOrBefore(at))
 }
+/// The target's position, refused while a transaction ordered before it
+/// is open: its prefix could still grow, and the same read would later
+/// answer differently. The horizon is read after the target, so every
+/// row below it is final and visible to the replay's later statements.
+async fn settled_target(
+    conn: &mut sqlx::PgConnection,
+    transition_id: Uuid,
+) -> Result<AuditPosition, PgError> {
+    let target = audit_cursor_for(&mut *conn, transition_id).await?;
+    settled(target, audit_resume_watermark(&mut *conn).await?)
+}
+
 /// Shared replay behind [`reconstruct_state_at`] (`predicates` is `None`)
 /// and [`reconstruct_state_at_for_predicates`]. Out-of-scope claims are
 /// skipped during replay, never held in memory.
@@ -182,8 +188,7 @@ pub(crate) async fn reconstruct_inner(
     mut asserted_in: Option<&mut HashMap<ClaimInstance, Uuid>>,
     mut on_page: Option<&mut dyn FnMut(u64)>,
 ) -> Result<State, PgError> {
-    // A missing target is TransitionNotFound.
-    let target = audit_cursor_for(&mut *conn, transition_id).await?;
+    let target = settled_target(&mut *conn, transition_id).await?;
     let scope_set: Option<HashSet<&str>> =
         predicates.map(|preds| preds.iter().map(String::as_str).collect());
     let mut state = State::default();

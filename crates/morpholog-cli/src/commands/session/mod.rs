@@ -621,7 +621,9 @@ async fn handle_audit(
 /// one it could not compute.
 fn audit_failure(e: PgError) -> SessionFailure {
     match e {
-        PgError::TransitionNotFound(_) => invalid_arguments(e.into()),
+        PgError::TransitionNotFound(_) | PgError::TransitionNotSettled(_) => {
+            invalid_arguments(e.into())
+        }
         other => {
             SessionFailure::Operational(anyhow::Error::new(other).context("reading the audit tail"))
         }

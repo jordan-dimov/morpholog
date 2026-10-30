@@ -663,9 +663,9 @@ use crate::audit_pages::AuditPages;
 
 /// A streaming audit tail with the lossless-resume order built in.
 ///
-/// [`begin_audit_tail`] resolves the cursor, computes the horizon BEFORE
-/// the snapshot, then opens one `REPEATABLE READ READ ONLY` transaction;
-/// [`AuditTail::next_page`] pages to the horizon inside it. Rows from
+/// [`begin_audit_tail`] computes the horizon BEFORE the snapshot, opens
+/// one `REPEATABLE READ READ ONLY` transaction, and resolves the cursor
+/// inside it; [`AuditTail::next_page`] pages to the horizon. Rows from
 /// writers in flight at the horizon are withheld for the next tail, never
 /// skipped (see [`audit_resume_watermark`]).
 pub struct AuditTail<'p> {
@@ -674,22 +674,20 @@ pub struct AuditTail<'p> {
 }
 /// Open an audit tail, optionally resuming strictly after a seen
 /// transition. An unknown id is [`PgError::TransitionNotFound`], never a
-/// silent restart from zero.
+/// silent restart from zero, and one at or above the horizon is
+/// [`PgError::TransitionNotSettled`].
 pub async fn begin_audit_tail<'p>(
     pool: &'p PgPool,
     after: Option<Uuid>,
 ) -> Result<AuditTail<'p>, PgError> {
-    let cursor = match after {
-        Some(tid) => {
-            let mut conn = pool.acquire().await.map_err(classify)?;
-            Some(audit_cursor_for(&mut conn, tid).await?)
-        }
-        None => None,
-    };
     // Horizon strictly before the snapshot - the ordering the
     // lossless-resume proof rests on.
     let horizon = audit_resume_watermark(pool).await?;
-    let tx = begin_isolated_tx(pool, TxIsolation::RepeatableReadReadOnly).await?;
+    let mut tx = begin_isolated_tx(pool, TxIsolation::RepeatableReadReadOnly).await?;
+    let cursor = match after {
+        Some(tid) => Some(settled(audit_cursor_for(&mut tx, tid).await?, horizon)?),
+        None => None,
+    };
     Ok(AuditTail {
         tx,
         pages: AuditPages::new(Some(horizon)).after(cursor),
@@ -768,6 +766,17 @@ pub async fn audit_cursor_for(
         None => Err(PgError::TransitionNotFound(transition_id)),
     }
 }
+/// A cursor below `horizon`, or [`PgError::TransitionNotSettled`]. Only
+/// then is every row before it final, so that a read up to or after it
+/// gives the same answer each time.
+pub(crate) fn settled(cursor: AuditPosition, horizon: u64) -> Result<AuditPosition, PgError> {
+    if cursor.audit_order < horizon {
+        Ok(cursor)
+    } else {
+        Err(PgError::TransitionNotSettled(cursor.transition_id))
+    }
+}
+
 /// The resume horizon for a lossless audit tail: every audit row whose
 /// order is strictly below the returned one is final, committed or never
 /// to commit, and so visible to a snapshot taken after this call returns.
@@ -782,9 +791,12 @@ pub async fn audit_cursor_for(
 /// No session view is read, so the horizon needs no visibility into
 /// other roles' sessions. A prepared transaction left unresolved holds
 /// the horizon back until it is committed or rolled back.
-pub async fn audit_resume_watermark(pool: &PgPool) -> Result<u64, PgError> {
+pub async fn audit_resume_watermark<'e, E>(executor: E) -> Result<u64, PgError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let horizon = sqlx::query_scalar!(r#"SELECT morpholog.audit_watermark() AS "horizon!""#)
-        .fetch_one(pool)
+        .fetch_one(executor)
         .await
         .map_err(classify_checked_query)?;
     Ok(horizon.cast_unsigned())

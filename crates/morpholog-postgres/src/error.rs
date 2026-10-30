@@ -95,6 +95,15 @@ pub enum PgError {
     /// ids.
     #[error("transition_id {0} not found in morpholog.audit")]
     TransitionNotFound(Uuid),
+    /// A transition used as a boundary (a resume cursor or an as-of
+    /// target) while a transaction ordered before it is still open. Rows
+    /// may still appear below it, so it names no fixed prefix yet. Retry
+    /// once that transaction finishes.
+    #[error(
+        "transition {0} is not settled: a transaction ordered before it is still open; \
+         retry when it finishes"
+    )]
+    TransitionNotSettled(Uuid),
     /// A transition selected for disclosure, or one a checkpoint must
     /// cover, is not in the prefix the checkpoint commits to. It may exist
     /// after the checkpoint, so [`PgError::TransitionNotFound`] would be

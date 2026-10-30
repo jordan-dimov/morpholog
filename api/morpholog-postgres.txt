@@ -587,6 +587,7 @@ pub morpholog_postgres::PgError::TransitionNotCovered
 pub morpholog_postgres::PgError::TransitionNotCovered::id: uuid::Uuid
 pub morpholog_postgres::PgError::TransitionNotCovered::tree_size: i64
 pub morpholog_postgres::PgError::TransitionNotFound(uuid::Uuid)
+pub morpholog_postgres::PgError::TransitionNotSettled(uuid::Uuid)
 pub morpholog_postgres::PgError::UnknownTransformation
 pub morpholog_postgres::PgError::UnknownTransformation::name: morpholog_core::ir::TransformationName
 impl core::convert::From<morpholog_core::eval::EvalError> for morpholog_postgres::PgError
@@ -2740,7 +2741,7 @@ pub async fn morpholog_postgres::testing::AlwaysTransient::deliver(&self, &morph
 pub async fn morpholog_postgres::apply_migrations(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::attach_witness(&sqlx_postgres::PgPool, i64, &morpholog_postgres::Digest, morpholog_postgres::Witness) -> core::result::Result<morpholog_postgres::Checkpoint, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::audit_cursor_for(&mut sqlx_postgres::connection::PgConnection, uuid::Uuid) -> core::result::Result<morpholog_postgres::AuditPosition, morpholog_postgres::PgError>
-pub async fn morpholog_postgres::audit_resume_watermark(&sqlx_postgres::PgPool) -> core::result::Result<u64, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::audit_resume_watermark<'e, E>(E) -> core::result::Result<u64, morpholog_postgres::PgError> where E: sqlx_core::executor::Executor<'e, Database = sqlx_postgres::database::Postgres>
 pub async fn morpholog_postgres::begin_audit_tail<'p>(&'p sqlx_postgres::PgPool, core::option::Option<uuid::Uuid>) -> core::result::Result<morpholog_postgres::AuditTail<'p>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::begin_compensation(&sqlx_postgres::PgPool, uuid::Uuid, &str, core::time::Duration) -> core::result::Result<core::option::Option<morpholog_postgres::OutboxRow>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::begin_prefix_export(&sqlx_postgres::PgPool, core::option::Option<i64>) -> core::result::Result<morpholog_postgres::PrefixExport<'_>, morpholog_postgres::PgError>
