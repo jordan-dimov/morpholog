@@ -2885,6 +2885,7 @@ pub async fn morpholog_postgres::testing::AlwaysTransient::deliver(&self, &morph
 pub async fn morpholog_postgres::activation_preflight(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::ActivationPreflight, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::activation_preflight_within(&sqlx_postgres::PgPool, i64) -> core::result::Result<morpholog_postgres::ActivationPreflight, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::apply_migrations(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::apply_migrations_paused(&sqlx_postgres::PgPool, morpholog_postgres::MigrateMode, &morpholog_postgres::LockPolicy, impl core::future::future::Future<Output = ()>) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::apply_migrations_with(&sqlx_postgres::PgPool, morpholog_postgres::MigrateMode, &morpholog_postgres::LockPolicy) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::attach_witness(&sqlx_postgres::PgPool, i64, &morpholog_postgres::Digest, morpholog_postgres::Witness) -> core::result::Result<morpholog_postgres::Checkpoint, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::audit_cursor_for(&mut sqlx_postgres::connection::PgConnection, uuid::Uuid) -> core::result::Result<morpholog_postgres::AuditPosition, morpholog_postgres::PgError>

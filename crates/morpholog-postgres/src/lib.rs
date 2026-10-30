@@ -100,7 +100,8 @@ pub use indexes::{
 pub use merkle::{Digest, DigestError};
 pub use migrations::{
     BASELINE_VERSION, BelowBaseline, MigrateMode, MigrationRef, MigrationReport, apply_migrations,
-    apply_migrations_with, head_version, migration_status, require_current_schema,
+    apply_migrations_paused, apply_migrations_with, head_version, migration_status,
+    require_current_schema,
 };
 pub use outbox::{
     CompensationSpec, Deliverer, DeliveryOutcome, OutboxRow, OutboxStatus, OutboxUpdate,

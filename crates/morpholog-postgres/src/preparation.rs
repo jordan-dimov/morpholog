@@ -35,6 +35,10 @@ pub(crate) const STEPS: [&str; 5] = ["columns", "constraints", "indexes", "objec
 
 const FRONTIER: &str = "frontier";
 
+/// The saved frontier's own row: written after every page, so a pass
+/// resumes from it, and never counted as the step being done.
+const FRONTIER_STATE: &str = "frontier_state";
+
 /// How many passes one preparation makes over the legacy rows before
 /// leaving the rest to the cutover.
 const MAX_PASSES: usize = 10;
@@ -268,15 +272,18 @@ pub async fn census(pool: &PgPool) -> Result<Census, PgError> {
     census_paused(pool, async {}).await
 }
 
-/// The steps recorded done for migration 27, in step order.
-async fn steps_done(pool: &PgPool) -> Result<Vec<String>, PgError> {
-    let present = sqlx::query_scalar!(
+async fn progress_table_exists(pool: &PgPool) -> Result<bool, PgError> {
+    sqlx::query_scalar!(
         r#"SELECT to_regclass('morpholog.migration_progress') IS NOT NULL AS "present!""#
     )
     .fetch_one(pool)
     .await
-    .map_err(classify_checked_query)?;
-    if !present {
+    .map_err(classify_checked_query)
+}
+
+/// The steps recorded done for migration 27, in step order.
+async fn steps_done(pool: &PgPool) -> Result<Vec<String>, PgError> {
+    if !progress_table_exists(pool).await? {
         return Ok(Vec::new());
     }
     let done = sqlx::query_scalar!(
@@ -293,7 +300,11 @@ async fn steps_done(pool: &PgPool) -> Result<Vec<String>, PgError> {
         .collect())
 }
 
-async fn mark_done(pool: &PgPool, step: &str, detail: serde_json::Value) -> Result<(), PgError> {
+async fn upsert_progress(
+    pool: &PgPool,
+    step: &str,
+    detail: serde_json::Value,
+) -> Result<(), PgError> {
     sqlx::query!(
         "INSERT INTO morpholog.migration_progress (version, step, detail)
          VALUES ($1, $2, $3)
@@ -533,7 +544,7 @@ pub(crate) async fn prepare_canonical_order(
             FRONTIER => step_frontier(pool).await?,
             _ => step_objects(pool).await?,
         };
-        mark_done(pool, step, detail).await?;
+        upsert_progress(pool, step, detail).await?;
     }
     Ok(())
 }
@@ -576,8 +587,8 @@ struct FrontierCursor {
 fn malformed_frontier(why: &str) -> PgError {
     PgError::InvalidState(format!(
         "the saved frontier of migration 27 is malformed ({why}); delete it \
-         (`DELETE FROM morpholog.migration_progress WHERE version = 27 AND step = 'frontier'`) \
-         and run `morpholog migrate --prepare` again"
+         (`DELETE FROM morpholog.migration_progress WHERE version = 27 AND step = \
+         'frontier_state'`) and run `morpholog migrate --prepare` again"
     ))
 }
 
@@ -590,7 +601,7 @@ where
     let detail = sqlx::query_scalar!(
         "SELECT detail FROM morpholog.migration_progress WHERE version = $1 AND step = $2",
         CANONICAL_ORDER_VERSION,
-        FRONTIER
+        FRONTIER_STATE
     )
     .fetch_optional(executor)
     .await
@@ -631,7 +642,7 @@ async fn save_frontier(
         cursor,
         horizon,
     };
-    mark_done(pool, FRONTIER, serde_json::to_value(&state)?).await
+    upsert_progress(pool, FRONTIER_STATE, serde_json::to_value(&state)?).await
 }
 
 /// Where the frontier stands after a pass: what is saved, never what a
@@ -710,10 +721,13 @@ async fn step_frontier(pool: &PgPool) -> Result<serde_json::Value, PgError> {
             break;
         }
     }
-    let (_, state) = load_frontier(pool)
+    let (frontier, state) = load_frontier(pool)
         .await?
         .ok_or_else(|| malformed_frontier("absent after a pass"))?;
-    Ok(serde_json::to_value(&state)?)
+    Ok(serde_json::json!({
+        "legacy_rows_prepared": frontier.len(),
+        "horizon": state.horizon,
+    }))
 }
 
 /// Every legacy row hashed as one tree from scratch: the ruler the
@@ -770,8 +784,8 @@ pub(crate) async fn prepared_frontier(
             reasons: vec![format!(
                 "the prepared frontier holds {} legacy rows but {below} are at or below its \
                  cursor: the legacy rows changed under it. Delete it (`DELETE FROM \
-                 morpholog.migration_progress WHERE version = 27 AND step = 'frontier'`) and \
-                 run `morpholog migrate --prepare` again",
+                 morpholog.migration_progress WHERE version = 27 AND step = 'frontier_state'`) \
+                 and run `morpholog migrate --prepare` again",
                 frontier.len()
             )],
         });
@@ -841,7 +855,7 @@ pub async fn activation_preflight_within(
     .fetch_one(pool)
     .await
     .map_err(classify_checked_query)?;
-    let prepared = match steps_done.iter().any(|s| s == FRONTIER) {
+    let prepared = match progress_table_exists(pool).await? {
         true => load_frontier(pool)
             .await?
             .map_or(0, |(frontier, _)| frontier.len() as i64),

@@ -87,7 +87,8 @@ async fn drop_database(pool: PgPool, admin: PgPool, name: &str) {
 
 async fn steps_recorded(pool: &PgPool) -> Vec<(String, serde_json::Value)> {
     sqlx::query_as(
-        "SELECT step, detail FROM morpholog.migration_progress WHERE version = 27 ORDER BY step",
+        "SELECT step, detail FROM morpholog.migration_progress
+         WHERE version = 27 AND step <> 'frontier_state' ORDER BY step",
     )
     .fetch_all(pool)
     .await
@@ -126,7 +127,7 @@ where
 
 async fn frontier_detail(pool: &PgPool) -> Option<serde_json::Value> {
     sqlx::query_scalar(
-        "SELECT detail FROM morpholog.migration_progress WHERE version = 27 AND step = 'frontier'",
+        "SELECT detail FROM morpholog.migration_progress WHERE version = 27 AND step = 'frontier_state'",
     )
     .fetch_optional(pool)
     .await
@@ -346,9 +347,23 @@ async fn the_frontier_equals_a_full_scan_and_resumes_from_what_it_saved() {
         .await;
     }
 
-    // A pass that dies after hashing its second page saved only its first.
+    // A pass that dies after hashing its second page saved only its first;
+    // the saved page is resumable, and the step is not done.
+    ddl(
+        &pool,
+        "DELETE FROM morpholog.migration_progress WHERE step = 'frontier'".to_string(),
+    )
+    .await;
     let interrupted = frontier_pass_with(&pool, 32, Some(2)).await.unwrap();
     assert_eq!(interrupted.legacy_rows_prepared, 32, "{interrupted:?}");
+    let partial = activation_preflight_within(&pool, BASELINE_LIMIT_BYTES)
+        .await
+        .unwrap();
+    assert_eq!(
+        (partial.state, partial.legacy_rows_prepared),
+        (morpholog_postgres::PreparationState::Preparing, 32),
+        "{partial:?}"
+    );
     let resumed = frontier_pass_with(&pool, 32, None).await.unwrap();
     assert_eq!(resumed.legacy_rows_prepared, 100);
     assert_eq!(
@@ -371,7 +386,7 @@ async fn the_frontier_equals_a_full_scan_and_resumes_from_what_it_saved() {
     // From zero, the same root.
     ddl(
         &pool,
-        "DELETE FROM morpholog.migration_progress WHERE step = 'frontier'".to_string(),
+        "DELETE FROM morpholog.migration_progress WHERE step = 'frontier_state'".to_string(),
     )
     .await;
     let again = frontier_pass_with(&pool, 1024, None).await.unwrap();
@@ -461,7 +476,7 @@ async fn the_cutover_checks_the_rows_under_the_prepared_frontier() {
 
     ddl(
         &pool,
-        "DELETE FROM morpholog.migration_progress WHERE step = 'frontier'".to_string(),
+        "DELETE FROM morpholog.migration_progress WHERE step = 'frontier_state'".to_string(),
     )
     .await;
     apply_migrations_with(&pool, MigrateMode::Complete, &LockPolicy::default())
@@ -484,7 +499,7 @@ async fn a_malformed_saved_frontier_is_refused_not_reset() {
     ddl(
         &pool,
         "UPDATE morpholog.migration_progress SET detail = jsonb_set(detail, '{subtrees}', '[]')
-         WHERE step = 'frontier'"
+         WHERE step = 'frontier_state'"
             .to_string(),
     )
     .await;
@@ -509,6 +524,34 @@ async fn a_malformed_saved_frontier_is_refused_not_reset() {
     }
     assert_eq!(frontier_detail(&pool).await, detail, "untouched");
     assert!(!migration_status(&pool).await.unwrap().is_current());
+    drop_database(pool, admin, &name).await;
+}
+
+#[tokio::test]
+async fn a_runner_looks_again_once_it_holds_the_lock() {
+    let Some((pool, admin, name)) = baseline_database("reread").await else {
+        return;
+    };
+    legacy_row(&pool, "k", None).await;
+    // Another runner completes the migration between this one's first
+    // look and its lock. This one applies nothing and writes no second
+    // record.
+    let other = pool.clone();
+    let report = morpholog_postgres::apply_migrations_paused(
+        &pool,
+        MigrateMode::Complete,
+        &LockPolicy::default(),
+        async move {
+            apply_migrations_with(&other, MigrateMode::Complete, &LockPolicy::default())
+                .await
+                .unwrap();
+        },
+    )
+    .await
+    .unwrap();
+    assert!(report.applied.is_empty(), "{report:?}");
+    assert!(report.is_current(), "{report:?}");
+    assert_eq!(recorded_legacy(&pool).await.0, 1);
     drop_database(pool, admin, &name).await;
 }
 

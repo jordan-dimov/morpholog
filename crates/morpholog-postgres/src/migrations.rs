@@ -299,17 +299,35 @@ pub async fn apply_migrations_with(
     mode: MigrateMode,
     policy: &LockPolicy,
 ) -> Result<MigrationReport, PgError> {
-    let before = migration_status(pool).await?;
+    apply_migrations_paused(pool, mode, policy, async {}).await
+}
+
+/// [`apply_migrations_with`] pausing between its first look at the
+/// database and the lock: the seam a test uses to let another runner
+/// finish in between.
+#[doc(hidden)]
+pub async fn apply_migrations_paused(
+    pool: &PgPool,
+    mode: MigrateMode,
+    policy: &LockPolicy,
+    before_lock: impl Future<Output = ()>,
+) -> Result<MigrationReport, PgError> {
+    let mut before = migration_status(pool).await?;
     // Migrating a database that is ahead would apply nothing and report
     // success, although an unseen migration may have broken this binary.
     refuse_if_ahead(&before)?;
     crate::require_deployment_roles(pool).await?;
-    // One runner at a time: a second would race the first over the
-    // prepared frontier and the progress rows.
-    let lock = match before.pending.is_empty() {
-        true => None,
-        false => Some(take_migration_lock(pool).await?),
-    };
+    let mut lock = None;
+    if !before.pending.is_empty() {
+        before_lock.await;
+        // One runner at a time: a second would race the first over the
+        // prepared frontier and the progress rows. What this one saw
+        // before the lock may be another's finished work, so it looks
+        // again under it.
+        lock = Some(take_migration_lock(pool).await?);
+        before = migration_status(pool).await?;
+        refuse_if_ahead(&before)?;
+    }
     let mut applied = Vec::new();
     let mut preflight = None;
     for &(version, name, sql) in MIGRATIONS {
