@@ -1155,6 +1155,7 @@ pub(crate) async fn write_claim_delta(
     }
 
     // Claims are a set: asserting a present claim is a no-op.
+    let mut inserted_here: HashSet<ClaimInstance> = HashSet::new();
     for claim in asserted_claims {
         let args_json: serde_json::Value = serde_json::to_value(&claim.args)?;
         let result = sqlx::query!(
@@ -1177,9 +1178,11 @@ pub(crate) async fn write_claim_delta(
             },
             claim,
         ));
-        // A claim retracted by this delta was just re-inserted, so only
-        // an unretracted claim reports pre-state presence here.
-        if !inserted && !present.contains(claim) {
+        // A conflict is pre-state presence only for a claim this delta has
+        // neither retracted (it was just re-inserted) nor already inserted.
+        if inserted {
+            inserted_here.insert(claim.clone());
+        } else if !present.contains(claim) && !inserted_here.contains(claim) {
             present.insert(claim.clone());
         }
     }
