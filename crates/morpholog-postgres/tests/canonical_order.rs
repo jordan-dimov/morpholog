@@ -424,27 +424,33 @@ async fn the_order_is_of_effects_not_of_what_each_decision_saw() {
     assert_eq!(rehearsal.differences[0].transition_id, a.to_string());
 }
 
-/// Two writers that share nothing, each queued on the ordering lock after
-/// its trigger has begun: both commit. A trigger that searched its table
-/// for the transaction's row made each conflict with the other's insert,
-/// and one was aborted every time.
+/// Two transactions that write one audit row each and nothing else,
+/// queued on the ordering lock after their triggers have begun: both
+/// commit. A trigger that searched its table for the transaction's row
+/// made each conflict with the other's insert, and one was aborted every
+/// time. Plain rows keep every other read out of the picture.
 #[tokio::test]
 async fn writers_queued_on_the_ordering_lock_do_not_conflict() {
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let pg = std::sync::Arc::new(pg_program(program()));
     let mut holder = pool.acquire().await.unwrap();
     sqlx::query("SELECT pg_advisory_lock(625626, 0)")
         .execute(&mut *holder)
         .await
         .unwrap();
-    let writers: Vec<_> = ["p", "q"]
-        .into_iter()
-        .map(|k| {
-            let (pool, pg) = (pool.clone(), pg.clone());
+    let writers: Vec<_> = (0..2)
+        .map(|_| {
+            let pool = pool.clone();
             tokio::spawn(async move {
-                let t = program().transformation("admit_x").unwrap().clone();
-                propose_pg_as(&pool, &pg, &t, vec![subj(k)], "w").await
+                let mut tx = pool.begin().await.unwrap();
+                sqlx::raw_sql("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+                    .execute(&mut *tx)
+                    .await
+                    .unwrap();
+                sqlx::raw_sql(sqlx::AssertSqlSafe(ORDERED_ROW))
+                    .execute(&mut *tx)
+                    .await?;
+                tx.commit().await
             })
         })
         .collect();
@@ -471,13 +477,7 @@ async fn writers_queued_on_the_ordering_lock_do_not_conflict() {
         .unwrap();
     for writer in writers {
         let outcome = writer.await.unwrap();
-        assert!(
-            matches!(
-                outcome,
-                Ok(morpholog_postgres::PgProposalOutcome::Committed { .. })
-            ),
-            "{outcome:?}"
-        );
+        assert!(outcome.is_ok(), "{outcome:?}");
     }
 }
 
