@@ -137,6 +137,14 @@ pub enum PgError {
          retry when it finishes"
     )]
     TransitionNotSettled(Uuid),
+    /// An as-of target that is a chunk of the activation baseline. The
+    /// activation is one event, so no state after one chunk ever existed;
+    /// its record is the coordinate.
+    #[error(
+        "transition {chunk} is a chunk of the activation baseline, not a transition; for the \
+         state as of the activation use its record, {record}"
+    )]
+    BaselineChunk { chunk: Uuid, record: Uuid },
     /// A transition selected for disclosure, or one a checkpoint must
     /// cover, is not in the prefix the checkpoint commits to. It may exist
     /// after the checkpoint, so [`PgError::TransitionNotFound`] would be

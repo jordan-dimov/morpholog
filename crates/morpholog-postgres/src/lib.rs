@@ -22,6 +22,7 @@ mod attestation;
 mod audit;
 mod audit_pages;
 mod checkpoints;
+mod claim_key;
 mod claims;
 mod compiled;
 #[cfg(test)]
@@ -62,6 +63,7 @@ pub mod wire_time;
 mod witnesses;
 
 // The whole public surface, flat at the crate root.
+pub use activation::{CHUNK_BYTES, CHUNK_CLAIMS, write_activation_record_with};
 pub use actor_policy::{
     AUTHORITY_PREDICATE, PolicyDeclarationError, RESTRICTED_PREDICATE, validate_declarations,
 };
@@ -81,6 +83,8 @@ pub use checkpoints::{
     load_checkpoint, verify_audit_tree, verify_audit_tree_under, verify_audit_tree_with_chain,
     with_anchor_signatures,
 };
+#[doc(hidden)]
+pub use claim_key::arguments_hash;
 pub use claims::{
     ClaimFilter, ClaimRead, StoredShape, list_claims, list_claims_for_predicates,
     list_claims_where, load_scoped_state, read_claims, read_claims_for_predicates,
@@ -119,9 +123,9 @@ pub use pack::{
     verify_pack, verify_prefix_stream, verify_selective, verify_window,
 };
 pub use preparation::{
-    ActivationPreflight, BASELINE_LIMIT_BYTES, Census, FrontierProgress, LockPolicy,
-    MIGRATION_LOCK_KEY, PreparationState, activation_preflight, activation_preflight_within,
-    census, census_paused, frontier_pass_with, legacy_root_full_scan,
+    ActivationPreflight, Census, FrontierProgress, LockPolicy, MIGRATION_LOCK_KEY,
+    PreparationState, activation_preflight, census, census_paused, frontier_pass_with,
+    legacy_root_full_scan,
 };
 pub use program::{InvariantPlan, PgProgram};
 pub use propose::{

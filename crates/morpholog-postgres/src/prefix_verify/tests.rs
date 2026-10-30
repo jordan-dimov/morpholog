@@ -140,6 +140,7 @@ fn variant(v: &TreeVerification) -> &'static str {
         TreeVerification::AnchorMismatch { .. } => "anchor_mismatch",
         TreeVerification::MalformedPack { .. } => "malformed_pack",
         TreeVerification::UnsupportedPack { .. } => "unsupported_pack",
+        TreeVerification::ActivationFaulty { .. } => "activation_faulty",
         TreeVerification::SignatureInvalid { .. } => "signature_invalid",
         TreeVerification::UnauthorizedKey { .. } => "unauthorized_key",
         TreeVerification::SignatureRequired { .. } => "signature_required",
@@ -513,5 +514,263 @@ fn a_chain_whose_sizes_go_back_down_is_broken_where_it_was_intact() {
             "{detail}"
         ),
         other => panic!("expected ChainBroken, got {other:?}"),
+    }
+}
+
+/// The activation's shape, offline: the rows of order 1 as the migration
+/// writes them, and what a prefix that departs from it is called.
+/// Attacker capability modelled: full write access to the stored rows and
+/// checkpoints, as above.
+mod activation {
+    use super::*;
+    use crate::activation::{
+        ACTIVATE, ACTIVATION_MODEL_HASH, BASELINE, PARAMETERS, arguments_over, baseline_digest,
+    };
+    use crate::merkle::merkle_root;
+    use morpholog_core::EvalValue;
+
+    fn control(
+        i: usize,
+        name: &str,
+        ordinal: u32,
+        arguments: serde_json::Value,
+        parameters: serde_json::Value,
+        operations: serde_json::Value,
+    ) -> AuditRow {
+        serde_json::from_value(serde_json::json!({
+            "transition_id": format!("00000000-0000-0000-0000-{:012x}", i + 1),
+            "transformation_name": name,
+            "arguments": arguments,
+            "actor": { "type": "subject", "value": "owner" },
+            "invariant_epoch": 1,
+            "invariants_checked": [],
+            "asserted_claims": [],
+            "retracted_claims": [],
+            "emitted_intents": [],
+            "committed_at": "2026-06-24T00:01:00Z",
+            "attestation": { "mode": "migration", "authenticated_by": "owner", "authenticated_by_oid": 10 },
+            "parameters": parameters,
+            "model_hash": ACTIVATION_MODEL_HASH,
+            "semantics_version": 1,
+            "drawn_subjects": [],
+            "audit_order": 1,
+            "act_ordinal": ordinal,
+            "ordered_at": "2026-06-24T00:01:00Z",
+            "operations": operations,
+        }))
+        .unwrap()
+    }
+
+    fn ins(k: &str) -> serde_json::Value {
+        serde_json::json!({
+            "op": "ins", "predicate": "X",
+            "args": [{ "type": "subject", "value": k }],
+            "asserted_in": "00000000-0000-0000-0000-000000000001",
+        })
+    }
+
+    /// One chunk of one claim, then the record over `legacy` and it.
+    fn activation(legacy: &[AuditRow]) -> Vec<AuditRow> {
+        let chunk = control(
+            legacy.len(),
+            BASELINE,
+            0,
+            serde_json::json!([]),
+            serde_json::json!([]),
+            serde_json::json!([ins("a")]),
+        );
+        let record = record_over(legacy, std::slice::from_ref(&chunk), legacy.len() + 1);
+        vec![chunk, record]
+    }
+
+    fn record_over(legacy: &[AuditRow], chunks: &[AuditRow], i: usize) -> AuditRow {
+        let digest = baseline_digest(&leaves(chunks));
+        let arguments = arguments_over(
+            legacy.len() as u64,
+            merkle_root(&leaves(legacy)),
+            chunks.len() as u64,
+            &digest,
+        );
+        control(
+            i,
+            ACTIVATE,
+            chunks.len() as u32,
+            serde_json::to_value(arguments).unwrap(),
+            serde_json::to_value(PARAMETERS).unwrap(),
+            serde_json::json!([]),
+        )
+    }
+
+    fn faulty(verdict: TreeVerification, names: &str) {
+        match verdict {
+            TreeVerification::ActivationFaulty { detail } if detail.contains(names) => {}
+            other => panic!("expected activation_faulty naming {names:?}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_activations_rows_verify_in_a_prefix() {
+        let (k1, k2) = (
+            SigningKey::from_bytes(&[1; 32]),
+            SigningKey::from_bytes(&[2; 32]),
+        );
+        let mut rows = history(&k1, &k2);
+        rows.extend(activation(&rows.clone()));
+        let cps = chain(&rows, &[ROWS, rows.len()]);
+        assert_eq!(variant(&streamed(&rows, &cps, None)), "intact");
+    }
+
+    /// A database `init` creates: its first transition is an ordinary
+    /// row at order 1, which begins no activation.
+    #[test]
+    fn a_fresh_log_begins_with_an_ordinary_row_at_order_one() {
+        let row: AuditRow = serde_json::from_value(serde_json::json!({
+            "transition_id": "00000000-0000-0000-0000-000000000001",
+            "transformation_name": "post",
+            "arguments": [],
+            "actor": { "type": "subject", "value": "alex" },
+            "invariant_epoch": 1,
+            "invariants_checked": [],
+            "asserted_claims": [],
+            "retracted_claims": [],
+            "emitted_intents": [],
+            "committed_at": "2026-06-24T00:01:00Z",
+            "attestation": { "mode": "gateway", "authenticated_by": "alex" },
+            "parameters": [],
+            "model_hash": format!("sha256:{}", "d".repeat(64)),
+            "semantics_version": 1,
+            "drawn_subjects": [],
+            "audit_order": 1,
+            "act_ordinal": 0,
+            "ordered_at": "2026-06-24T00:01:00Z",
+            "operations": [],
+        }))
+        .unwrap();
+        let cps = chain(std::slice::from_ref(&row), &[1]);
+        assert_eq!(variant(&streamed(&[row], &cps, None)), "intact");
+    }
+
+    #[test]
+    fn a_record_naming_other_chunks_is_faulty() {
+        let (k1, k2) = (
+            SigningKey::from_bytes(&[1; 32]),
+            SigningKey::from_bytes(&[2; 32]),
+        );
+        let mut rows = history(&k1, &k2);
+        let legacy = rows.clone();
+        let [chunk, _] = <[AuditRow; 2]>::try_from(activation(&legacy)).unwrap();
+        let mut record = record_over(&legacy, std::slice::from_ref(&chunk), rows.len() + 1);
+        record.arguments[2] = EvalValue::Decimal(2.into());
+        rows.extend([chunk, record]);
+        let cps = chain(&rows, &[rows.len()]);
+        faulty(
+            streamed(&rows, &cps, None),
+            "does not name the 8 legacy rows",
+        );
+    }
+
+    #[test]
+    fn a_missing_chunk_is_faulty() {
+        let (k1, k2) = (
+            SigningKey::from_bytes(&[1; 32]),
+            SigningKey::from_bytes(&[2; 32]),
+        );
+        let mut rows = history(&k1, &k2);
+        let [_, record] = <[AuditRow; 2]>::try_from(activation(&rows.clone())).unwrap();
+        rows.push(record);
+        let cps = chain(&rows, &[rows.len()]);
+        faulty(
+            streamed(&rows, &cps, None),
+            "the activation record at ordinal 1 after 0 baseline chunks",
+        );
+    }
+
+    /// A checkpoint sees the whole activation or none of it, so a prefix
+    /// that ends inside order 1 is no honest export.
+    #[test]
+    fn a_prefix_ending_inside_the_activation_is_faulty() {
+        let (k1, k2) = (
+            SigningKey::from_bytes(&[1; 32]),
+            SigningKey::from_bytes(&[2; 32]),
+        );
+        let mut rows = history(&k1, &k2);
+        let [chunk, _] = <[AuditRow; 2]>::try_from(activation(&rows.clone())).unwrap();
+        rows.push(chunk);
+        let cps = chain(&rows, &[rows.len()]);
+        faulty(
+            streamed(&rows, &cps, None),
+            "1 baseline chunks and no record",
+        );
+    }
+
+    /// An ordinary ordered row, as a writer after the migration leaves it.
+    fn ordinary(i: usize, order: u64, ordinal: u32) -> AuditRow {
+        serde_json::from_value(serde_json::json!({
+            "transition_id": format!("00000000-0000-0000-0000-{:012x}", i + 1),
+            "transformation_name": "post",
+            "arguments": [],
+            "actor": { "type": "subject", "value": "alex" },
+            "invariant_epoch": 1,
+            "invariants_checked": [],
+            "asserted_claims": [],
+            "retracted_claims": [],
+            "emitted_intents": [],
+            "committed_at": "2026-06-24T00:02:00Z",
+            "attestation": { "mode": "gateway", "authenticated_by": "alex" },
+            "parameters": [],
+            "model_hash": format!("sha256:{}", "d".repeat(64)),
+            "semantics_version": 1,
+            "drawn_subjects": [],
+            "audit_order": order,
+            "act_ordinal": ordinal,
+            "ordered_at": "2026-06-24T00:02:00Z",
+            "operations": [],
+        }))
+        .unwrap()
+    }
+
+    /// Legacy rows, then ordered rows with no activation between: the
+    /// tree is consistent, and only the activation check names it.
+    #[test]
+    fn ordered_rows_after_legacy_ones_need_an_activation() {
+        let (k1, k2) = (
+            SigningKey::from_bytes(&[1; 32]),
+            SigningKey::from_bytes(&[2; 32]),
+        );
+        let mut rows = history(&k1, &k2);
+        rows.push(ordinary(ROWS, 2, 0));
+        let cps = chain(&rows, &[rows.len()]);
+        faulty(
+            streamed(&rows, &cps, None),
+            "ordered after legacy rows with no activation record between",
+        );
+    }
+
+    #[test]
+    fn an_ordinary_row_inside_the_activation_is_faulty() {
+        let (k1, k2) = (
+            SigningKey::from_bytes(&[1; 32]),
+            SigningKey::from_bytes(&[2; 32]),
+        );
+        let mut rows = history(&k1, &k2);
+        rows.extend(activation(&rows.clone()));
+        rows.push(ordinary(ROWS + 2, 1, 2));
+        let cps = chain(&rows, &[rows.len()]);
+        faulty(streamed(&rows, &cps, None), "inside the activation's order");
+    }
+
+    #[test]
+    fn a_tampered_tree_outranks_the_activations_shape() {
+        let (k1, k2) = (
+            SigningKey::from_bytes(&[1; 32]),
+            SigningKey::from_bytes(&[2; 32]),
+        );
+        let mut rows = history(&k1, &k2);
+        let [_, record] = <[AuditRow; 2]>::try_from(activation(&rows.clone())).unwrap();
+        rows.push(record);
+        let mut cps = chain(&rows, &[rows.len()]);
+        cps[0].root_hash = Digest::from_bytes([9; 32]);
+        rehash_from(&mut cps, 0);
+        assert_eq!(variant(&streamed(&rows, &cps, None)), "tampered");
     }
 }

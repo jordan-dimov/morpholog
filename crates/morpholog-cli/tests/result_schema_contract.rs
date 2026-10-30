@@ -1116,9 +1116,8 @@ fn migration_reports_serialize_as_pinned() {
             audit_bytes: 3_726_000_128,
             live_claims: 300_000,
             baseline_bytes: 83_660_004,
-            baseline_limit_bytes: morpholog_postgres::BASELINE_LIMIT_BYTES,
             estimated_preparation_ms: 37_800,
-            estimated_writer_pause_ms: 4_960,
+            estimated_writer_pause_ms: 4_360,
             refusals: vec!["1 prepared transaction(s) are open on this database; commit or roll them back first (`pg_prepared_xacts`)".to_string()],
         }),
     };
@@ -1352,28 +1351,21 @@ fn audit_rows_serialize_as_pinned() {
     };
     assert_golden("audit_row_ordered.json", &to_value(&ordered));
 
-    // The activation record: a control record the migration wrote, whose
-    // operations are the baseline, each claim with the transition that
-    // admitted it.
-    let activation = AuditRow {
-        transformation_name: "morpholog.activate".into(),
-        arguments: vec![
-            EvalValue::Decimal(3.into()),
-            EvalValue::Subject(Subject::from(format!("sha256:{}", "a".repeat(64)))),
-            EvalValue::Subject(Subject::from(format!("sha256:{}", "b".repeat(64)))),
-        ],
+    // The activation: a baseline chunk, its operations the claims the
+    // table held with the transition that admitted each, then the record
+    // naming the legacy prefix and the chunks.
+    let chunk = AuditRow {
+        transformation_name: "morpholog.baseline".into(),
+        arguments: vec![],
         invariants_checked: vec![],
         asserted_claims: vec![],
+        retracted_claims: vec![],
         emitted_intents: vec![],
         attestation: Some(morpholog_postgres::AuditAttestation::Migration {
             authenticated_by: "deployer".to_string(),
             authenticated_by_oid: 10,
         }),
-        parameters: Some(vec![
-            "legacy_tree_size".to_string(),
-            "legacy_root".to_string(),
-            "baseline_digest".to_string(),
-        ]),
+        parameters: Some(vec![]),
         drawn_subjects: Some(vec![]),
         audit_order: Some(1),
         act_ordinal: Some(0),
@@ -1384,6 +1376,25 @@ fn audit_rows_serialize_as_pinned() {
             asserted_in: Some(sample_uuid()),
         }]),
         ..ordered.clone()
+    };
+    assert_golden("audit_row_baseline_chunk.json", &to_value(&chunk));
+    let activation = AuditRow {
+        transformation_name: "morpholog.activate".into(),
+        arguments: vec![
+            EvalValue::Decimal(3.into()),
+            EvalValue::Subject(Subject::from(format!("sha256:{}", "a".repeat(64)))),
+            EvalValue::Decimal(1.into()),
+            EvalValue::Subject(Subject::from(format!("sha256:{}", "b".repeat(64)))),
+        ],
+        parameters: Some(vec![
+            "legacy_tree_size".to_string(),
+            "legacy_root".to_string(),
+            "baseline_chunks".to_string(),
+            "baseline_digest".to_string(),
+        ]),
+        act_ordinal: Some(1),
+        operations: Some(vec![]),
+        ..chunk.clone()
     };
     assert_golden("audit_row_activation.json", &to_value(&activation));
 
@@ -2428,7 +2439,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
     assert_golden_bytes(
         "prefix_pack_manifest.json",
         &PrefixPackManifest {
-            pack_format_version: 18,
+            pack_format_version: 19,
             pack_kind: "prefix".into(),
             morpholog_version: "0.0.0".into(),
             tree_size: 2,
@@ -2461,9 +2472,17 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         }),
     );
     assert_golden(
+        "tree_verification_activation_faulty.json",
+        &to_value(&TreeVerification::ActivationFaulty {
+            detail: "00000000-0000-0000-0000-000000000003: the activation record does not name \
+                     the 3 legacy rows before it and its 1 baseline chunks"
+                .into(),
+        }),
+    );
+    assert_golden(
         "tree_verification_unsupported_pack.json",
         &to_value(&TreeVerification::unsupported_pack(
-            19,
+            20,
             Some("9.9.9".into()),
         )),
     );
@@ -2504,7 +2523,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         "window_evidence_pack.json",
         &to_value(&WindowEvidencePack {
             manifest: WindowPackManifest {
-                pack_format_version: 18,
+                pack_format_version: 19,
                 pack_kind: "window".into(),
                 morpholog_version: "0.0.0".into(),
                 from_tree_size: 2,
@@ -2585,7 +2604,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         "selective_evidence_pack.json",
         &to_value(&SelectiveEvidencePack {
             manifest: SelectivePackManifest {
-                pack_format_version: 18,
+                pack_format_version: 19,
                 pack_kind: "selective".into(),
                 morpholog_version: "0.0.0".into(),
                 tree_size: 3,
@@ -3269,6 +3288,10 @@ fn every_golden_validates_against_its_defs_entry() {
             "tree_verification",
         ),
         ("tree_verification_malformed_pack.json", "tree_verification"),
+        (
+            "tree_verification_activation_faulty.json",
+            "tree_verification",
+        ),
         (
             "tree_verification_unsupported_pack.json",
             "tree_verification",

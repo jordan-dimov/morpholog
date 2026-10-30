@@ -571,6 +571,9 @@ pub morpholog_postgres::PgError::AnchorDivergedFromStart::tree_size: i64
 pub morpholog_postgres::PgError::AuditPrefixIncomplete
 pub morpholog_postgres::PgError::AuditPrefixIncomplete::rows_present: i64
 pub morpholog_postgres::PgError::AuditPrefixIncomplete::tree_size: i64
+pub morpholog_postgres::PgError::BaselineChunk
+pub morpholog_postgres::PgError::BaselineChunk::chunk: uuid::Uuid
+pub morpholog_postgres::PgError::BaselineChunk::record: uuid::Uuid
 pub morpholog_postgres::PgError::CommitOutcomeUnknown(sqlx_core::error::Error)
 pub morpholog_postgres::PgError::CutoverRefused
 pub morpholog_postgres::PgError::CutoverRefused::reasons: alloc::vec::Vec<alloc::string::String>
@@ -978,6 +981,8 @@ impl core::marker::UnsafeUnpin for morpholog_postgres::StatisticsAction
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::StatisticsAction
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::StatisticsAction
 pub enum morpholog_postgres::TreeVerification
+pub morpholog_postgres::TreeVerification::ActivationFaulty
+pub morpholog_postgres::TreeVerification::ActivationFaulty::detail: alloc::string::String
 pub morpholog_postgres::TreeVerification::AnchorMismatch
 pub morpholog_postgres::TreeVerification::AnchorMismatch::anchor_checkpoint_hash: morpholog_postgres::Digest
 pub morpholog_postgres::TreeVerification::AnchorMismatch::stored_checkpoint_hash: core::option::Option<morpholog_postgres::Digest>
@@ -1263,7 +1268,6 @@ impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::WitnessStandin
 pub struct morpholog_postgres::ActivationPreflight
 pub morpholog_postgres::ActivationPreflight::audit_bytes: i64
 pub morpholog_postgres::ActivationPreflight::baseline_bytes: i64
-pub morpholog_postgres::ActivationPreflight::baseline_limit_bytes: i64
 pub morpholog_postgres::ActivationPreflight::estimated_preparation_ms: i64
 pub morpholog_postgres::ActivationPreflight::estimated_writer_pause_ms: i64
 pub morpholog_postgres::ActivationPreflight::legacy_rows: i64
@@ -2867,8 +2871,9 @@ impl core::marker::UnsafeUnpin for morpholog_postgres::WitnessesReport
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::WitnessesReport
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::WitnessesReport
 pub const morpholog_postgres::AUTHORITY_PREDICATE: &str
-pub const morpholog_postgres::BASELINE_LIMIT_BYTES: i64
 pub const morpholog_postgres::BASELINE_VERSION: i32
+pub const morpholog_postgres::CHUNK_BYTES: usize
+pub const morpholog_postgres::CHUNK_CLAIMS: usize
 pub const morpholog_postgres::DEFAULT_ROLE_PREFIX: &str
 pub const morpholog_postgres::LEGACY_PACK_FORMAT: u32
 pub const morpholog_postgres::MIGRATION_LOCK_KEY: i64
@@ -2883,10 +2888,10 @@ pub async fn morpholog_postgres::testing::AlwaysNonRetryable::deliver(&self, &mo
 impl morpholog_postgres::Deliverer for morpholog_postgres::testing::AlwaysTransient
 pub async fn morpholog_postgres::testing::AlwaysTransient::deliver(&self, &morpholog_postgres::OutboxRow) -> morpholog_postgres::DeliveryOutcome
 pub async fn morpholog_postgres::activation_preflight(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::ActivationPreflight, morpholog_postgres::PgError>
-pub async fn morpholog_postgres::activation_preflight_within(&sqlx_postgres::PgPool, i64) -> core::result::Result<morpholog_postgres::ActivationPreflight, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::apply_migrations(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::apply_migrations_paused(&sqlx_postgres::PgPool, morpholog_postgres::MigrateMode, &morpholog_postgres::LockPolicy, impl core::future::future::Future<Output = ()>) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::apply_migrations_with(&sqlx_postgres::PgPool, morpholog_postgres::MigrateMode, &morpholog_postgres::LockPolicy) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
+pub fn morpholog_postgres::arguments_hash(&[morpholog_core::state::EvalValue]) -> core::result::Result<[u8; 32], alloc::string::String>
 pub async fn morpholog_postgres::attach_witness(&sqlx_postgres::PgPool, i64, &morpholog_postgres::Digest, morpholog_postgres::Witness) -> core::result::Result<morpholog_postgres::Checkpoint, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::audit_cursor_for(&mut sqlx_postgres::connection::PgConnection, uuid::Uuid) -> core::result::Result<morpholog_postgres::AuditPosition, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::audit_resume_watermark<'e, E>(E) -> core::result::Result<u64, morpholog_postgres::PgError> where E: sqlx_core::executor::Executor<'e, Database = sqlx_postgres::database::Postgres>
@@ -3002,3 +3007,4 @@ pub fn morpholog_postgres::with_anchor_signatures(&[morpholog_postgres::Checkpoi
 pub fn morpholog_postgres::with_default_user(&str) -> alloc::string::String
 pub fn morpholog_postgres::with_user(&str, &str) -> alloc::string::String
 pub fn morpholog_postgres::witnesses_report(&[morpholog_postgres::Checkpoint], core::option::Option<&morpholog_witness::Anchors>) -> core::option::Option<morpholog_postgres::WitnessesReport>
+pub async fn morpholog_postgres::write_activation_record_with(&mut sqlx_core::transaction::Transaction<'_, sqlx_postgres::database::Postgres>, usize, usize) -> core::result::Result<(), morpholog_postgres::PgError>

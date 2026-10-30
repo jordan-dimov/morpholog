@@ -17,7 +17,7 @@ fn rehearse_rows<'a>(
     rows: impl IntoIterator<Item = &'a AuditRow>,
 ) {
     for row in rows {
-        if row.is_activation() {
+        if row.is_control() {
             row.effect().apply_to(replay);
             continue;
         }

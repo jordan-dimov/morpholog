@@ -982,12 +982,43 @@ fn subjects_history() -> Vec<AuditRow> {
     rows
 }
 
-/// The whole ladder, then rows in the one canonical order: a batch of two
+/// The whole ladder, the activation that ends it (its record alone, over
+/// no live claims), then rows in the one canonical order: a batch of two
 /// acts under one order, then a later order.
 fn ordered_history() -> Vec<AuditRow> {
+    use crate::activation::{
+        ACTIVATE, ACTIVATION_MODEL_HASH, PARAMETERS, arguments_over, baseline_digest,
+    };
     let mut rows = subjects_history();
     let last = rows[rows.len() - 1].clone();
-    let newest: Vec<AuditRow> = [(1, 0), (1, 1), (2, 0)]
+    let legacy: Vec<Hash> = rows.iter().map(|r| audit_leaf_hash(r).unwrap()).collect();
+    let at: jiff::Timestamp = "2026-06-24T00:02:59Z".parse().unwrap();
+    rows.push(AuditRow {
+        transition_id: uuid::Uuid::from_u128(0x2ff),
+        transformation_name: ACTIVATE.into(),
+        arguments: arguments_over(
+            legacy.len() as u64,
+            crate::merkle::merkle_root(&legacy),
+            0,
+            &baseline_digest(&[]),
+        ),
+        asserted_claims: Vec::new(),
+        retracted_claims: Vec::new(),
+        emitted_intents: Vec::new(),
+        committed_at: at,
+        attestation: Some(crate::attestation::AuditAttestation::Migration {
+            authenticated_by: "owner".into(),
+            authenticated_by_oid: 10,
+        }),
+        parameters: Some(PARAMETERS.map(String::from).to_vec()),
+        model_hash: Some(ACTIVATION_MODEL_HASH.into()),
+        audit_order: Some(1),
+        act_ordinal: Some(0),
+        ordered_at: Some(at),
+        operations: Some(Vec::new()),
+        ..last.clone()
+    });
+    let newest: Vec<AuditRow> = [(2, 0), (2, 1), (3, 0)]
         .into_iter()
         .enumerate()
         .map(|(i, (order, ordinal))| {
@@ -1096,24 +1127,24 @@ fn another_format_is_unsupported_not_malformed() {
         }) => assert_eq!(written_by.as_deref(), Some("0.0.0")),
         other => panic!("expected format 13 to be unsupported, got {other:?}"),
     }
-    let newer = b"{\"pack_format_version\": 19, \"pack_kind\": \"prefix\", \
+    let newer = b"{\"pack_format_version\": 20, \"pack_kind\": \"prefix\", \
                   \"morpholog_version\": \"9.9.9\", \"from_the_future\": true}\nnot json\n";
     match stream_verdict(newer, None) {
         Err(PackError::Unsupported {
-            pack_format_version: 19,
+            pack_format_version: 20,
             written_by,
         }) => assert_eq!(written_by.as_deref(), Some("9.9.9")),
-        other => panic!("expected format 19 to be unsupported, got {other:?}"),
+        other => panic!("expected format 20 to be unsupported, got {other:?}"),
     }
     let message = PackError::Unsupported {
-        pack_format_version: 19,
+        pack_format_version: 20,
         written_by: Some("9.9.9".into()),
     }
     .to_string();
     assert!(
-        message.contains("reads formats 17 and 18")
+        message.contains("reads formats 17 and 19")
             && message.contains("names Morpholog 9.9.9")
-            && message.contains("a release that reads format 19"),
+            && message.contains("a release that reads format 20"),
         "{message}"
     );
     let message = PackError::Unsupported {

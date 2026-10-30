@@ -468,7 +468,8 @@ CREATE TABLE audit (
         AND (audit_order > 0 OR act_ordinal = 0)
     ),
     CONSTRAINT audit_activation_attested CHECK (
-        (transformation_name = 'morpholog.activate') = (attestation ->> 'mode' = 'migration')
+        (transformation_name IN ('morpholog.activate', 'morpholog.baseline'))
+        = (attestation ->> 'mode' = 'migration')
     )
 );
 
@@ -849,9 +850,15 @@ BEGIN
         END IF;
     END IF;
     PERFORM set_config('morpholog.audit_order_row', held::text, true);
-    IF NEW.transformation_name = 'morpholog.activate'
-       AND (NEW.audit_order, NEW.act_ordinal) <> (1, 0) THEN
-        RAISE EXCEPTION 'the activation record can only be the first ordered audit row'
+    -- The activation is order 1 alone: its baseline chunks at ordinals
+    -- 0 to k-1, then its record at k. Each control row's ordinal is the
+    -- number of chunks before it.
+    IF NEW.transformation_name IN ('morpholog.activate', 'morpholog.baseline')
+       AND (NEW.audit_order <> 1
+            OR NEW.act_ordinal <> (SELECT count(*) FROM audit
+                                    WHERE audit_order = 1
+                                      AND transformation_name = 'morpholog.baseline')) THEN
+        RAISE EXCEPTION 'the activation rows can only be the first order, chunks then record'
             USING ERRCODE = '23514';
     END IF;
     RETURN NEW;

@@ -1,0 +1,67 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT predicate_name, arguments, arguments_hash, asserted_in\n               FROM (SELECT predicate_name, arguments, arguments_hash, asserted_in,\n                            row_number() OVER w AS n,\n                            sum(octet_length(arguments::text)) OVER w AS bytes\n                     FROM (SELECT predicate_name, arguments, arguments_hash, asserted_in\n                           FROM morpholog.claims\n                           WHERE (predicate_name, arguments_hash)\n                                 > (coalesce($1, ''), coalesce($2, ''::bytea))\n                           ORDER BY predicate_name, arguments_hash\n                           LIMIT $3) page\n                     WINDOW w AS (ORDER BY predicate_name, arguments_hash\n                                  ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)) bounded\n               WHERE n = 1 OR bytes <= $4\n               ORDER BY n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "predicate_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.claims",
+            "name": "predicate_name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "arguments",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.claims",
+            "name": "arguments"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "arguments_hash",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "morpholog.claims",
+            "name": "arguments_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "asserted_in",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "morpholog.claims",
+            "name": "asserted_in"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bytea",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c22dbf399176574718cc97cce7ef6fa834671979333ba3865753a6a7b9360d17"
+}

@@ -2310,7 +2310,6 @@ class ActivationPreflight:
     audit_bytes: int
     live_claims: int
     baseline_bytes: int
-    baseline_limit_bytes: int
     estimated_preparation_ms: int
     estimated_writer_pause_ms: int
     # Why the cutover is refused now; empty when it may proceed.
@@ -2322,7 +2321,7 @@ class ActivationPreflight:
             "activation preflight",
             payload,
             {"state", "steps_done", "legacy_rows", "legacy_rows_prepared", "audit_bytes",
-             "live_claims", "baseline_bytes", "baseline_limit_bytes",
+             "live_claims", "baseline_bytes",
              "estimated_preparation_ms", "estimated_writer_pause_ms", "refusals"},
         )
         return cls(
@@ -2333,7 +2332,6 @@ class ActivationPreflight:
             audit_bytes=data.integer("audit_bytes", minimum=0),
             live_claims=data.integer("live_claims", minimum=0),
             baseline_bytes=data.integer("baseline_bytes", minimum=0),
-            baseline_limit_bytes=data.integer("baseline_limit_bytes", minimum=1),
             estimated_preparation_ms=data.integer("estimated_preparation_ms", minimum=0),
             estimated_writer_pause_ms=data.integer("estimated_writer_pause_ms", minimum=0),
             refusals=data.texts("refusals"),
@@ -2820,6 +2818,20 @@ class TreeMalformedPack:
 
 
 @dataclass(frozen=True)
+class TreeActivationFaulty:
+    """The activation's rows are not the shape the migration writes; the
+    tree is otherwise intact."""
+
+    detail: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> TreeActivationFaulty:
+        data = _strict("activation faulty", payload, {"status", "detail"})
+        data.constant("status", "activation_faulty")
+        return cls(detail=data.text("detail"))
+
+
+@dataclass(frozen=True)
 class TreeUnsupportedPack:
     """An evidence pack of a format this binary does not read: nothing
     about it is established. ``reads`` is the format this binary reads;
@@ -2936,6 +2948,7 @@ TreeVerification = (
     | TreeChainBroken
     | TreeAnchorMismatch
     | TreeMalformedPack
+    | TreeActivationFaulty
     | TreeUnsupportedPack
     | TreeSignatureInvalid
     | TreeUnauthorizedKey
@@ -2953,6 +2966,7 @@ def parse_tree_verification(payload: object) -> TreeVerification:
         "chain_broken": TreeChainBroken.from_json,
         "anchor_mismatch": TreeAnchorMismatch.from_json,
         "malformed_pack": TreeMalformedPack.from_json,
+        "activation_faulty": TreeActivationFaulty.from_json,
         "unsupported_pack": TreeUnsupportedPack.from_json,
         "signature_invalid": TreeSignatureInvalid.from_json,
         "unauthorized_key": TreeUnauthorizedKey.from_json,

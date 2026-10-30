@@ -120,7 +120,7 @@ DATABASE_URL=postgres:///morpholog_scratch python3 examples/etrm_embedder/etrm_l
 
 ## Upgrading an existing database
 
-A verifier reads its own evidence-pack format, and the format before it when that one holds rows written before the log had one order: v0.0.17 writes format 18 and still verifies the format 17 packs v0.0.15 and v0.0.16 wrote. A pack in any older format is refused as `unsupported_pack`; export it again from the upgraded database. Keep the old packs, and a binary of the release that wrote them: anyone who holds a pack without the database cannot export it again, and only that release verifies it. This holds even when little changed. A prefix pack from v0.0.14 (format 13) and a v0.0.15 export of the same record differ only in their first line, and v0.0.15 still refuses the older one. The other way round, v0.0.14 reports a format 17 pack as `malformed_pack`, with a detail that says to upgrade. The generated client's pack models, such as `PrefixPackManifest`, read the current format only. That does not change the semantics version an older receipt was decided under: its integrity can verify while the current release reports `not_re_evaluated` for its answer (see [semantics versions](runtime-semantics.md#semantics-versions)).
+A verifier reads its own evidence-pack format, and the format before it when that one holds rows written before the log had one order: v0.0.17 writes format 19 and still verifies the format 17 packs v0.0.15 and v0.0.16 wrote. A pack in any older format is refused as `unsupported_pack`; export it again from the upgraded database. Keep the old packs, and a binary of the release that wrote them: anyone who holds a pack without the database cannot export it again, and only that release verifies it. This holds even when little changed. A prefix pack from v0.0.14 (format 13) and a v0.0.15 export of the same record differ only in their first line, and v0.0.15 still refuses the older one. The other way round, v0.0.14 reports a format 17 pack as `malformed_pack`, with a detail that says to upgrade. The generated client's pack models, such as `PrefixPackManifest`, read the current format only. That does not change the semantics version an older receipt was decided under: its integrity can verify while the current release reports `not_re_evaluated` for its answer (see [semantics versions](runtime-semantics.md#semantics-versions)).
 
 `morpholog init` provisions a schema; it never migrates one. That is
 deliberate - it means running `init` against a live database cannot alter
@@ -146,8 +146,11 @@ covers only the rows written since the last pass and the live claims.
 `migrate --check` reports it beforehand under `activation_preflight`: where
 the preparation stands, how many rows the root already holds, the
 estimated preparation time and writer pause, and anything that refuses the
-cutover now (a prepared transaction left open, a session this login cannot
-see, or a baseline too large for one record). One `migrate` runs at a time
+cutover now (a prepared transaction left open, or a session this login
+cannot see). The live claims are written as chunk rows of bounded size, so
+no register is too large to activate, and the runner's memory does not
+grow with them. A database activated by a development build from before
+those chunks is not read; recreate it. One `migrate` runs at a time
 on a database; a second is refused while the first holds its lock. To take the long part out of
 the window, run `migrate --prepare` ahead of it; it stops with the
 migration still pending and `--check` saying `ready`, and the plain
