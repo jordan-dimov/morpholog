@@ -53,7 +53,10 @@ REVOKE ALL ON morpholog.audit_order_txn FROM PUBLIC;
 CREATE FUNCTION morpholog.audit_order_assign() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = morpholog, pg_temp AS $$
 DECLARE
-    held audit_order_txn%ROWTYPE;
+    -- This transaction's own row, found by its address: a search of the
+    -- table would conflict, under serializable isolation, with every
+    -- other writer's insert.
+    held tid := nullif(current_setting('morpholog.audit_order_row', true), '')::tid;
     n bigint;
     us bigint;
 BEGIN
@@ -61,12 +64,15 @@ BEGIN
         RAISE EXCEPTION 'this audit row records no operations: it was written by a binary older than the database'
             USING ERRCODE = '55000';
     END IF;
-    SELECT * INTO held FROM audit_order_txn WHERE xid = pg_current_xact_id();
-    IF FOUND THEN
-        UPDATE audit_order_txn SET next_act = next_act + 1 WHERE xid = held.xid;
-        NEW.audit_order := held.audit_order;
-        NEW.act_ordinal := held.next_act;
-        NEW.ordered_at := held.ordered_at;
+    IF held IS NOT NULL THEN
+        UPDATE audit_order_txn SET next_act = next_act + 1
+         WHERE ctid = held AND xid = pg_current_xact_id()
+         RETURNING audit_order, next_act - 1, ordered_at, ctid
+              INTO NEW.audit_order, NEW.act_ordinal, NEW.ordered_at, held;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'this transaction names an audit order that is not its own'
+                USING ERRCODE = '55000';
+        END IF;
     ELSE
         -- G is released on every path, a cancel included, so a pooled
         -- connection never keeps it.
@@ -87,7 +93,8 @@ BEGIN
         NEW.audit_order := n;
         NEW.act_ordinal := 0;
         NEW.ordered_at := timestamptz 'epoch' + us * interval '1 microsecond';
-        INSERT INTO audit_order_txn VALUES (pg_current_xact_id(), n, 1, NEW.ordered_at);
+        INSERT INTO audit_order_txn VALUES (pg_current_xact_id(), n, 1, NEW.ordered_at)
+            RETURNING ctid INTO held;
         -- Open and prepared transactions are at or above the snapshot's
         -- xmin, so only finished ones are removed.
         IF n % 64 = 0 THEN
@@ -97,6 +104,7 @@ BEGIN
                  LIMIT 256);
         END IF;
     END IF;
+    PERFORM set_config('morpholog.audit_order_row', held::text, true);
     IF NEW.transformation_name = 'morpholog.activate'
        AND (NEW.audit_order, NEW.act_ordinal) <> (1, 0) THEN
         RAISE EXCEPTION 'the activation record can only be the first ordered audit row'

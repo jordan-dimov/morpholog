@@ -1012,8 +1012,8 @@ pub morpholog_postgres::VerifyOutcome::Divergent::only_in_claims_table: alloc::v
 pub morpholog_postgres::VerifyOutcome::Divergent::only_in_replay: alloc::vec::Vec<morpholog_core::state::ClaimInstance>
 pub morpholog_postgres::VerifyOutcome::Indeterminate
 pub morpholog_postgres::VerifyOutcome::Indeterminate::claims: usize
-pub morpholog_postgres::VerifyOutcome::Indeterminate::legacy_only_in_baseline: alloc::vec::Vec<morpholog_core::state::ClaimInstance>
-pub morpholog_postgres::VerifyOutcome::Indeterminate::legacy_only_in_replay: alloc::vec::Vec<morpholog_core::state::ClaimInstance>
+pub morpholog_postgres::VerifyOutcome::Indeterminate::legacy_only_in_baseline: alloc::vec::Vec<morpholog_postgres::ClaimRead>
+pub morpholog_postgres::VerifyOutcome::Indeterminate::legacy_only_in_replay: alloc::vec::Vec<morpholog_postgres::ClaimRead>
 pub morpholog_postgres::VerifyOutcome::Indeterminate::transitions: i64
 impl core::clone::Clone for morpholog_postgres::VerifyOutcome
 pub fn morpholog_postgres::VerifyOutcome::clone(&self) -> morpholog_postgres::VerifyOutcome

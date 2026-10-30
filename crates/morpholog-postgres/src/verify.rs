@@ -2,6 +2,7 @@ use crate::audit::Operation;
 use crate::audit::{REPLAY_CHUNK, list_audit_rows_page};
 use crate::audit_pages::{ReplayPages, ReplayRow};
 use crate::checkpoints::TreeVerification;
+use crate::claims::ClaimRead;
 use crate::error::{PgError, classify, classify_checked_query};
 use crate::history::{
     HistoryCheck, HistoryVerdict, LegacyDisagreement, ReplayConflict, sort_key, sorted,
@@ -48,10 +49,12 @@ pub enum VerifyOutcome {
     Indeterminate {
         transitions: i64,
         claims: usize,
-        /// Claims the baseline holds that the legacy replay does not.
-        legacy_only_in_baseline: Vec<ClaimInstance>,
-        /// Claims the legacy replay holds that the baseline does not.
-        legacy_only_in_replay: Vec<ClaimInstance>,
+        /// Claims the baseline holds, each with its admitter, that the
+        /// legacy replay does not hold with the same admitter.
+        legacy_only_in_baseline: Vec<ClaimRead>,
+        /// Claims the legacy replay holds, each with its admitter, that the
+        /// baseline does not hold with the same admitter.
+        legacy_only_in_replay: Vec<ClaimRead>,
     },
     /// The two records disagree, or the log contradicts itself.
     Divergent {

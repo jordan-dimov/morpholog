@@ -174,7 +174,7 @@ AuditRecord
   operations                     -- what the commit did to the claims table, in order
 ```
 
-Rows from before the canonical order carry none of the last four. Replay reads them from the claims they proposed, which can differ from what their commit did when two writers overlapped. The activation record that ends them replaces the replayed state with the claims the table held, and every row after it applies its recorded operations.
+Rows from before the canonical order carry none of the last four. Replay reads them from the claims they proposed, which can differ from what their commit did when two writers overlapped. The activation record that ends them replaces the replayed state with the claims the table held, and every row after it applies its recorded operations. The order is taken when a transaction writes its first audit row, after it has read and written its claims, so it is the order of effects. It need not be the order in which serializable isolation placed the decisions: a transaction that read a claim before another removed it can commit after the removal and sort after it.
 
 ## Surface-to-IR mapping
 

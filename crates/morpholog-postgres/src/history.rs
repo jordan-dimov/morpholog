@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::activation::{ACTIVATION_MODEL_HASH, PARAMETERS, activation_arguments};
 use crate::attestation::AuditAttestation;
 use crate::audit::{AuditRow, Operation, OperationKind};
+use crate::claims::ClaimRead;
 use crate::merkle::{Frontier, audit_leaf_hash};
 use crate::replay::EffectKind;
 
@@ -40,11 +41,13 @@ pub(crate) struct HistoryCheck {
     conflicts: Vec<ReplayConflict>,
 }
 
-/// Where the legacy replay and the activation baseline differ.
+/// Where the legacy replay and the activation baseline differ, each claim
+/// with the transition that side says admitted it. A claim both hold but
+/// attribute differently is in both lists.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LegacyDisagreement {
-    pub(crate) only_in_baseline: Vec<ClaimInstance>,
-    pub(crate) only_in_replay: Vec<ClaimInstance>,
+    pub(crate) only_in_baseline: Vec<ClaimRead>,
+    pub(crate) only_in_replay: Vec<ClaimRead>,
 }
 
 pub(crate) struct HistoryVerdict {
@@ -71,12 +74,12 @@ impl HistoryCheck {
                 }
                 faults.extend(activation_faults(row, &self.legacy)?);
                 let replayed = std::mem::take(&mut self.admitted_by);
-                let claims: HashSet<ClaimInstance> =
-                    baseline.iter().map(Operation::claim).collect();
-                let only_in_baseline =
-                    sorted(claims.iter().filter(|c| !replayed.contains_key(c)).cloned());
-                let only_in_replay =
-                    sorted(replayed.keys().filter(|c| !claims.contains(c)).cloned());
+                let claims: HashMap<ClaimInstance, Uuid> = baseline
+                    .iter()
+                    .filter_map(|op| op.asserted_in.map(|by| (op.claim(), by)))
+                    .collect();
+                let only_in_baseline = unmatched(&claims, &replayed);
+                let only_in_replay = unmatched(&replayed, &claims);
                 if !only_in_baseline.is_empty() || !only_in_replay.is_empty() {
                     self.legacy_disagreement = Some(LegacyDisagreement {
                         only_in_baseline,
@@ -95,6 +98,9 @@ impl HistoryCheck {
                     faults
                         .push("ordered after legacy rows with no activation record between".into());
                     self.activated = true;
+                }
+                if !follows_the_proposal(row, operations)? {
+                    faults.push("the operations do not follow the claims it proposed".into());
                 }
                 // Presence as the row's own earlier operations left it.
                 let mut moved: HashMap<ClaimInstance, bool> = HashMap::new();
@@ -145,6 +151,48 @@ impl HistoryCheck {
             conflicts: self.conflicts,
         }
     }
+}
+
+/// The claims of `side` that `other` does not hold with the same admitter.
+fn unmatched(
+    side: &HashMap<ClaimInstance, Uuid>,
+    other: &HashMap<ClaimInstance, Uuid>,
+) -> Vec<ClaimRead> {
+    let mut reads: Vec<ClaimRead> = side
+        .iter()
+        .filter(|(claim, by)| other.get(*claim) != Some(*by))
+        .map(|(claim, by)| ClaimRead {
+            claim: claim.clone(),
+            asserted_in: *by,
+        })
+        .collect();
+    reads.sort_by_key(|r| sort_key(&r.claim));
+    reads
+}
+
+/// The commit deletes each distinct claim it retracts, in order, then
+/// inserts each claim it admits or finds it present, in order.
+fn follows_the_proposal(
+    row: &AuditRow,
+    operations: &[Operation],
+) -> Result<bool, serde_json::Error> {
+    let mut seen = HashSet::new();
+    let mut expected: Vec<(&ClaimInstance, bool)> = Vec::new();
+    for claim in &row.retracted_claims {
+        if seen.insert((claim.predicate.clone(), serde_json::to_string(&claim.args)?)) {
+            expected.push((claim, true));
+        }
+    }
+    expected.extend(row.asserted_claims.iter().map(|claim| (claim, false)));
+    Ok(operations.len() == expected.len()
+        && operations
+            .iter()
+            .zip(expected)
+            .all(|(op, (claim, deletes))| {
+                op.predicate == claim.predicate
+                    && op.args == claim.args
+                    && (op.op == OperationKind::Del) == deletes
+            }))
 }
 
 /// What makes this row other than the record the migration writes over
@@ -271,9 +319,12 @@ mod tests {
         for row in rows {
             check.push(row).unwrap();
         }
-        let verdict = check.finish();
-        assert!(verdict.legacy_disagreement.is_none());
-        verdict.conflicts.into_iter().map(|c| c.detail).collect()
+        check
+            .finish()
+            .conflicts
+            .into_iter()
+            .map(|c| c.detail)
+            .collect()
     }
 
     /// A pack is hostile input with no database constraints behind it, so
@@ -354,6 +405,7 @@ mod tests {
                 authenticated_by_oid: None,
             }),
             audit_order: Some(2),
+            retracted_claims: vec![x()],
             operations: Some(vec![Operation {
                 asserted_in: Some(Uuid::from_u128(1)),
                 ..Operation::new(OperationKind::Del, &x())

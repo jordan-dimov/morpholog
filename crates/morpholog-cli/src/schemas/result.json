@@ -1690,8 +1690,8 @@
             "status": { "const": "indeterminate" },
             "transitions": { "type": "integer" },
             "claims": { "type": "integer" },
-            "legacy_only_in_baseline": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } },
-            "legacy_only_in_replay": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } }
+            "legacy_only_in_baseline": { "type": "array", "items": { "$ref": "#/$defs/claim_read" } },
+            "legacy_only_in_replay": { "type": "array", "items": { "$ref": "#/$defs/claim_read" } }
           }
         },
         {

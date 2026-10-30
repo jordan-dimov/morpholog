@@ -2611,12 +2611,14 @@ class ReplayIndeterminate:
     """Everything holds except the legacy history, written before the log
     had one order: replayed from what it proposed, it does not reach the
     activation baseline. Uncertainty about that history, not evidence of
-    tampering, and it does not pass."""
+    tampering, and it does not pass. Each claim carries the transition
+    that side says admitted it, so a claim both sides hold but attribute
+    differently is in both lists."""
 
     transitions: int
     claims: int
-    legacy_only_in_baseline: list[ClaimInstance]
-    legacy_only_in_replay: list[ClaimInstance]
+    legacy_only_in_baseline: list[ClaimRead]
+    legacy_only_in_replay: list[ClaimRead]
 
     @classmethod
     def from_json(cls, payload: object) -> ReplayIndeterminate:
@@ -2635,8 +2637,8 @@ class ReplayIndeterminate:
         return cls(
             transitions=data.integer("transitions"),
             claims=data.integer("claims"),
-            legacy_only_in_baseline=data.array("legacy_only_in_baseline", ClaimInstance.from_json),
-            legacy_only_in_replay=data.array("legacy_only_in_replay", ClaimInstance.from_json),
+            legacy_only_in_baseline=data.array("legacy_only_in_baseline", ClaimRead.from_json),
+            legacy_only_in_replay=data.array("legacy_only_in_replay", ClaimRead.from_json),
         )
 
 

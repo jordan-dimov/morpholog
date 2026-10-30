@@ -2172,8 +2172,14 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
             replay: VerifyOutcome::Indeterminate {
                 transitions: 4,
                 claims: 1,
-                legacy_only_in_baseline: vec![kitchen_sink_claim()],
-                legacy_only_in_replay: vec![],
+                legacy_only_in_baseline: vec![morpholog_postgres::ClaimRead {
+                    claim: kitchen_sink_claim(),
+                    asserted_in: uuid::Uuid::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0002),
+                }],
+                legacy_only_in_replay: vec![morpholog_postgres::ClaimRead {
+                    claim: kitchen_sink_claim(),
+                    asserted_in: uuid::Uuid::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0001),
+                }],
             },
             views: None,
             witnesses: None,

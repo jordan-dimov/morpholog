@@ -12,7 +12,7 @@ mod common;
 
 use common::{expect_committed, pg_program, propose_pg_as, reset_db, test_pool};
 use morpholog_core::{ClaimInstance, Program};
-use morpholog_postgres::{PgPool, PgProgram, VerifyOutcome, testing, verify_replay};
+use morpholog_postgres::{ClaimRead, PgPool, PgProgram, VerifyOutcome, testing, verify_replay};
 use morpholog_test_support::subj;
 use uuid::Uuid;
 
@@ -23,6 +23,10 @@ transformation admit_x(k):
 transformation retract_x(k):
     require X(k)
     retract X(k)
+predicate Y(k: Subject)
+transformation admit_y(k):
+    require X(k)
+    admit Y(k)
 ";
 
 fn program() -> Program {
@@ -36,6 +40,10 @@ async fn act(pool: &PgPool, pg: &PgProgram, name: &str, k: &str) -> Uuid {
             .await
             .unwrap(),
     )
+}
+
+fn read(claim: ClaimInstance, asserted_in: Uuid) -> ClaimRead {
+    ClaimRead { claim, asserted_in }
 }
 
 fn x(k: &str) -> ClaimInstance {
@@ -116,7 +124,7 @@ async fn legacy_uncertainty_survives_later_transitions() {
     testing::reset_before_activation(&pool).await.unwrap();
     legacy(&pool, "admit_x", "a", "2026-06-01T00:00:01Z").await;
     legacy(&pool, "retract_x", "a", "2026-06-01T00:00:02Z").await;
-    legacy(&pool, "admit_x", "a", "2026-06-01T00:00:03Z").await;
+    let no_op = legacy(&pool, "admit_x", "a", "2026-06-01T00:00:03Z").await;
     testing::activate(&pool).await.unwrap();
 
     let indeterminate = |outcome: VerifyOutcome, rows: i64| match outcome {
@@ -127,7 +135,7 @@ async fn legacy_uncertainty_survives_later_transitions() {
             legacy_only_in_replay,
         } => {
             assert_eq!(transitions, rows);
-            assert_eq!(legacy_only_in_replay, vec![x("a")]);
+            assert_eq!(legacy_only_in_replay, vec![read(x("a"), no_op)]);
             assert!(legacy_only_in_baseline.is_empty());
             claims
         }
@@ -144,6 +152,64 @@ async fn legacy_uncertainty_survives_later_transitions() {
         1,
         "a lawful readmit does not settle it"
     );
+}
+
+/// The same overlap, then a later legacy admit the table did make: both
+/// sides hold the claim, but the replay says the no-op admitted it, so
+/// the history is still uncertain.
+#[tokio::test]
+async fn legacy_uncertainty_includes_who_admitted_a_claim() {
+    let pool = test_pool().await;
+    common::drain_open_transactions(&pool).await;
+    testing::reset_before_activation(&pool).await.unwrap();
+    legacy(&pool, "admit_x", "a", "2026-06-01T00:00:01Z").await;
+    legacy(&pool, "retract_x", "a", "2026-06-01T00:00:02Z").await;
+    let no_op = legacy(&pool, "admit_x", "a", "2026-06-01T00:00:03Z").await;
+    let readmit = legacy(&pool, "admit_x", "a", "2026-06-01T00:00:04Z").await;
+    execute(
+        &pool,
+        &format!(
+            "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+             VALUES ('X', '[{{\"type\": \"subject\", \"value\": \"a\"}}]', '{readmit}')"
+        ),
+    )
+    .await;
+    testing::activate(&pool).await.unwrap();
+    match verdict(&pool).await {
+        VerifyOutcome::Indeterminate {
+            legacy_only_in_baseline,
+            legacy_only_in_replay,
+            ..
+        } => {
+            assert_eq!(legacy_only_in_baseline, vec![read(x("a"), readmit)]);
+            assert_eq!(legacy_only_in_replay, vec![read(x("a"), no_op)]);
+        }
+        other => panic!("expected indeterminate: {other:?}"),
+    }
+}
+
+/// A row whose operations are not the ones its proposal implies: it says
+/// it admitted one claim and records inserting another. The replay still
+/// matches the table, so only this check sees it.
+#[tokio::test]
+async fn operations_follow_the_claims_a_row_proposed() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let pg = pg_program(program());
+    let admitted = act(&pool, &pg, "admit_x", "a").await;
+    execute(
+        &pool,
+        &format!(
+            "UPDATE morpholog.audit
+                SET asserted_claims = '[{{\"predicate\": \"X\", \"args\": [{{\"type\": \"subject\", \"value\": \"b\"}}]}}]'
+              WHERE transition_id = '{admitted}'"
+        ),
+    )
+    .await;
+    let found = conflicts(verdict(&pool).await);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].0, admitted);
+    assert!(found[0].1.contains("do not follow the claims"), "{found:?}");
 }
 
 /// An admit removed from the log leaves the later retraction deleting a
@@ -265,4 +331,209 @@ async fn the_activation_record_is_the_one_its_prefix_implies() {
         conflicts[0].detail.contains("no activation record"),
         "{conflicts:?}"
     );
+}
+
+/// What the order does not promise. A reads X and passes its gate; B
+/// retracts X and commits; A commits after it. The database accepts that
+/// as A before B, since A read X before B removed it, but the order is
+/// taken at the audit write, so the record puts B first. Replaying the
+/// recorded operations still rebuilds the table exactly. Re-deciding A
+/// against the prefix the order gives finds X gone, so `rehearse` reports
+/// a refusal A never met: the order is the order of effects, not the
+/// state each decision saw.
+#[tokio::test]
+async fn the_order_is_of_effects_not_of_what_each_decision_saw() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let pg = std::sync::Arc::new(pg_program(program()));
+    // A deployment's shape: the programme's indexes, and enough claims
+    // between X and Y in key order that B's delete and A's insert touch
+    // different index pages. On a few rows they share one, and the
+    // false conflict aborts A instead.
+    morpholog_postgres::provision_indexes(&pool, &[&pg], false)
+        .await
+        .unwrap();
+    execute(
+        &pool,
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'XPad', jsonb_build_array(jsonb_build_object('type', 'subject', 'value', i::text)),
+                '00000000-0000-0000-0000-000000000000'
+           FROM generate_series(1, 5000) AS i;
+         ANALYZE morpholog.claims;",
+    )
+    .await;
+    act(&pool, &pg, "admit_x", "a").await;
+
+    // An uncommitted row on A's key holds A after its read, before its
+    // write.
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query(
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         VALUES ('Y', '[{\"type\": \"subject\", \"value\": \"a\"}]', $1)",
+    )
+    .bind(Uuid::nil())
+    .execute(&mut *holder)
+    .await
+    .unwrap();
+    let a = {
+        let (pool, pg) = (pool.clone(), pg.clone());
+        tokio::spawn(async move { act(&pool, &pg, "admit_y", "a").await })
+    };
+    for waited in 0.. {
+        let blocked: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+              WHERE wait_event_type = 'Lock' AND query LIKE 'INSERT INTO morpholog.claims%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        if blocked > 0 {
+            break;
+        }
+        assert!(waited < 400, "A never blocked");
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    let b = act(&pool, &pg, "retract_x", "a").await;
+    holder.rollback().await.unwrap();
+    let a = a.await.unwrap();
+
+    let order: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT transition_id FROM morpholog.audit
+         ORDER BY audit_order, act_ordinal, committed_at, transition_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(&order[1..], &[b, a], "B takes the earlier order");
+    execute(
+        &pool,
+        "DELETE FROM morpholog.claims WHERE predicate_name = 'XPad'",
+    )
+    .await;
+    assert!(matches!(
+        verdict(&pool).await,
+        VerifyOutcome::Consistent {
+            transitions: 3,
+            claims: 1
+        }
+    ));
+    let rehearsal = morpholog_postgres::rehearse_candidate(&pool, pg.prepared())
+        .await
+        .unwrap();
+    assert_eq!(rehearsal.totals.would_reject, 1, "{rehearsal:?}");
+    assert_eq!(rehearsal.differences[0].transition_id, a.to_string());
+}
+
+/// Two writers that share nothing, each queued on the ordering lock after
+/// its trigger has begun: both commit. A trigger that searched its table
+/// for the transaction's row made each conflict with the other's insert,
+/// and one was aborted every time.
+#[tokio::test]
+async fn writers_queued_on_the_ordering_lock_do_not_conflict() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let pg = std::sync::Arc::new(pg_program(program()));
+    let mut holder = pool.acquire().await.unwrap();
+    sqlx::query("SELECT pg_advisory_lock(625626, 0)")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let writers: Vec<_> = ["p", "q"]
+        .into_iter()
+        .map(|k| {
+            let (pool, pg) = (pool.clone(), pg.clone());
+            tokio::spawn(async move {
+                let t = program().transformation("admit_x").unwrap().clone();
+                propose_pg_as(&pool, &pg, &t, vec![subj(k)], "w").await
+            })
+        })
+        .collect();
+    for waited in 0.. {
+        let queued: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_locks
+              WHERE locktype = 'advisory' AND classid = 625626 AND objid = 0 AND NOT granted",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        if queued == 2 {
+            break;
+        }
+        assert!(
+            waited < 400,
+            "the writers never queued on the ordering lock"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    sqlx::query("SELECT pg_advisory_unlock(625626, 0)")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    for writer in writers {
+        let outcome = writer.await.unwrap();
+        assert!(
+            matches!(
+                outcome,
+                Ok(morpholog_postgres::PgProposalOutcome::Committed { .. })
+            ),
+            "{outcome:?}"
+        );
+    }
+}
+
+const ORDERED_ROW: &str = "INSERT INTO morpholog.audit (
+        transition_id, transformation_name, arguments, actor, invariant_epoch,
+        invariants_checked, asserted_claims, retracted_claims, emitted_intents, attestation,
+        parameters, model_hash, semantics_version, drawn_subjects, operations)
+     VALUES (gen_random_uuid(), 'probe', '[]', '{\"type\": \"subject\", \"value\": \"w\"}', 1,
+        '[]', '[]', '[]', '[]', '{\"mode\": \"gateway\", \"authenticated_by\": \"w\"}', '[]',
+        'sha256:' || repeat('d', 64), 1, '[]', '[]')";
+
+/// The trigger remembers its transaction's row in a setting the session
+/// can also write. Attacker capability: a writer setting it by hand, to
+/// borrow a committed transaction's order or to draw a second one.
+#[tokio::test]
+async fn a_transaction_cannot_choose_its_order() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let mut committed = pool.begin().await.unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(ORDERED_ROW))
+        .execute(&mut *committed)
+        .await
+        .unwrap();
+    let borrowed: String =
+        sqlx::query_scalar("SELECT current_setting('morpholog.audit_order_row')")
+            .fetch_one(&mut *committed)
+            .await
+            .unwrap();
+    committed.commit().await.unwrap();
+
+    let mut forger = pool.begin().await.unwrap();
+    sqlx::query("SELECT set_config('morpholog.audit_order_row', $1, true)")
+        .bind(&borrowed)
+        .execute(&mut *forger)
+        .await
+        .unwrap();
+    let err = sqlx::raw_sql(sqlx::AssertSqlSafe(ORDERED_ROW))
+        .execute(&mut *forger)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("not its own"), "{err}");
+    forger.rollback().await.unwrap();
+
+    // Forgetting its row would draw a second order, and the table holds
+    // one per transaction.
+    let mut twice = pool.begin().await.unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "{ORDERED_ROW}; SELECT set_config('morpholog.audit_order_row', '', true)"
+    )))
+    .execute(&mut *twice)
+    .await
+    .unwrap();
+    let err = sqlx::raw_sql(sqlx::AssertSqlSafe(ORDERED_ROW))
+        .execute(&mut *twice)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("audit_order_txn_pkey"), "{err}");
+    twice.rollback().await.unwrap();
 }

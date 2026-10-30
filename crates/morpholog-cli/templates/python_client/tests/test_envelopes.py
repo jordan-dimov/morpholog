@@ -1188,8 +1188,10 @@ class TamperEvidence(unittest.TestCase):
         report = envelopes.VerifyReport.from_json(golden("verify_report_indeterminate.json"))
         self.assertIsInstance(report.replay, envelopes.ReplayIndeterminate)
         self.assertFalse(report.passes)
-        self.assertEqual(report.replay.legacy_only_in_baseline[0].predicate, "EveryKind")
-        self.assertEqual(report.replay.legacy_only_in_replay, [])
+        baseline = report.replay.legacy_only_in_baseline[0]
+        replay = report.replay.legacy_only_in_replay[0]
+        self.assertEqual((baseline.predicate, baseline.args), (replay.predicate, replay.args))
+        self.assertNotEqual(baseline.asserted_in, replay.asserted_in)
 
     def test_checkpoint_outcomes(self):
         created = envelopes.parse_checkpoint_outcome(golden("checkpoint_created.json"))
