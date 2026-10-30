@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"claims!\",\n                  coalesce(sum(pg_column_size(jsonb_build_object(\n                      'op', 'ins', 'predicate', predicate_name,\n                      'args', arguments, 'asserted_in', asserted_in))), 0)::bigint AS \"bytes!\"\n           FROM morpholog.claims",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "claims!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "bytes!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "f65cbf030083468d561ad9158fb160eed326152e25f6dd0c22915fd790dd4f23"
+}

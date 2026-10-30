@@ -2297,6 +2297,47 @@ class BelowBaseline:
 
 
 @dataclass(frozen=True)
+class ActivationPreflight:
+    """Where the staged migration's preparation stands, what its cutover
+    would cost, and what refuses it. Present while that migration is
+    pending."""
+
+    state: str
+    steps_done: list[str]
+    legacy_rows: int
+    audit_bytes: int
+    live_claims: int
+    baseline_bytes: int
+    baseline_limit_bytes: int
+    estimated_preparation_ms: int
+    estimated_writer_pause_ms: int
+    # Why the cutover is refused now; empty when it may proceed.
+    refusals: list[str]
+
+    @classmethod
+    def from_json(cls, payload: object) -> ActivationPreflight:
+        data = _strict(
+            "activation preflight",
+            payload,
+            {"state", "steps_done", "legacy_rows", "audit_bytes", "live_claims",
+             "baseline_bytes", "baseline_limit_bytes", "estimated_preparation_ms",
+             "estimated_writer_pause_ms", "refusals"},
+        )
+        return cls(
+            state=data.member("state", {"pending", "preparing", "ready"}),
+            steps_done=data.texts("steps_done"),
+            legacy_rows=data.integer("legacy_rows", minimum=0),
+            audit_bytes=data.integer("audit_bytes", minimum=0),
+            live_claims=data.integer("live_claims", minimum=0),
+            baseline_bytes=data.integer("baseline_bytes", minimum=0),
+            baseline_limit_bytes=data.integer("baseline_limit_bytes", minimum=1),
+            estimated_preparation_ms=data.integer("estimated_preparation_ms", minimum=0),
+            estimated_writer_pause_ms=data.integer("estimated_writer_pause_ms", minimum=0),
+            refusals=data.texts("refusals"),
+        )
+
+
+@dataclass(frozen=True)
 class MigrationReport:
     """What `migrate` found, and what it did about it."""
 
@@ -2311,6 +2352,9 @@ class MigrationReport:
     # Set only when the database is older than the baseline. Nothing is
     # pending then, since this binary can apply nothing to it.
     below_baseline: BelowBaseline | None = None
+    # Present while the staged migration is pending: its preparation state,
+    # the cutover's estimated cost, and what refuses it.
+    activation_preflight: ActivationPreflight | None = None
 
     @property
     def is_current(self) -> bool:
@@ -2327,7 +2371,7 @@ class MigrationReport:
             payload,
             {"recorded_version_before", "recorded_version_after", "binary_version",
              "applied", "pending"},
-            {"unknown", "below_baseline"},
+            {"unknown", "below_baseline", "activation_preflight"},
         )
         return cls(
             recorded_version_before=data.integer("recorded_version_before"),
@@ -2337,6 +2381,9 @@ class MigrationReport:
             pending=data.array("pending", MigrationRef.from_json),
             unknown=data.optional_array("unknown", MigrationRef.from_json),
             below_baseline=data.optional_nested("below_baseline", BelowBaseline.from_json),
+            activation_preflight=data.optional_nested(
+                "activation_preflight", ActivationPreflight.from_json
+            ),
         )
 
 

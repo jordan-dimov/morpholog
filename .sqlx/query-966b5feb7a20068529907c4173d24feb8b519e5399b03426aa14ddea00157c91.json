@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO morpholog.migration_progress (version, step, detail)\n         VALUES ($1, $2, $3)\n         ON CONFLICT (version, step) DO UPDATE\n            SET detail = EXCLUDED.detail, updated_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "966b5feb7a20068529907c4173d24feb8b519e5399b03426aa14ddea00157c91"
+}

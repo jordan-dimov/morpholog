@@ -426,7 +426,9 @@ class Morpholog:
             args.extend(["--role-prefix", role_prefix])
         return envelopes.InitReport.from_json(self._json(*args))
 
-    def migrate(self, *, check: bool = False) -> envelopes.MigrationReport:
+    def migrate(
+        self, *, check: bool = False, prepare: bool = False
+    ) -> envelopes.MigrationReport:
         """Bring the database up to the schema this binary expects.
 
         The migrations are embedded in the binary, so an upgrade needs
@@ -447,10 +449,20 @@ class Morpholog:
 
             if not client.migrate(check=True).is_current:
                 ...
+
+        `prepare` does everything except the one step that pauses writers:
+        the plain migrations and every preparation step of the staged one,
+        which then stays pending with its `activation_preflight` reporting
+        `ready`. A later plain `migrate()` completes it, in the window you
+        choose. `check` and `prepare` exclude each other.
         """
+        if check and prepare:
+            raise ValueError("check and prepare exclude each other")
         args = ["migrate", "--database-url", self.database_url]
         if check:
             args.append("--check")
+        if prepare:
+            args.append("--prepare")
         return envelopes.MigrationReport.from_json(self._json(*args))
 
     def provision_indexes(

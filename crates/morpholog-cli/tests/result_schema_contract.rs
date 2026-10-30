@@ -1068,6 +1068,7 @@ fn migration_reports_serialize_as_pinned() {
         applied: Vec::new(),
         unknown: Vec::new(),
         below_baseline: None,
+        activation_preflight: None,
         pending: vec![
             morpholog_postgres::MigrationRef {
                 version: 24,
@@ -1089,8 +1090,39 @@ fn migration_reports_serialize_as_pinned() {
         pending: Vec::new(),
         unknown: Vec::new(),
         below_baseline: None,
+        activation_preflight: None,
     };
     assert_golden("migration_report_applied.json", &to_value(&applied));
+    // A database prepared for the staged migration, with the cutover
+    // still ahead: `migrate --prepare` reports this, and so does `--check`.
+    let prepared = morpholog_postgres::MigrationReport {
+        recorded_version_before: 23,
+        recorded_version_after: 26,
+        binary_version: 27,
+        applied: behind.pending.clone(),
+        pending: vec![morpholog_postgres::MigrationRef {
+            version: 27,
+            name: "canonical_order".to_string(),
+        }],
+        unknown: Vec::new(),
+        below_baseline: None,
+        activation_preflight: Some(morpholog_postgres::ActivationPreflight {
+            state: morpholog_postgres::PreparationState::Ready,
+            steps_done: ["columns", "constraints", "indexes", "objects"]
+                .map(String::from)
+                .to_vec(),
+            legacy_rows: 3_000_000,
+            audit_bytes: 3_726_000_128,
+            live_claims: 300_000,
+            baseline_bytes: 83_660_004,
+            baseline_limit_bytes: morpholog_postgres::BASELINE_LIMIT_BYTES,
+            estimated_preparation_ms: 1_800,
+            estimated_writer_pause_ms: 35_550,
+            refusals: vec!["1 prepared transaction(s) are open on this database; commit or roll them back first (`pg_prepared_xacts`)".to_string()],
+        }),
+    };
+    assert!(!prepared.is_current());
+    assert_golden("migration_report_prepared.json", &to_value(&prepared));
 
     // A database migrated by a newer binary: nothing pending, yet not
     // current.
@@ -1105,6 +1137,7 @@ fn migration_reports_serialize_as_pinned() {
             name: "something_this_build_never_saw".to_string(),
         }],
         below_baseline: None,
+        activation_preflight: None,
     };
     assert!(!ahead.is_current(), "an ahead database is not current");
     assert_golden("migration_report_ahead.json", &to_value(&ahead));
@@ -3123,6 +3156,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("outbox_row.json", "outbox_row"),
         ("migration_report_behind.json", "migration_report"),
         ("migration_report_applied.json", "migration_report"),
+        ("migration_report_prepared.json", "migration_report"),
         ("roles_move_report.json", "roles_move_report"),
         ("migration_report_ahead.json", "migration_report"),
         ("migration_report_below_baseline.json", "migration_report"),

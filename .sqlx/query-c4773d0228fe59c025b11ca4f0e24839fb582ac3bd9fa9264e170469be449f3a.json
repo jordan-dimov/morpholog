@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM morpholog.migration_progress WHERE version = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c4773d0228fe59c025b11ca4f0e24839fb582ac3bd9fa9264e170469be449f3a"
+}

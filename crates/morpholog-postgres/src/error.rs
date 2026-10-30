@@ -76,6 +76,20 @@ pub enum PgError {
          run the Morpholog the database was migrated by, or newer, rather than migrating the database"
     )]
     SchemaAhead { recorded: i32, binary: i32 },
+    /// A brief ACCESS EXCLUSIVE lock a migration step needs could not be
+    /// taken within its bounded attempts: a long-running statement holds
+    /// the table. Nothing was changed; rerun when it has finished.
+    #[error(
+        "could not take the lock for `{statement}` in {attempts} attempt(s): a long-running \
+         statement holds the table. Nothing was changed; rerun `morpholog migrate` when it \
+         has finished"
+    )]
+    LockNotAcquired { statement: String, attempts: u32 },
+    /// The cutover of migration 27 would rest on a fact this login cannot
+    /// establish, or would write a record the database cannot hold. Each
+    /// reason names its remedy.
+    #[error("the migration cannot activate the canonical order yet: {}", reasons.join("; "))]
+    CutoverRefused { reasons: Vec<String> },
     /// The database does not record the baseline migration, v0.0.14's
     /// head: an older release made it, and this binary carries nothing
     /// that brings it forward.

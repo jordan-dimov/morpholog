@@ -353,6 +353,26 @@ impl<'a> core::marker::Unpin for morpholog_postgres::InvariantPlan<'a>
 impl<'a> core::marker::UnsafeUnpin for morpholog_postgres::InvariantPlan<'a>
 impl<'a> core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::InvariantPlan<'a>
 impl<'a> core::panic::unwind_safe::UnwindSafe for morpholog_postgres::InvariantPlan<'a>
+pub enum morpholog_postgres::MigrateMode
+pub morpholog_postgres::MigrateMode::Complete
+pub morpholog_postgres::MigrateMode::Prepare
+impl core::clone::Clone for morpholog_postgres::MigrateMode
+pub fn morpholog_postgres::MigrateMode::clone(&self) -> morpholog_postgres::MigrateMode
+impl core::clone::TrivialClone for morpholog_postgres::MigrateMode
+impl core::cmp::Eq for morpholog_postgres::MigrateMode
+impl core::cmp::PartialEq for morpholog_postgres::MigrateMode
+pub fn morpholog_postgres::MigrateMode::eq(&self, &morpholog_postgres::MigrateMode) -> bool
+impl core::fmt::Debug for morpholog_postgres::MigrateMode
+pub fn morpholog_postgres::MigrateMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for morpholog_postgres::MigrateMode
+impl core::marker::StructuralPartialEq for morpholog_postgres::MigrateMode
+impl core::marker::Freeze for morpholog_postgres::MigrateMode
+impl core::marker::Send for morpholog_postgres::MigrateMode
+impl core::marker::Sync for morpholog_postgres::MigrateMode
+impl core::marker::Unpin for morpholog_postgres::MigrateMode
+impl core::marker::UnsafeUnpin for morpholog_postgres::MigrateMode
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::MigrateMode
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::MigrateMode
 pub enum morpholog_postgres::NeedKind
 pub morpholog_postgres::NeedKind::Invariant
 pub morpholog_postgres::NeedKind::Transformation
@@ -552,11 +572,16 @@ pub morpholog_postgres::PgError::AuditPrefixIncomplete
 pub morpholog_postgres::PgError::AuditPrefixIncomplete::rows_present: i64
 pub morpholog_postgres::PgError::AuditPrefixIncomplete::tree_size: i64
 pub morpholog_postgres::PgError::CommitOutcomeUnknown(sqlx_core::error::Error)
+pub morpholog_postgres::PgError::CutoverRefused
+pub morpholog_postgres::PgError::CutoverRefused::reasons: alloc::vec::Vec<alloc::string::String>
 pub morpholog_postgres::PgError::Database(sqlx_core::error::Error)
 pub morpholog_postgres::PgError::DuplicateIntent
 pub morpholog_postgres::PgError::Encoding(serde_json::error::Error)
 pub morpholog_postgres::PgError::InvalidState(alloc::string::String)
 pub morpholog_postgres::PgError::Kernel(morpholog_core::eval::EvalError)
+pub morpholog_postgres::PgError::LockNotAcquired
+pub morpholog_postgres::PgError::LockNotAcquired::attempts: u32
+pub morpholog_postgres::PgError::LockNotAcquired::statement: alloc::string::String
 pub morpholog_postgres::PgError::NoCheckpoint
 pub morpholog_postgres::PgError::NoProgramNamed
 pub morpholog_postgres::PgError::NoTransitionAtOrBefore(jiff::timestamp::Timestamp)
@@ -650,6 +675,31 @@ impl core::marker::Unpin for morpholog_postgres::PgTracedOutcome
 impl core::marker::UnsafeUnpin for morpholog_postgres::PgTracedOutcome
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::PgTracedOutcome
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::PgTracedOutcome
+pub enum morpholog_postgres::PreparationState
+pub morpholog_postgres::PreparationState::Pending
+pub morpholog_postgres::PreparationState::Preparing
+pub morpholog_postgres::PreparationState::Ready
+impl core::clone::Clone for morpholog_postgres::PreparationState
+pub fn morpholog_postgres::PreparationState::clone(&self) -> morpholog_postgres::PreparationState
+impl core::clone::TrivialClone for morpholog_postgres::PreparationState
+impl core::cmp::Eq for morpholog_postgres::PreparationState
+impl core::cmp::PartialEq for morpholog_postgres::PreparationState
+pub fn morpholog_postgres::PreparationState::eq(&self, &morpholog_postgres::PreparationState) -> bool
+impl core::fmt::Debug for morpholog_postgres::PreparationState
+pub fn morpholog_postgres::PreparationState::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for morpholog_postgres::PreparationState
+impl core::marker::StructuralPartialEq for morpholog_postgres::PreparationState
+impl serde_core::ser::Serialize for morpholog_postgres::PreparationState
+pub fn morpholog_postgres::PreparationState::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for morpholog_postgres::PreparationState
+pub fn morpholog_postgres::PreparationState::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for morpholog_postgres::PreparationState
+impl core::marker::Send for morpholog_postgres::PreparationState
+impl core::marker::Sync for morpholog_postgres::PreparationState
+impl core::marker::Unpin for morpholog_postgres::PreparationState
+impl core::marker::UnsafeUnpin for morpholog_postgres::PreparationState
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::PreparationState
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::PreparationState
 pub enum morpholog_postgres::ProcessOutcome
 pub morpholog_postgres::ProcessOutcome::Compensated
 pub morpholog_postgres::ProcessOutcome::Compensated::compensation_transition_id: uuid::Uuid
@@ -1205,6 +1255,37 @@ impl core::marker::Unpin for morpholog_postgres::WitnessStanding
 impl core::marker::UnsafeUnpin for morpholog_postgres::WitnessStanding
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::WitnessStanding
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::WitnessStanding
+pub struct morpholog_postgres::ActivationPreflight
+pub morpholog_postgres::ActivationPreflight::audit_bytes: i64
+pub morpholog_postgres::ActivationPreflight::baseline_bytes: i64
+pub morpholog_postgres::ActivationPreflight::baseline_limit_bytes: i64
+pub morpholog_postgres::ActivationPreflight::estimated_preparation_ms: i64
+pub morpholog_postgres::ActivationPreflight::estimated_writer_pause_ms: i64
+pub morpholog_postgres::ActivationPreflight::legacy_rows: i64
+pub morpholog_postgres::ActivationPreflight::live_claims: i64
+pub morpholog_postgres::ActivationPreflight::refusals: alloc::vec::Vec<alloc::string::String>
+pub morpholog_postgres::ActivationPreflight::state: morpholog_postgres::PreparationState
+pub morpholog_postgres::ActivationPreflight::steps_done: alloc::vec::Vec<alloc::string::String>
+impl core::clone::Clone for morpholog_postgres::ActivationPreflight
+pub fn morpholog_postgres::ActivationPreflight::clone(&self) -> morpholog_postgres::ActivationPreflight
+impl core::cmp::Eq for morpholog_postgres::ActivationPreflight
+pub fn morpholog_postgres::ActivationPreflight::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::ActivationPreflight
+pub fn morpholog_postgres::ActivationPreflight::eq(&self, &morpholog_postgres::ActivationPreflight) -> bool
+impl core::fmt::Debug for morpholog_postgres::ActivationPreflight
+pub fn morpholog_postgres::ActivationPreflight::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::ActivationPreflight
+impl serde_core::ser::Serialize for morpholog_postgres::ActivationPreflight
+pub fn morpholog_postgres::ActivationPreflight::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for morpholog_postgres::ActivationPreflight
+pub fn morpholog_postgres::ActivationPreflight::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for morpholog_postgres::ActivationPreflight
+impl core::marker::Send for morpholog_postgres::ActivationPreflight
+impl core::marker::Sync for morpholog_postgres::ActivationPreflight
+impl core::marker::Unpin for morpholog_postgres::ActivationPreflight
+impl core::marker::UnsafeUnpin for morpholog_postgres::ActivationPreflight
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ActivationPreflight
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ActivationPreflight
 pub struct morpholog_postgres::AtomicAct
 pub morpholog_postgres::AtomicAct::actor: morpholog_core::ir::Subject
 pub morpholog_postgres::AtomicAct::asserted_claims: alloc::vec::Vec<morpholog_core::state::ClaimInstance>
@@ -1352,6 +1433,28 @@ impl core::marker::Unpin for morpholog_postgres::BelowBaseline
 impl core::marker::UnsafeUnpin for morpholog_postgres::BelowBaseline
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::BelowBaseline
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::BelowBaseline
+pub struct morpholog_postgres::Census
+pub morpholog_postgres::Census::hidden_sessions: i64
+pub morpholog_postgres::Census::horizon: jiff::timestamp::Timestamp
+pub morpholog_postgres::Census::prepared_transactions: i64
+impl morpholog_postgres::Census
+pub fn morpholog_postgres::Census::refusals(&self) -> alloc::vec::Vec<alloc::string::String>
+impl core::clone::Clone for morpholog_postgres::Census
+pub fn morpholog_postgres::Census::clone(&self) -> morpholog_postgres::Census
+impl core::cmp::Eq for morpholog_postgres::Census
+pub fn morpholog_postgres::Census::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::Census
+pub fn morpholog_postgres::Census::eq(&self, &morpholog_postgres::Census) -> bool
+impl core::fmt::Debug for morpholog_postgres::Census
+pub fn morpholog_postgres::Census::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::Census
+impl core::marker::Freeze for morpholog_postgres::Census
+impl core::marker::Send for morpholog_postgres::Census
+impl core::marker::Sync for morpholog_postgres::Census
+impl core::marker::Unpin for morpholog_postgres::Census
+impl core::marker::UnsafeUnpin for morpholog_postgres::Census
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::Census
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::Census
 pub struct morpholog_postgres::Checkpoint
 pub morpholog_postgres::Checkpoint::checkpoint_hash: morpholog_postgres::Digest
 pub morpholog_postgres::Checkpoint::prev_checkpoint_hash: core::option::Option<morpholog_postgres::Digest>
@@ -1658,6 +1761,25 @@ impl core::marker::Unpin for morpholog_postgres::IndexPlanEntry
 impl core::marker::UnsafeUnpin for morpholog_postgres::IndexPlanEntry
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::IndexPlanEntry
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::IndexPlanEntry
+pub struct morpholog_postgres::LockPolicy
+pub morpholog_postgres::LockPolicy::attempts: u32
+pub morpholog_postgres::LockPolicy::backoff: core::time::Duration
+pub morpholog_postgres::LockPolicy::cap: core::time::Duration
+pub morpholog_postgres::LockPolicy::jitter: core::time::Duration
+pub morpholog_postgres::LockPolicy::timeout: core::time::Duration
+impl core::clone::Clone for morpholog_postgres::LockPolicy
+pub fn morpholog_postgres::LockPolicy::clone(&self) -> morpholog_postgres::LockPolicy
+impl core::default::Default for morpholog_postgres::LockPolicy
+pub fn morpholog_postgres::LockPolicy::default() -> Self
+impl core::fmt::Debug for morpholog_postgres::LockPolicy
+pub fn morpholog_postgres::LockPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for morpholog_postgres::LockPolicy
+impl core::marker::Send for morpholog_postgres::LockPolicy
+impl core::marker::Sync for morpholog_postgres::LockPolicy
+impl core::marker::Unpin for morpholog_postgres::LockPolicy
+impl core::marker::UnsafeUnpin for morpholog_postgres::LockPolicy
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::LockPolicy
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::LockPolicy
 pub struct morpholog_postgres::MigrationRef
 pub morpholog_postgres::MigrationRef::name: alloc::string::String
 pub morpholog_postgres::MigrationRef::version: i32
@@ -1682,6 +1804,7 @@ impl core::marker::UnsafeUnpin for morpholog_postgres::MigrationRef
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::MigrationRef
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::MigrationRef
 pub struct morpholog_postgres::MigrationReport
+pub morpholog_postgres::MigrationReport::activation_preflight: core::option::Option<morpholog_postgres::ActivationPreflight>
 pub morpholog_postgres::MigrationReport::applied: alloc::vec::Vec<morpholog_postgres::MigrationRef>
 pub morpholog_postgres::MigrationReport::below_baseline: core::option::Option<morpholog_postgres::BelowBaseline>
 pub morpholog_postgres::MigrationReport::binary_version: i32
@@ -2725,6 +2848,7 @@ impl core::marker::UnsafeUnpin for morpholog_postgres::WitnessesReport
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::WitnessesReport
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::WitnessesReport
 pub const morpholog_postgres::AUTHORITY_PREDICATE: &str
+pub const morpholog_postgres::BASELINE_LIMIT_BYTES: i64
 pub const morpholog_postgres::BASELINE_VERSION: i32
 pub const morpholog_postgres::DEFAULT_ROLE_PREFIX: &str
 pub const morpholog_postgres::LEGACY_PACK_FORMAT: u32
@@ -2738,13 +2862,18 @@ impl morpholog_postgres::Deliverer for morpholog_postgres::testing::AlwaysNonRet
 pub async fn morpholog_postgres::testing::AlwaysNonRetryable::deliver(&self, &morpholog_postgres::OutboxRow) -> morpholog_postgres::DeliveryOutcome
 impl morpholog_postgres::Deliverer for morpholog_postgres::testing::AlwaysTransient
 pub async fn morpholog_postgres::testing::AlwaysTransient::deliver(&self, &morpholog_postgres::OutboxRow) -> morpholog_postgres::DeliveryOutcome
+pub async fn morpholog_postgres::activation_preflight(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::ActivationPreflight, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::activation_preflight_within(&sqlx_postgres::PgPool, i64) -> core::result::Result<morpholog_postgres::ActivationPreflight, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::apply_migrations(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::apply_migrations_with(&sqlx_postgres::PgPool, morpholog_postgres::MigrateMode, &morpholog_postgres::LockPolicy) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::attach_witness(&sqlx_postgres::PgPool, i64, &morpholog_postgres::Digest, morpholog_postgres::Witness) -> core::result::Result<morpholog_postgres::Checkpoint, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::audit_cursor_for(&mut sqlx_postgres::connection::PgConnection, uuid::Uuid) -> core::result::Result<morpholog_postgres::AuditPosition, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::audit_resume_watermark<'e, E>(E) -> core::result::Result<u64, morpholog_postgres::PgError> where E: sqlx_core::executor::Executor<'e, Database = sqlx_postgres::database::Postgres>
 pub async fn morpholog_postgres::begin_audit_tail<'p>(&'p sqlx_postgres::PgPool, core::option::Option<uuid::Uuid>) -> core::result::Result<morpholog_postgres::AuditTail<'p>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::begin_compensation(&sqlx_postgres::PgPool, uuid::Uuid, &str, core::time::Duration) -> core::result::Result<core::option::Option<morpholog_postgres::OutboxRow>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::begin_prefix_export(&sqlx_postgres::PgPool, core::option::Option<i64>) -> core::result::Result<morpholog_postgres::PrefixExport<'_>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::census(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::Census, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::census_paused(&sqlx_postgres::PgPool, impl core::future::future::Future<Output = ()>) -> core::result::Result<morpholog_postgres::Census, morpholog_postgres::PgError>
 pub fn morpholog_postgres::check_named_programs(&[&morpholog_postgres::PgProgram]) -> core::result::Result<(), morpholog_postgres::PgError>
 pub async fn morpholog_postgres::claim_pending_outbox_row(&sqlx_postgres::PgPool, &str, &str, core::time::Duration, jiff::timestamp::Timestamp) -> core::result::Result<core::option::Option<morpholog_postgres::OutboxRow>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::complete_compensation(&sqlx_postgres::PgPool, uuid::Uuid, &str, uuid::Uuid) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>

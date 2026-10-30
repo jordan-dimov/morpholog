@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT convalidated AS \"validated!\" FROM pg_constraint\n               WHERE conrelid = 'morpholog.audit'::regclass AND conname = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "validated!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_constraint",
+            "name": "convalidated"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Name"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4b0f2e2897d80a25ddaae04dc0929a8c8fa7b208c567212d355884f5b9966249"
+}

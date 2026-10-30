@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT i.indisvalid AS \"valid!\" FROM pg_index i\n               JOIN pg_class c ON c.oid = i.indexrelid\n               JOIN pg_namespace n ON n.oid = c.relnamespace\n               WHERE n.nspname = 'morpholog' AND c.relname = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "valid!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_index",
+            "name": "indisvalid"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Name"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0cfd31691812e7d8222649e386b526392f1e0f48529181c0e44e1c4195145cd6"
+}
