@@ -530,6 +530,46 @@ pub async fn list_audit_rows_page(
     rows.into_iter().map(decode_audit_row).collect()
 }
 
+/// One keyset page of the rows from before the canonical order, in their
+/// order `(committed_at, transition_id)`: strictly after `cursor`, strictly
+/// below `below`. Below a start-time horizon every row is final, so each
+/// statement's own snapshot is enough.
+pub(crate) async fn list_legacy_rows_page<'e, E>(
+    executor: E,
+    cursor: Option<(Timestamp, Uuid)>,
+    below: Timestamp,
+    limit: i64,
+) -> Result<Vec<AuditRow>, PgError>
+where
+    E: sqlx::Executor<'e, Database = Postgres>,
+{
+    let (at, id) = cursor.map_or((None, None), |(at, id)| (Some(at.to_sqlx()), Some(id)));
+    let rows = sqlx::query_as!(
+        AuditRowRaw,
+        "SELECT transition_id, transformation_name, arguments, actor,
+                invariant_epoch, invariants_checked,
+                asserted_claims, retracted_claims, emitted_intents, committed_at,
+                attestation, parameters, model_hash, semantics_version, drawn_subjects,
+                audit_order, act_ordinal, ordered_at, operations
+         FROM morpholog.audit
+         WHERE audit_order = 0 AND act_ordinal = 0
+           AND committed_at < $1
+           AND (committed_at, transition_id) > (
+               coalesce($2, '-infinity'::timestamptz),
+               coalesce($3, '00000000-0000-0000-0000-000000000000'::uuid))
+         ORDER BY committed_at, transition_id
+         LIMIT $4",
+        below.to_sqlx(),
+        at,
+        id,
+        limit,
+    )
+    .fetch_all(executor)
+    .await
+    .map_err(classify)?;
+    rows.into_iter().map(decode_audit_row).collect()
+}
+
 /// [`list_audit_rows_page`] restricted to the transitions that mention a
 /// subject in their arguments, asserted or retracted claims, or emitted
 /// intents: the tagged subject at any depth, a collection included, found

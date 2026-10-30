@@ -4,8 +4,9 @@
     "baseline_bytes": 83660004,
     "baseline_limit_bytes": 268435455,
     "estimated_preparation_ms": 1800,
-    "estimated_writer_pause_ms": 35550,
+    "estimated_writer_pause_ms": 2200,
     "legacy_rows": 3000000,
+    "legacy_rows_prepared": 2900000,
     "live_claims": 300000,
     "refusals": [
       "1 prepared transaction(s) are open on this database; commit or roll them back first (`pg_prepared_xacts`)"
@@ -15,7 +16,8 @@
       "columns",
       "constraints",
       "indexes",
-      "objects"
+      "objects",
+      "frontier"
     ]
   },
   "applied": [

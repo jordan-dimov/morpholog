@@ -118,6 +118,16 @@ impl Frontier {
         self.size
     }
 
+    /// A frontier from saved parts; `None` unless the subtrees are one
+    /// per set bit of the size, as `push` leaves them.
+    pub(crate) fn from_parts(size: usize, subtrees: Vec<Hash>) -> Option<Self> {
+        (subtrees.len() == size.count_ones() as usize).then_some(Self { size, subtrees })
+    }
+
+    pub(crate) fn subtrees(&self) -> &[Hash] {
+        &self.subtrees
+    }
+
     /// The same root [`merkle_root`] gives over the leaves pushed so far.
     pub(crate) fn root(&self) -> Hash {
         let mut from_right = self.subtrees.iter().rev();

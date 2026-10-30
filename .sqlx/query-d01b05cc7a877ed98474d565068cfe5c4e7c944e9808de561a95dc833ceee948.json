@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"below!\" FROM morpholog.audit\n           WHERE audit_order = 0 AND act_ordinal = 0\n             AND (committed_at, transition_id) <= ($1, $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "below!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d01b05cc7a877ed98474d565068cfe5c4e7c944e9808de561a95dc833ceee948"
+}

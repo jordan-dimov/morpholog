@@ -63,6 +63,7 @@ async fn prepare_stops_before_the_cutover_and_check_reports_it() {
         Value::Array(vec![])
     );
     assert_eq!(pending["activation_preflight"]["legacy_rows"], 0);
+    assert_eq!(pending["activation_preflight"]["legacy_rows_prepared"], 0);
 
     let (ok, prepared, stderr) = migrate(&url, &["--prepare"]);
     assert!(ok, "{stderr}");
@@ -74,7 +75,7 @@ async fn prepare_stops_before_the_cutover_and_check_reports_it() {
     );
     assert_eq!(
         prepared["activation_preflight"]["steps_done"],
-        serde_json::json!(["columns", "constraints", "indexes", "objects"])
+        serde_json::json!(["columns", "constraints", "indexes", "objects", "frontier"])
     );
 
     let (ok, ready, _) = migrate(&url, &["--check"]);

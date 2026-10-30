@@ -323,6 +323,7 @@ pub(crate) fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
         | PgError::SchemaBelowBaseline { .. }
         | PgError::LockNotAcquired { .. }
         | PgError::ObjectDiffers { .. }
+        | PgError::MigrationRunning
         | PgError::CutoverRefused { .. }
         | PgError::TransitionNotFound(_)
         | PgError::TransitionNotSettled(_)

@@ -582,6 +582,7 @@ pub morpholog_postgres::PgError::Kernel(morpholog_core::eval::EvalError)
 pub morpholog_postgres::PgError::LockNotAcquired
 pub morpholog_postgres::PgError::LockNotAcquired::attempts: u32
 pub morpholog_postgres::PgError::LockNotAcquired::statement: alloc::string::String
+pub morpholog_postgres::PgError::MigrationRunning
 pub morpholog_postgres::PgError::NoCheckpoint
 pub morpholog_postgres::PgError::NoProgramNamed
 pub morpholog_postgres::PgError::NoTransitionAtOrBefore(jiff::timestamp::Timestamp)
@@ -1266,6 +1267,7 @@ pub morpholog_postgres::ActivationPreflight::baseline_limit_bytes: i64
 pub morpholog_postgres::ActivationPreflight::estimated_preparation_ms: i64
 pub morpholog_postgres::ActivationPreflight::estimated_writer_pause_ms: i64
 pub morpholog_postgres::ActivationPreflight::legacy_rows: i64
+pub morpholog_postgres::ActivationPreflight::legacy_rows_prepared: i64
 pub morpholog_postgres::ActivationPreflight::live_claims: i64
 pub morpholog_postgres::ActivationPreflight::refusals: alloc::vec::Vec<alloc::string::String>
 pub morpholog_postgres::ActivationPreflight::state: morpholog_postgres::PreparationState
@@ -1719,6 +1721,19 @@ impl core::marker::Unpin for morpholog_postgres::EvidencePack
 impl core::marker::UnsafeUnpin for morpholog_postgres::EvidencePack
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::EvidencePack
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::EvidencePack
+pub struct morpholog_postgres::FrontierProgress
+pub morpholog_postgres::FrontierProgress::legacy_root: alloc::string::String
+pub morpholog_postgres::FrontierProgress::legacy_rows_prepared: u64
+pub morpholog_postgres::FrontierProgress::rows_added: u64
+impl core::clone::Clone for morpholog_postgres::FrontierProgress
+pub fn morpholog_postgres::FrontierProgress::clone(&self) -> morpholog_postgres::FrontierProgress
+impl core::cmp::Eq for morpholog_postgres::FrontierProgress
+pub fn morpholog_postgres::FrontierProgress::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::FrontierProgress
+pub fn morpholog_postgres::FrontierProgress::eq(&self, &morpholog_postgres::FrontierProgress) -> bool
+impl core::fmt::Debug for morpholog_postgres::FrontierProgress
+pub fn morpholog_postgres::FrontierProgress::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::FrontierProgress
 pub struct morpholog_postgres::IndexNeed
 pub morpholog_postgres::IndexNeed::kind: morpholog_postgres::NeedKind
 pub morpholog_postgres::IndexNeed::name: alloc::string::String
@@ -2856,6 +2871,7 @@ pub const morpholog_postgres::BASELINE_LIMIT_BYTES: i64
 pub const morpholog_postgres::BASELINE_VERSION: i32
 pub const morpholog_postgres::DEFAULT_ROLE_PREFIX: &str
 pub const morpholog_postgres::LEGACY_PACK_FORMAT: u32
+pub const morpholog_postgres::MIGRATION_LOCK_KEY: i64
 pub const morpholog_postgres::PACK_FORMAT: u32
 pub const morpholog_postgres::RESTRICTED_PREDICATE: &str
 pub trait morpholog_postgres::Deliverer: core::marker::Send + core::marker::Sync
@@ -2894,10 +2910,12 @@ pub async fn morpholog_postgres::export_pack(&sqlx_postgres::PgPool, core::optio
 pub async fn morpholog_postgres::export_selective(&sqlx_postgres::PgPool, core::option::Option<i64>, &[uuid::Uuid]) -> core::result::Result<morpholog_postgres::SelectiveEvidencePack, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::export_window(&sqlx_postgres::PgPool, morpholog_postgres::WindowStart, core::option::Option<i64>) -> core::result::Result<morpholog_postgres::WindowEvidencePack, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::fetch_diagnostic(&mut sqlx_core::transaction::Transaction<'_, sqlx_postgres::database::Postgres>, alloc::string::String) -> core::result::Result<core::option::Option<sqlx_postgres::row::PgRow>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::frontier_pass_with(&sqlx_postgres::PgPool, i64, core::option::Option<usize>) -> core::result::Result<morpholog_postgres::FrontierProgress, morpholog_postgres::PgError>
 pub fn morpholog_postgres::generate_signing_key() -> ed25519_dalek::signing::SigningKey
 pub fn morpholog_postgres::head_version() -> i32
 pub async fn morpholog_postgres::initialise_schema(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::InitOutcome, morpholog_postgres::PgError>
 pub fn morpholog_postgres::issue_receipt(&morpholog_core::validate::ValidatedProgram<'_>, &morpholog_postgres::EvidencePack, morpholog_postgres::ReceiptQuery) -> core::result::Result<morpholog_postgres::EvaluationReceipt, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::legacy_root_full_scan(&sqlx_postgres::PgPool) -> core::result::Result<(u64, alloc::string::String), morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_audit_rows(&sqlx_postgres::PgPool) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::AuditRow>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_audit_rows_page(&mut sqlx_postgres::connection::PgConnection, core::option::Option<morpholog_postgres::AuditPosition>, core::option::Option<u64>, i64) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::AuditRow>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_audit_rows_page_mentioning(&mut sqlx_postgres::connection::PgConnection, core::option::Option<morpholog_postgres::AuditPosition>, core::option::Option<u64>, i64, &str) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::AuditRow>, morpholog_postgres::PgError>
