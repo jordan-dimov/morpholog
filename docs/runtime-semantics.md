@@ -51,8 +51,7 @@ These are not contradictions. They are four admitted claims from four authoritie
 Claims are **set-valued** in v0.
 
 - Asserting an already-present claim is idempotent (no-op).
-- Retracting a specific missing claim fails the transformation.
-- Pattern-based retraction (`retract Pred(a, b, _)`, or `retract Pred(key: k, ..)`) retracts every claim the pattern matches and is idempotent on zero matches. A `bind` that matches a claim only so the retract can name every field is unnecessary where the fields kept cover a uniqueness key grounded before the bind, and `check` hints the pattern form there; the `bind`'s refusal when no claim matches is kept by a `require`. Where no such key pins one claim the hint stays silent, because a `bind` over several matches is an error and a pattern retract removes them all.
+- Retraction takes a pattern (`retract Pred(a, b, c)`, `retract Pred(a, b, _)`, or `retract Pred(key: k, ..)`) and retracts every claim it matches. Zero matches changes nothing, even when the pattern names every field. A transformation that must refuse when the claim is missing says so with a `require` (or a `bind`) before the `retract`. A `bind` that matches a claim only so the retract can name every field is unnecessary where the fields kept cover a uniqueness key grounded before the bind, and `check` hints the pattern form there; the `bind`'s refusal when no claim matches is kept by a `require`. Where no such key pins one claim the hint stays silent, because a `bind` over several matches is an error and a pattern retract removes them all.
 - Reads observe only the pre-transformation snapshot.
 - Invariants evaluate against `CandidateState`, not the snapshot.
 
