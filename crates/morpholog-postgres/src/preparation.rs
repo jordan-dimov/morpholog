@@ -7,6 +7,11 @@
 //! shape under one of its names is refused, never changed. Completed
 //! steps are recorded in `morpholog.migration_progress` for reporting.
 //!
+//! The legacy history's Merkle root is built here too, in passes below a
+//! start-time horizon from the census, with the frontier saved after
+//! every page, so the cutover hashes only the rows written since the
+//! last pass. One runner at a time holds the migration lock.
+//!
 //! The preflight says what the cutover would cost and refuses it while a
 //! fact it depends on cannot be established: a prepared transaction, a
 //! session this login cannot see, a baseline the record cannot hold.
@@ -14,15 +19,32 @@
 use std::time::Duration;
 
 use jiff::Timestamp;
+use jiff_sqlx::ToSqlx;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
+use uuid::Uuid;
 
+use crate::audit::{AuditPosition, REPLAY_CHUNK, list_legacy_rows_page};
 use crate::error::{PgError, classify, classify_checked_query};
+use crate::merkle::{Digest, Frontier, Hash, audit_leaf_hash, merkle_root};
 
 pub(crate) const CANONICAL_ORDER_VERSION: i32 = 27;
 
 /// The preparation steps, in order.
-pub(crate) const STEPS: [&str; 4] = ["columns", "constraints", "indexes", "objects"];
+pub(crate) const STEPS: [&str; 5] = ["columns", "constraints", "indexes", "objects", FRONTIER];
+
+const FRONTIER: &str = "frontier";
+
+/// The saved frontier's own row: written after every page, so a pass
+/// resumes from it, and never counted as the step being done.
+const FRONTIER_STATE: &str = "frontier_state";
+
+/// How many passes one preparation makes over the legacy rows before
+/// leaving the rest to the cutover.
+const MAX_PASSES: usize = 10;
+
+/// The advisory lock one `migrate` holds for its whole run on a database.
+pub const MIGRATION_LOCK_KEY: i64 = 0x6d6f_7270_686f_6c6f;
 
 const COLUMNS_SQL: &str = include_str!("../sql/migrations/027/columns.sql");
 const OBJECTS_SQL: &str = include_str!("../sql/migrations/027/objects.sql");
@@ -98,11 +120,12 @@ const PROGRESS_SQL: &str = "CREATE TABLE IF NOT EXISTS morpholog.migration_progr
 pub const BASELINE_LIMIT_BYTES: i64 = (1 << 28) - 1;
 
 /// Measured on 2026-10-30 (release build, laptop): preparation scans
-/// about 0.6 us per audit row; the cutover's legacy pass 11.5 us per row
-/// and its baseline 3.5 us per live claim.
-const PREPARATION_NS_PER_ROW: i64 = 600;
+/// about 0.6 us per audit row for its schema steps and 12 us per row for
+/// the frontier; the cutover's legacy tail 11.5 us per row and its
+/// baseline 12.7 us per live claim, the record's serialisation included.
+const PREPARATION_NS_PER_ROW: i64 = 12_600;
 const PAUSE_NS_PER_ROW: i64 = 11_500;
-const PAUSE_NS_PER_CLAIM: i64 = 3_500;
+const PAUSE_NS_PER_CLAIM: i64 = 12_700;
 
 /// How a brief ACCESS EXCLUSIVE lock is taken: with a short timeout and
 /// bounded retries, so a request never queues behind a long-running
@@ -160,6 +183,8 @@ pub struct ActivationPreflight {
     pub state: PreparationState,
     pub steps_done: Vec<String>,
     pub legacy_rows: i64,
+    /// How many of them the saved frontier already holds.
+    pub legacy_rows_prepared: i64,
     pub audit_bytes: i64,
     pub live_claims: i64,
     /// The bytes the baseline's JSONB elements would take, as PostgreSQL
@@ -247,15 +272,18 @@ pub async fn census(pool: &PgPool) -> Result<Census, PgError> {
     census_paused(pool, async {}).await
 }
 
-/// The steps recorded done for migration 27, in step order.
-async fn steps_done(pool: &PgPool) -> Result<Vec<String>, PgError> {
-    let present = sqlx::query_scalar!(
+async fn progress_table_exists(pool: &PgPool) -> Result<bool, PgError> {
+    sqlx::query_scalar!(
         r#"SELECT to_regclass('morpholog.migration_progress') IS NOT NULL AS "present!""#
     )
     .fetch_one(pool)
     .await
-    .map_err(classify_checked_query)?;
-    if !present {
+    .map_err(classify_checked_query)
+}
+
+/// The steps recorded done for migration 27, in step order.
+async fn steps_done(pool: &PgPool) -> Result<Vec<String>, PgError> {
+    if !progress_table_exists(pool).await? {
         return Ok(Vec::new());
     }
     let done = sqlx::query_scalar!(
@@ -272,7 +300,11 @@ async fn steps_done(pool: &PgPool) -> Result<Vec<String>, PgError> {
         .collect())
 }
 
-async fn mark_done(pool: &PgPool, step: &str, detail: serde_json::Value) -> Result<(), PgError> {
+async fn upsert_progress(
+    pool: &PgPool,
+    step: &str,
+    detail: serde_json::Value,
+) -> Result<(), PgError> {
     sqlx::query!(
         "INSERT INTO morpholog.migration_progress (version, step, detail)
          VALUES ($1, $2, $3)
@@ -509,11 +541,264 @@ pub(crate) async fn prepare_canonical_order(
             "columns" => step_columns(pool, policy).await?,
             "constraints" => step_constraints(pool, policy).await?,
             "indexes" => step_indexes(pool).await?,
+            FRONTIER => step_frontier(pool).await?,
             _ => step_objects(pool).await?,
         };
-        mark_done(pool, step, detail).await?;
+        upsert_progress(pool, step, detail).await?;
     }
     Ok(())
+}
+
+/// Take the migration lock without waiting. The connection holds it
+/// until closed; a second runner is refused.
+pub(crate) async fn take_migration_lock(pool: &PgPool) -> Result<sqlx::PgConnection, PgError> {
+    let mut conn = pool.acquire().await.map_err(classify)?.detach();
+    // `taken!`: pg_try_advisory_lock is never null.
+    let taken = sqlx::query_scalar!(
+        r#"SELECT pg_try_advisory_lock($1) AS "taken!""#,
+        MIGRATION_LOCK_KEY
+    )
+    .fetch_one(&mut conn)
+    .await
+    .map_err(classify_checked_query)?;
+    if taken {
+        Ok(conn)
+    } else {
+        Err(PgError::MigrationRunning)
+    }
+}
+
+/// The saved frontier: the tree over the legacy rows up to `cursor`, as
+/// `Frontier` keeps it, and the horizon of the pass that saved it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct FrontierState {
+    size: u64,
+    subtrees: Vec<String>,
+    cursor: Option<FrontierCursor>,
+    horizon: Timestamp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+struct FrontierCursor {
+    committed_at: Timestamp,
+    transition_id: Uuid,
+}
+
+fn malformed_frontier(why: &str) -> PgError {
+    PgError::InvalidState(format!(
+        "the saved frontier of migration 27 is malformed ({why}); delete it \
+         (`DELETE FROM morpholog.migration_progress WHERE version = 27 AND step = \
+         'frontier_state'`) and run `morpholog migrate --prepare` again"
+    ))
+}
+
+/// The saved frontier, if any. A malformed one is refused, never reset
+/// or trusted. The progress table must exist.
+async fn load_frontier<'e, E>(executor: E) -> Result<Option<(Frontier, FrontierState)>, PgError>
+where
+    E: sqlx::Executor<'e, Database = Postgres>,
+{
+    let detail = sqlx::query_scalar!(
+        "SELECT detail FROM morpholog.migration_progress WHERE version = $1 AND step = $2",
+        CANONICAL_ORDER_VERSION,
+        FRONTIER_STATE
+    )
+    .fetch_optional(executor)
+    .await
+    .map_err(classify_checked_query)?;
+    let Some(detail) = detail else {
+        return Ok(None);
+    };
+    let state: FrontierState =
+        serde_json::from_value(detail).map_err(|e| malformed_frontier(&e.to_string()))?;
+    let size = usize::try_from(state.size).map_err(|_| malformed_frontier("size"))?;
+    let subtrees = state
+        .subtrees
+        .iter()
+        .map(|hex| {
+            hex::decode(hex)
+                .ok()
+                .and_then(|bytes| Hash::try_from(bytes).ok())
+                .ok_or_else(|| malformed_frontier("a subtree hash"))
+        })
+        .collect::<Result<Vec<Hash>, PgError>>()?;
+    let frontier = Frontier::from_parts(size, subtrees)
+        .ok_or_else(|| malformed_frontier("subtree count against size"))?;
+    if state.cursor.is_some() != (size > 0) {
+        return Err(malformed_frontier("cursor against size"));
+    }
+    Ok(Some((frontier, state)))
+}
+
+async fn save_frontier(
+    pool: &PgPool,
+    frontier: &Frontier,
+    cursor: Option<FrontierCursor>,
+    horizon: Timestamp,
+) -> Result<(), PgError> {
+    let state = FrontierState {
+        size: frontier.len() as u64,
+        subtrees: frontier.subtrees().iter().map(hex::encode).collect(),
+        cursor,
+        horizon,
+    };
+    upsert_progress(pool, FRONTIER_STATE, serde_json::to_value(&state)?).await
+}
+
+/// Where the frontier stands after a pass: what is saved, never what a
+/// pass hashed and lost.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrontierProgress {
+    pub legacy_rows_prepared: u64,
+    pub legacy_root: String,
+    pub rows_added: u64,
+}
+
+fn progress(frontier: &Frontier, rows_added: u64) -> FrontierProgress {
+    FrontierProgress {
+        legacy_rows_prepared: frontier.len() as u64,
+        legacy_root: Digest::from_bytes(frontier.root()).to_string(),
+        rows_added,
+    }
+}
+
+/// One pass over the legacy rows below a fresh horizon, from the saved
+/// cursor, saving the frontier after every page. Each page reads under
+/// its own snapshot: below the horizon every row is final. The seam
+/// stops a pass after hashing its n-th page and before saving it, as a
+/// crash there would.
+#[doc(hidden)]
+pub async fn frontier_pass_with(
+    pool: &PgPool,
+    limit: i64,
+    stop_before_saving_page: Option<usize>,
+) -> Result<FrontierProgress, PgError> {
+    let census = census(pool).await?;
+    let refusals = census.refusals();
+    if !refusals.is_empty() {
+        return Err(PgError::CutoverRefused { reasons: refusals });
+    }
+    let (mut frontier, mut cursor) = match load_frontier(pool).await? {
+        Some((frontier, state)) => (frontier, state.cursor),
+        None => (Frontier::default(), None),
+    };
+    let mut saved = progress(&frontier, 0);
+    let mut pages = 0;
+    loop {
+        let page = list_legacy_rows_page(
+            pool,
+            cursor.map(|c| (c.committed_at, c.transition_id)),
+            census.horizon,
+            limit,
+        )
+        .await?;
+        pages += 1;
+        for row in &page {
+            frontier.push(audit_leaf_hash(row)?);
+        }
+        if stop_before_saving_page == Some(pages) {
+            return Ok(saved);
+        }
+        if let Some(last) = page.last() {
+            cursor = Some(FrontierCursor {
+                committed_at: last.committed_at,
+                transition_id: last.transition_id,
+            });
+        }
+        save_frontier(pool, &frontier, cursor, census.horizon).await?;
+        saved = progress(&frontier, saved.rows_added + page.len() as u64);
+        if (page.len() as i64) < limit {
+            return Ok(saved);
+        }
+    }
+}
+
+async fn step_frontier(pool: &PgPool) -> Result<serde_json::Value, PgError> {
+    for _ in 0..MAX_PASSES {
+        let pass = frontier_pass_with(pool, REPLAY_CHUNK, None).await?;
+        if pass.rows_added < REPLAY_CHUNK as u64 {
+            break;
+        }
+    }
+    let (frontier, state) = load_frontier(pool)
+        .await?
+        .ok_or_else(|| malformed_frontier("absent after a pass"))?;
+    Ok(serde_json::json!({
+        "legacy_rows_prepared": frontier.len(),
+        "horizon": state.horizon,
+    }))
+}
+
+/// Every legacy row hashed as one tree from scratch: the ruler the
+/// frontier is held to.
+#[doc(hidden)]
+pub async fn legacy_root_full_scan(pool: &PgPool) -> Result<(u64, String), PgError> {
+    let mut leaves = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = list_legacy_rows_page(pool, cursor, Timestamp::MAX, REPLAY_CHUNK).await?;
+        for row in &page {
+            leaves.push(audit_leaf_hash(row)?);
+        }
+        match page.last() {
+            Some(last) if page.len() as i64 == REPLAY_CHUNK => {
+                cursor = Some((last.committed_at, last.transition_id));
+            }
+            _ => break,
+        }
+    }
+    Ok((
+        leaves.len() as u64,
+        Digest::from_bytes(merkle_root(&leaves)).to_string(),
+    ))
+}
+
+/// The prepared frontier for the cutover, with the position the scan of
+/// the remaining legacy rows continues from. The rows at or below the
+/// cursor are counted against the frontier's size: a consistency check
+/// that the legacy rows did not change under it, not tamper evidence,
+/// which stays with checkpoints and verification.
+pub(crate) async fn prepared_frontier(
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<(Frontier, Option<AuditPosition>), PgError> {
+    let Some((frontier, state)) = load_frontier(&mut **tx).await? else {
+        return Ok((Frontier::default(), None));
+    };
+    let Some(cursor) = state.cursor else {
+        return Ok((frontier, None));
+    };
+    // `below!`: count(*) is never null.
+    let below = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "below!" FROM morpholog.audit
+           WHERE audit_order = 0 AND act_ordinal = 0
+             AND (committed_at, transition_id) <= ($1, $2)"#,
+        cursor.committed_at.to_sqlx(),
+        cursor.transition_id
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(classify_checked_query)?;
+    if below != frontier.len() as i64 {
+        return Err(PgError::CutoverRefused {
+            reasons: vec![format!(
+                "the prepared frontier holds {} legacy rows but {below} are at or below its \
+                 cursor: the legacy rows changed under it. Delete it (`DELETE FROM \
+                 morpholog.migration_progress WHERE version = 27 AND step = 'frontier_state'`) \
+                 and run `morpholog migrate --prepare` again",
+                frontier.len()
+            )],
+        });
+    }
+    Ok((
+        frontier,
+        Some(AuditPosition {
+            audit_order: 0,
+            act_ordinal: 0,
+            committed_at: cursor.committed_at,
+            transition_id: cursor.transition_id,
+        }),
+    ))
 }
 
 /// Forget the recorded steps once the migration itself is recorded.
@@ -570,6 +855,13 @@ pub async fn activation_preflight_within(
     .fetch_one(pool)
     .await
     .map_err(classify_checked_query)?;
+    let prepared = match progress_table_exists(pool).await? {
+        true => load_frontier(pool)
+            .await?
+            .map_or(0, |(frontier, _)| frontier.len() as i64),
+        false => 0,
+    };
+    let remaining = (audit.rows - prepared).max(0);
     let mut refusals = census(pool).await?.refusals();
     if claims.bytes >= baseline_limit_bytes {
         refusals.push(format!(
@@ -583,12 +875,13 @@ pub async fn activation_preflight_within(
         state,
         steps_done,
         legacy_rows: audit.rows,
+        legacy_rows_prepared: prepared,
         audit_bytes: audit.bytes,
         live_claims: claims.claims,
         baseline_bytes: claims.bytes,
         baseline_limit_bytes,
         estimated_preparation_ms: audit.rows * PREPARATION_NS_PER_ROW / 1_000_000,
-        estimated_writer_pause_ms: (audit.rows * PAUSE_NS_PER_ROW
+        estimated_writer_pause_ms: (remaining * PAUSE_NS_PER_ROW
             + claims.claims * PAUSE_NS_PER_CLAIM)
             / 1_000_000,
         refusals,

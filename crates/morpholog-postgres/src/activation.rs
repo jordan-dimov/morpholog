@@ -53,8 +53,8 @@ pub(crate) fn activation_arguments(
 pub(crate) async fn write_activation_record(
     tx: &mut Transaction<'_, Postgres>,
 ) -> Result<(), PgError> {
-    let mut legacy = Frontier::default();
-    let mut cursor: Option<AuditPosition> = None;
+    let (mut legacy, mut cursor): (Frontier, Option<AuditPosition>) =
+        crate::preparation::prepared_frontier(tx).await?;
     loop {
         let page = list_audit_rows_page(tx, cursor, None, REPLAY_CHUNK).await?;
         for row in &page {

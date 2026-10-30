@@ -100,7 +100,8 @@ pub use indexes::{
 pub use merkle::{Digest, DigestError};
 pub use migrations::{
     BASELINE_VERSION, BelowBaseline, MigrateMode, MigrationRef, MigrationReport, apply_migrations,
-    apply_migrations_with, head_version, migration_status, require_current_schema,
+    apply_migrations_paused, apply_migrations_with, head_version, migration_status,
+    require_current_schema,
 };
 pub use outbox::{
     CompensationSpec, Deliverer, DeliveryOutcome, OutboxRow, OutboxStatus, OutboxUpdate,
@@ -118,8 +119,9 @@ pub use pack::{
     verify_pack, verify_prefix_stream, verify_selective, verify_window,
 };
 pub use preparation::{
-    ActivationPreflight, BASELINE_LIMIT_BYTES, Census, LockPolicy, PreparationState,
-    activation_preflight, activation_preflight_within, census, census_paused,
+    ActivationPreflight, BASELINE_LIMIT_BYTES, Census, FrontierProgress, LockPolicy,
+    MIGRATION_LOCK_KEY, PreparationState, activation_preflight, activation_preflight_within,
+    census, census_paused, frontier_pass_with, legacy_root_full_scan,
 };
 pub use program::{InvariantPlan, PgProgram};
 pub use propose::{

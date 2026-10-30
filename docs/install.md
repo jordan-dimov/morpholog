@@ -140,12 +140,15 @@ One migration, the canonical audit order, does most of its work before
 the step that pauses writers: new columns, constraints and indexes are
 added with the database in service, in steps that resume if interrupted,
 and only the last transaction holds a lock, one that waits for writers and
-lets readers carry on. On a large history that pause is seconds, in
-proportion to the audit rows and live claims. `migrate --check` reports it
-beforehand under `activation_preflight`: where the preparation stands, the
+lets readers carry on. The history's Merkle root is built in that service
+too, in passes over the rows every writer has finished with, so the pause
+covers only the rows written since the last pass and the live claims.
+`migrate --check` reports it beforehand under `activation_preflight`: where
+the preparation stands, how many rows the root already holds, the
 estimated preparation time and writer pause, and anything that refuses the
 cutover now (a prepared transaction left open, a session this login cannot
-see, or a baseline too large for one record). To take the long part out of
+see, or a baseline too large for one record). One `migrate` runs at a time
+on a database; a second is refused while the first holds its lock. To take the long part out of
 the window, run `migrate --prepare` ahead of it; it stops with the
 migration still pending and `--check` saying `ready`, and the plain
 `migrate` in the window does only the cutover.

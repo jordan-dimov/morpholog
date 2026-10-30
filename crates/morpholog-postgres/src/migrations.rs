@@ -13,9 +13,10 @@
 use crate::error::{PgError, classify, classify_checked_query};
 use crate::preparation::{
     ActivationPreflight, LockPolicy, activation_preflight, clear_progress, prepare_canonical_order,
+    take_migration_lock,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{Connection as _, PgPool};
 
 /// The migration every database must record: v0.0.14's head.
 pub const BASELINE_VERSION: i32 = 23;
@@ -298,11 +299,35 @@ pub async fn apply_migrations_with(
     mode: MigrateMode,
     policy: &LockPolicy,
 ) -> Result<MigrationReport, PgError> {
-    let before = migration_status(pool).await?;
+    apply_migrations_paused(pool, mode, policy, async {}).await
+}
+
+/// [`apply_migrations_with`] pausing between its first look at the
+/// database and the lock: the seam a test uses to let another runner
+/// finish in between.
+#[doc(hidden)]
+pub async fn apply_migrations_paused(
+    pool: &PgPool,
+    mode: MigrateMode,
+    policy: &LockPolicy,
+    before_lock: impl Future<Output = ()>,
+) -> Result<MigrationReport, PgError> {
+    let mut before = migration_status(pool).await?;
     // Migrating a database that is ahead would apply nothing and report
     // success, although an unseen migration may have broken this binary.
     refuse_if_ahead(&before)?;
     crate::require_deployment_roles(pool).await?;
+    let mut lock = None;
+    if !before.pending.is_empty() {
+        before_lock.await;
+        // One runner at a time: a second would race the first over the
+        // prepared frontier and the progress rows. What this one saw
+        // before the lock may be another's finished work, so it looks
+        // again under it.
+        lock = Some(take_migration_lock(pool).await?);
+        before = migration_status(pool).await?;
+        refuse_if_ahead(&before)?;
+    }
     let mut applied = Vec::new();
     let mut preflight = None;
     for &(version, name, sql) in MIGRATIONS {
@@ -345,6 +370,9 @@ pub async fn apply_migrations_with(
             version,
             name: name.to_string(),
         });
+    }
+    if let Some(conn) = lock {
+        conn.close().await.map_err(classify)?;
     }
     // Grants are per table and do not cover tables created later, so the
     // floor is re-applied on every run (it is idempotent), not only after

@@ -1108,16 +1108,17 @@ fn migration_reports_serialize_as_pinned() {
         below_baseline: None,
         activation_preflight: Some(morpholog_postgres::ActivationPreflight {
             state: morpholog_postgres::PreparationState::Ready,
-            steps_done: ["columns", "constraints", "indexes", "objects"]
+            steps_done: ["columns", "constraints", "indexes", "objects", "frontier"]
                 .map(String::from)
                 .to_vec(),
             legacy_rows: 3_000_000,
+            legacy_rows_prepared: 2_900_000,
             audit_bytes: 3_726_000_128,
             live_claims: 300_000,
             baseline_bytes: 83_660_004,
             baseline_limit_bytes: morpholog_postgres::BASELINE_LIMIT_BYTES,
-            estimated_preparation_ms: 1_800,
-            estimated_writer_pause_ms: 35_550,
+            estimated_preparation_ms: 37_800,
+            estimated_writer_pause_ms: 4_960,
             refusals: vec!["1 prepared transaction(s) are open on this database; commit or roll them back first (`pg_prepared_xacts`)".to_string()],
         }),
     };

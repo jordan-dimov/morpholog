@@ -85,6 +85,12 @@ pub enum PgError {
          has finished"
     )]
     LockNotAcquired { statement: String, attempts: u32 },
+    /// Another `morpholog migrate` holds this database's migration lock.
+    #[error(
+        "another `morpholog migrate` is running on this database; wait for it to finish, \
+         then rerun"
+    )]
+    MigrationRunning,
     /// A preparation step found an object under a name it owns with
     /// another shape: someone else's column, constraint or index. The
     /// step refuses rather than change it; preparation stopped there.

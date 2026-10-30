@@ -2305,6 +2305,8 @@ class ActivationPreflight:
     state: str
     steps_done: list[str]
     legacy_rows: int
+    # How many of them the saved frontier already holds.
+    legacy_rows_prepared: int
     audit_bytes: int
     live_claims: int
     baseline_bytes: int
@@ -2319,14 +2321,15 @@ class ActivationPreflight:
         data = _strict(
             "activation preflight",
             payload,
-            {"state", "steps_done", "legacy_rows", "audit_bytes", "live_claims",
-             "baseline_bytes", "baseline_limit_bytes", "estimated_preparation_ms",
-             "estimated_writer_pause_ms", "refusals"},
+            {"state", "steps_done", "legacy_rows", "legacy_rows_prepared", "audit_bytes",
+             "live_claims", "baseline_bytes", "baseline_limit_bytes",
+             "estimated_preparation_ms", "estimated_writer_pause_ms", "refusals"},
         )
         return cls(
             state=data.member("state", {"pending", "preparing", "ready"}),
             steps_done=data.texts("steps_done"),
             legacy_rows=data.integer("legacy_rows", minimum=0),
+            legacy_rows_prepared=data.integer("legacy_rows_prepared", minimum=0),
             audit_bytes=data.integer("audit_bytes", minimum=0),
             live_claims=data.integer("live_claims", minimum=0),
             baseline_bytes=data.integer("baseline_bytes", minimum=0),
