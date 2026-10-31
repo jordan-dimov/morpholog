@@ -35,7 +35,7 @@ async fn plan(pool: &PgPool, sql: &str, args: Option<&str>) -> (Vec<String>, Vec
             )))
             .execute(&mut *tx)
             .await
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{e}: {sql}"));
             format!("EXPLAIN (FORMAT JSON) EXECUTE page({args})")
         }
     };
@@ -137,80 +137,109 @@ async fn the_scoped_load_orders_by_the_key() {
 /// Every audit walk pages the canonical-order index in order, and each
 /// bound is an index condition in the generic prepared plan. Behind flags
 /// in one query the bounds would become a filter, so each bound has its
-/// own query. The texts are hand-kept copies of `audit_pages::replay_page`
-/// and `list_audit_rows_page`.
+/// own query. The unfiltered walks cut a page before a second baseline
+/// chunk with a window count under the limit, so the window runs over at
+/// most a page. The texts are hand-kept copies of
+/// `audit_pages::replay_page`, `list_audit_rows_page` and
+/// `list_audit_rows_page_mentioning`.
 #[tokio::test]
 async fn every_audit_walk_is_an_index_walk_with_its_bounds_as_index_conditions() {
     let pool = test_pool().await;
-    let replay = "SELECT transition_id, transformation_name, asserted_claims, retracted_claims, committed_at, audit_order, act_ordinal, operations FROM morpholog.audit";
-    let full = "SELECT transition_id, transformation_name, arguments, actor, invariant_epoch, invariants_checked, asserted_claims, retracted_claims, emitted_intents, committed_at, attestation, parameters, model_hash, semantics_version, drawn_subjects, audit_order, act_ordinal, ordered_at, operations FROM morpholog.audit";
-    let order = "ORDER BY audit_order, act_ordinal, committed_at, transition_id LIMIT $1";
+    let replay = "transition_id, transformation_name, asserted_claims, retracted_claims, committed_at, audit_order, act_ordinal, operations";
+    let full = "transition_id, transformation_name, arguments, actor, invariant_epoch, invariants_checked, asserted_claims, retracted_claims, emitted_intents, committed_at, attestation, parameters, model_hash, semantics_version, drawn_subjects, audit_order, act_ordinal, ordered_at, operations";
     let key = "(audit_order, act_ordinal, committed_at, transition_id)";
-    let (at, id, n, k, h) = (
+    let order = format!("ORDER BY {}", &key[1..key.len() - 1]);
+    // One page: the rows after the bounds, cut before a second chunk.
+    let paged = |cols: &str, bounds: &str, name: &str| {
+        let bounds = if bounds.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {bounds} ")
+        };
+        format!(
+            "SELECT {cols} FROM (SELECT {cols}, sum((transformation_name = {name})::int) OVER w AS chunks \
+             FROM morpholog.audit {bounds}WINDOW w AS ({order} ROWS UNBOUNDED PRECEDING) {order} LIMIT $1) s \
+             WHERE chunks <= 1 {order}"
+        )
+    };
+    let (at, id, n, k, h, name) = (
         "'2026-06-01T00:00:00Z'::timestamptz",
         "'01900000-0000-7000-8000-000000000001'::uuid",
         "'3'::bigint",
         "'0'::integer",
         "'5'::bigint",
+        "'morpholog.baseline'::text",
     );
     let after = |o: &str, a: &str| format!("ROW{key} > ROW(${o}, ${a}, $2, $3)");
     let mentions_at = r#"jsonb_path_exists(jsonb_build_array(arguments, asserted_claims, retracted_claims, emitted_intents), '$.** ? (@.type == "subject" && @.value == $s)', $"#;
     let vars = r#"'{"s":"x"}'::jsonb"#;
     let cases: Vec<(String, String, Vec<String>)> = vec![
-        (format!("{replay} {order}"), "1024".into(), vec![]),
+        (paged(replay, "", "$2"), format!("1024, {name}"), vec![]),
         (
-            format!("{replay} WHERE {key} > ($4, $5, $2, $3) {order}"),
-            format!("1024, {at}, {id}, {n}, {k}"),
+            paged(replay, &format!("{key} > ($4, $5, $2, $3)"), "$6"),
+            format!("1024, {at}, {id}, {n}, {k}, {name}"),
             vec![after("4", "5")],
         ),
         (
-            format!("{replay} WHERE {key} <= ($4, $5, $2, $3) {order}"),
-            format!("1024, {at}, {id}, {n}, {k}"),
+            paged(replay, &format!("{key} <= ($4, $5, $2, $3)"), "$6"),
+            format!("1024, {at}, {id}, {n}, {k}, {name}"),
             vec![format!("ROW{key} <= ROW($4, $5, $2, $3)")],
         ),
         (
-            format!(
-                "{replay} WHERE {key} > ($6, $7, $2, $3) AND {key} <= ($8, $9, $4, $5) {order}"
+            paged(
+                replay,
+                &format!("{key} > ($6, $7, $2, $3) AND {key} <= ($8, $9, $4, $5)"),
+                "$10",
             ),
-            format!("1024, {at}, {id}, {at}, {id}, {n}, {k}, {n}, {k}"),
+            format!("1024, {at}, {id}, {at}, {id}, {n}, {k}, {n}, {k}, {name}"),
             vec![after("6", "7"), format!("ROW{key} <= ROW($8, $9, $4, $5)")],
         ),
-        (format!("{full} {order}"), "1024".into(), vec![]),
+        (paged(full, "", "$2"), format!("1024, {name}"), vec![]),
         (
-            format!("{full} WHERE {key} > ($4, $5, $2, $3) {order}"),
-            format!("1024, {at}, {id}, {n}, {k}"),
+            paged(full, &format!("{key} > ($4, $5, $2, $3)"), "$6"),
+            format!("1024, {at}, {id}, {n}, {k}, {name}"),
             vec![after("4", "5")],
         ),
         (
-            format!("{full} WHERE audit_order < $2 {order}"),
-            format!("1024, {h}"),
+            paged(full, "audit_order < $2", "$3"),
+            format!("1024, {h}, {name}"),
             vec!["audit_order < $2".into()],
         ),
         (
-            format!("{full} WHERE {key} > ($5, $6, $2, $3) AND audit_order < $4 {order}"),
-            format!("1024, {at}, {id}, {h}, {n}, {k}"),
+            paged(
+                full,
+                &format!("{key} > ($5, $6, $2, $3) AND audit_order < $4"),
+                "$7",
+            ),
+            format!("1024, {at}, {id}, {h}, {n}, {k}, {name}"),
             vec![after("5", "6"), "audit_order < $4".into()],
         ),
         // The `--mentions` statements: the same walk and bounds, the
-        // subject test a filter on each row, never a second scan.
+        // subject test a filter on each row, never a second scan. A
+        // baseline chunk's filtered columns are empty, so these pages
+        // never hold one and keep the plain shape.
         (
-            format!("{full} WHERE {mentions_at}2) {order}"),
+            format!("SELECT {full} FROM morpholog.audit WHERE {mentions_at}2) {order} LIMIT $1"),
             format!("1024, {vars}"),
             vec![],
         ),
         (
-            format!("{full} WHERE {key} > ($5, $6, $2, $3) AND {mentions_at}4) {order}"),
+            format!(
+                "SELECT {full} FROM morpholog.audit WHERE {key} > ($5, $6, $2, $3) AND {mentions_at}4) {order} LIMIT $1"
+            ),
             format!("1024, {at}, {id}, {vars}, {n}, {k}"),
             vec![after("5", "6")],
         ),
         (
-            format!("{full} WHERE audit_order < $2 AND {mentions_at}3) {order}"),
+            format!(
+                "SELECT {full} FROM morpholog.audit WHERE audit_order < $2 AND {mentions_at}3) {order} LIMIT $1"
+            ),
             format!("1024, {h}, {vars}"),
             vec!["audit_order < $2".into()],
         ),
         (
             format!(
-                "{full} WHERE {key} > ($6, $7, $2, $3) AND audit_order < $4 AND {mentions_at}5) {order}"
+                "SELECT {full} FROM morpholog.audit WHERE {key} > ($6, $7, $2, $3) AND audit_order < $4 AND {mentions_at}5) {order} LIMIT $1"
             ),
             format!("1024, {at}, {id}, {h}, {vars}, {n}, {k}"),
             vec![after("6", "7"), "audit_order < $4".into()],
@@ -229,13 +258,24 @@ async fn every_audit_walk_is_an_index_walk_with_its_bounds_as_index_conditions()
                 "`{bound}` must be an index condition, got {conds:?} for {sql}"
             );
         }
+        if sql.contains("WINDOW") {
+            // The limit feeds the window, so the window never runs past a
+            // page: in the plan's walk the window is the limit's child.
+            let limit_over_window = nodes
+                .windows(2)
+                .any(|pair| pair[0] == "Limit" && pair[1] == "WindowAgg");
+            assert!(
+                limit_over_window,
+                "the window must sit under the limit: {nodes:?} for {sql}"
+            );
+        }
     }
 
     // The single flagged query keeps the order but loses the bound to a
     // filter, so this test can tell the difference.
     let (_, conds) = plan(
         &pool,
-        &format!("{replay} WHERE ($6 OR {key} > ($4, $5, $2, $3)) {order}"),
+        &format!("SELECT {replay} FROM morpholog.audit WHERE ($6 OR {key} > ($4, $5, $2, $3)) {order} LIMIT $1"),
         Some(&format!("1024, {at}, {id}, {n}, {k}, false")),
     )
     .await;

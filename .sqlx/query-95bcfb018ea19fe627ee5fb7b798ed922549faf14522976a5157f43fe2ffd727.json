@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT transition_id, transformation_name, arguments, actor,\n                        invariant_epoch, invariants_checked,\n                        asserted_claims, retracted_claims, emitted_intents, committed_at,\n                attestation, parameters, model_hash, semantics_version, drawn_subjects,\n                audit_order, act_ordinal, ordered_at, operations\n                 FROM morpholog.audit\n                 ORDER BY audit_order, act_ordinal, committed_at, transition_id\n                 LIMIT $1",
+  "query": "SELECT transition_id, transformation_name, arguments, actor,\n                        invariant_epoch, invariants_checked,\n                        asserted_claims, retracted_claims, emitted_intents, committed_at,\n                attestation, parameters, model_hash, semantics_version, drawn_subjects,\n                audit_order, act_ordinal, ordered_at, operations\n                  FROM (SELECT transition_id, transformation_name, arguments, actor,\n                               invariant_epoch, invariants_checked,\n                               asserted_claims, retracted_claims, emitted_intents, committed_at,\n                       attestation, parameters, model_hash, semantics_version, drawn_subjects,\n                       audit_order, act_ordinal, ordered_at, operations,\n                               sum((transformation_name = $6)::int) OVER w AS chunks\n                        FROM morpholog.audit\n                        WHERE (audit_order, act_ordinal, committed_at, transition_id) > ($4, $5, $2, $3)\n                        WINDOW w AS (ORDER BY audit_order, act_ordinal, committed_at, transition_id\n                                     ROWS UNBOUNDED PRECEDING)\n                        ORDER BY audit_order, act_ordinal, committed_at, transition_id\n                        LIMIT $1) s\n                  WHERE chunks <= 1\n                  ORDER BY audit_order, act_ordinal, committed_at, transition_id",
   "describe": {
     "columns": [
       {
@@ -215,7 +215,12 @@
     ],
     "parameters": {
       "Left": [
-        "Int8"
+        "Int8",
+        "Timestamptz",
+        "Uuid",
+        "Int8",
+        "Int4",
+        "Text"
       ]
     },
     "nullable": [
@@ -240,5 +245,5 @@
       true
     ]
   },
-  "hash": "8f8dd8ab862a31c9397f8a507a54b62d374a7e33a8e7bf24d7b28273ba580cf7"
+  "hash": "95bcfb018ea19fe627ee5fb7b798ed922549faf14522976a5157f43fe2ffd727"
 }

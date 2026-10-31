@@ -1,6 +1,6 @@
 use crate::audit::Operation;
-use crate::audit::{REPLAY_CHUNK, list_audit_rows_page};
-use crate::audit_pages::{ReplayPages, ReplayRow};
+use crate::audit::REPLAY_CHUNK;
+use crate::audit_pages::{AuditPages, ReplayPages, ReplayRow};
 use crate::checkpoints::TreeVerification;
 use crate::claims::ClaimRead;
 use crate::error::{PgError, classify, classify_checked_query};
@@ -531,10 +531,13 @@ pub async fn verify_replay(
         .count;
     let total = u64::try_from(transitions).unwrap_or(0);
     let mut history = HistoryCheck::default();
-    let mut cursor = None;
+    let mut pages = AuditPages::new(None);
     let mut done = 0u64;
     loop {
-        let page = list_audit_rows_page(&mut tx, cursor, None, REPLAY_CHUNK).await?;
+        let page = pages.next(&mut tx).await?;
+        if page.is_empty() {
+            break;
+        }
         for row in &page {
             history.push(row)?;
         }
@@ -544,10 +547,6 @@ pub async fn verify_replay(
             done,
             total,
         });
-        match page.last() {
-            Some(last) if page.len() as i64 == REPLAY_CHUNK => cursor = Some(last.position()),
-            _ => break,
-        }
     }
     // Keyset over the primary key, so the claims table is paged rather
     // than read in one statement.

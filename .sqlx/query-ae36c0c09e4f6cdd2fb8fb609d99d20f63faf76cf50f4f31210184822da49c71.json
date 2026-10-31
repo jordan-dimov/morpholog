@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT transition_id, transformation_name,\n                        asserted_claims, retracted_claims, committed_at, audit_order, act_ordinal,\n                        operations\n                 FROM morpholog.audit\n                 WHERE (audit_order, act_ordinal, committed_at, transition_id) <= ($4, $5, $2, $3)\n                 ORDER BY audit_order, act_ordinal, committed_at, transition_id\n                 LIMIT $1",
+  "query": "SELECT transition_id, transformation_name,\n                        asserted_claims, retracted_claims, committed_at, audit_order, act_ordinal,\n                        operations\n                  FROM (SELECT transition_id, transformation_name,\n                               asserted_claims, retracted_claims, committed_at, audit_order, act_ordinal,\n                               operations,\n                               sum((transformation_name = $10)::int) OVER w AS chunks\n                        FROM morpholog.audit\n                        WHERE (audit_order, act_ordinal, committed_at, transition_id) > ($6, $7, $2, $3)\n                          AND (audit_order, act_ordinal, committed_at, transition_id) <= ($8, $9, $4, $5)\n                        WINDOW w AS (ORDER BY audit_order, act_ordinal, committed_at, transition_id\n                                     ROWS UNBOUNDED PRECEDING)\n                        ORDER BY audit_order, act_ordinal, committed_at, transition_id\n                        LIMIT $1) s\n                  WHERE chunks <= 1\n                  ORDER BY audit_order, act_ordinal, committed_at, transition_id",
   "describe": {
     "columns": [
       {
@@ -97,8 +97,13 @@
         "Int8",
         "Timestamptz",
         "Uuid",
+        "Timestamptz",
+        "Uuid",
         "Int8",
-        "Int4"
+        "Int4",
+        "Int8",
+        "Int4",
+        "Text"
       ]
     },
     "nullable": [
@@ -112,5 +117,5 @@
       true
     ]
   },
-  "hash": "9b6fb986bb71b58c61866852168bfb866b9ec7f0320ba8801415aa4d2ea3a283"
+  "hash": "ae36c0c09e4f6cdd2fb8fb609d99d20f63faf76cf50f4f31210184822da49c71"
 }

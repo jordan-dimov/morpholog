@@ -12,11 +12,17 @@
 //!
 //! Each bound combination has its own query: one query with the bounds
 //! behind flags loses the index condition under a generic plan.
+//!
+//! A page holds at most one baseline chunk, cut in the statement before
+//! the second, so a walk over the activation decodes one chunk at a time
+//! however many there are. A short page therefore proves nothing about
+//! the end of the log; only an empty one does.
 
 use jiff::Timestamp;
 use jiff_sqlx::ToSqlx;
 use uuid::Uuid;
 
+use crate::activation::BASELINE;
 use crate::audit::{
     AuditPosition, AuditRow, REPLAY_CHUNK, list_audit_rows_page, list_audit_rows_page_mentioning,
 };
@@ -41,15 +47,16 @@ impl Keyset {
         }
     }
 
-    /// A page shorter than the `asked` size ends the walk, and so does a
-    /// page ending on the `through` target, saving an empty query.
-    fn advance(&mut self, asked: i64, len: usize, last: Option<AuditPosition>) {
+    /// An empty page ends the walk, and so does a page ending on the
+    /// `through` target, saving an empty query. A short page does not: a
+    /// page is cut before a second baseline chunk.
+    fn advance(&mut self, last: Option<AuditPosition>) {
         let Some(last) = last else {
             self.done = true;
             return;
         };
         self.cursor = Some(last);
-        self.done = (len as i64) < asked || self.through == Some(last);
+        self.done = self.through == Some(last);
     }
 }
 
@@ -102,11 +109,7 @@ impl ReplayPages {
             return Ok(Vec::new());
         }
         let rows = replay_page(conn, self.0.cursor, self.0.through, self.0.chunk).await?;
-        self.0.advance(
-            self.0.chunk,
-            rows.len(),
-            rows.last().map(ReplayRow::position),
-        );
+        self.0.advance(rows.last().map(ReplayRow::position));
         Ok(rows)
     }
 }
@@ -181,8 +184,7 @@ impl AuditPages {
                 .await?
             }
         };
-        self.keyset
-            .advance(asked, rows.len(), rows.last().map(AuditRow::position));
+        self.keyset.advance(rows.last().map(AuditRow::position));
         Ok(rows)
     }
 }
@@ -202,10 +204,19 @@ async fn replay_page(
                 "SELECT transition_id, transformation_name,
                         asserted_claims, retracted_claims, committed_at, audit_order, act_ordinal,
                         operations
-                 FROM morpholog.audit
-                 ORDER BY audit_order, act_ordinal, committed_at, transition_id
-                 LIMIT $1",
+                  FROM (SELECT transition_id, transformation_name,
+                               asserted_claims, retracted_claims, committed_at, audit_order, act_ordinal,
+                               operations,
+                               sum((transformation_name = $2)::int) OVER w AS chunks
+                        FROM morpholog.audit
+                        WINDOW w AS (ORDER BY audit_order, act_ordinal, committed_at, transition_id
+                                     ROWS UNBOUNDED PRECEDING)
+                        ORDER BY audit_order, act_ordinal, committed_at, transition_id
+                        LIMIT $1) s
+                  WHERE chunks <= 1
+                  ORDER BY audit_order, act_ordinal, committed_at, transition_id",
                 limit,
+                BASELINE,
             )
             .fetch_all(&mut *conn)
             .await
@@ -224,15 +235,24 @@ async fn replay_page(
                 "SELECT transition_id, transformation_name,
                         asserted_claims, retracted_claims, committed_at, audit_order, act_ordinal,
                         operations
-                 FROM morpholog.audit
-                 WHERE (audit_order, act_ordinal, committed_at, transition_id) > ($4, $5, $2, $3)
-                 ORDER BY audit_order, act_ordinal, committed_at, transition_id
-                 LIMIT $1",
+                  FROM (SELECT transition_id, transformation_name,
+                               asserted_claims, retracted_claims, committed_at, audit_order, act_ordinal,
+                               operations,
+                               sum((transformation_name = $6)::int) OVER w AS chunks
+                        FROM morpholog.audit
+                        WHERE (audit_order, act_ordinal, committed_at, transition_id) > ($4, $5, $2, $3)
+                        WINDOW w AS (ORDER BY audit_order, act_ordinal, committed_at, transition_id
+                                     ROWS UNBOUNDED PRECEDING)
+                        ORDER BY audit_order, act_ordinal, committed_at, transition_id
+                        LIMIT $1) s
+                  WHERE chunks <= 1
+                  ORDER BY audit_order, act_ordinal, committed_at, transition_id",
                 limit,
                 at.to_sqlx(),
                 id,
                 o.cast_signed(),
                 k.cast_signed(),
+                BASELINE,
             )
             .fetch_all(&mut *conn)
             .await
@@ -251,15 +271,24 @@ async fn replay_page(
                 "SELECT transition_id, transformation_name,
                         asserted_claims, retracted_claims, committed_at, audit_order, act_ordinal,
                         operations
-                 FROM morpholog.audit
-                 WHERE (audit_order, act_ordinal, committed_at, transition_id) <= ($4, $5, $2, $3)
-                 ORDER BY audit_order, act_ordinal, committed_at, transition_id
-                 LIMIT $1",
+                  FROM (SELECT transition_id, transformation_name,
+                               asserted_claims, retracted_claims, committed_at, audit_order, act_ordinal,
+                               operations,
+                               sum((transformation_name = $6)::int) OVER w AS chunks
+                        FROM morpholog.audit
+                        WHERE (audit_order, act_ordinal, committed_at, transition_id) <= ($4, $5, $2, $3)
+                        WINDOW w AS (ORDER BY audit_order, act_ordinal, committed_at, transition_id
+                                     ROWS UNBOUNDED PRECEDING)
+                        ORDER BY audit_order, act_ordinal, committed_at, transition_id
+                        LIMIT $1) s
+                  WHERE chunks <= 1
+                  ORDER BY audit_order, act_ordinal, committed_at, transition_id",
                 limit,
                 to_at.to_sqlx(),
                 to_id,
                 to_o.cast_signed(),
                 to_k.cast_signed(),
+                BASELINE,
             )
             .fetch_all(&mut *conn)
             .await
@@ -283,11 +312,19 @@ async fn replay_page(
                 "SELECT transition_id, transformation_name,
                         asserted_claims, retracted_claims, committed_at, audit_order, act_ordinal,
                         operations
-                 FROM morpholog.audit
-                 WHERE (audit_order, act_ordinal, committed_at, transition_id) > ($6, $7, $2, $3)
-                   AND (audit_order, act_ordinal, committed_at, transition_id) <= ($8, $9, $4, $5)
-                 ORDER BY audit_order, act_ordinal, committed_at, transition_id
-                 LIMIT $1",
+                  FROM (SELECT transition_id, transformation_name,
+                               asserted_claims, retracted_claims, committed_at, audit_order, act_ordinal,
+                               operations,
+                               sum((transformation_name = $10)::int) OVER w AS chunks
+                        FROM morpholog.audit
+                        WHERE (audit_order, act_ordinal, committed_at, transition_id) > ($6, $7, $2, $3)
+                          AND (audit_order, act_ordinal, committed_at, transition_id) <= ($8, $9, $4, $5)
+                        WINDOW w AS (ORDER BY audit_order, act_ordinal, committed_at, transition_id
+                                     ROWS UNBOUNDED PRECEDING)
+                        ORDER BY audit_order, act_ordinal, committed_at, transition_id
+                        LIMIT $1) s
+                  WHERE chunks <= 1
+                  ORDER BY audit_order, act_ordinal, committed_at, transition_id",
                 limit,
                 at.to_sqlx(),
                 id,
@@ -297,6 +334,7 @@ async fn replay_page(
                 k.cast_signed(),
                 to_o.cast_signed(),
                 to_k.cast_signed(),
+                BASELINE,
             )
             .fetch_all(&mut *conn)
             .await
