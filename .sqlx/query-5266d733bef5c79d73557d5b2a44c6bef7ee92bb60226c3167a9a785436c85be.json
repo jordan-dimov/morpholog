@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT audit_order AS \"audit_order!\", quiet_at AS \"quiet_at: jiff_sqlx::Timestamp\"\n           FROM morpholog.audit_horizon()",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "audit_order!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "quiet_at: jiff_sqlx::Timestamp",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "5266d733bef5c79d73557d5b2a44c6bef7ee92bb60226c3167a9a785436c85be"
+}

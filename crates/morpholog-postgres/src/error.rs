@@ -170,6 +170,14 @@ pub enum PgError {
     /// corrected id.
     #[error("no transition committed at or before {0}")]
     NoTransitionAtOrBefore(Timestamp),
+    /// An as-of instant whose answer is not final: a transaction that
+    /// could take a place at or before it is still open, or the instant
+    /// has not passed. The remedy is to retry, or to name a transition.
+    #[error(
+        "the state as of {0} is not settled: a transaction that may be ordered at or before it \
+         is still open, or the instant has not passed; retry, or give a transition id"
+    )]
+    InstantNotSettled(Timestamp),
     /// A programme declares one of the reserved actor-policy
     /// predicates in a shape the runtime does not match.
     ///

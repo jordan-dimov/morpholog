@@ -438,7 +438,7 @@ async fn a_timestamp_boundary_matches_the_transition_form() {
         .into_iter()
         .find(|r| r.transition_id == e0)
         .unwrap()
-        .committed_at;
+        .instant();
 
     let by_id = score_candidate(
         &pool,

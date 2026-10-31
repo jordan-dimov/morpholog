@@ -26,8 +26,10 @@ use crate::state::State;
 
 /// Bumped when the report shape or the scoring semantics change
 /// incompatibly, so a stored result is never misread. New optional fields
-/// do not bump it.
-pub const SCORE_FORMAT_VERSION: u32 = 5;
+/// do not bump it. Version 6: a timestamp boundary selects by each row's
+/// instant, `ordered_at` or `committed_at` before the order, where 5
+/// selected by `committed_at`.
+pub const SCORE_FORMAT_VERSION: u32 = 6;
 /// Names the exact scoring rule, so the report is self-describing.
 pub const SCORE_SEMANTICS: &str = "case_bound_admission_v5";
 

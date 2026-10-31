@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT transition_id FROM morpholog.audit\n         WHERE committed_at <= $1\n         ORDER BY committed_at DESC, transition_id DESC\n         LIMIT 1",
+  "query": "SELECT transition_id FROM morpholog.audit\n         WHERE coalesce(ordered_at, committed_at) <= $1\n         ORDER BY coalesce(ordered_at, committed_at) DESC, audit_order DESC, act_ordinal DESC,\n                  committed_at DESC, transition_id DESC\n         LIMIT 1",
   "describe": {
     "columns": [
       {
@@ -24,5 +24,5 @@
       false
     ]
   },
-  "hash": "0ed3ef8ff08b6533c5861ed0246b3fd531c009c5f896382279366bc97cc36f5a"
+  "hash": "2f4073a491a529332ec43a453a57ea2dbcad0da9a5e6c314408afdaaebdbfb94"
 }

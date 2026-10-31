@@ -284,3 +284,45 @@ async fn every_audit_walk_is_an_index_walk_with_its_bounds_as_index_conditions()
         "a flagged bound must not show as an index condition: {conds:?}"
     );
 }
+
+/// The as-of resolvers: the instant lookup steps backward once through
+/// `audit_instant`, and the last-final-row lookup once through
+/// `audit_canonical`, neither sorting.
+#[tokio::test]
+async fn the_instant_resolvers_step_once_through_their_indexes() {
+    let pool = test_pool().await;
+    let by_instant = "SELECT transition_id FROM morpholog.audit \
+         WHERE coalesce(ordered_at, committed_at) <= $1 \
+         ORDER BY coalesce(ordered_at, committed_at) DESC, audit_order DESC, act_ordinal DESC, \
+                  committed_at DESC, transition_id DESC \
+         LIMIT 1";
+    let below_horizon = "SELECT coalesce(ordered_at, committed_at) FROM morpholog.audit \
+         WHERE audit_order < $1 \
+         ORDER BY audit_order DESC, act_ordinal DESC, committed_at DESC, transition_id DESC \
+         LIMIT 1";
+    for (sql, args, index, bound) in [
+        (
+            by_instant,
+            "'2026-06-01T00:00:00Z'::timestamptz",
+            "audit_instant",
+            "<= $1",
+        ),
+        (
+            below_horizon,
+            "7::bigint",
+            "audit_canonical",
+            "audit_order < $1",
+        ),
+    ] {
+        let (nodes, conds) = plan(&pool, sql, Some(args)).await;
+        assert!(
+            nodes.iter().any(|n| n.ends_with(index)),
+            "must walk {index}: {nodes:?} for {sql}"
+        );
+        assert!(!sorts(&nodes), "must not sort: {nodes:?} for {sql}");
+        assert!(
+            conds.iter().any(|c| c.contains(bound)),
+            "`{bound}` must be an index condition, got {conds:?} for {sql}"
+        );
+    }
+}

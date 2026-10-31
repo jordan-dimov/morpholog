@@ -592,7 +592,9 @@ pub(crate) struct EvaluateArgs {
     /// this boundary) and a held-out test slice (everything after),
     /// reported separately - the overfitting guard: a rule discovered
     /// on the training slice is honestly judged on history it never
-    /// saw. Takes a transition id or an RFC 3339 timestamp. One
+    /// saw. Takes a transition id or an RFC 3339 timestamp, the latter
+    /// selecting by when each transaction was placed in the audit order,
+    /// as the replay's snapshot holds the log, settled or not. One
     /// continuous replay: rule state carries across the boundary and
     /// each violation counts in the slice that introduced it. Not
     /// available with `--packs`, where each per-case pack is already
@@ -964,14 +966,14 @@ pub(crate) struct InitArgs {
 }
 
 /// An `--as-of` coordinate: an exact `transition_id` (UUIDv7), or an
-/// RFC 3339 timestamp resolved to the last transition committed at or
-/// before that instant. Parsed at the clap layer so a malformed value
-/// errors before any database work.
+/// RFC 3339 timestamp resolved to the last transition placed in the
+/// audit order at or before that instant. Parsed at the clap layer so a
+/// malformed value errors before any database work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AsOf {
     /// State immediately after this committed transition.
     Transition(Uuid),
-    /// State at the last transition committed at or before this instant.
+    /// State at the last transition placed at or before this instant.
     AtOrBefore(jiff::Timestamp),
 }
 
@@ -1249,11 +1251,15 @@ pub(crate) struct InspectClaimsArgs {
 
     /// Optional: list claims as they were at a past moment - either a
     /// `transition_id` (UUIDv7) or an RFC 3339 timestamp resolved to
-    /// the last transition committed at or before it. Without it, the
-    /// current admitted claim set is returned; with it, the adapter
-    /// replays the audit log up to the resolved transition. Unknown
-    /// ids return `TransitionNotFound`; a timestamp earlier than every
-    /// commit returns `NoTransitionAtOrBefore`.
+    /// the last transition placed in the audit order at or before it (a
+    /// transaction is placed when it writes its first audit row, before
+    /// it commits). Without it, the current admitted claim set is
+    /// returned; with it, the adapter replays the audit log up to the
+    /// resolved transition. Unknown ids return `TransitionNotFound`; a
+    /// timestamp earlier than every transition returns
+    /// `NoTransitionAtOrBefore`; one whose answer is not yet final, since
+    /// an open transaction may still be placed at or before it or the
+    /// instant has not passed, returns `InstantNotSettled`.
     #[arg(long)]
     pub(crate) as_of: Option<AsOf>,
 
@@ -1309,10 +1315,9 @@ pub(crate) struct InspectDerivedArgs {
 
     /// Optional: enumerate against the state at a past moment - either
     /// a `transition_id` (UUIDv7) or an RFC 3339 timestamp resolved to
-    /// the last transition committed at or before it - instead of
-    /// current state. Same predicate-scoped replay; unknown ids return
-    /// `TransitionNotFound`, and a timestamp earlier than every commit
-    /// returns `NoTransitionAtOrBefore`.
+    /// the last transition placed at or before it, as for `inspect
+    /// claims --as-of` - instead of current state. Same predicate-scoped
+    /// replay and the same errors.
     #[arg(long)]
     pub(crate) as_of: Option<AsOf>,
 

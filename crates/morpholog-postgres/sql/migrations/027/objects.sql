@@ -1,4 +1,4 @@
--- The order's sequences, the per-transaction table and the two functions.
+-- The order's sequences, the per-transaction table and the functions.
 -- Nothing here changes how a row is written until the trigger exists.
 CREATE SEQUENCE IF NOT EXISTS morpholog.audit_order_seq CACHE 1;
 -- Microseconds since the epoch of the last `ordered_at` handed out.
@@ -115,3 +115,44 @@ BEGIN
     RETURN coalesce(inflight, CASE WHEN called THEN last + 1 ELSE last END);
 END $$;
 REVOKE ALL ON FUNCTION morpholog.audit_watermark() FROM PUBLIC;
+
+-- The watermark with the quiet case made final. When no order is held,
+-- the ordering clock is moved up to the server clock, under G, and that
+-- floor is returned: every order drawn later takes an instant above it
+-- even if the clock steps back. The sequence never moves down, and
+-- setval takes effect at once, so a cancelled call leaves only the
+-- floor. It writes, so it runs outside a read-only transaction, on the
+-- primary.
+CREATE OR REPLACE FUNCTION morpholog.audit_horizon(OUT audit_order bigint, OUT quiet_at timestamptz)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = morpholog, pg_temp AS $$
+DECLARE
+    inflight bigint;
+    last bigint;
+    called boolean;
+    floor_us bigint;
+BEGIN
+    BEGIN
+        PERFORM pg_advisory_lock(625626, 0);
+        SELECT min(((classid::bigint & 1073741823) << 32) | objid::bigint)
+          INTO inflight FROM pg_catalog.pg_locks
+         WHERE locktype = 'advisory'
+           AND database = (SELECT oid FROM pg_catalog.pg_database
+                            WHERE datname = current_database())
+           AND objsubid = 1 AND classid::bigint BETWEEN 1073741824 AND 2147483647
+           AND mode = 'ExclusiveLock' AND granted;
+        SELECT last_value, is_called INTO last, called FROM audit_order_seq;
+        IF inflight IS NULL THEN
+            SELECT greatest(last_value,
+                            floor(extract(epoch FROM clock_timestamp()) * 1000000)::bigint)
+              INTO floor_us FROM audit_ordered_at_us;
+            PERFORM setval('audit_ordered_at_us', floor_us);
+            quiet_at := timestamptz 'epoch' + floor_us * interval '1 microsecond';
+        END IF;
+        PERFORM pg_advisory_unlock(625626, 0);
+    EXCEPTION WHEN OTHERS OR QUERY_CANCELED THEN
+        PERFORM pg_advisory_unlock(625626, 0);
+        RAISE;
+    END;
+    audit_order := coalesce(inflight, CASE WHEN called THEN last + 1 ELSE last END);
+END $$;
+REVOKE ALL ON FUNCTION morpholog.audit_horizon() FROM PUBLIC;

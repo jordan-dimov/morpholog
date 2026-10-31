@@ -1022,8 +1022,9 @@ fn ordered_history() -> Vec<AuditRow> {
         .into_iter()
         .enumerate()
         .map(|(i, (order, ordinal))| {
+            // One transaction, one start and one instant, for both acts.
             let committed_at: jiff::Timestamp =
-                format!("2026-06-24T00:03:{i:02}Z").parse().unwrap();
+                format!("2026-06-24T00:03:{order:02}Z").parse().unwrap();
             AuditRow {
                 transition_id: uuid::Uuid::from_u128(0x300 + i as u128),
                 committed_at,

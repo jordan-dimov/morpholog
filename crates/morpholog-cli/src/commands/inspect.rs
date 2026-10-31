@@ -7,7 +7,7 @@ use morpholog_core::ClaimInstance;
 use morpholog_postgres::{
     ClaimRead, PgPool, begin_audit_tail, list_derived, list_derived_at, list_outbox_rows,
     list_rejection_rows, read_claims, read_claims_at, read_claims_at_for_predicates,
-    read_claims_for_predicates, read_claims_where, resolve_transition_at_or_before,
+    read_claims_for_predicates, read_claims_where, resolve_settled_instant,
 };
 use std::path::Path;
 use uuid::Uuid;
@@ -32,7 +32,7 @@ pub(crate) async fn resolve_as_of(
         None => None,
         Some(AsOf::Transition(tid)) => Some(tid),
         Some(AsOf::AtOrBefore(at)) => Some(
-            resolve_transition_at_or_before(pool, at)
+            resolve_settled_instant(pool, at)
                 .await
                 .context("resolving --as-of timestamp")?,
         ),

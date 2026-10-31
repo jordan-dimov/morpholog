@@ -5,7 +5,7 @@
 //! scoring lives in `morpholog_core::CandidateScorer`; this drives the
 //! replay from the live database or from an offline evidence pack.
 
-use crate::as_of::resolve_transition_at_or_before;
+use crate::as_of::resolve_instant_in_snapshot;
 use crate::audit::{AuditPosition, AuditRow, audit_cursor_for};
 use crate::audit_pages::AuditPages;
 use crate::checkpoints::{Checkpoint, TreeVerification};
@@ -118,9 +118,7 @@ pub async fn score_candidate(
         Some(boundary) => {
             let id = match boundary {
                 SplitBoundary::Transition(id) => id,
-                SplitBoundary::AtOrBefore(at) => {
-                    resolve_transition_at_or_before(&mut *tx, at).await?
-                }
+                SplitBoundary::AtOrBefore(at) => resolve_instant_in_snapshot(&mut *tx, at).await?,
             };
             let cursor = audit_cursor_for(&mut tx, id).await?;
             Some(pending_split(boundary, cursor))
@@ -191,7 +189,7 @@ pub fn score_candidate_against_pack(
             b,
             rows.iter()
                 .rev()
-                .find(|r| r.committed_at <= at)
+                .find(|r| r.instant() <= at)
                 .map(|r| r.position())
                 .ok_or(PgError::NoTransitionAtOrBefore(at))?,
         )),

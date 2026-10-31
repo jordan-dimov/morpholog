@@ -257,6 +257,39 @@ async fn inspect_claims_as_of_a_prior_transition_returns_state_at_that_point() {
     );
 }
 
+/// The timestamp form resolves to the transition placed at that instant:
+/// as of the first transition's own `ordered_at`, the state is the state
+/// as of its id.
+#[tokio::test(flavor = "current_thread")]
+async fn inspect_claims_as_of_a_timestamp_is_the_state_as_of_the_transition_placed_at_it() {
+    reset_db().await;
+    let first_tid = post_balanced_entry("entry_001", 100);
+    post_balanced_entry("entry_002", 200);
+
+    let (status, stdout, stderr) = run_cli(&["inspect", "audit"]);
+    assert!(status.success(), "{stderr}");
+    let first_row: Value = stdout
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|row| row["transition_id"] == first_tid.to_string())
+        .expect("the first transition's audit row");
+    let at = first_row["ordered_at"]
+        .as_str()
+        .expect("ordered_at")
+        .to_string();
+
+    let (status, by_time, stderr) = run_cli(&["inspect", "claims", "--as-of", &at]);
+    assert!(
+        status.success(),
+        "inspect claims --as-of <timestamp>; {stderr}"
+    );
+    let (_, by_id, _) = run_cli(&["inspect", "claims", "--as-of", &first_tid.to_string()]);
+    let by_time: Value = serde_json::from_str(&by_time).unwrap();
+    let by_id: Value = serde_json::from_str(&by_id).unwrap();
+    assert_eq!(by_time, by_id);
+    assert!(!by_time.as_array().unwrap().is_empty());
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn inspect_claims_predicate_filter_returns_only_matching_claims() {
     reset_db().await;

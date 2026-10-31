@@ -17,6 +17,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::claim_key::arguments_hash;
 
+use jiff::Timestamp;
 use morpholog_core::{ClaimInstance, PredicateName};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
@@ -51,6 +52,47 @@ pub(crate) struct ActivationFold {
     last_key: Option<(PredicateName, Hash)>,
     last_row: Uuid,
     complete: bool,
+}
+
+/// The instants along the log, as every verifier holds them: a row's
+/// instant is its `ordered_at`, or `committed_at` before the order (see
+/// [`AuditRow::instant`]). One order has one instant; distinct orders'
+/// instants strictly increase, the first at or after the last legacy
+/// one; legacy rows sort by their instant, so theirs never decrease by
+/// construction. So an instant ends a prefix of the log that splits no
+/// transaction, which is what an as-of timestamp resolves by.
+#[derive(Default)]
+pub(crate) struct Chronology {
+    last: Option<(u64, Timestamp)>,
+}
+
+impl Chronology {
+    /// The next row in log order; how its instant breaks the chronology,
+    /// if it does.
+    pub(crate) fn observe(&mut self, row: &AuditRow) -> Option<String> {
+        let order = row.audit_order.unwrap_or(0);
+        let instant = row.instant();
+        let fault = self.last.and_then(|(prev_order, prev)| {
+            if order == 0 {
+                None
+            } else if order == prev_order {
+                (instant != prev)
+                    .then(|| format!("ordered_at {instant} differs from its order's {prev}"))
+            } else if prev_order == 0 {
+                (instant < prev).then(|| {
+                    format!(
+                        "ordered_at {instant} is before the last legacy row's committed_at {prev}"
+                    )
+                })
+            } else {
+                (instant <= prev).then(|| {
+                    format!("ordered_at {instant} is not after order {prev_order}'s {prev}")
+                })
+            }
+        });
+        self.last = Some((order, instant));
+        fault
+    }
 }
 
 /// Why an ordinary ordered row is out of place: inside the activation's
@@ -243,6 +285,7 @@ pub(crate) struct HistoryCheck {
     /// The missing activation was reported once.
     reported_missing: bool,
     rows: i64,
+    chronology: Chronology,
     legacy_disagreement: Option<LegacyDisagreement>,
     conflicts: Vec<ReplayConflict>,
 }
@@ -348,6 +391,7 @@ impl HistoryCheck {
                 }
             }
         }
+        faults.extend(self.chronology.observe(row));
         effect.apply_to_provenance(&mut self.admitted_by);
         self.conflicts
             .extend(faults.into_iter().map(|detail| ReplayConflict {
@@ -561,7 +605,11 @@ mod tests {
 
         type Edit = fn(&mut AuditRow);
         let on_record: Vec<(&str, Edit)> = vec![
-            ("not the first order", |r| r.audit_order = Some(2)),
+            ("not the first order", |r| {
+                r.audit_order = Some(2);
+                // A later order with a later instant, so only the place is wrong.
+                r.ordered_at = r.ordered_at.map(|t| t + jiff::SignedDuration::from_secs(1));
+            }),
             ("no migration attestation", |r| {
                 r.attestation = Some(AuditAttestation::Gateway {
                     authenticated_by: "owner".into(),
@@ -633,11 +681,16 @@ mod tests {
         assert_eq!(found.len(), 1, "{found:?}");
         assert_names(&found, "1 baseline chunks and no record");
 
+        // A later order has a later instant.
+        let later = activation
+            .ordered_at
+            .map(|t| t + jiff::SignedDuration::from_secs(1));
         let ordered = AuditRow {
             transition_id: Uuid::from_u128(6),
             transformation_name: "admit_y".into(),
             audit_order: Some(2),
             act_ordinal: Some(0),
+            ordered_at: later,
             operations: Some(Vec::new()),
             ..activation.clone()
         };
@@ -656,6 +709,7 @@ mod tests {
             parameters: Some(Vec::new()),
             audit_order: Some(2),
             act_ordinal: Some(0),
+            ordered_at: later,
             retracted_claims: vec![claim("X")],
             operations: Some(vec![Operation {
                 asserted_in: Some(Uuid::from_u128(1)),

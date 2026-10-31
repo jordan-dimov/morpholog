@@ -207,6 +207,13 @@ impl std::fmt::Display for AuditPosition {
 }
 
 impl AuditRow {
+    /// The instant an as-of timestamp selects this row by: when its
+    /// transaction took its place in the order, or, for a row from before
+    /// the order, when its transaction started.
+    pub fn instant(&self) -> Timestamp {
+        self.ordered_at.unwrap_or(self.committed_at)
+    }
+
     /// This row's place in the log order.
     pub fn position(&self) -> AuditPosition {
         AuditPosition {
@@ -901,6 +908,34 @@ pub(crate) fn settled(cursor: AuditPosition, horizon: u64) -> Result<AuditPositi
 /// No session view is read, so the horizon needs no visibility into
 /// other roles' sessions. A prepared transaction left unresolved holds
 /// the horizon back until it is committed or rolled back.
+/// The horizon an as-of instant settles by: the watermark, and, when no
+/// order is held, the ordering clock's floor once the call has moved it
+/// up to the server clock, so every order drawn later takes an instant
+/// above it. The call writes the sequence, so it runs outside a read-only
+/// transaction, on the primary.
+pub(crate) struct Horizon {
+    pub(crate) audit_order: u64,
+    pub(crate) quiet_at: Option<Timestamp>,
+}
+
+pub(crate) async fn audit_horizon<'e, E>(executor: E) -> Result<Horizon, PgError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    // `audit_order!`: the function always sets it.
+    let row = sqlx::query!(
+        r#"SELECT audit_order AS "audit_order!", quiet_at AS "quiet_at: jiff_sqlx::Timestamp"
+           FROM morpholog.audit_horizon()"#
+    )
+    .fetch_one(executor)
+    .await
+    .map_err(classify_checked_query)?;
+    Ok(Horizon {
+        audit_order: row.audit_order.cast_unsigned(),
+        quiet_at: row.quiet_at.map(jiff_sqlx::Timestamp::to_jiff),
+    })
+}
+
 pub async fn audit_resume_watermark<'e, E>(executor: E) -> Result<u64, PgError>
 where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,

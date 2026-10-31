@@ -202,7 +202,7 @@ async fn preparation_is_idempotent_and_repairs_what_it_owns() {
     .await;
     ddl(
         &pool,
-        "DROP FUNCTION morpholog.audit_watermark()".to_string(),
+        "DROP FUNCTION morpholog.audit_watermark(), morpholog.audit_horizon()".to_string(),
     )
     .await;
     ddl(
@@ -222,12 +222,14 @@ async fn preparation_is_idempotent_and_repairs_what_it_owns() {
     assert_eq!(recorded.len(), 5, "{recorded:?}");
     let indexes = &recorded.iter().find(|(s, _)| s == "indexes").unwrap().1;
     assert_eq!(indexes["rebuilt"], serde_json::json!(["audit_canonical"]));
-    let watermark: bool =
-        sqlx::query_scalar("SELECT to_regprocedure('morpholog.audit_watermark()') IS NOT NULL")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert!(watermark, "the dropped function is back");
+    let functions: bool = sqlx::query_scalar(
+        "SELECT to_regprocedure('morpholog.audit_watermark()') IS NOT NULL
+            AND to_regprocedure('morpholog.audit_horizon()') IS NOT NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(functions, "the dropped functions are back");
 
     // The cutover records the migration, writes the activation record and
     // forgets the steps.
@@ -875,5 +877,51 @@ async fn the_constraint_of_the_build_before_the_chunks_is_replaced() {
         serde_json::json!(["audit_activation_attested"]),
         "{detail}"
     );
+    drop_database(pool, admin, &name).await;
+}
+
+/// A legacy row stamped ahead of the server clock. The cutover moves the
+/// ordering clock up to the latest legacy start first, so the activation
+/// is placed at or after every legacy row whatever the clock says, and
+/// the chronology the verifiers hold is met from the first ordered row.
+#[tokio::test]
+async fn the_cutover_places_the_activation_after_every_legacy_row() {
+    let Some((pool, admin, name)) = baseline_database("floor").await else {
+        return;
+    };
+    let ahead = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(24);
+    legacy_row(&pool, "a", Some(&ahead.to_string())).await;
+    ddl(
+        &pool,
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'X', jsonb_build_array(jsonb_build_object('type', 'subject', 'value', 'a')),
+                transition_id FROM morpholog.audit"
+            .to_string(),
+    )
+    .await;
+    apply_migrations_with(&pool, MigrateMode::Complete, &LockPolicy::default())
+        .await
+        .unwrap();
+    let placed: Vec<String> = sqlx::query_scalar(
+        "SELECT ordered_at::text FROM morpholog.audit
+          WHERE transformation_name IN ('morpholog.baseline', 'morpholog.activate')",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(placed.len(), 2, "{placed:?}");
+    for at in &placed {
+        let at: jiff::Timestamp = at.replace(' ', "T").parse().unwrap();
+        assert!(
+            at >= ahead,
+            "the activation at {at} is before the legacy row at {ahead}"
+        );
+    }
+    assert!(matches!(
+        morpholog_postgres::verify_replay(&pool, &mut |_| {})
+            .await
+            .unwrap(),
+        morpholog_postgres::VerifyOutcome::Consistent { .. }
+    ));
     drop_database(pool, admin, &name).await;
 }
