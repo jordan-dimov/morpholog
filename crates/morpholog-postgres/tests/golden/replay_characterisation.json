@@ -812,7 +812,7 @@
     ],
     "program": "replay_characterisation",
     "program_hash": "sha256:528f80e80c6f345c0c3439f4d8dab6e8123948939cd8dd1a3d332ff0cd893f50",
-    "score_format_version": 5,
+    "score_format_version": 6,
     "semantics": "case_bound_admission_v5",
     "transitions_replayed": 13
   },
@@ -936,7 +936,7 @@
     ],
     "program": "replay_characterisation",
     "program_hash": "sha256:528f80e80c6f345c0c3439f4d8dab6e8123948939cd8dd1a3d332ff0cd893f50",
-    "score_format_version": 5,
+    "score_format_version": 6,
     "semantics": "case_bound_admission_v5",
     "transitions_replayed": 13
   },
@@ -962,7 +962,7 @@
     ],
     "program": "replay_characterisation",
     "program_hash": "sha256:528f80e80c6f345c0c3439f4d8dab6e8123948939cd8dd1a3d332ff0cd893f50",
-    "score_format_version": 5,
+    "score_format_version": 6,
     "semantics": "case_bound_admission_v5",
     "split": {
       "boundary": {
