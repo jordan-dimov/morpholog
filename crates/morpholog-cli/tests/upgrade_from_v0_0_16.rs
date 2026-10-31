@@ -1,5 +1,8 @@
 //! A database the v0.0.16 release wrote, upgraded in place, in the order
-//! a real upgrade takes. The release's own binary, downloaded and held to
+//! a real upgrade takes, with a writer of the old release at each side of
+//! the cutover: before it, after the preparation, holding an inserted row
+//! across it, starting before it and writing after it, and connecting
+//! afresh after it. The release's own binary, downloaded and held to
 //! its published digest, writes the history, a checkpoint and a pack.
 //! This binary then migrates the database, verifies what the old one
 //! wrote, writes on and exports the whole history again. The old binary,
@@ -10,11 +13,12 @@
 mod common;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
+use sqlx::{Connection as _, PgConnection, PgPool};
 
 const RELEASE: &str = "v0.0.16";
 
@@ -102,6 +106,69 @@ fn run(binary: &Path, url: &str, args: &[&str]) -> Output {
         .expect("spawn morpholog")
 }
 
+fn spawn(binary: &Path, url: &str, args: &[&str]) -> Child {
+    Command::new(binary)
+        .args(args)
+        .env("DATABASE_URL", url)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn morpholog")
+}
+
+/// The statement the v0.0.16 binary ran for one `admit_x(k)` commit, in
+/// an open transaction the test drives: a writer of the old release that
+/// a process the test runs could not hold mid-flight.
+async fn old_shape_admit(conn: &mut PgConnection, k: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "WITH row AS (
+            INSERT INTO morpholog.audit (
+                transition_id, transformation_name, arguments, actor, invariant_epoch,
+                invariants_checked, asserted_claims, retracted_claims, emitted_intents,
+                attestation, parameters, model_hash, semantics_version, drawn_subjects)
+            VALUES (gen_random_uuid(), 'admit_x',
+                jsonb_build_array(jsonb_build_object('type', 'subject', 'value', $1::text)),
+                '{\"type\": \"subject\", \"value\": \"w\"}', 1, '[]',
+                jsonb_build_array(jsonb_build_object('predicate', 'X', 'args',
+                    jsonb_build_array(jsonb_build_object('type', 'subject', 'value', $1::text)))),
+                '[]', '[]', '{\"mode\": \"gateway\", \"authenticated_by\": \"w\"}', '[\"k\"]',
+                'sha256:' || repeat('d', 64), 1, '[]')
+            RETURNING transition_id)
+         INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'X', jsonb_build_array(jsonb_build_object('type', 'subject', 'value', $1::text)),
+                transition_id
+         FROM row",
+    )
+    .bind(k)
+    .execute(conn)
+    .await
+    .map(|_| ())
+}
+
+/// Wait until one backend of the database waits on a lock in a statement
+/// matching `pattern`.
+async fn wait_blocked(conn: &mut PgConnection, pattern: &str) {
+    let started = Instant::now();
+    loop {
+        let blocked: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock' AND query ILIKE $1",
+        )
+        .bind(pattern)
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+        if blocked == 1 {
+            return;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "nothing blocked on {pattern:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 fn json(output: &Output) -> Value {
     assert!(
         output.status.success(),
@@ -170,7 +237,45 @@ async fn a_database_the_last_release_wrote_upgrades_and_verifies() {
     assert!(exported.status.success());
     std::fs::write(&*pack, &exported.stdout).unwrap();
 
-    let migrated = json(&run(new, &url, &["migrate", "--database-url", &url]));
+    // A: the preparation runs with the database in service, and a writer
+    // from before the order writes on after it, a legacy row like any
+    // other. The release binary stands at migration 25 and the unreleased
+    // 026 comes before 027, so the preparation puts the database past it
+    // and it is refused as older; a writer of the old shape at 26 stands
+    // in for a release at 26.
+    let prepared = json(&run(
+        new,
+        &url,
+        &["migrate", "--prepare", "--database-url", &url],
+    ));
+    let old_after_prepare = propose(&old, &url, &file, "admit_x", "o");
+    assert!(
+        !old_after_prepare.status.success()
+            && String::from_utf8_lossy(&old_after_prepare.stderr)
+                .contains("older than the database"),
+        "{}",
+        String::from_utf8_lossy(&old_after_prepare.stderr)
+    );
+    let mut writer = PgConnection::connect(&url).await.unwrap();
+    old_shape_admit(&mut writer, "p").await.unwrap();
+    // B: a writer of the old shape has inserted and holds; the cutover
+    // waits for it and counts its row. C: one that started before the
+    // cutover and writes only after it.
+    let mut holding = PgConnection::connect(&url).await.unwrap();
+    sqlx::raw_sql("BEGIN").execute(&mut holding).await.unwrap();
+    old_shape_admit(&mut holding, "q").await.unwrap();
+    let mut late = PgConnection::connect(&url).await.unwrap();
+    sqlx::raw_sql("BEGIN; SELECT 1")
+        .execute(&mut late)
+        .await
+        .unwrap();
+    let cutover = spawn(new, &url, &["migrate", "--database-url", &url]);
+    let mut watch = PgConnection::connect(&url).await.unwrap();
+    wait_blocked(&mut watch, "%LOCK TABLE morpholog.claims, morpholog.audit%").await;
+    sqlx::raw_sql("COMMIT").execute(&mut holding).await.unwrap();
+    let migrated = json(&cutover.wait_with_output().unwrap());
+    let late_refused = old_shape_admit(&mut late, "r").await.unwrap_err();
+    sqlx::raw_sql("ROLLBACK").execute(&mut late).await.unwrap();
     let verified = json(&run(new, &url, &["audit", "verify"]));
     let offline = json(&run(
         new,
@@ -198,15 +303,27 @@ async fn a_database_the_last_release_wrote_upgrades_and_verifies() {
     .await
     .unwrap();
 
-    assert_eq!(migrated["recorded_version_before"], 25, "{migrated}");
+    assert_eq!(prepared["recorded_version_before"], 25, "{prepared}");
+    assert_eq!(
+        prepared["activation_preflight"]["state"], "ready",
+        "{prepared}"
+    );
+    assert_eq!(migrated["recorded_version_before"], 26, "{migrated}");
     assert_eq!(
         migrated["recorded_version_after"],
         morpholog_postgres::head_version(),
         "{migrated}"
     );
-    // The legacy rows, the baseline chunk and the activation record, then
-    // the new write.
-    for (report, rows) in [(&verified, 5), (&verified_after, 6)] {
+    assert!(
+        late_refused
+            .to_string()
+            .contains("written by a binary older than the database"),
+        "C: {late_refused}"
+    );
+    // The legacy rows (three from the release, one after the preparation,
+    // one held across the cutover), the baseline chunk and the activation
+    // record, then the new write.
+    for (report, rows) in [(&verified, 7), (&verified_after, 8)] {
         assert_eq!(report["passes"], true, "{report}");
         assert_eq!(report["replay"]["status"], "consistent", "{report}");
         assert_eq!(report["tree"]["status"], "intact", "{report}");
@@ -236,28 +353,43 @@ async fn a_database_the_last_release_wrote_upgrades_and_verifies() {
     assert_eq!(manifest["checkpoint_count"], 2, "{manifest}");
     assert_eq!(new_pack[1], old_pack[1], "the old checkpoint is unchanged");
     let rows = &new_pack[3..];
-    assert_eq!(rows.len(), 6);
+    assert_eq!(rows.len(), 8);
     assert_eq!(&rows[..3], &old_pack[2..], "the legacy rows are unchanged");
-    assert!(rows[..3].iter().all(|r| r.get("audit_order").is_none()));
-    assert_eq!(rows[3]["transformation_name"], "morpholog.baseline");
+    assert!(rows[..5].iter().all(|r| r.get("audit_order").is_none()));
+    let written_by_old = |row: &Value| row["arguments"][0]["value"].as_str().unwrap().to_string();
     assert_eq!(
-        (&rows[3]["audit_order"], &rows[3]["act_ordinal"]),
+        (written_by_old(&rows[3]), written_by_old(&rows[4])),
+        ("p".to_string(), "q".to_string()),
+        "A and B are legacy rows, in order"
+    );
+    assert_eq!(rows[5]["transformation_name"], "morpholog.baseline");
+    assert_eq!(
+        (&rows[5]["audit_order"], &rows[5]["act_ordinal"]),
         (&1.into(), &0.into())
     );
-    assert_eq!(rows[4]["transformation_name"], "morpholog.activate");
     assert_eq!(
-        (&rows[4]["audit_order"], &rows[4]["act_ordinal"]),
+        rows[5]["operations"].as_array().unwrap().len(),
+        3,
+        "the baseline holds b, p and q"
+    );
+    assert_eq!(rows[6]["transformation_name"], "morpholog.activate");
+    assert_eq!(
+        (&rows[6]["audit_order"], &rows[6]["act_ordinal"]),
         (&1.into(), &1.into())
     );
-    assert_eq!(rows[4]["operations"], serde_json::json!([]));
-    assert_eq!(rows[5]["transformation_name"], "admit_x");
-    assert_eq!(rows[5]["audit_order"], 2, "the new write is ordered");
+    assert_eq!(rows[6]["operations"], serde_json::json!([]));
+    assert_eq!(
+        rows[6]["arguments"][0]["value"], "5",
+        "the record counts every legacy row"
+    );
+    assert_eq!(rows[7]["transformation_name"], "admit_x");
+    assert_eq!(rows[7]["audit_order"], 2, "the new write is ordered");
     assert_eq!(offline_after["passes"], true, "{offline_after}");
     assert_eq!(
         offline_after["verdict"]["status"], "intact",
         "{offline_after}"
     );
-    assert_eq!(offline_after["verdict"]["tree_size"], 6, "{offline_after}");
+    assert_eq!(offline_after["verdict"]["tree_size"], 8, "{offline_after}");
     let stderr = String::from_utf8_lossy(&refused.stderr);
     assert!(
         !refused.status.success() && stderr.contains("older than the database"),
