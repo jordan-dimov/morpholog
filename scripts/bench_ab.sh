@@ -360,7 +360,8 @@ if [[ "$(pkg_temp)" == NA ]]; then TEMP_OBSERVABLE=no; fi
     echo "cpu=$(awk -F': ' '/^model name/ { print $2; exit }' /proc/cpuinfo)"
     echo "kernel=$(uname -r)"
     echo "postgresql=$PG_VERSION"
-    echo "baseline_database=$([[ "$BASELINE_DATABASE_URL" == "$DATABASE_URL" ]] && echo same || echo "$BASELINE_DATABASE_URL")"
+    # The name only: a URL can carry credentials, and the session is evidence.
+    echo "baseline_database=$([[ "$BASELINE_DATABASE_URL" == "$DATABASE_URL" ]] && echo same || psql "$BASELINE_DATABASE_URL" -Atc 'SELECT current_database()' 2>/dev/null || echo other)"
     rustc -Vv | sed 's/^/rustc: /'
     echo "started=$(date -Is)"
 } > "$SESSION/session.txt"
