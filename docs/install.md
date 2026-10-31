@@ -202,6 +202,50 @@ on the record, so a readiness step can ask without holding the privileges
 to act. `migrate` re-applies the privilege floor on every run, since a `GRANT`
 cannot reach a table that did not exist when it ran.
 
+### Running the migration to the canonical order
+
+Migration 027 is the one that pauses writers, so it has a procedure. The
+numbers are from a laptop with a history of three million audit rows and
+three hundred thousand live claims; a server does better.
+
+1. Back the database up, as before any migration.
+2. `morpholog migrate --check`. It reports `activation_preflight`: how
+   many legacy rows there are, the estimated preparation time, the
+   estimated pause, and anything that refuses the cutover now.
+3. `morpholog migrate --prepare`, ahead of the window, with the database
+   in service. It adds the columns, constraints and indexes in steps and
+   builds the history's Merkle root in passes over the rows every writer
+   has finished with (about 13 microseconds per row: forty seconds for
+   three million). Interrupted, it resumes from its last saved page; run
+   it again. Run it again before the window too, so the cutover has only
+   the rows written since to hash. `--check` then says `ready`.
+4. `morpholog migrate` in the window. It waits for the writers that have
+   already written, then holds every writer for the cutover. Measured:
+   3.6 seconds at three hundred thousand live claims, 11 seconds at a
+   million, 22 seconds at two million, about 0.5 seconds plus 11
+   microseconds per claim. Readers are never held. Its memory stays near
+   60 MB whatever the table holds.
+5. `morpholog audit verify`, then `morpholog audit checkpoint`. Until
+   #642 is fixed, these and `audit export` take about four gigabytes of
+   memory per million live claims on a database that was migrated,
+   because they read every baseline chunk at once; run them on a host
+   with that room, or defer them to one. `audit verify-pack` on an
+   exported pack needs about 25 MB.
+
+If `migrate` is refused, the message says why: a prepared transaction
+left open, a session this login cannot see, another `migrate` holding
+the lock, or an object of another shape under one of the migration's
+names. Fix that and run it again.
+
+If `migrate` is interrupted, or the process dies before it reports, run
+`migrate --check` first. The cutover is one transaction: either it
+committed, and `--check` reports the database current with the
+activation in place, in which case a second `migrate` changes nothing;
+or it did not, and the database is still at the migration before, with
+the preparation intact, in which case `migrate` runs the cutover again.
+A dead process is not proof that the transaction failed; the database
+is the record.
+
 ## Several projects on one machine
 
 A `morpholog` on `PATH` serves every project on the machine. Migrate one

@@ -27,9 +27,10 @@
 # limit: lower absolute numbers, much less noise between runs.
 #
 # Both binaries run against the one database named by DATABASE_URL, which
-# the suite truncates. The runner does not migrate it: a baseline and
-# candidate that need different schemas cannot be compared this way, and
-# the run that fails aborts the session.
+# the suite truncates. The runner does not migrate it, so a baseline and
+# candidate that need different schemas take two databases, each at its
+# own head: --baseline-database-url names the baseline's. A run that
+# fails aborts the session.
 #
 # Exit status: 0 when the session completed clean; 1 when the runner, a
 # build or a run failed; 2 when the session completed but its evidence is
@@ -44,6 +45,7 @@
 # Usage:
 #   DATABASE_URL=postgres:///morpholog_bench \
 #     ./scripts/bench_ab.sh <baseline-rev> [--runs N] [--max-mhz MHZ] \
+#       [--baseline-database-url URL] \
 #       [--idle-above PCT] [--cool-below C] [--quiet-for S] \
 #       [--quiet-timeout S] [--uneven-throttle PP] [-- <suite args>]
 
@@ -76,6 +78,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -h | --help) usage; exit 0 ;;
         --runs) RUNS="${2:?--runs takes a number}"; shift 2 ;;
+        --baseline-database-url) BASELINE_DATABASE_URL="${2:?--baseline-database-url takes a URL}"; shift 2 ;;
         --max-mhz) MAX_MHZ="${2:?--max-mhz takes a clock in MHz}"; shift 2 ;;
         --idle-above) IDLE_ABOVE="${2:?--idle-above takes a percentage}"; shift 2 ;;
         --cool-below) COOL_BELOW="${2:?--cool-below takes degrees C}"; shift 2 ;;
@@ -98,6 +101,7 @@ done
 
 [[ -n "$BASELINE_REV" ]] || { usage; fail "a baseline rev is required"; }
 : "${DATABASE_URL:?set DATABASE_URL to a disposable database; the suite truncates it}"
+BASELINE_DATABASE_URL="${BASELINE_DATABASE_URL:-$DATABASE_URL}"
 
 whole() { [[ "$1" =~ ^[0-9]+$ ]]; }
 # Balanced order needs the same number of first and second positions on
@@ -356,6 +360,8 @@ if [[ "$(pkg_temp)" == NA ]]; then TEMP_OBSERVABLE=no; fi
     echo "cpu=$(awk -F': ' '/^model name/ { print $2; exit }' /proc/cpuinfo)"
     echo "kernel=$(uname -r)"
     echo "postgresql=$PG_VERSION"
+    # The name only: a URL can carry credentials, and the session is evidence.
+    echo "baseline_database=$([[ "$BASELINE_DATABASE_URL" == "$DATABASE_URL" ]] && echo same || psql "$BASELINE_DATABASE_URL" -Atc 'SELECT current_database()' 2>/dev/null || echo other)"
     rustc -Vv | sed 's/^/rustc: /'
     echo "started=$(date -Is)"
 } > "$SESSION/session.txt"
@@ -375,7 +381,8 @@ for ((pair = 1; pair <= RUNS; pair++)); do
         label="$side$pair"
         seq=$((seq + 1))
         binary="$SESSION/baseline-morpholog-bench"
-        if [[ "$side" == b ]]; then binary="$SESSION/candidate-morpholog-bench"; fi
+        database="$BASELINE_DATABASE_URL"
+        if [[ "$side" == b ]]; then binary="$SESSION/candidate-morpholog-bench"; database="$DATABASE_URL"; fi
 
         wait_for_quiet
         machine_start="$(machine_state)"
@@ -384,7 +391,7 @@ for ((pair = 1; pair <= RUNS; pair++)); do
         started="$(date -Is)"
         t0="$(date +%s%N)"
         say "run $seq/$((2 * RUNS)): $label"
-        "$binary" suite "${SUITE_ARGS[@]}" --reset --format json \
+        DATABASE_URL="$database" "$binary" suite "${SUITE_ARGS[@]}" --reset --format json \
             > "$SESSION/$label.json" 2> "$SESSION/$label.err" ||
             fail "run $label failed; see $SESSION/$label.err:
 $(tail -5 "$SESSION/$label.err")"
