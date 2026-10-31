@@ -406,8 +406,9 @@ fn ordering_field<T: TryFrom<i64>>(value: i64, ordered: bool) -> Result<Option<T
         .map(Some)
         .map_err(|_| PgError::InvalidState(format!("audit ordering value {value} is out of range")))
 }
-/// Return every committed audit row, ordered by `(committed_at,
-/// transition_id)`: commit order, with the UUIDv7 key as tie-break.
+/// Return every committed audit row in log order ([`AuditPosition`]),
+/// as one snapshot sees them: a row committing while the pages are read
+/// is either in every page or in none.
 ///
 /// A decoding error is [`PgError::Encoding`], which on a database the
 /// runtime wrote means corruption or tampering.
@@ -415,16 +416,28 @@ fn ordering_field<T: TryFrom<i64>>(value: i64, ordered: bool) -> Result<Option<T
 /// A whole-table fetch for tests and small histories, every page of it.
 /// To tail, use [`begin_audit_tail`].
 pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
-    let mut conn = pool.acquire().await.map_err(classify)?;
+    list_audit_rows_pausing(pool, async |_| {}).await
+}
+
+/// The whole-table read, with a pause after each page so a test can
+/// commit a writer between two of them.
+pub(crate) async fn list_audit_rows_pausing(
+    pool: &PgPool,
+    mut between_pages: impl AsyncFnMut(&[AuditRow]),
+) -> Result<Vec<AuditRow>, PgError> {
+    let mut tx = begin_isolated_tx(pool, TxIsolation::RepeatableReadReadOnly).await?;
     let mut pages = AuditPages::new(None);
     let mut rows = Vec::new();
     loop {
-        let page = pages.next(&mut conn).await?;
+        let page = pages.next(&mut tx).await?;
         if page.is_empty() {
-            return Ok(rows);
+            break;
         }
+        between_pages(&page).await;
         rows.extend(page);
     }
+    tx.commit().await.map_err(classify)?;
+    Ok(rows)
 }
 /// One keyset page of audit rows in log order ([`AuditPosition`]):
 /// strictly after `cursor` and strictly below `horizon`, each when given.

@@ -68,12 +68,17 @@ fn ordered_pos(audit_order: u64, act_ordinal: u32, second: i64, n: u128) -> Audi
 // Hand-inserted audit rows carry an attestation, as every row the
 // adapter writes does. `None` is a legacy row; an order and an ordinal
 // make an ordered one.
-async fn insert(pool: &PgPool, n: u128, second: i64, order: Option<(i64, i32)>) {
-    insert_with_arguments(pool, n, second, order, "[]").await;
+async fn insert(
+    executor: impl sqlx::PgExecutor<'_>,
+    n: u128,
+    second: i64,
+    order: Option<(i64, i32)>,
+) {
+    insert_with_arguments(executor, n, second, order, "[]").await;
 }
 
 async fn insert_with_arguments(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     n: u128,
     second: i64,
     order: Option<(i64, i32)>,
@@ -101,7 +106,7 @@ async fn insert_with_arguments(
     .bind(arguments)
     .bind(order.map(|o| o.0))
     .bind(order.map(|o| o.1))
-    .execute(pool)
+    .execute(executor)
     .await
     .unwrap();
 }
@@ -515,6 +520,47 @@ async fn the_whole_table_read_returns_every_row_across_the_chunks() {
     assert_eq!(
         rows.iter().map(|r| r.transition_id).collect::<Vec<_>>(),
         ids(&ACTIVATED)
+    );
+}
+
+/// The whole-table read sees one snapshot. A writer that took order 4
+/// is still open when a writer at order 5 commits; the read passes
+/// order 5, then the first writer commits and a third commits at order
+/// 6. Page by page on its own snapshots, the read would return order 6
+/// without order 4, a history no snapshot ever held. It returns neither.
+#[tokio::test]
+async fn the_whole_table_read_holds_one_snapshot_across_its_pages() {
+    let pool = activated().await;
+    let mut open_writer = Some(pool.begin().await.unwrap());
+    insert(&mut **open_writer.as_mut().unwrap(), 31, 6, Some((4, 0))).await;
+    insert(&pool, 32, 7, Some((5, 0))).await;
+    let late = &pool;
+    let rows = crate::audit::list_audit_rows_pausing(&pool, async |page| {
+        if page.iter().any(|r| r.transition_id == id(32))
+            && let Some(writer) = open_writer.take()
+        {
+            writer.commit().await.unwrap();
+            insert(late, 33, 8, Some((6, 0))).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        open_writer.is_none(),
+        "the walk passed order 5 before it ended"
+    );
+    let mut expected = ACTIVATED.to_vec();
+    expected.push(32);
+    assert_eq!(
+        rows.iter().map(|r| r.transition_id).collect::<Vec<_>>(),
+        ids(&expected)
+    );
+    let after = crate::audit::list_audit_rows(&pool).await.unwrap();
+    expected.splice(expected.len() - 1..expected.len() - 1, [31]);
+    expected.push(33);
+    assert_eq!(
+        after.iter().map(|r| r.transition_id).collect::<Vec<_>>(),
+        ids(&expected)
     );
 }
 
