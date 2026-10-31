@@ -101,12 +101,12 @@ pub async fn write_activation_record_with(
         crate::preparation::prepared_frontier(tx).await?;
     loop {
         let page = list_audit_rows_page(tx, cursor, None, REPLAY_CHUNK).await?;
+        let Some(last) = page.last() else {
+            break;
+        };
+        cursor = Some(last.position());
         for row in &page {
             legacy.push(audit_leaf_hash(row)?);
-        }
-        match page.last() {
-            Some(last) if page.len() as i64 == REPLAY_CHUNK => cursor = Some(last.position()),
-            _ => break,
         }
     }
 

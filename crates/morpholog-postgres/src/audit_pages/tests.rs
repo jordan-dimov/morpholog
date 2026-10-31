@@ -68,12 +68,17 @@ fn ordered_pos(audit_order: u64, act_ordinal: u32, second: i64, n: u128) -> Audi
 // Hand-inserted audit rows carry an attestation, as every row the
 // adapter writes does. `None` is a legacy row; an order and an ordinal
 // make an ordered one.
-async fn insert(pool: &PgPool, n: u128, second: i64, order: Option<(i64, i32)>) {
-    insert_with_arguments(pool, n, second, order, "[]").await;
+async fn insert(
+    executor: impl sqlx::PgExecutor<'_>,
+    n: u128,
+    second: i64,
+    order: Option<(i64, i32)>,
+) {
+    insert_with_arguments(executor, n, second, order, "[]").await;
 }
 
 async fn insert_with_arguments(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     n: u128,
     second: i64,
     order: Option<(i64, i32)>,
@@ -101,7 +106,7 @@ async fn insert_with_arguments(
     .bind(arguments)
     .bind(order.map(|o| o.0))
     .bind(order.map(|o| o.1))
-    .execute(pool)
+    .execute(executor)
     .await
     .unwrap();
 }
@@ -311,5 +316,262 @@ fn a_position_orders_by_order_ordinal_time_then_id() {
             ordered_pos(1, 1, 0, 2),
             ordered_pos(2, 0, 0, 1),
         ]
+    );
+}
+
+// An activation's rows, inserted by hand: `name` is the control row's
+// transformation, `operations` its payload. The trigger is off, so the
+// row takes the order and ordinal given.
+async fn insert_control(pool: &PgPool, n: u128, order: (i64, i32), name: &str, operations: &str) {
+    sqlx::query(
+        "INSERT INTO morpholog.audit (
+            transition_id, transformation_name, arguments, actor,
+            invariant_epoch, invariants_checked,
+            asserted_claims, retracted_claims, emitted_intents,
+            attestation, parameters, model_hash, semantics_version, drawn_subjects,
+            committed_at, audit_order, act_ordinal, ordered_at, operations
+         ) VALUES ($1, $2, '[]'::jsonb,
+                   '{\"type\":\"subject\",\"value\":\"migrator\"}'::jsonb,
+                   1, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
+                   '{\"mode\":\"migration\",\"authenticated_by\":\"test\",\"authenticated_by_oid\":10}'::jsonb,
+                   '[]'::jsonb, 'sha256:' || repeat('0', 64), 1, '[]'::jsonb,
+                   $3, $4, $5, $3, ($6::text)::jsonb)",
+    )
+    .bind(id(n))
+    .bind(name)
+    .bind(jiff_sqlx::ToSqlx::to_sqlx(at(0)))
+    .bind(order.0)
+    .bind(order.1)
+    .bind(operations)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// A chunk's payload: `claims` near-identical insertions, so the stored
+/// JSONB compresses to a small fraction of its text. Each names the
+/// subject `s` in its arguments.
+fn chunk_operations(claims: usize) -> String {
+    let ops: Vec<String> = (0..claims)
+        .map(|i| {
+            format!(
+                r#"{{"op":"ins","predicate":"Held","args":[{{"type":"subject","value":"s"}},{{"type":"decimal","value":"{}"}}],"asserted_in":"{}"}}"#,
+                i % 7,
+                id(1)
+            )
+        })
+        .collect();
+    format!("[{}]", ops.join(","))
+}
+
+/// The chronology the activation leaves: legacy rows 1 to 3, three
+/// baseline chunks (11, 12, 13) and the record (14) at order 1, then
+/// ordinary rows 21 and 22. Row 21 names the subject the chunks name.
+async fn activated() -> PgPool {
+    let pool = pool().await;
+    insert(&pool, 1, 1, None).await;
+    insert(&pool, 2, 2, None).await;
+    insert(&pool, 3, 3, None).await;
+    for (n, ordinal) in [(11, 0), (12, 1), (13, 2)] {
+        insert_control(
+            &pool,
+            n,
+            (1, ordinal),
+            crate::activation::BASELINE,
+            &chunk_operations(2_000),
+        )
+        .await;
+    }
+    insert_control(&pool, 14, (1, 3), crate::activation::ACTIVATE, "[]").await;
+    insert_with_arguments(
+        &pool,
+        21,
+        4,
+        Some((2, 0)),
+        r#"[{"type":"subject","value":"s"}]"#,
+    )
+    .await;
+    insert(&pool, 22, 5, Some((3, 0))).await;
+    pool
+}
+
+const ACTIVATED: [u128; 9] = [1, 2, 3, 11, 12, 13, 14, 21, 22];
+
+/// The pages a walk yields, each as its ids.
+async fn audit_pages(pool: &PgPool, mut pages: AuditPages) -> Vec<Vec<Uuid>> {
+    let mut conn = pool.acquire().await.unwrap();
+    let mut seen = Vec::new();
+    loop {
+        let page = pages.next(&mut conn).await.unwrap();
+        if page.is_empty() {
+            return seen;
+        }
+        seen.push(page.iter().map(|r| r.transition_id).collect());
+    }
+}
+
+async fn replay_pages(pool: &PgPool, mut pages: ReplayPages) -> Vec<Vec<Uuid>> {
+    let mut conn = pool.acquire().await.unwrap();
+    let mut seen = Vec::new();
+    loop {
+        let page = pages.next(&mut conn).await.unwrap();
+        if page.is_empty() {
+            return seen;
+        }
+        seen.push(page.iter().map(|r| r.transition_id).collect());
+    }
+}
+
+fn pages_of(groups: &[&[u128]]) -> Vec<Vec<Uuid>> {
+    groups.iter().map(|g| ids(g)).collect()
+}
+
+/// A page ends before a second baseline chunk, whatever the row limit,
+/// and the walk goes on past the short page: the first page crossing
+/// from the legacy rows holds one chunk, then one chunk a page, then the
+/// last chunk's page runs on through the record and the rows after it.
+/// Both projections, each row once, in order.
+#[tokio::test]
+async fn a_page_holds_at_most_one_baseline_chunk_and_the_walk_loses_nothing() {
+    let pool = activated().await;
+    let expected = pages_of(&[&[1, 2, 3, 11], &[12], &[13, 14, 21, 22]]);
+    assert_eq!(
+        audit_pages(&pool, AuditPages::with_chunk(None, 1024)).await,
+        expected,
+        "every row fits a page; only the chunks cut it"
+    );
+    assert_eq!(
+        replay_pages(&pool, ReplayPages::with_chunk(None, 1024)).await,
+        expected
+    );
+    // At a row limit of two, the limit and the chunk cut take turns.
+    let expected = pages_of(&[&[1, 2], &[3, 11], &[12], &[13, 14], &[21, 22]]);
+    assert_eq!(
+        audit_pages(&pool, AuditPages::with_chunk(None, 2)).await,
+        expected
+    );
+    assert_eq!(
+        replay_pages(&pool, ReplayPages::with_chunk(None, 2)).await,
+        expected
+    );
+}
+
+/// The cut does not depend on the chunks' stored size: the fixture's
+/// chunks compress to under a tenth of their text, and still page one at
+/// a time. A page bounded by stored bytes would hold them all.
+#[tokio::test]
+async fn compressible_chunks_still_page_one_at_a_time() {
+    let pool = activated().await;
+    let (stored, text): (i32, i32) = sqlx::query_as(
+        "SELECT max(pg_column_size(operations)), min(octet_length(operations::text))
+         FROM morpholog.audit WHERE transformation_name = $1",
+    )
+    .bind(crate::activation::BASELINE)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        stored * 10 < text,
+        "the fixture must compress well: {stored} bytes stored of {text}"
+    );
+    let pages = audit_pages(&pool, AuditPages::with_chunk(None, 1024)).await;
+    for page in &pages {
+        let chunks = page
+            .iter()
+            .filter(|id| ids(&[11, 12, 13]).contains(id))
+            .count();
+        assert!(chunks <= 1, "a page with {chunks} chunks: {page:?}");
+    }
+    assert_eq!(pages.concat(), ids(&ACTIVATED));
+}
+
+/// A target inside the chunks ends the walk on the page that reaches it,
+/// without another query; a horizon cuts the rows at and after it.
+#[tokio::test]
+async fn bounds_hold_across_the_chunks() {
+    let pool = activated().await;
+    let (seen, queries) = replay_walk(
+        &pool,
+        ReplayPages::with_chunk(Some(ordered_pos(1, 1, 0, 12)), 1024),
+    )
+    .await;
+    assert_eq!(seen, ids(&[1, 2, 3, 11, 12]));
+    assert_eq!(queries, 2);
+    assert_eq!(
+        audit_pages(&pool, AuditPages::with_chunk(Some(2), 1024)).await,
+        pages_of(&[&[1, 2, 3, 11], &[12], &[13, 14]])
+    );
+    assert_eq!(
+        audit_pages(
+            &pool,
+            AuditPages::with_chunk(None, 1024).after(Some(ordered_pos(1, 0, 0, 11)))
+        )
+        .await,
+        pages_of(&[&[12], &[13, 14, 21, 22]])
+    );
+}
+
+/// The whole-table read holds its contract across the activation: every
+/// row, the chunks, the record and the rows after them.
+#[tokio::test]
+async fn the_whole_table_read_returns_every_row_across_the_chunks() {
+    let pool = activated().await;
+    let rows = crate::audit::list_audit_rows(&pool).await.unwrap();
+    assert_eq!(
+        rows.iter().map(|r| r.transition_id).collect::<Vec<_>>(),
+        ids(&ACTIVATED)
+    );
+}
+
+/// The whole-table read sees one snapshot. A writer that took order 4
+/// is still open when a writer at order 5 commits; the read passes
+/// order 5, then the first writer commits and a third commits at order
+/// 6. Page by page on its own snapshots, the read would return order 6
+/// without order 4, a history no snapshot ever held. It returns neither.
+#[tokio::test]
+async fn the_whole_table_read_holds_one_snapshot_across_its_pages() {
+    let pool = activated().await;
+    let mut open_writer = Some(pool.begin().await.unwrap());
+    insert(&mut **open_writer.as_mut().unwrap(), 31, 6, Some((4, 0))).await;
+    insert(&pool, 32, 7, Some((5, 0))).await;
+    let late = &pool;
+    let rows = crate::audit::list_audit_rows_pausing(&pool, async |page| {
+        if page.iter().any(|r| r.transition_id == id(32))
+            && let Some(writer) = open_writer.take()
+        {
+            writer.commit().await.unwrap();
+            insert(late, 33, 8, Some((6, 0))).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        open_writer.is_none(),
+        "the walk passed order 5 before it ended"
+    );
+    let mut expected = ACTIVATED.to_vec();
+    expected.push(32);
+    assert_eq!(
+        rows.iter().map(|r| r.transition_id).collect::<Vec<_>>(),
+        ids(&expected)
+    );
+    let after = crate::audit::list_audit_rows(&pool).await.unwrap();
+    expected.splice(expected.len() - 1..expected.len() - 1, [31]);
+    expected.push(33);
+    assert_eq!(
+        after.iter().map(|r| r.transition_id).collect::<Vec<_>>(),
+        ids(&expected)
+    );
+}
+
+/// A chunk names its subjects only in `operations`, which the subject
+/// filter does not read, so a filtered walk never returns a chunk and
+/// keeps its plain pages.
+#[tokio::test]
+async fn a_filtered_walk_never_returns_a_chunk() {
+    let pool = activated().await;
+    assert_eq!(
+        audit_pages(&pool, AuditPages::with_chunk(None, 1024).mentioning("s")).await,
+        pages_of(&[&[21]])
     );
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT transition_id, transformation_name, arguments, actor,\n                        invariant_epoch, invariants_checked,\n                        asserted_claims, retracted_claims, emitted_intents, committed_at,\n                attestation, parameters, model_hash, semantics_version, drawn_subjects,\n                audit_order, act_ordinal, ordered_at, operations\n                 FROM morpholog.audit\n                 WHERE audit_order < $2\n                 ORDER BY audit_order, act_ordinal, committed_at, transition_id\n                 LIMIT $1",
+  "query": "SELECT transition_id, transformation_name, arguments, actor,\n                        invariant_epoch, invariants_checked,\n                        asserted_claims, retracted_claims, emitted_intents, committed_at,\n                attestation, parameters, model_hash, semantics_version, drawn_subjects,\n                audit_order, act_ordinal, ordered_at, operations\n                  FROM (SELECT transition_id, transformation_name, arguments, actor,\n                               invariant_epoch, invariants_checked,\n                               asserted_claims, retracted_claims, emitted_intents, committed_at,\n                       attestation, parameters, model_hash, semantics_version, drawn_subjects,\n                       audit_order, act_ordinal, ordered_at, operations,\n                               sum((transformation_name = $3)::int) OVER w AS chunks\n                        FROM morpholog.audit\n                        WHERE audit_order < $2\n                        WINDOW w AS (ORDER BY audit_order, act_ordinal, committed_at, transition_id\n                                     ROWS UNBOUNDED PRECEDING)\n                        ORDER BY audit_order, act_ordinal, committed_at, transition_id\n                        LIMIT $1) s\n                  WHERE chunks <= 1\n                  ORDER BY audit_order, act_ordinal, committed_at, transition_id",
   "describe": {
     "columns": [
       {
@@ -216,7 +216,8 @@
     "parameters": {
       "Left": [
         "Int8",
-        "Int8"
+        "Int8",
+        "Text"
       ]
     },
     "nullable": [
@@ -241,5 +242,5 @@
       true
     ]
   },
-  "hash": "6d33231cf442f6b7b361e06674ba4ce508d45cf4ae7b10378f57c761bdea70e5"
+  "hash": "c3a83692ea91f69e520e6a3dd18fd94e1bbdd4d92f7c627e7b77ba5b83256a4c"
 }

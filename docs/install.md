@@ -225,12 +225,13 @@ three hundred thousand live claims; a server does better.
    million, 22 seconds at two million, about 0.5 seconds plus 11
    microseconds per claim. Readers are never held. Its memory stays near
    60 MB whatever the table holds.
-5. `morpholog audit verify`, then `morpholog audit checkpoint`. Until
-   #642 is fixed, these and `audit export` take about four gigabytes of
-   memory per million live claims on a database that was migrated,
-   because they read every baseline chunk at once; run them on a host
-   with that room, or defer them to one. `audit verify-pack` on an
-   exported pack needs about 25 MB.
+5. `morpholog audit verify`, then `morpholog audit checkpoint`. Measured
+   at two million live claims: the checkpoint takes 19 seconds and
+   116 MB, `audit export` 20 seconds and 49 MB, `audit verify` 46 seconds
+   and 2.4 GB, since it holds every live claim twice to compare the
+   replay with the table; `audit verify-pack` on the exported pack needs
+   about 21 MB. An `--as-of` read at the activation holds the whole
+   state it rebuilds, 1.5 GB at a million claims.
 
 If `migrate` is refused, the message says why: a prepared transaction
 left open, a session this login cannot see, another `migrate` holding

@@ -1,4 +1,6 @@
+use crate::activation::BASELINE;
 use crate::attestation::AuditAttestation;
+use crate::audit_pages::AuditPages;
 use crate::error::{PgError, classify, classify_checked_query};
 use crate::propose::AuditedInvariantCheck;
 use crate::txn::{TxIsolation, begin_isolated_tx};
@@ -404,21 +406,46 @@ fn ordering_field<T: TryFrom<i64>>(value: i64, ordered: bool) -> Result<Option<T
         .map(Some)
         .map_err(|_| PgError::InvalidState(format!("audit ordering value {value} is out of range")))
 }
-/// Return every committed audit row, ordered by `(committed_at,
-/// transition_id)`: commit order, with the UUIDv7 key as tie-break.
+/// Return every committed audit row in log order ([`AuditPosition`]),
+/// as one snapshot sees them: a row committing while the pages are read
+/// is either in every page or in none.
 ///
 /// A decoding error is [`PgError::Encoding`], which on a database the
 /// runtime wrote means corruption or tampering.
 ///
-/// A whole-table fetch for tests and small histories. To tail, use
-/// [`list_audit_rows_page`] under [`audit_resume_watermark`].
+/// A whole-table fetch for tests and small histories, every page of it.
+/// To tail, use [`begin_audit_tail`].
 pub async fn list_audit_rows(pool: &PgPool) -> Result<Vec<AuditRow>, PgError> {
-    let mut conn = pool.acquire().await.map_err(classify)?;
-    list_audit_rows_page(&mut conn, None, None, i64::MAX).await
+    list_audit_rows_pausing(pool, async |_| {}).await
 }
-/// One keyset page of audit rows in log order ([`AuditPosition`]): strictly after `cursor` and strictly below `horizon`, each when
-/// given. Takes a connection so the caller can hold one snapshot across
-/// pages.
+
+/// The whole-table read, with a pause after each page so a test can
+/// commit a writer between two of them.
+pub(crate) async fn list_audit_rows_pausing(
+    pool: &PgPool,
+    mut between_pages: impl AsyncFnMut(&[AuditRow]),
+) -> Result<Vec<AuditRow>, PgError> {
+    let mut tx = begin_isolated_tx(pool, TxIsolation::RepeatableReadReadOnly).await?;
+    let mut pages = AuditPages::new(None);
+    let mut rows = Vec::new();
+    loop {
+        let page = pages.next(&mut tx).await?;
+        if page.is_empty() {
+            break;
+        }
+        between_pages(&page).await;
+        rows.extend(page);
+    }
+    tx.commit().await.map_err(classify)?;
+    Ok(rows)
+}
+/// One keyset page of audit rows in log order ([`AuditPosition`]):
+/// strictly after `cursor` and strictly below `horizon`, each when given.
+/// Takes a connection so the caller can hold one snapshot across pages.
+///
+/// A page holds at most one baseline chunk: it ends before the second,
+/// however many rows were asked for, so a short page does not mean the
+/// log is exhausted. Only an empty page does.
 ///
 /// `horizon` comes from [`audit_resume_watermark`]; `None` reads to the
 /// snapshot's end and loses the lossless-resume guarantee.
@@ -439,10 +466,21 @@ pub async fn list_audit_rows_page(
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
                 attestation, parameters, model_hash, semantics_version, drawn_subjects,
                 audit_order, act_ordinal, ordered_at, operations
-                 FROM morpholog.audit
-                 ORDER BY audit_order, act_ordinal, committed_at, transition_id
-                 LIMIT $1",
+                  FROM (SELECT transition_id, transformation_name, arguments, actor,
+                               invariant_epoch, invariants_checked,
+                               asserted_claims, retracted_claims, emitted_intents, committed_at,
+                       attestation, parameters, model_hash, semantics_version, drawn_subjects,
+                       audit_order, act_ordinal, ordered_at, operations,
+                               sum((transformation_name = $2)::int) OVER w AS chunks
+                        FROM morpholog.audit
+                        WINDOW w AS (ORDER BY audit_order, act_ordinal, committed_at, transition_id
+                                     ROWS UNBOUNDED PRECEDING)
+                        ORDER BY audit_order, act_ordinal, committed_at, transition_id
+                        LIMIT $1) s
+                  WHERE chunks <= 1
+                  ORDER BY audit_order, act_ordinal, committed_at, transition_id",
                 limit,
+                BASELINE,
             )
             .fetch_all(&mut *conn)
             .await
@@ -463,15 +501,26 @@ pub async fn list_audit_rows_page(
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
                 attestation, parameters, model_hash, semantics_version, drawn_subjects,
                 audit_order, act_ordinal, ordered_at, operations
-                 FROM morpholog.audit
-                 WHERE (audit_order, act_ordinal, committed_at, transition_id) > ($4, $5, $2, $3)
-                 ORDER BY audit_order, act_ordinal, committed_at, transition_id
-                 LIMIT $1",
+                  FROM (SELECT transition_id, transformation_name, arguments, actor,
+                               invariant_epoch, invariants_checked,
+                               asserted_claims, retracted_claims, emitted_intents, committed_at,
+                       attestation, parameters, model_hash, semantics_version, drawn_subjects,
+                       audit_order, act_ordinal, ordered_at, operations,
+                               sum((transformation_name = $6)::int) OVER w AS chunks
+                        FROM morpholog.audit
+                        WHERE (audit_order, act_ordinal, committed_at, transition_id) > ($4, $5, $2, $3)
+                        WINDOW w AS (ORDER BY audit_order, act_ordinal, committed_at, transition_id
+                                     ROWS UNBOUNDED PRECEDING)
+                        ORDER BY audit_order, act_ordinal, committed_at, transition_id
+                        LIMIT $1) s
+                  WHERE chunks <= 1
+                  ORDER BY audit_order, act_ordinal, committed_at, transition_id",
                 limit,
                 at.to_sqlx(),
                 *id,
                 o.cast_signed(),
                 k.cast_signed(),
+                BASELINE,
             )
             .fetch_all(&mut *conn)
             .await
@@ -484,12 +533,23 @@ pub async fn list_audit_rows_page(
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
                 attestation, parameters, model_hash, semantics_version, drawn_subjects,
                 audit_order, act_ordinal, ordered_at, operations
-                 FROM morpholog.audit
-                 WHERE audit_order < $2
-                 ORDER BY audit_order, act_ordinal, committed_at, transition_id
-                 LIMIT $1",
+                  FROM (SELECT transition_id, transformation_name, arguments, actor,
+                               invariant_epoch, invariants_checked,
+                               asserted_claims, retracted_claims, emitted_intents, committed_at,
+                       attestation, parameters, model_hash, semantics_version, drawn_subjects,
+                       audit_order, act_ordinal, ordered_at, operations,
+                               sum((transformation_name = $3)::int) OVER w AS chunks
+                        FROM morpholog.audit
+                        WHERE audit_order < $2
+                        WINDOW w AS (ORDER BY audit_order, act_ordinal, committed_at, transition_id
+                                     ROWS UNBOUNDED PRECEDING)
+                        ORDER BY audit_order, act_ordinal, committed_at, transition_id
+                        LIMIT $1) s
+                  WHERE chunks <= 1
+                  ORDER BY audit_order, act_ordinal, committed_at, transition_id",
                 limit,
                 h.cast_signed(),
+                BASELINE,
             )
             .fetch_all(&mut *conn)
             .await
@@ -510,17 +570,28 @@ pub async fn list_audit_rows_page(
                         asserted_claims, retracted_claims, emitted_intents, committed_at,
                 attestation, parameters, model_hash, semantics_version, drawn_subjects,
                 audit_order, act_ordinal, ordered_at, operations
-                 FROM morpholog.audit
-                 WHERE (audit_order, act_ordinal, committed_at, transition_id) > ($5, $6, $2, $3)
-                   AND audit_order < $4
-                 ORDER BY audit_order, act_ordinal, committed_at, transition_id
-                 LIMIT $1",
+                  FROM (SELECT transition_id, transformation_name, arguments, actor,
+                               invariant_epoch, invariants_checked,
+                               asserted_claims, retracted_claims, emitted_intents, committed_at,
+                       attestation, parameters, model_hash, semantics_version, drawn_subjects,
+                       audit_order, act_ordinal, ordered_at, operations,
+                               sum((transformation_name = $7)::int) OVER w AS chunks
+                        FROM morpholog.audit
+                        WHERE (audit_order, act_ordinal, committed_at, transition_id) > ($5, $6, $2, $3)
+                          AND audit_order < $4
+                        WINDOW w AS (ORDER BY audit_order, act_ordinal, committed_at, transition_id
+                                     ROWS UNBOUNDED PRECEDING)
+                        ORDER BY audit_order, act_ordinal, committed_at, transition_id
+                        LIMIT $1) s
+                  WHERE chunks <= 1
+                  ORDER BY audit_order, act_ordinal, committed_at, transition_id",
                 limit,
                 at.to_sqlx(),
                 *id,
                 h.cast_signed(),
                 o.cast_signed(),
                 k.cast_signed(),
+                BASELINE,
             )
             .fetch_all(&mut *conn)
             .await
@@ -699,7 +770,6 @@ pub async fn list_audit_rows_page_mentioning(
     .map_err(classify)?;
     rows.into_iter().map(decode_audit_row).collect()
 }
-use crate::audit_pages::AuditPages;
 
 /// A streaming audit tail with the lossless-resume order built in.
 ///
