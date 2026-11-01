@@ -1609,6 +1609,12 @@ fn checked_decimal_op(op: ArithOp, a: Decimal, b: Decimal) -> Result<Decimal, Ev
 
 const MANTISSA_LIMIT: i128 = 1 << 96;
 
+/// Whether a decimal mantissa holds `m`. The most negative i128 has no
+/// magnitude of its own and never fits.
+fn fits_mantissa(m: i128) -> bool {
+    m.checked_abs().is_some_and(|m| m < MANTISSA_LIMIT)
+}
+
 /// `d`'s count of units at `scale`, where an i128 holds it.
 fn units_at(d: Decimal, scale: u32) -> Option<i128> {
     d.mantissa()
@@ -1636,7 +1642,7 @@ fn exact_fast(op: ArithOp, a: Decimal, b: Decimal) -> Option<Decimal> {
         ),
         _ => return None,
     };
-    if scale <= 28 && m.abs() < MANTISSA_LIMIT {
+    if scale <= 28 && fits_mantissa(m) {
         fitted.or_else(|| Decimal::try_from_i128_with_scale(m, scale).ok())
     } else {
         None
@@ -1717,7 +1723,7 @@ fn round_fast(v: Decimal, q: Decimal, scale: u32) -> Option<Decimal> {
     } else {
         toward_zero
     };
-    if scale <= 28 && chosen.abs() < MANTISSA_LIMIT {
+    if scale <= 28 && fits_mantissa(chosen) {
         Decimal::try_from_i128_with_scale(chosen, scale)
             .ok()
             .map(|d| d.normalize())

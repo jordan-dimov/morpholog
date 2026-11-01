@@ -668,6 +668,17 @@ mod exact_arithmetic {
         refused(&mul(lit("0.9876543219"), lit("9876543210.9876543219")));
     }
 
+    /// The product of the two mantissas is the most negative i128, whose
+    /// magnitude no i128 holds: the fast path must hand it on, not panic
+    /// or wave the rounded figure through.
+    #[test]
+    fn a_product_at_the_most_negative_i128_is_refused() {
+        refused(&mul(
+            lit("-922337203.6854775808"),
+            lit("1844674407.3709551616"),
+        ));
+    }
+
     #[test]
     fn an_exact_result_keeps_its_digits() {
         assert_eq!(ok(&add(lit("1.10"), lit("0.00"))).to_string(), "1.10");
@@ -727,5 +738,11 @@ mod exact_arithmetic {
         );
         // The nearest multiple of 0.3 here has a tenth and 29 digits.
         refused(&round(lit("79228162514264337593543950334"), lit("0.3")));
+        // The selected multiple is the most negative i128 in units: too
+        // wide for a decimal, and its magnitude too wide for the i128.
+        refused(&round(
+            lit("-17014118346046923173168730371"),
+            lit("3961408125713216879.6771975168"),
+        ));
     }
 }

@@ -80,6 +80,13 @@ const EDGES: &[(&str, &str)] = &[
     ("2.0000000000000000000", "1.0000000000000000000"),
     // Thirty significant digits: refused where it once rounded.
     ("0.9876543219", "9876543210.9876543219"),
+    // The product of the mantissas, and the multiple round selects, is
+    // the most negative i128: refused, never a panic on its magnitude.
+    ("-922337203.6854775808", "1844674407.3709551616"),
+    (
+        "-17014118346046923173168730371",
+        "3961408125713216879.6771975168",
+    ),
 ];
 
 fn kernel(op: Op, a: Decimal, b: Decimal) -> Result<EvalValue, morpholog_core::EvalError> {
