@@ -11,7 +11,7 @@ mod common;
 use common::{reset_db, seed_claims, session_is_superuser, test_pool};
 use morpholog_core::{PreparedProgram, Subject, Transition};
 use morpholog_postgres::{
-    PgAtomicOutcome, PgError, PgPool, PgProgram, Proposal, propose_all_against_pg,
+    InvariantPlan, PgAtomicOutcome, PgError, PgPool, PgProgram, Proposal, propose_all_against_pg,
 };
 use morpholog_test_support::{claim_instance, subj};
 use std::sync::Arc;
@@ -21,6 +21,9 @@ fn program() -> morpholog_core::Program {
     morpholog_surface::parse_program(
         "program deadlock
 predicate X(k: Subject)
+predicate Y(k: Subject)
+invariant y_needs_x:
+    Y(k) implies X(k)
 transformation retract_x(k):
     require X(k)
     retract X(k)
@@ -37,11 +40,17 @@ fn act(k: &str) -> Proposal {
     })
 }
 
+/// One programme per evaluator. The invariant is there so each really
+/// takes its route: with none to check, both would be the compiled one.
 fn routes() -> [PgProgram; 2] {
-    [
-        PgProgram::interpreted(PreparedProgram::new(program()).unwrap()),
-        PgProgram::new(PreparedProgram::new(program()).unwrap()),
-    ]
+    let interpreted = PgProgram::interpreted(PreparedProgram::new(program()).unwrap());
+    let compiled = PgProgram::new(PreparedProgram::new(program()).unwrap());
+    assert!(matches!(
+        interpreted.plan(),
+        InvariantPlan::Interpreted { .. }
+    ));
+    assert!(matches!(compiled.plan(), InvariantPlan::Compiled));
+    [interpreted, compiled]
 }
 
 fn claim_args(k: &str) -> serde_json::Value {
