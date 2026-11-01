@@ -156,7 +156,9 @@ the window, run `migrate --prepare` ahead of it; it stops with the
 migration still pending and `--check` saying `ready`, and the plain
 `migrate` in the window does only the cutover.
 
-To rehearse, migrate a copy first (`createdb -T live rehearsal`). A copy holds the same grants as its source, so `migrate` on it warns that this deployment's roles also hold privileges in the source database. For a copy that is expected, and no reason to move roles. Drop the copy before you migrate the live database, or that migrate warns about the copy too.
+To try the migration first, migrate a copy (`createdb -T live trial`). A copy holds the same grants as its source, so `migrate` on it warns that this deployment's roles also hold privileges in the source database. For a copy that is expected, and no reason to move roles. Drop the copy before you migrate the live database, or that migrate warns about the copy too.
+
+When a release moves the semantics version, the release notes say which decisions moved. `morpholog rehearse <programme>` with the programme you serve, after step 4, lists every committed proposal this binary would decide differently, so the ones a moved decision touches are found before anyone proposes again.
 
 Step 6 provisions. `provision indexes --check` asks the same question and changes nothing, so it belongs at deployment or service start, before the first write is accepted: a programme running unprovisioned is refused there instead of found by its latency.
 
