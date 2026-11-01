@@ -1607,20 +1607,37 @@ fn checked_decimal_op(op: ArithOp, a: Decimal, b: Decimal) -> Result<Decimal, Ev
     result.ok_or_else(out_of_range)
 }
 
-/// The common case without a big integer: same-scale addition, and a
-/// product whose mantissas multiply within an i128. Where the exact
-/// result fits a decimal here, rust_decimal's result is that value.
+const MANTISSA_LIMIT: i128 = 1 << 96;
+
+/// `d`'s count of units at `scale`, where an i128 holds it.
+fn units_at(d: Decimal, scale: u32) -> Option<i128> {
+    d.mantissa()
+        .checked_mul(10i128.checked_pow(scale - d.scale())?)
+}
+
+/// The common case without a big integer: the exact result computed in
+/// an i128. `Some` only where that result is a decimal as it stands;
+/// rust_decimal's result is then that value, and is kept for its digits.
 fn exact_fast(op: ArithOp, a: Decimal, b: Decimal) -> Option<Decimal> {
-    const LIMIT: i128 = 1 << 96;
-    let (ma, mb) = (a.mantissa(), b.mantissa());
     let (m, scale, fitted) = match op {
-        ArithOp::Add if a.scale() == b.scale() => (ma + mb, a.scale(), a.checked_add(b)),
-        ArithOp::Sub if a.scale() == b.scale() => (ma - mb, a.scale(), a.checked_sub(b)),
-        ArithOp::Mul => (ma.checked_mul(mb)?, a.scale() + b.scale(), a.checked_mul(b)),
+        ArithOp::Add | ArithOp::Sub => {
+            let scale = a.scale().max(b.scale());
+            let (x, y) = (units_at(a, scale)?, units_at(b, scale)?);
+            if op == ArithOp::Add {
+                (x.checked_add(y)?, scale, a.checked_add(b))
+            } else {
+                (x.checked_sub(y)?, scale, a.checked_sub(b))
+            }
+        }
+        ArithOp::Mul => (
+            a.mantissa().checked_mul(b.mantissa())?,
+            a.scale() + b.scale(),
+            a.checked_mul(b),
+        ),
         _ => return None,
     };
-    if scale <= 28 && m.abs() < LIMIT {
-        fitted
+    if scale <= 28 && m.abs() < MANTISSA_LIMIT {
+        fitted.or_else(|| Decimal::try_from_i128_with_scale(m, scale).ok())
     } else {
         None
     }
@@ -1679,6 +1696,36 @@ impl Exact {
     }
 }
 
+/// [`round_decimal`] in an i128, for the common case: `Some` only where
+/// every step fits and the selected multiple is a decimal as it stands.
+/// Anything else is left to the exact path, which decides.
+fn round_fast(v: Decimal, q: Decimal, scale: u32) -> Option<Decimal> {
+    let (units_v, units_q) = (units_at(v, scale)?, units_at(q, scale)?);
+    let rem = units_v % units_q;
+    if rem == 0 {
+        return Some(v.normalize());
+    }
+    let toward_zero = units_v - rem;
+    let away = if v.is_sign_negative() {
+        toward_zero.checked_sub(units_q)?
+    } else {
+        toward_zero.checked_add(units_q)?
+    };
+    let doubled = rem.abs().checked_mul(2)?;
+    let chosen = if doubled >= units_q {
+        away
+    } else {
+        toward_zero
+    };
+    if scale <= 28 && chosen.abs() < MANTISSA_LIMIT {
+        Decimal::try_from_i128_with_scale(chosen, scale)
+            .ok()
+            .map(|d| d.normalize())
+    } else {
+        None
+    }
+}
+
 /// The multiple of `quantum` nearest to `v`, halves away from zero,
 /// computed exactly. Fails only when that multiple itself is not a
 /// decimal: an unchosen candidate or the doubled remainder the choice
@@ -1689,6 +1736,9 @@ fn round_decimal(v: Decimal, q: Decimal) -> Result<Decimal, EvalError> {
         quantum: q.to_string(),
     };
     let scale = v.scale().max(q.scale());
+    if let Some(fast) = round_fast(v, q, scale) {
+        return Ok(fast);
+    }
     let (big_v, big_q) = (Exact::at_scale(v, scale), Exact::at_scale(q, scale));
     let rem = &big_v % &big_q;
     if rem == num_bigint::BigInt::from(0) {

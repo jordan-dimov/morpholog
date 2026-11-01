@@ -275,6 +275,54 @@ $$;
 
 COMMENT ON FUNCTION decimal_round_v1(numeric, numeric) IS 'morpholog decimal round v1';
 
+-- An exact result where a decimal holds it, NULL otherwise: the
+-- kernel's `+`, `-`, `*` and `%` refuse rather than round, so the
+-- compiled checks compute `a * b` as `decimal_exact_v1(a * b)`. Trailing
+-- zeros do not count against the digits.
+CREATE FUNCTION decimal_exact_v1(x numeric) RETURNS numeric
+    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+BEGIN
+    IF min_scale(x) <= 28 AND abs(x) * ('1e' || min_scale(x))::numeric < 79228162514264337593543950336 THEN
+        RETURN x;
+    END IF;
+    RETURN NULL;
+END
+$$;
+COMMENT ON FUNCTION decimal_exact_v1(numeric) IS 'morpholog decimal exact v1';
+
+-- The kernel's `round(v, q)` over exact steps: the nearest multiple,
+-- halves away from zero, NULL only when that multiple is not a decimal.
+-- An unchosen candidate outside the range does not matter.
+CREATE FUNCTION decimal_round_v2(v numeric, q numeric) RETURNS numeric
+    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+DECLARE
+    rem numeric;
+    toward numeric;
+    away numeric;
+BEGIN
+    IF q <= 0 THEN
+        RETURN NULL;
+    END IF;
+    rem := mod(v, q);
+    IF rem = 0 THEN
+        RETURN v;
+    END IF;
+    toward := v - rem;
+    IF v < 0 THEN
+        away := toward - q;
+    ELSE
+        away := toward + q;
+    END IF;
+    IF abs(rem) + abs(rem) >= q THEN
+        RETURN morpholog.decimal_exact_v1(away);
+    END IF;
+    RETURN morpholog.decimal_exact_v1(toward);
+END
+$$;
+COMMENT ON FUNCTION decimal_round_v2(numeric, numeric) IS 'morpholog decimal round v2';
+
 -- The kernel's `min` of two decimals: strict, so a failed argument is
 -- never skipped, as `LEAST` would skip it.
 CREATE FUNCTION decimal_min_v1(a numeric, b numeric) RETURNS numeric
@@ -973,4 +1021,5 @@ INSERT INTO schema_migrations (version, name) VALUES
     (24, 'gate_witness'),
     (25, 'rejection_compared'),
     (26, 'decimal_arithmetic'),
-    (27, 'canonical_order');
+    (27, 'canonical_order'),
+    (28, 'exact_arithmetic');

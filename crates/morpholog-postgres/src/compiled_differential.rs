@@ -2564,20 +2564,30 @@ fn dec_text(text: &str) -> EvalValue {
     EvalValue::Decimal(text.parse().expect("a decimal"))
 }
 
-/// The kernel's arithmetic rounds where the exact result does not fit;
-/// the compiled checks must decide on the rounded value, not the exact
-/// one, or they admit and refuse different proposals.
+/// The kernel's `+`, `-` and `*` are exact or refused, `/` rounds by
+/// its rule, and `round` is judged on the multiple it selects; the
+/// compiled checks must decide the same way, or they admit and refuse
+/// different proposals. `None` is a kernel error both stages must raise.
 #[tokio::test]
-async fn arithmetic_decides_on_the_kernels_rounded_values() {
-    let cases: &[(&str, &str, bool)] = &[
-        ("n * 0.5 > 0", "0.0000000000000000000000000001", false),
-        ("n + 0.4 = n", MAX, true),
-        ("(n / 3) * 3 = n", "1", false),
-        ("round(n, 19) <= n", MAX, true),
-        ("abs(0 - n) = n", "2.5", true),
-        ("min(n, 5) + max(n, 5) = n + 5", "7.25", true),
-        ("n % 3 = 1", "10", true),
-        ("round(n, 0.01) = 2.35", "2.345", true),
+async fn arithmetic_decides_on_the_kernels_exact_values() {
+    let cases: &[(&str, &str, Option<bool>)] = &[
+        ("n * 0.5 > 0", "0.0000000000000000000000000001", None),
+        ("n * 0.5 > 0", "0.000000000000000000000000001", Some(true)),
+        ("n + 0.4 = n", MAX, None),
+        ("n - 0.25 < n", "10", Some(true)),
+        ("(n / 3) * 3 = n", "1", Some(false)),
+        ("round(n, 19) <= n", MAX, Some(true)),
+        ("round(n, 0.3) <= n", "79228162514264337593543950334", None),
+        (
+            "round(n, 40000000000000000000000000000) = 40000000000000000000000000000",
+            "50000000000000000000000000000",
+            Some(true),
+        ),
+        ("abs(0 - n) = n", "2.5", Some(true)),
+        ("min(n, 5) + max(n, 5) = n + 5", "7.25", Some(true)),
+        ("n % 3 = 1", "10", Some(true)),
+        ("round(n, 0.01) = 2.35", "2.345", Some(true)),
+        ("n * 9876543210.9876543219 > 0", "0.9876543219", None),
     ];
     for (body, n, accepted) in cases {
         let verdict =
@@ -2585,7 +2595,9 @@ async fn arithmetic_decides_on_the_kernels_rounded_values() {
         assert!(
             matches!(
                 (&verdict, accepted),
-                (Verdict::Accepted, true) | (Verdict::Rejected, false)
+                (Verdict::Accepted, Some(true))
+                    | (Verdict::Rejected, Some(false))
+                    | (Verdict::Errored(_), None)
             ),
             "{body} at n = {n}: {}",
             match verdict {
