@@ -710,7 +710,7 @@
         },
         "kind": "invariant",
         "rule": "small_notes",
-        "semantics_version": 3,
+        "semantics_version": 4,
         "transformation": "note",
         "transition_id": "t3",
         "witness": [
@@ -745,7 +745,7 @@
         },
         "kind": "invariant",
         "rule": "small_notes",
-        "semantics_version": 3,
+        "semantics_version": 4,
         "transformation": "note",
         "transition_id": "t9",
         "witness": [
@@ -780,7 +780,7 @@
       }
     ],
     "rehearsal_format_version": 1,
-    "semantics_version": 3,
+    "semantics_version": 4,
     "totals": {
       "different_delta": 0,
       "same": 11,
@@ -834,7 +834,7 @@
         },
         "kind": "invariant",
         "rule": "small_notes",
-        "semantics_version": 3,
+        "semantics_version": 4,
         "transformation": "note",
         "transition_id": "t3",
         "witness": [
@@ -869,7 +869,7 @@
         },
         "kind": "invariant",
         "rule": "small_notes",
-        "semantics_version": 3,
+        "semantics_version": 4,
         "transformation": "note",
         "transition_id": "t9",
         "witness": [
@@ -904,7 +904,7 @@
       }
     ],
     "rehearsal_format_version": 1,
-    "semantics_version": 3,
+    "semantics_version": 4,
     "totals": {
       "different_delta": 0,
       "same": 11,
