@@ -315,6 +315,51 @@ transformation mark_b(x):
     );
 }
 
+/// Decimal arithmetic at the edge of what a decimal can hold: a product
+/// and a rounding whose exact result does not fit, beside one that does.
+fn arithmetic_fixtures(out: &mut BTreeMap<String, Fingerprints>) {
+    use morpholog_test_support::dec_str;
+    let program = morpholog_surface::parse_program(
+        "
+program arithmetic
+
+predicate Scaled(y: Decimal)
+predicate Rounded(y: Decimal)
+
+transformation scale(x, f):
+    let y = x * f
+    admit Scaled(y)
+
+transformation to_multiple(x, q):
+    let y = round(x, q)
+    admit Rounded(y)
+",
+    )
+    .unwrap();
+    let scale = program.transformation("scale").unwrap();
+    let cases = [
+        (
+            "fixture/arithmetic/exact_product",
+            scale,
+            vec![dec_str("1.5"), dec_str("2")],
+        ),
+        (
+            "fixture/arithmetic/inexact_product",
+            scale,
+            vec![dec_str("0.0000000000000000000000000001"), dec_str("0.5")],
+        ),
+        (
+            "fixture/arithmetic/round_to_an_unrepresentable_multiple",
+            program.transformation("to_multiple").unwrap(),
+            vec![dec_str("79228162514264337593543950334"), dec_str("0.3")],
+        ),
+    ];
+    for (name, t, args) in cases {
+        let (input, decided) = proposal_case(&program, t, args, &State::default());
+        record(out, name.to_string(), &input, &decided);
+    }
+}
+
 fn corpus() -> BTreeMap<String, Fingerprints> {
     let mut out = BTreeMap::new();
     for program in morpholog_examples::all_programs() {
@@ -322,6 +367,7 @@ fn corpus() -> BTreeMap<String, Fingerprints> {
         reads(&program, &mut out);
     }
     fixtures(&mut out);
+    arithmetic_fixtures(&mut out);
     out
 }
 

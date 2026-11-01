@@ -1,4 +1,7 @@
 {"semantics_version":3}
+{"case":"fixture/arithmetic/exact_product","decision":"sha256:6df9e2112c4fae9476e76fcb191c1ed4a8781856addc78fb1379db46a559daa4","input":"sha256:39438966d3d7493a43079c08b3ff526a28e7ff60eb5497f1d894c86be521d758"}
+{"case":"fixture/arithmetic/inexact_product","decision":"sha256:f5bf1d6356b397c9b145441e9d63bdf515b60a3b9733cbd9b525b71afc9c6e7e","input":"sha256:8c3890354fb2ff7dbe054f68a962e7cbbad1849a856821bba21ba04d89eaac51"}
+{"case":"fixture/arithmetic/round_to_an_unrepresentable_multiple","decision":"sha256:a72b08ab26362eb01b55a25cd1c835b6dbd7781bc24af71d162a639caa342a6c","input":"sha256:329d54eb508da09d3113083fd443fe0602df209993972961c41a14b129622d07"}
 {"case":"fixture/consequent_or/touched_case_is_judged","decision":"sha256:9555ed27b2709ca015e74845089da969b04b990438825fe4aa42bab720f95cf9","input":"sha256:d34926a4cfb3084f38e4534c6d08b26a8b40e226efac4f762c05e8ca8fde4048"}
 {"case":"fixture/consequent_or/untouched_case_admits","decision":"sha256:3fdbaf9cddf6363a90d08425908541466f2c286264d600a34369db1a0dd7a357","input":"sha256:8ef41864d8e88369658d4bac67cfb3e218696d26e4535921c52c6e80863fef7f"}
 {"case":"fixture/division_by_zero","decision":"sha256:80ef52aff8957fc727a2b6177fac9bbea0730213bd90f511a01f6faefd3a3eb1","input":"sha256:901f4a8a9be461c23274719fba285168ccc8a3d21c15e4c5c59317b4903f5d6f"}
