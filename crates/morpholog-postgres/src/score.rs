@@ -23,14 +23,14 @@ use uuid::Uuid;
 
 /// A train/test boundary for a split replay: everything at or before it
 /// trains, everything after is held out. Both forms resolve to one
-/// `(committed_at, transition_id)` cursor, so each splits at exactly one
-/// point in replay order.
+/// place in the log order ([`AuditPosition`]), so each splits at exactly
+/// one point in replay order.
 #[derive(Debug, Clone, Copy)]
 pub enum SplitBoundary {
     /// Split immediately after this transition.
     Transition(Uuid),
-    /// Split after the last transition committed at or before this
-    /// instant.
+    /// Split after the last transition placed in the audit order at or
+    /// before this instant.
     AtOrBefore(Timestamp),
 }
 

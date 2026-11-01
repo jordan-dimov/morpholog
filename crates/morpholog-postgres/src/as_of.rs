@@ -15,9 +15,9 @@ use uuid::Uuid;
 /// Reconstruct the full [`State`] that existed immediately after
 /// `transition_id` committed.
 ///
-/// Replays every audit row up to and including the target's
-/// `(committed_at, transition_id)`, in causal order. Within a
-/// transition, retractions apply before assertions, as in the kernel.
+/// Replays every audit row up to and including the target's place in
+/// the log order ([`AuditPosition`]). Within a transition, retractions
+/// apply before assertions, as in the kernel.
 /// Asserting a claim already present is a no-op, as on commit.
 ///
 /// Errors:

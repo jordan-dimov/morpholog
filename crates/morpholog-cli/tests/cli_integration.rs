@@ -1711,7 +1711,7 @@ async fn as_of_timestamp_before_all_commits_errors() {
         "a timestamp before every commit must error"
     );
     assert!(
-        stderr.contains("no transition committed at or before"),
+        stderr.contains("no transition placed in the audit order at or before"),
         "the error should name the condition; got:\n{stderr}"
     );
 }
