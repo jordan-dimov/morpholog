@@ -163,7 +163,7 @@ fn the_range_includes_both_ends() {
 fn business_days_are_weekdays_less_the_listed_holidays() {
     let year = rows(&business_days("2026-01-01", "2026-12-31"));
     let dates: Vec<&str> = year.iter().map(|r| named(r, "date")).collect();
-    // 261 weekdays in 2026, less the six listed holidays that fall on one.
+    // 261 weekdays in 2026, less the eight listed holidays, all on weekdays.
     assert_eq!(dates.len(), 253);
     assert_eq!(dates[0], "2026-01-02");
     for (holiday, following) in [("2026-04-03", "2026-04-07"), ("2026-12-25", "2026-12-29")] {
@@ -337,27 +337,217 @@ fn a_holiday_list_is_one_authority_and_version_with_dates() {
         ])
     };
     refused(
-        &with(r#"{"authority": "a", "version": "1", "holidays": ["2026-01-01"], "zone": "x"}"#),
+        &with(
+            r#"{"authority": "a", "version": "1", "from": "2026-01-01", "until": "2026-12-31", "holidays": ["2026-01-01"], "zone": "x"}"#,
+        ),
+        "is not a holiday list",
+    );
+    // The covered dates are required, not assumed.
+    refused(
+        &with(r#"{"authority": "a", "version": "1", "holidays": ["2026-01-01"]}"#),
         "is not a holiday list",
     );
     refused(
-        &with(r#"{"authority": "", "version": "1", "holidays": []}"#),
+        &with(
+            r#"{"authority": "a", "version": "1", "from": "2026-12-31", "until": "2026-01-01", "holidays": []}"#,
+        ),
+        "which is empty",
+    );
+    refused(
+        &with(
+            r#"{"authority": "a", "version": "1", "from": "2026-01-01", "until": "2026-06-30", "holidays": ["2026-12-25"]}"#,
+        ),
+        "2026-12-25 is outside the dates the list covers",
+    );
+    // A range the list does not cover: a weekday absent from an
+    // incomplete list is not a business day.
+    refused(
+        &with(
+            r#"{"authority": "a", "version": "1", "from": "2026-01-01", "until": "2026-01-06", "holidays": []}"#,
+        ),
+        "the range 2026-01-01 to 2026-01-07 is not inside it",
+    );
+    refused(
+        &with(
+            r#"{"authority": "", "version": "1", "from": "2026-01-01", "until": "2026-12-31", "holidays": []}"#,
+        ),
         "`authority` and `version` must both be given",
     );
     refused(
-        &with(r#"{"authority": "a", "version": "1", "holidays": ["2026-01-01", "2026-01-01"]}"#),
+        &with(
+            r#"{"authority": "a", "version": "1", "from": "2026-01-01", "until": "2026-12-31", "holidays": ["2026-01-01", "2026-01-01"]}"#,
+        ),
         "2026-01-01 is listed twice",
     );
     refused(
-        &with(r#"{"authority": "a", "version": "1", "holidays": ["01/01/2026"]}"#),
+        &with(
+            r#"{"authority": "a", "version": "1", "from": "2026-01-01", "until": "2026-12-31", "holidays": ["01/01/2026"]}"#,
+        ),
         "is not a holiday list",
     );
     let week = rows(&with(
-        r#"{"authority": "a", "version": "1", "holidays": ["2026-01-01"]}"#,
+        r#"{"authority": "a", "version": "1", "from": "2026-01-01", "until": "2026-12-31", "holidays": ["2026-01-01"]}"#,
     ));
     assert_eq!(
         week.iter().map(|r| named(r, "date")).collect::<Vec<_>>(),
         ["2026-01-02", "2026-01-05", "2026-01-06", "2026-01-07"]
+    );
+}
+
+fn local_days_in(zone: &str, zoneinfo: &str, from: &str, until: &str) -> Output {
+    let file = example_23();
+    run(&[
+        "generate",
+        "local-days",
+        file.to_str().unwrap(),
+        "publish_delivery_day",
+        "--actor",
+        "cal",
+        "--arg",
+        "calendar=c",
+        "--zone",
+        zone,
+        "--zoneinfo",
+        zoneinfo,
+        "--from",
+        from,
+        "--until",
+        until,
+    ])
+}
+
+/// Samoa skipped 30 December 2011 by moving across the date line, so
+/// the date has no instants: refused whole, never a zero-length day.
+#[test]
+fn a_date_the_zone_skips_is_refused_not_emitted_empty() {
+    let zoneinfo = zoneinfo();
+    refused(
+        &local_days_in("Pacific/Apia", &zoneinfo, "2011-12-29", "2011-12-31"),
+        "2011-12-30 does not exist in Pacific/Apia",
+    );
+    let before = rows(&local_days_in(
+        "Pacific/Apia",
+        &zoneinfo,
+        "2011-12-29",
+        "2011-12-29",
+    ));
+    let after = rows(&local_days_in(
+        "Pacific/Apia",
+        &zoneinfo,
+        "2011-12-31",
+        "2011-12-31",
+    ));
+    assert_eq!(named(&before[0], "starts_at"), "2011-12-29T10:00:00Z");
+    assert_eq!(named(&before[0], "ends_at"), "2011-12-30T10:00:00Z");
+    assert_eq!(named(&after[0], "starts_at"), "2011-12-30T10:00:00Z");
+    assert_eq!(named(&after[0], "ends_at"), "2011-12-31T10:00:00Z");
+}
+
+/// A TZif file with one transition, built here so the case needs no
+/// real zone: at 23:30 the clock moves forward an hour to 00:30, so
+/// midnight of the next date falls inside the gap.
+fn tzif_with_a_gap_across_midnight() -> Vec<u8> {
+    let transition_at: i64 = 946_683_000; // 1999-12-31T23:30:00Z
+    let header = |counts: [u32; 6]| {
+        let mut h = b"TZif2".to_vec();
+        h.extend([0u8; 15]);
+        for c in counts {
+            h.extend(c.to_be_bytes());
+        }
+        h
+    };
+    let types = |mut block: Vec<u8>| {
+        block.push(1); // the transition moves to type 1
+        for (utoff, abbrind) in [(0i32, 0u8), (3600, 4)] {
+            block.extend(utoff.to_be_bytes());
+            block.push(0);
+            block.push(abbrind);
+        }
+        block.extend(b"+00\0+01\0");
+        block
+    };
+    // isutcnt, isstdcnt, leapcnt, timecnt, typecnt, charcnt
+    let counts = [0, 0, 0, 1, 2, 8];
+    let mut file = header(counts);
+    #[allow(clippy::cast_possible_truncation)]
+    file.extend(types((transition_at as i32).to_be_bytes().to_vec()));
+    file.extend(header(counts));
+    file.extend(types(transition_at.to_be_bytes().to_vec()));
+    file.extend(b"\n<+01>-1\n");
+    file
+}
+
+#[test]
+fn a_day_whose_midnight_is_skipped_starts_at_the_clock_change() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("tzdata.zi"), "# version test\n").unwrap();
+    std::fs::create_dir(dir.path().join("Test")).unwrap();
+    std::fs::write(
+        dir.path().join("Test/Gap"),
+        tzif_with_a_gap_across_midnight(),
+    )
+    .unwrap();
+    let days = rows(&local_days_in(
+        "Test/Gap",
+        dir.path().to_str().unwrap(),
+        "1999-12-31",
+        "2000-01-01",
+    ));
+    let bounds: Vec<(&str, &str)> = days
+        .iter()
+        .map(|r| (named(r, "starts_at"), named(r, "ends_at")))
+        .collect();
+    // The new year begins at the change itself, 00:30 local, not an
+    // hour after a midnight that never happened.
+    assert_eq!(
+        bounds,
+        [
+            ("1999-12-31T00:00:00Z", "1999-12-31T23:30:00Z"),
+            ("1999-12-31T23:30:00Z", "2000-01-01T23:00:00Z"),
+        ]
+    );
+    assert_eq!(named(&days[0], "tzdb_version"), "test");
+}
+
+#[test]
+fn a_fixed_argument_takes_the_json_shape_its_kind_needs() {
+    let file = fixture("flagged_days.morph");
+    let zoneinfo = zoneinfo();
+    let with = |extra: &[&str]| {
+        let mut args = vec![
+            "generate",
+            "local-days",
+            file.to_str().unwrap(),
+            "publish",
+            "--actor",
+            "cal",
+            "--zone",
+            "Europe/London",
+            "--zoneinfo",
+            &zoneinfo,
+            "--from",
+            "2026-01-01",
+            "--until",
+            "2026-01-01",
+        ];
+        args.extend_from_slice(extra);
+        run(&args)
+    };
+    let day = rows(&with(&[
+        "--arg",
+        "provisional=true",
+        "--arg",
+        r#"tags=["a", "b"]"#,
+    ]));
+    assert_eq!(day[0]["args_named"]["provisional"], serde_json::json!(true));
+    assert_eq!(day[0]["args_named"]["tags"], serde_json::json!(["a", "b"]));
+    refused(
+        &with(&["--arg", "provisional=maybe", "--arg", r#"tags=["a"]"#]),
+        "`provisional` is Bool",
+    );
+    refused(
+        &with(&["--arg", "provisional=true", "--arg", "tags=a"]),
+        "`tags`",
     );
 }
 

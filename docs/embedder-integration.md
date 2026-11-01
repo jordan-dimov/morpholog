@@ -806,19 +806,32 @@ morpholog generate business-days bank.morph admit_business_day \
 
 Each writes `propose --batch` rows to stdout, one per day, proposing
 the named transformation. `local-days` fills `local_date`, `starts_at`,
-`ends_at` and `tzdb_version`: the day's bounds as UTC instants (23, 24
-or 25 hours apart across a clock change; a day starts at its local
-midnight, or at the instant the clock jumps to when midnight is
-skipped) and the release the zone was read under. `business-days` fills
-`date`, `authority` and `version` for every Monday to Friday the
-holiday list does not name; the list is one JSON object,
-`{"authority": "...", "version": "...", "holidays": ["YYYY-MM-DD", ...]}`,
-and the generator takes its coverage on trust, since only the authority
-knows it. Every other parameter of the transformation comes from
-`--arg name=value`, and the parameters must be exactly the generated
-fields plus those; a generated field cannot be overridden. The range is
-inclusive at both ends. Every row is decoded as `propose` decodes it
-before any is written, so a refusal writes nothing to stdout.
+`ends_at` and `tzdb_version`: the day's bounds as UTC instants and the
+release the zone was read under. A clock change makes a day shorter or
+longer, by an hour in most zones and half an hour in some. A day starts
+at its local midnight, or at the clock change itself when midnight is
+skipped. A date a zone skips entirely, as Samoa skipped 30 December
+2011, is refused rather than written with no instants. `business-days`
+fills `date`, `authority` and `version` for every Monday to Friday the
+holiday list does not name. The list is one JSON object:
+
+```json
+{"authority": "uk_bank_holidays", "version": "2026-03",
+ "from": "2026-01-01", "until": "2026-12-31",
+ "holidays": ["2026-01-01", "2026-04-03", "..."]}
+```
+
+The range must lie inside the dates the list covers: a weekday absent
+from a list that does not cover it is not a business day. The coverage
+is the authority's statement, which the generator requires and does not
+verify. Every other parameter of the transformation comes from
+`--arg name=value`; a Bool or collection parameter's value is written
+as JSON (`--arg provisional=true`, `--arg 'tags=["a"]'`), everything
+else as the text the named codec reads. The parameters must be exactly
+the generated fields plus those, and a generated field cannot be
+overridden. The range is inclusive at both ends. Every row is decoded
+as `propose` decodes it before any is written, so a refusal writes
+nothing to stdout.
 
 **Generation admits nothing.** The rows are an input like any other
 batch: `propose --batch` commits them one by one, keeps going past a

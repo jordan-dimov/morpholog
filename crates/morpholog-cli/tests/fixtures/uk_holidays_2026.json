@@ -1,6 +1,8 @@
 {
   "authority": "uk_bank_holidays",
   "version": "2026-03",
+  "from": "2026-01-01",
+  "until": "2026-12-31",
   "holidays": [
     "2026-01-01",
     "2026-04-03",

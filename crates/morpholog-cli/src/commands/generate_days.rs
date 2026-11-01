@@ -17,8 +17,11 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, anyhow, bail};
 use jiff::civil::{Date, Weekday};
-use jiff::tz::TimeZone;
-use morpholog_core::{PreparedProgram, Transformation, transformation_param_kinds};
+use jiff::tz::{AmbiguousOffset, TimeZone};
+use jiff::{SignedDuration, Timestamp};
+use morpholog_core::{
+    ParamKind, PredicateArgKind, PreparedProgram, Transformation, transformation_param_kinds,
+};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
@@ -42,9 +45,14 @@ pub(crate) fn local_days(args: &GenerateLocalDaysArgs) -> anyhow::Result<()> {
             .with_context(|| format!("{} is not a TZif zone file", path.display()))?
     };
     let fields = target.dates().into_iter().map(|date| {
-        let start = |d: Date| d.at(0, 0, 0, 0).to_zoned(tz.clone()).map(|z| z.timestamp());
-        let starts_at = start(date)?;
-        let ends_at = start(date.tomorrow()?)?;
+        let starts_at = day_start(&tz, date)?;
+        let ends_at = day_start(&tz, date.tomorrow()?)?;
+        if ends_at <= starts_at {
+            bail!(
+                "{date} does not exist in {zone}: its clock skips from {starts_at} straight \
+                 to the next day, so the day has no instants; narrow the range around it"
+            );
+        }
         Ok([
             ("local_date", date.to_string()),
             ("starts_at", starts_at.to_string()),
@@ -69,6 +77,17 @@ pub(crate) fn local_days(args: &GenerateLocalDaysArgs) -> anyhow::Result<()> {
 pub(crate) fn business_days(args: &GenerateBusinessDaysArgs) -> anyhow::Result<()> {
     let target = Target::resolve(&args.rows, &BUSINESS_DAY_FIELDS)?;
     let holidays = HolidayList::read(&args.holidays)?;
+    if args.rows.from < holidays.from || holidays.until < args.rows.until {
+        bail!(
+            "{} covers {} to {}; the range {} to {} is not inside it, and a weekday the list \
+             does not cover is not an established business day",
+            args.holidays.display(),
+            holidays.from,
+            holidays.until,
+            args.rows.from,
+            args.rows.until
+        );
+    }
     let fields = target
         .dates()
         .into_iter()
@@ -197,14 +216,17 @@ impl<'a> Target<'a> {
         for fields in generated {
             let fields = fields?;
             let mut named = Map::new();
-            for (param, _) in &kinds {
-                let value = fields
-                    .iter()
-                    .find(|(name, _)| *name == param.as_str())
-                    .map(|(_, v)| v)
-                    .or_else(|| self.fixed.get(param.as_str()))
-                    .ok_or_else(|| anyhow!("internal: `{param}` is neither generated nor fixed"))?;
-                named.insert(param.to_string(), Value::String(value.clone()));
+            for (param, kind) in &kinds {
+                let value = match fields.iter().find(|(name, _)| *name == param.as_str()) {
+                    Some((_, generated)) => Value::String(generated.clone()),
+                    None => {
+                        let fixed = self.fixed.get(param.as_str()).ok_or_else(|| {
+                            anyhow!("internal: `{param}` is neither generated nor fixed")
+                        })?;
+                        fixed_value(kind, fixed)
+                    }
+                };
+                named.insert(param.to_string(), value);
             }
             let named_json = Value::Object(named).to_string();
             decode_args(
@@ -222,6 +244,37 @@ impl<'a> Target<'a> {
         }
         Ok(rows)
     }
+}
+
+/// A `--arg` value in the JSON shape its parameter's kind takes: a
+/// boolean or a collection is written as JSON, everything else travels
+/// as the string the named codec reads. A value that does not parse is
+/// passed on as text, so the codec's own message names the parameter.
+fn fixed_value(kind: &ParamKind, text: &str) -> Value {
+    let typed = match kind {
+        ParamKind::Concrete(PredicateArgKind::Bool) => text.parse::<bool>().ok().map(Value::Bool),
+        ParamKind::Collection(_) => serde_json::from_str::<Value>(text)
+            .ok()
+            .filter(Value::is_array),
+        _ => None,
+    };
+    typed.unwrap_or_else(|| Value::String(text.to_string()))
+}
+
+/// The first instant of the local date. Where midnight is skipped by a
+/// clock change, the day begins at the change itself, which may fall at
+/// any minute of the gap; where midnight occurs twice, at the first.
+fn day_start(tz: &TimeZone, date: Date) -> anyhow::Result<Timestamp> {
+    let midnight = tz.to_ambiguous_timestamp(date.at(0, 0, 0, 0));
+    let compatible = midnight.compatible()?;
+    if !matches!(midnight.offset(), AmbiguousOffset::Gap { .. }) {
+        return Ok(compatible);
+    }
+    let just_after = compatible.checked_add(SignedDuration::from_nanos(1))?;
+    tz.preceding(just_after)
+        .next()
+        .map(|transition| transition.timestamp())
+        .ok_or_else(|| anyhow!("{date}: midnight falls in a clock change with no transition"))
 }
 
 fn emit(rows: &[Value], summary: &str) -> anyhow::Result<()> {
@@ -288,14 +341,17 @@ fn tzdb_version(dir: &Path) -> anyhow::Result<String> {
     })
 }
 
-/// A holiday list as one authority publishes it, with the version that
-/// names the publication. The generator does not know what dates the
-/// list covers; that is the authority's statement.
+/// A holiday list as one authority publishes it: the version that names
+/// the publication, the dates it covers, and the holidays inside them.
+/// A weekday outside the covered dates is not known to be a working day,
+/// so the coverage is the authority's statement, required and checked.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HolidayList {
     authority: String,
     version: String,
+    from: Date,
+    until: Date,
     holidays: Vec<Date>,
 }
 
@@ -305,8 +361,8 @@ impl HolidayList {
             .with_context(|| format!("read the holiday list {}", path.display()))?;
         let list: Self = serde_json::from_str(&text).with_context(|| {
             format!(
-                "{} is not a holiday list: an object with `authority`, `version` and \
-                 `holidays` (dates as YYYY-MM-DD)",
+                "{} is not a holiday list: an object with `authority`, `version`, the \
+                 covered `from` and `until`, and `holidays` (dates as YYYY-MM-DD)",
                 path.display()
             )
         })?;
@@ -316,10 +372,26 @@ impl HolidayList {
                 path.display()
             );
         }
+        if list.from > list.until {
+            bail!(
+                "{}: covers {} to {}, which is empty",
+                path.display(),
+                list.from,
+                list.until
+            );
+        }
         let mut seen = std::collections::BTreeSet::new();
         for day in &list.holidays {
             if !seen.insert(*day) {
                 bail!("{}: {day} is listed twice", path.display());
+            }
+            if *day < list.from || list.until < *day {
+                bail!(
+                    "{}: {day} is outside the dates the list covers ({} to {})",
+                    path.display(),
+                    list.from,
+                    list.until
+                );
             }
         }
         Ok(list)

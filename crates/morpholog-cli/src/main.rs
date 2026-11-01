@@ -352,8 +352,9 @@ pub(crate) enum GenerateCmd {
 
     /// Emit `propose --batch` rows that publish a zone's local days,
     /// one per date from `--from` to `--until` inclusive: the day's
-    /// bounds as UTC instants (23, 24 or 25 hours apart across a clock
-    /// change) and the tzdb release they were read from. The rows
+    /// bounds as UTC instants (a clock change makes a day shorter or
+    /// longer; a date the zone skips is refused) and the tzdb release
+    /// they were read from. The rows
     /// propose the named transformation, whose parameters must be
     /// exactly `local_date`, `starts_at`, `ends_at`, `tzdb_version`
     /// plus whatever `--arg` supplies. Every row is decoded as `propose`
@@ -424,8 +425,9 @@ pub(crate) struct GenerateBusinessDaysArgs {
     #[command(flatten)]
     pub(crate) rows: GeneratedRowsArgs,
 
-    /// A JSON file: `{"authority": "...", "version": "...", "holidays":
-    /// ["YYYY-MM-DD", ...]}`.
+    /// A JSON file: `{"authority": "...", "version": "...", "from":
+    /// "YYYY-MM-DD", "until": "YYYY-MM-DD", "holidays": ["YYYY-MM-DD",
+    /// ...]}`. The range must lie inside the dates the list covers.
     #[arg(long)]
     pub(crate) holidays: PathBuf,
 }
