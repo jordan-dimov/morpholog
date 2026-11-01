@@ -3,6 +3,7 @@ pub mod morpholog_cli::envelopes
 pub enum morpholog_cli::envelopes::ErrorCode
 pub morpholog_cli::envelopes::ErrorCode::ActorAssertionUnauthorised
 pub morpholog_cli::envelopes::ErrorCode::CommitOutcomeUnknown
+pub morpholog_cli::envelopes::ErrorCode::DeadlockDetected
 pub morpholog_cli::envelopes::ErrorCode::DuplicateIntent
 pub morpholog_cli::envelopes::ErrorCode::InvalidArguments
 pub morpholog_cli::envelopes::ErrorCode::InvalidRequest
@@ -37,6 +38,7 @@ impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::ErrorCod
 pub enum morpholog_cli::envelopes::ProposeCode
 pub morpholog_cli::envelopes::ProposeCode::ActorAssertionUnauthorised
 pub morpholog_cli::envelopes::ProposeCode::CommitOutcomeUnknown
+pub morpholog_cli::envelopes::ProposeCode::DeadlockDetected
 pub morpholog_cli::envelopes::ProposeCode::DuplicateIntent
 pub morpholog_cli::envelopes::ProposeCode::InvalidArguments
 pub morpholog_cli::envelopes::ProposeCode::InvalidRequest

@@ -173,7 +173,8 @@ The proposal-row codes, which `propose`, `propose --batch`, `transact` and the s
 | `actor_assertion_unauthorised` | The actor is restricted and this login holds no authority to assert it. | Once the authority is granted. |
 | `kernel_error` | The proposal could not be decided on its data, for example arithmetic out of range. | After fixing the data. |
 | `duplicate_intent` | An outbox intent with the same idempotency key already exists. | Not as is. |
-| `serialization_failure` | A concurrent transaction conflicted. | As is: the one code that is always safe to retry. |
+| `serialization_failure` | A concurrent transaction conflicted (SQLSTATE 40001). | As is. If it recurs, look at contention, transaction length and read footprints. |
+| `deadlock_detected` | PostgreSQL broke a lock cycle by aborting this transaction (SQLSTATE 40P01). | As is. If it recurs, look at the order in which transactions take their locks. |
 | `not_committed` | Nothing became durable: the programme did not load, the connection failed, the database refused, or a rejection could not be recorded. | Once the cause is fixed. |
 | `commit_outcome_unknown` | COMMIT failed without a verdict from the server (exit `3`). | Only after reading the record. |
 
@@ -293,7 +294,7 @@ The whole contract in one artefact, with top-level keys `program`, `hash`, `pred
 
 ### `morpholog inspect claims --predicate`
 
-The targeted read of governed state, for building a transition's arguments from claims the embedder did not itself mint (the in-force pointer after a correction, say). `--predicate <Name>` repeats; the result is only claims of the named predicates. Composes with `--as-of` for the historical equivalent - a `transition_id`, or an RFC 3339 timestamp resolved to the last transition placed in the audit order at or before it (`ordered_at`: when the transaction took its place, before it committed) - where it scopes the replay itself rather than filtering afterwards. The transition must be settled, as for the tail's `--after` below: while a transaction ordered before it is still open, the read is refused rather than answering one way now and another once that transaction commits. A timestamp is answered once no open transaction can be placed at or before it and the instant has passed; until then it is refused as `InstantNotSettled`. Deciding that moves the ordering clock, so a timestamp read runs against the primary; a replica answers the transition form only.
+The targeted read of governed state, for building a transition's arguments from claims the embedder did not itself mint (the in-force pointer after a correction, say). `--predicate <Name>` repeats; the result is only claims of the named predicates. Composes with `--as-of` for the historical equivalent - a `transition_id`, or an RFC 3339 timestamp resolved to the last transition placed in the audit order at or before it (`ordered_at`: when the transaction took its place, before it committed) - where it scopes the replay itself rather than filtering afterwards. The transition must be settled, as for the tail's `--after` below: while a transaction ordered before it is still open, the read is refused rather than answering one way now and another once that transaction commits. A timestamp is answered once no open transaction can be placed at or before it and the instant has passed; until then it is refused as `InstantNotSettled`. Deciding that moves the ordering clock, which is a write. Both forms run against the primary: settlement is read off the orders held open on the connected server, and a standby does not see the primary's, so it cannot tell a final prefix from one still being written.
 
 Stdout is a JSON array of claim objects, each `{"predicate": "<Name>", "args": [<tagged values>], "asserted_in": "<transition_id>"}` - the same tagged-value encoding as the `--args` codec and intent payloads. An unknown predicate name yields an empty array, not an error: the claims table is the authority, not any one programme's vocabulary, so a typo is indistinguishable from a true zero by design.
 
@@ -652,7 +653,7 @@ malformed row (bad JSON, unknown transformation, undecodable args)
 yields `{"row": N, "status": "error", "code": "...", "error": "..."}` and
 processing continues; `code` is the same stable set a session error
 receipt carries (`invalid_request`, `actor_assertion_unauthorised`,
-`serialization_failure`, ...) minus the session-only `unknown_operation`,
+`serialization_failure`, `deadlock_detected`, ...) minus the session-only `unknown_operation`,
 so a control test matches a refusal by code through both batch and
 session, never by prose. A single `propose` prints the same codes in its
 error object. `--explain-on-reject` composes per row, exactly as in
@@ -677,7 +678,8 @@ next, so every row from there is unknown. The generated client's
 `propose_batch` raises `MorphologBatchIncomplete` with exactly that split:
 the receipts, the `unknown_rows`, and the rows `not_attempted`, which is
 empty unless the output stopped. A serialization conflict
-(SQLSTATE 40001) surfaces in that row's error receipt, and so does the
+(SQLSTATE 40001) or a deadlock (40P01) surfaces in that row's error
+receipt, and so does the
 database refusing or failing a row before anything was recorded
 (`not_committed`: nothing changed, re-submit once the cause is fixed)
 and a row whose COMMIT failed without a server verdict
@@ -717,7 +719,8 @@ One JSON object on stdout, the `atomic_outcome` union:
   the whole batch, with the proposal-row code set: a malformed or
   undecodable act (`invalid_request`, `invalid_arguments`,
   `unknown_transformation`, named by position), `serialization_failure`
-  (the one code that is safe to re-submit, as a whole batch),
+  or `deadlock_detected` (the codes that are safe to re-submit, as a
+  whole batch),
   `not_committed` (nothing was committed: the programme did not parse,
   the acts could not be read, the connection failed, or the database
   refused before anything was recorded; re-submit once the cause is
@@ -732,7 +735,8 @@ acts committed; if all committed and only the acknowledgement was
 lost, re-submitting applies the whole operation twice, and nothing in
 a proposal identifies it durably enough to deduplicate. Read the
 governed record first. The generated client's `retriable` property is
-the one retry predicate: true only on a `serialization_failure`.
+the one retry predicate: true only on a `serialization_failure` or a
+`deadlock_detected`.
 
 The rejection recorded in the operational log for an atomic batch
 describes the refusing act against the staged prefix of that
@@ -785,7 +789,7 @@ does), and give the retry budget the interval between writes.
 
 ## Concurrent proposals and retries
 
-A serialization conflict is a known non-commit: the binary reports it with the code `serialization_failure`, on one-shot `propose` and `transact`, in a batch receipt and in a session receipt, and the generated client raises `MorphologRequestError` with `retriable` true. It is the one error that is safe to submit again as it is. Morpholog does not retry for you, because how many attempts, how long to wait and when to give up depend on the caller: an interactive request and a nightly import want different answers. With the generated client:
+A serialization conflict is a known non-commit: the binary reports it with the code `serialization_failure`, on one-shot `propose` and `transact`, in a batch receipt and in a session receipt, and the generated client raises `MorphologRequestError` with `retriable` true. A deadlock is the same kind of answer with its own code, `deadlock_detected`: PostgreSQL found two transactions each waiting for a lock the other holds and aborted this one, so nothing was recorded. Both are safe to submit again as they are. They differ in what to look at when they recur: a serialization failure points at contention, transaction length and read footprints; a deadlock at the order in which transactions take their locks, which a batch of several acts and the ordering lock every commit takes can both bring about. Morpholog does not retry for you, because how many attempts, how long to wait and when to give up depend on the caller: an interactive request and a nightly import want different answers. With the generated client:
 
 ```python
 import random
@@ -943,8 +947,8 @@ arguments, a serialization conflict, a kernel error, a colliding
 intent, or a database failure on a proposal answers with
 `session_error_receipt`: `status: "error"`, the `row`, the prose, and
 a stable `code` - because a caller deciding whether a retry is safe
-must never parse prose. `serialization_failure` is safe to re-submit
-on as is; `not_committed` (the database refused or failed before
+must never parse prose. `serialization_failure` and `deadlock_detected`
+are safe to re-submit on as is; `not_committed` (the database refused or failed before
 anything was recorded - nothing changed) once its cause is fixed;
 `commit_outcome_unknown` (COMMIT failed without a server verdict)
 only after reading the record. A rejection that was decided but could
@@ -1006,8 +1010,9 @@ not a prerequisite. The pattern:
   propose it again; the new session only makes new requests possible.
   A `commit_outcome_unknown` receipt raises the same error without
   poisoning the session, because the wire stayed in step.
-- Retry automatically only on `serialization_failure`, a bounded number
-  of times. That code says the proposal was decided as not committed;
+- Retry automatically only on `serialization_failure` and
+  `deadlock_detected`, a bounded number of times, with backoff and
+  jitter. Those codes say the proposal was decided as not committed;
   every other refusal is the programme's answer, and an unknown outcome
   is reconciled, not retried.
 

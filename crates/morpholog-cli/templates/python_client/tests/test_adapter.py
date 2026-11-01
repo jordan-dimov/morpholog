@@ -1011,14 +1011,21 @@ class AdapterDiscrimination(unittest.TestCase):
         # A refusal that names its comparison is still a decided refusal.
         self.assertEqual(rejected.compared.op, "<=")
 
-        # The error object is raised with its code; only a serialization
-        # failure is retriable, and the predicate says so.
+        # The error object is raised with its code; a serialization
+        # failure and a deadlock are retriable, and the predicate says so.
         os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "transact_error.json").read_text()
         with self.assertRaises(MorphologRequestError) as coded:
             self.client.transact(acts)
         self.assertEqual(coded.exception.code, "serialization_failure")
         self.assertTrue(coded.exception.retriable)
         self.assertIsNone(coded.exception.row)
+        os.environ["STUB_STDOUT"] = json.dumps(
+            {"status": "error", "code": "deadlock_detected", "error": "lock cycle"}
+        )
+        with self.assertRaises(MorphologRequestError) as deadlocked:
+            self.client.transact(acts)
+        self.assertEqual(deadlocked.exception.code, "deadlock_detected")
+        self.assertTrue(deadlocked.exception.retriable)
         os.environ["STUB_STDOUT"] = json.dumps(
             {"status": "error", "code": "not_committed", "error": "check constraint"}
         )

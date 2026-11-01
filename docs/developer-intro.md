@@ -676,8 +676,8 @@ class OutcomeUnknown(Exception):
 # this list as NOTHING_RECORDED_CODES). Any other code - a newer one
 # included - says nothing, so it is unknown.
 NOTHING_RECORDED = {
-    "actor_assertion_unauthorised", "duplicate_intent", "invalid_arguments",
-    "invalid_request", "kernel_error", "not_committed",
+    "actor_assertion_unauthorised", "deadlock_detected", "duplicate_intent",
+    "invalid_arguments", "invalid_request", "kernel_error", "not_committed",
     "serialization_failure", "unknown_transformation",
 }
 

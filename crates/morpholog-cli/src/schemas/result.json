@@ -699,17 +699,17 @@
     "propose_error_code": {
       "enum": [
         "actor_assertion_unauthorised", "commit_outcome_unknown",
-        "duplicate_intent", "invalid_arguments", "invalid_request",
-        "kernel_error", "not_committed", "serialization_failure",
-        "unknown_transformation"
+        "deadlock_detected", "duplicate_intent", "invalid_arguments",
+        "invalid_request", "kernel_error", "not_committed",
+        "serialization_failure", "unknown_transformation"
       ]
     },
     "error_code": {
       "enum": [
         "actor_assertion_unauthorised", "commit_outcome_unknown",
-        "duplicate_intent", "invalid_arguments", "invalid_request",
-        "kernel_error", "not_committed", "serialization_failure",
-        "unknown_operation", "unknown_transformation"
+        "deadlock_detected", "duplicate_intent", "invalid_arguments",
+        "invalid_request", "kernel_error", "not_committed",
+        "serialization_failure", "unknown_operation", "unknown_transformation"
       ]
     },
     "session_error_receipt": {

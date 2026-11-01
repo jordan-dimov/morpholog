@@ -578,6 +578,7 @@ pub morpholog_postgres::PgError::CommitOutcomeUnknown(sqlx_core::error::Error)
 pub morpholog_postgres::PgError::CutoverRefused
 pub morpholog_postgres::PgError::CutoverRefused::reasons: alloc::vec::Vec<alloc::string::String>
 pub morpholog_postgres::PgError::Database(sqlx_core::error::Error)
+pub morpholog_postgres::PgError::DeadlockDetected
 pub morpholog_postgres::PgError::DuplicateIntent
 pub morpholog_postgres::PgError::Encoding(serde_json::error::Error)
 pub morpholog_postgres::PgError::InstantNotSettled(jiff::timestamp::Timestamp)

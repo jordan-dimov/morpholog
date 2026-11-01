@@ -2025,7 +2025,7 @@ async fn one_op(
                 tally.rejected += 1;
                 return Ok(());
             }
-            Err(PgError::SerializationFailure) => {
+            Err(PgError::SerializationFailure | PgError::DeadlockDetected) => {
                 tally.retries += 1;
                 attempt += 1;
                 if attempt as usize > max_retries {
@@ -3264,7 +3264,7 @@ async fn transact_once(
             Ok(PgAtomicOutcome::Rejected { act, reason, .. }) => {
                 return Err(anyhow!("the batch was refused at act {act}: {reason}"));
             }
-            Err(PgError::SerializationFailure) => {
+            Err(PgError::SerializationFailure | PgError::DeadlockDetected) => {
                 retries += 1;
                 if retries as usize > max_retries {
                     return Ok((t.elapsed(), retries, false));

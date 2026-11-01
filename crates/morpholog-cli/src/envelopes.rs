@@ -202,8 +202,8 @@ impl CheckpointRefusal {
 }
 
 /// The closed set of per-row failure codes a batch or session can return.
-/// Only `serialization_failure` is safe to re-submit; the rest describe the
-/// row itself. Operational failures abort the run instead.
+/// `serialization_failure` and `deadlock_detected` are safe to re-submit;
+/// the rest describe the row itself. Operational failures abort the run instead.
 ///
 /// One list builds both the enum and the `ALL` slice a contract test
 /// walks, so the published set cannot miss a code.
@@ -235,6 +235,9 @@ pub enum ProposeCode {
     /// the runtime cannot prove whether the proposal took effect. Read
     /// the record before re-submitting.
     CommitOutcomeUnknown,
+    /// PostgreSQL aborted the transaction to break a lock cycle. Nothing
+    /// was recorded; re-submit as is, as after a serialization failure.
+    DeadlockDetected,
     DuplicateIntent,
     InvalidArguments,
     InvalidRequest,
@@ -252,6 +255,7 @@ impl ProposeCode {
     pub const ALL: &'static [ProposeCode] = &[
         ProposeCode::ActorAssertionUnauthorised,
         ProposeCode::CommitOutcomeUnknown,
+        ProposeCode::DeadlockDetected,
         ProposeCode::DuplicateIntent,
         ProposeCode::InvalidArguments,
         ProposeCode::InvalidRequest,
@@ -267,6 +271,7 @@ impl From<ProposeCode> for ErrorCode {
         match code {
             ProposeCode::ActorAssertionUnauthorised => ErrorCode::ActorAssertionUnauthorised,
             ProposeCode::CommitOutcomeUnknown => ErrorCode::CommitOutcomeUnknown,
+            ProposeCode::DeadlockDetected => ErrorCode::DeadlockDetected,
             ProposeCode::DuplicateIntent => ErrorCode::DuplicateIntent,
             ProposeCode::InvalidArguments => ErrorCode::InvalidArguments,
             ProposeCode::InvalidRequest => ErrorCode::InvalidRequest,
@@ -281,6 +286,7 @@ impl From<ProposeCode> for ErrorCode {
 error_codes!(
     ActorAssertionUnauthorised,
     CommitOutcomeUnknown,
+    DeadlockDetected,
     DuplicateIntent,
     InvalidArguments,
     InvalidRequest,

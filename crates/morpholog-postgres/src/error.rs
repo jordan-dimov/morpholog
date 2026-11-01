@@ -16,6 +16,13 @@ pub enum PgError {
     /// retried by the caller.
     #[error("SERIALIZABLE retry needed (SQLSTATE 40001)")]
     SerializationFailure,
+    /// SQLSTATE 40P01: PostgreSQL broke a lock cycle by aborting this
+    /// transaction. It rolled back and nothing was recorded; the same
+    /// request is safe to submit again, as after a serialization failure.
+    /// Kept apart from it because the cause differs: lock order between
+    /// transactions, not overlapping read and write sets.
+    #[error("deadlock detected, retry needed (SQLSTATE 40P01)")]
+    DeadlockDetected,
     /// Evaluation error from the in-memory kernel (e.g. unbound variable,
     /// type mismatch). Distinct from a business [`crate::PgProposalOutcome::Rejected`].
     #[error(transparent)]
@@ -271,6 +278,10 @@ pub enum PgError {
 pub(crate) fn is_serialization_failure_code(code: Option<&str>) -> bool {
     code == Some("40001")
 }
+/// Is this SQLSTATE the PostgreSQL `deadlock_detected` code (`40P01`)?
+pub(crate) fn is_deadlock_detected_code(code: Option<&str>) -> bool {
+    code == Some("40P01")
+}
 /// Is this SQLSTATE the PostgreSQL `unique_violation` code (`23505`)?
 pub(crate) fn is_unique_violation_code(code: Option<&str>) -> bool {
     code == Some("23505")
@@ -280,7 +291,8 @@ pub(crate) fn is_undefined_column_code(code: Option<&str>) -> bool {
     code == Some("42703")
 }
 /// Maps a `sqlx::Error` to a [`PgError`]: SQLSTATE 40001 is the retryable
-/// [`PgError::SerializationFailure`], a 23505 on the outbox idempotency key
+/// [`PgError::SerializationFailure`] and 40P01 the retryable
+/// [`PgError::DeadlockDetected`], a 23505 on the outbox idempotency key
 /// is [`PgError::DuplicateIntent`], and everything else is
 /// [`PgError::Database`].
 pub(crate) fn classify(err: sqlx::Error) -> PgError {
@@ -288,6 +300,9 @@ pub(crate) fn classify(err: sqlx::Error) -> PgError {
     let code = db.and_then(sqlx::error::DatabaseError::code);
     if is_serialization_failure_code(code.as_deref()) {
         return PgError::SerializationFailure;
+    }
+    if is_deadlock_detected_code(code.as_deref()) {
+        return PgError::DeadlockDetected;
     }
     if is_unique_violation_code(code.as_deref())
         && db
@@ -336,7 +351,10 @@ pub(crate) fn classify_checked_query(err: sqlx::Error) -> PgError {
 }
 #[cfg(test)]
 mod tests {
-    use super::{classify_commit, is_serialization_failure_code, is_undefined_column_code};
+    use super::{
+        classify_commit, is_deadlock_detected_code, is_serialization_failure_code,
+        is_undefined_column_code,
+    };
     use crate::PgError;
     use sqlx::error::DatabaseError;
 
@@ -374,6 +392,16 @@ mod tests {
         assert!(!is_serialization_failure_code(Some("40000")));
         assert!(!is_serialization_failure_code(Some("23505"))); // unique_violation
         assert!(!is_serialization_failure_code(Some("40P01"))); // deadlock_detected
+    }
+
+    /// Pins `"40P01"` as the deadlock code, and only it: a deadlock is
+    /// retryable but is never reported as a serialization failure.
+    #[test]
+    fn sqlstate_40p01_classified_as_deadlock_detected() {
+        assert!(is_deadlock_detected_code(Some("40P01")));
+        assert!(!is_deadlock_detected_code(None));
+        assert!(!is_deadlock_detected_code(Some("40001")));
+        assert!(!is_deadlock_detected_code(Some("40000")));
     }
 
     /// Pins `"42703"` so the upgrade diagnosis cannot regress silently.

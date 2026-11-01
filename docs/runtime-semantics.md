@@ -700,7 +700,7 @@ A case is as narrow as the rule's own pattern makes it. An invariant over one cl
 
 ## Concurrency: when two proposals conflict
 
-Every proposal runs in its own `SERIALIZABLE` transaction. When two concurrent proposals could not have run one after the other, PostgreSQL aborts one of them with SQLSTATE 40001. Morpholog reports it as `serialization_failure`: nothing was recorded, and the same proposal is safe to submit again. The runtime never retries on its own; how often and for how long is the caller's policy.
+Every proposal runs in its own `SERIALIZABLE` transaction. When two concurrent proposals could not have run one after the other, PostgreSQL aborts one of them with SQLSTATE 40001. Morpholog reports it as `serialization_failure`: nothing was recorded, and the same proposal is safe to submit again. When two transactions each wait for a lock the other holds, PostgreSQL aborts one of them with SQLSTATE 40P01, and Morpholog reports that as `deadlock_detected`: the same standing, nothing recorded and safe to submit again, under its own name because the cause is lock order rather than overlapping reads and writes. The runtime never retries on its own; how often and for how long is the caller's policy.
 
 Whether two proposals conflict depends on what they read, not on what they mean. A proposal reads:
 
