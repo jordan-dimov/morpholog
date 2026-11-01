@@ -341,7 +341,7 @@ async fn an_interrupted_cutover_rolls_back_and_the_next_attempt_activates() {
 
     assert!(run(&db.url, false), "the third attempt");
     let after = seen(&db.pool).await;
-    assert_eq!(after.version, 27);
+    assert_eq!(after.version, morpholog_postgres::head_version());
     assert!(
         one_activation(&after.first_order),
         "{:?}",
@@ -386,12 +386,16 @@ async fn a_client_lost_after_the_commit_leaves_one_activation_and_a_harmless_rer
     let pid_after = wait_blocked(&mut watch, "%FROM morpholog.deployment_roles%").await;
     assert_eq!(pid_after, pid, "the same backend, past its commit");
     let committed = seen(&db.pool).await;
-    assert_eq!(committed.version, 27, "the cutover committed");
+    assert_eq!(
+        committed.version,
+        morpholog_postgres::head_version(),
+        "the cutover committed, and the migrations after it"
+    );
     assert!(one_activation(&committed.first_order));
     kill(&mut child, &mut watch, pid, &mut after_commit).await;
 
     let after = seen(&db.pool).await;
-    assert_eq!(after.version, 27);
+    assert_eq!(after.version, morpholog_postgres::head_version());
     assert!(
         one_activation(&after.first_order),
         "{:?}",
@@ -399,7 +403,11 @@ async fn a_client_lost_after_the_commit_leaves_one_activation_and_a_harmless_rer
     );
     let rerun = cli_json(&db.url, &["migrate"]);
     assert_eq!(rerun["applied"], serde_json::json!([]), "{rerun}");
-    assert_eq!(rerun["recorded_version_after"], 27, "{rerun}");
+    assert_eq!(
+        rerun["recorded_version_after"],
+        morpholog_postgres::head_version(),
+        "{rerun}"
+    );
     assert!(one_activation(&seen(&db.pool).await.first_order));
     db.drop().await;
 }
