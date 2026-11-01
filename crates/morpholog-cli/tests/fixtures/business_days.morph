@@ -1,0 +1,11 @@
+-- The smallest programme a business-day calendar needs: the days a
+-- calendar's authority says are working days, each with the version of
+-- the list it came from. The generator's rows propose `admit_business_day`.
+program business_days
+
+predicate BusinessDay(calendar: Subject, date: Date, authority: Subject, version: Subject)
+    unique by (calendar, date)
+
+transformation admit_business_day(calendar, date, authority, version):
+    require not BusinessDay(calendar, date, _, _)
+    admit BusinessDay(calendar, date, authority, version)

@@ -1,0 +1,11 @@
+-- A transformation with the generated field names but the wrong kind on
+-- one of them: `tzdb_version` is compared as a figure, so a generated
+-- row cannot be decoded for it.
+program mistyped_days
+
+predicate Day(local_date: Date, starts_at: Timestamp, ends_at: Timestamp, tzdb_version: Decimal)
+    unique by (local_date)
+
+transformation publish_day(local_date, starts_at, ends_at, tzdb_version):
+    require 0 < tzdb_version
+    admit Day(local_date, starts_at, ends_at, tzdb_version)

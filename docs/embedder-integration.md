@@ -787,6 +787,54 @@ longer than it takes, or partition the footprint (the `contend`
 lesson: value sharding does not relieve it, predicate partitioning
 does), and give the retry budget the interval between writes.
 
+## Calendar claims as proposal rows (`generate local-days`, `generate business-days`)
+
+A calendar is data that changes over time: clocks change on days the
+law decides, and a holiday list has an authority and an edition. So a
+day enters the record as a claim with its source on it, never as a
+runtime lookup, and the two day generators are what write a year of
+such claims without typing them.
+
+```bash
+morpholog generate local-days delivery.morph publish_delivery_day \
+  --actor cal_uk --arg calendar=uk \
+  --zone Europe/London --from 2026-01-01 --until 2026-12-31 > days.ndjson
+morpholog generate business-days bank.morph admit_business_day \
+  --actor ops --arg calendar=uk \
+  --holidays uk_2026.json --from 2026-01-01 --until 2026-12-31 > days.ndjson
+```
+
+Each writes `propose --batch` rows to stdout, one per day, proposing
+the named transformation. `local-days` fills `local_date`, `starts_at`,
+`ends_at` and `tzdb_version`: the day's bounds as UTC instants (23, 24
+or 25 hours apart across a clock change; a day starts at its local
+midnight, or at the instant the clock jumps to when midnight is
+skipped) and the release the zone was read under. `business-days` fills
+`date`, `authority` and `version` for every Monday to Friday the
+holiday list does not name; the list is one JSON object,
+`{"authority": "...", "version": "...", "holidays": ["YYYY-MM-DD", ...]}`,
+and the generator takes its coverage on trust, since only the authority
+knows it. Every other parameter of the transformation comes from
+`--arg name=value`, and the parameters must be exactly the generated
+fields plus those; a generated field cannot be overridden. The range is
+inclusive at both ends. Every row is decoded as `propose` decodes it
+before any is written, so a refusal writes nothing to stdout.
+
+**Generation admits nothing.** The rows are an input like any other
+batch: `propose --batch` commits them one by one, keeps going past a
+refusal, and reports each in its receipt; when a calendar must land
+whole or not at all, the same rows go through `transact --acts`. A day
+published twice is refused by the programme's own gate, which is where
+that rule belongs.
+
+**The version stamp is the directory's declared release.** The zone
+file and the `tzdata.zi` header are read from one zoneinfo directory
+(`--zoneinfo`, else `TZDIR`, else `/usr/share/zoneinfo`), and the
+header's `# version` line is what every row carries. A directory
+without that header stops the run: the version is part of the claim,
+so no claim is written without it. It is the source's own statement of
+what it holds, not a proof that each file belongs to that release.
+
 ## Concurrent proposals and retries
 
 A serialization conflict is a known non-commit: the binary reports it with the code `serialization_failure`, on one-shot `propose` and `transact`, in a batch receipt and in a session receipt, and the generated client raises `MorphologRequestError` with `retriable` true. A deadlock is the same kind of answer with its own code, `deadlock_detected`: PostgreSQL found two transactions each waiting for a lock the other holds and aborted this one, so nothing was recorded. Both are safe to submit again as they are. They differ in what to look at when they recur: a serialization failure points at contention, transaction length and read footprints; a deadlock at the order in which transactions take their locks, which a batch of several acts and the ordering lock every commit takes can both bring about. Morpholog does not retry for you, because how many attempts, how long to wait and when to give up depend on the caller: an interactive request and a nightly import want different answers. With the generated client:

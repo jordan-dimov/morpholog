@@ -267,11 +267,13 @@ enum Command {
     /// 2020-12); no `--json` flag because the output IS JSON.
     Schema(SchemaArgs),
 
-    /// Generate a typed client that speaks exactly this binary's contract.
+    /// Generate what a programme implies: a typed client that speaks
+    /// exactly this binary's contract, a SQL view surface, or calendar
+    /// claims as proposal rows.
     ///
-    /// The client is a projection of the programme, like the schema
-    /// and the envelopes; generating it here is what keeps it from
-    /// being hand-maintained downstream, where it drifts.
+    /// Each is a projection of the programme, like the schema and the
+    /// envelopes; generating it here is what keeps it from being
+    /// hand-maintained downstream, where it drifts.
     Generate {
         #[command(subcommand)]
         what: GenerateCmd,
@@ -321,9 +323,11 @@ pub(crate) struct RefreshDerivedArgs {
     pub(crate) db: DatabaseArgs,
 }
 
-/// Client-generation targets. One language per worked embedder that
+/// Generation targets. One client language per worked embedder that
 /// forces it; `python-client` is forced by Glasshouse and the worked
-/// embedder example converging on the same hand-written layer.
+/// embedder example converging on the same hand-written layer. The day
+/// generators write calendar claims as proposal rows, since a calendar
+/// is data that changes over time and enters the record as claims.
 #[derive(Subcommand, Debug)]
 pub(crate) enum GenerateCmd {
     /// Emit a complete, self-contained, stdlib-only Python client
@@ -345,6 +349,85 @@ pub(crate) enum GenerateCmd {
     /// regenerate-and-diff for drift, like `python-client`. Derived
     /// claims are read via `inspect derived`, not views.
     Views(GenerateViewsArgs),
+
+    /// Emit `propose --batch` rows that publish a zone's local days,
+    /// one per date from `--from` to `--until` inclusive: the day's
+    /// bounds as UTC instants (23, 24 or 25 hours apart across a clock
+    /// change) and the tzdb release they were read from. The rows
+    /// propose the named transformation, whose parameters must be
+    /// exactly `local_date`, `starts_at`, `ends_at`, `tzdb_version`
+    /// plus whatever `--arg` supplies. Every row is decoded as `propose`
+    /// would decode it before any is written; a refusal writes nothing.
+    /// Generation admits nothing: feed the rows to `propose --batch`
+    /// (per-row commits) or `transact --acts` (all or none).
+    #[command(name = "local-days")]
+    LocalDays(GenerateLocalDaysArgs),
+
+    /// Emit `propose --batch` rows for the business days in a range:
+    /// Monday to Friday, less the dates a holiday list names, each row
+    /// carrying the list's authority and version. The transformation's
+    /// parameters must be exactly `date`, `authority`, `version` plus
+    /// whatever `--arg` supplies. Validated whole before anything is
+    /// written, like `local-days`, and admitting nothing by itself.
+    #[command(name = "business-days")]
+    BusinessDays(GenerateBusinessDaysArgs),
+}
+
+/// What every day generator shares: the programme and transformation
+/// the rows propose, the actor, the fixed arguments, and the range.
+#[derive(clap::Args, Debug)]
+pub(crate) struct GeneratedRowsArgs {
+    /// Path to a `.morph` source file.
+    pub(crate) file: PathBuf,
+
+    /// The transformation each row proposes.
+    pub(crate) transformation: String,
+
+    /// The actor on every row.
+    #[arg(long)]
+    pub(crate) actor: String,
+
+    /// A fixed value for a parameter the generator does not fill, as
+    /// `name=value`; repeat per parameter. A generated field cannot be
+    /// overridden.
+    #[arg(long = "arg", value_name = "NAME=VALUE")]
+    pub(crate) arg: Vec<String>,
+
+    /// First date, YYYY-MM-DD.
+    #[arg(long)]
+    pub(crate) from: jiff::civil::Date,
+
+    /// Last date, YYYY-MM-DD, included.
+    #[arg(long)]
+    pub(crate) until: jiff::civil::Date,
+}
+
+/// Arguments for `generate local-days`.
+#[derive(clap::Args, Debug)]
+pub(crate) struct GenerateLocalDaysArgs {
+    #[command(flatten)]
+    pub(crate) rows: GeneratedRowsArgs,
+
+    /// The zone, as the tz database names it (`Europe/London`).
+    #[arg(long)]
+    pub(crate) zone: String,
+
+    /// The zoneinfo directory the zone and its `tzdata.zi` header are
+    /// read from. Defaults to `TZDIR`, then `/usr/share/zoneinfo`.
+    #[arg(long)]
+    pub(crate) zoneinfo: Option<PathBuf>,
+}
+
+/// Arguments for `generate business-days`.
+#[derive(clap::Args, Debug)]
+pub(crate) struct GenerateBusinessDaysArgs {
+    #[command(flatten)]
+    pub(crate) rows: GeneratedRowsArgs,
+
+    /// A JSON file: `{"authority": "...", "version": "...", "holidays":
+    /// ["YYYY-MM-DD", ...]}`.
+    #[arg(long)]
+    pub(crate) holidays: PathBuf,
 }
 
 /// Arguments for `generate views`.
@@ -1721,6 +1804,12 @@ async fn run() -> anyhow::Result<()> {
         Command::Generate {
             what: GenerateCmd::Views(args),
         } => commands::generate_views::run(&args),
+        Command::Generate {
+            what: GenerateCmd::LocalDays(args),
+        } => commands::generate_days::local_days(&args),
+        Command::Generate {
+            what: GenerateCmd::BusinessDays(args),
+        } => commands::generate_days::business_days(&args),
         Command::Refresh {
             what: RefreshCmd::Derived(args),
         } => commands::refresh::run(&args).await,

@@ -56,3 +56,5 @@ Quarter-hour products (the same grid with a 15-minute step), a cap
 that changes over time, the breach raised when a cap is lowered under
 open trades, and where the published days come from. The authority's
 days are trusted as claims; the record governs what is done with them.
+`morpholog generate local-days` writes a year of them as proposal rows
+for `publish_delivery_day`, with the tzdb release on each.
