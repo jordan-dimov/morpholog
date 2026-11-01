@@ -86,19 +86,21 @@ class MorphologError(RuntimeError):
     business rejection, which is a decided outcome on stdout."""
 
     #: Whether re-submitting the same request is known to be safe. False
-    #: for every error but a ``serialization_failure`` receipt and a
-    #: checkpoint's ``transition_not_covered`` refusal: an unknown outcome
-    #: may already have committed, and any other failure needs its cause
-    #: fixed first. The one retry predicate.
+    #: for every error but a ``serialization_failure`` or
+    #: ``deadlock_detected`` receipt and a checkpoint's
+    #: ``transition_not_covered`` refusal: an unknown outcome may already
+    #: have committed, and any other failure needs its cause fixed first.
+    #: The one retry predicate.
     retriable: bool = False
 
 
 class MorphologRequestError(MorphologError):
     """A per-request error receipt with its stable ``code``: the request
     was received, classified, and refused, and the session (or the
-    one-shot binary) did nothing durable. ``serialization_failure`` is
-    re-submittable as is - ``retriable`` says so; ``not_committed`` once
-    its cause is fixed; every other code is the request's own fault.
+    one-shot binary) did nothing durable. ``serialization_failure`` and
+    ``deadlock_detected`` are re-submittable as is - ``retriable`` says
+    so; ``not_committed`` once its cause is fixed; every other code is
+    the request's own fault.
     ``row`` is the session request number, or ``None`` for a one-shot
     ``propose``, ``transact`` or a batch refused before its first row."""
 
@@ -111,7 +113,7 @@ class MorphologRequestError(MorphologError):
 
     @property
     def retriable(self) -> bool:  # type: ignore[override]
-        return self.code == "serialization_failure"
+        return self.code in envelopes.RETRIABLE_CODES
 
 
 class MorphologNotCovered(MorphologError):
@@ -729,7 +731,8 @@ class Morpholog:
         act) or ``AtomicRejected`` (the refusing act, nothing written) -
         both lawful outcomes. A known error of the whole batch raises
         ``MorphologRequestError`` with its code, whose ``retriable`` is
-        true only for ``serialization_failure``; a commit whose outcome
+        true for ``serialization_failure`` and ``deadlock_detected``; a
+        commit whose outcome
         the runtime could not prove, or a timeout after submission,
         raises ``MorphologOutcomeUnknown`` - read the record first,
         never re-submit blind. ``timeout`` bounds this one call and

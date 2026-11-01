@@ -14,9 +14,11 @@ use common::{
 };
 use jiff::{SignedDuration, Timestamp};
 use morpholog_core::Program;
+use morpholog_core::ir_builder::{claim, exists, invariant, not, predicate, var};
 use morpholog_postgres::{
-    PgError, PgPool, PgProgram, TreeVerification, VerifyOutcome, create_checkpoint, export_pack,
-    list_audit_rows, read_claims_at, resolve_settled_instant, testing, verify_pack, verify_replay,
+    PgError, PgPool, PgProgram, SplitBoundary, TreeVerification, VerifyOutcome, create_checkpoint,
+    export_pack, list_audit_rows, read_claims_at, resolve_settled_instant, score_candidate,
+    score_candidate_against_pack, testing, verify_pack, verify_replay,
 };
 use morpholog_test_support::subj;
 use uuid::Uuid;
@@ -525,4 +527,71 @@ async fn the_verifiers_hold_the_chronology_live_and_offline() {
     )
     .await;
     assert_both_name(&pool, "before the last legacy row's committed_at").await;
+}
+
+/// A candidate rule the history violates at every row: "no X".
+fn no_x() -> Program {
+    Program {
+        name: "candidate".into(),
+        predicates: vec![predicate("X").subject("k").build()],
+        intents: vec![],
+        definitions: vec![],
+        invariants: vec![invariant(
+            "NoX",
+            not(exists("k", claim("X", vec![var("k")]))),
+        )],
+        transformations: vec![],
+        derived_claims: vec![],
+    }
+}
+
+/// `evaluate --train-until <timestamp>` splits by each row's instant, live
+/// and from a pack alike: a transaction that started first but was placed
+/// last is in the test slice, and a boundary on a batch's shared instant
+/// keeps the whole batch in train.
+#[tokio::test]
+async fn a_timestamp_split_selects_the_same_slice_live_and_from_a_pack() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let pg = pg_program(program());
+    let r0 = act(&pool, &pg, "r0").await;
+    let mut first_started = pool.begin().await.unwrap();
+    sqlx::query("SELECT now()")
+        .execute(&mut *first_started)
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let mut batch = pool.begin().await.unwrap();
+    let p = ordered_row(&mut *batch, "p").await;
+    let q = ordered_row(&mut *batch, "q").await;
+    batch.commit().await.unwrap();
+    let a = ordered_row(&mut *first_started, "a").await;
+    first_started.commit().await.unwrap();
+
+    let (ra, rq) = (row_of(&pool, a).await, row_of(&pool, q).await);
+    assert!(ra.committed_at < rq.committed_at, "a started first");
+    assert!(rq.position() < ra.position(), "the batch is placed first");
+    let at = rq.instant();
+    assert_eq!(instant_of(&pool, p).await, at);
+    assert!(instant_of(&pool, r0).await < at && ra.instant() > at);
+
+    create_checkpoint(&pool, None, None).await.unwrap();
+    let pack = export_pack(&pool, None).await.unwrap();
+    let no_x = no_x();
+    let candidate = morpholog_test_support::validated(&no_x);
+    let boundary = Some(SplitBoundary::AtOrBefore(at));
+    let live = score_candidate(&pool, &candidate, boundary).await.unwrap();
+    let offline = score_candidate_against_pack(&candidate, &pack, None, boundary).unwrap();
+    assert_eq!(
+        serde_json::to_value(&live).unwrap(),
+        serde_json::to_value(&offline).unwrap(),
+        "the pack split must reproduce the live split"
+    );
+    let split = live.split.unwrap();
+    assert_eq!(split.boundary.resolved_transition_id, q.to_string());
+    assert_eq!(split.train.transitions_replayed, 3, "r0, p and q train");
+    assert_eq!(
+        split.test.transitions_replayed, 1,
+        "a, placed after the boundary, tests"
+    );
 }

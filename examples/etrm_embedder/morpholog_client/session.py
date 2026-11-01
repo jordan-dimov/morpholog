@@ -17,9 +17,9 @@ propose request has been written and flushed, no trustworthy response
 means the commit outcome is UNKNOWN - the database may have committed
 before the failure. That case raises ``MorphologOutcomeUnknown``,
 never plain ``MorphologError``: blindly re-submitting can duplicate a
-business action. A ``serialization_failure`` error receipt, by
-contrast, is the one answer that is safe to re-submit on - the
-request was decided as not-committed.
+business action. A ``serialization_failure`` or ``deadlock_detected``
+error receipt, by contrast, is safe to re-submit on - the request was
+decided as not-committed.
 
 The connection string travels in the child's environment, never its
 argv: a resident process would otherwise show it in the OS process
@@ -552,8 +552,9 @@ class Session:
         on the one-shot client: every act or none, each act seeing what
         the acts before it staged. A known error of the whole batch - an
         empty batch included - is a coded ``MorphologRequestError``
-        (``retriable`` only for ``serialization_failure``), exactly as on
-        the one-shot client; the session stays in step."""
+        (``retriable`` for ``serialization_failure`` and
+        ``deadlock_detected``), exactly as on the one-shot client; the
+        session stays in step."""
         body: dict[str, object] = {"op": "transact", "acts": [dict(a) for a in acts]}
         return self._exchange(body, commitful=True, decode=_decode_atomic)
 

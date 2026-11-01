@@ -999,6 +999,7 @@ PROPOSE_ERROR_CODES = frozenset(
     {
         "actor_assertion_unauthorised",
         "commit_outcome_unknown",
+        "deadlock_detected",
         "duplicate_intent",
         "invalid_arguments",
         "invalid_request",
@@ -1009,6 +1010,11 @@ PROPOSE_ERROR_CODES = frozenset(
     }
 )
 
+
+#: The codes whose request is safe to submit again as it is: the
+#: transaction was aborted by the database, for a serialization conflict
+#: or a deadlock, before anything was recorded.
+RETRIABLE_CODES = frozenset({"serialization_failure", "deadlock_detected"})
 
 #: The codes that say nothing was recorded: every published code but
 #: ``commit_outcome_unknown``. A caller that hand-rolls its own handling
@@ -1043,7 +1049,8 @@ class RequestError:
 class SessionErrorReceipt:
     """A per-request session failure with its stable ``code`` - the
     field a caller consults to decide whether re-submitting is safe
-    (``serialization_failure`` is the one re-submittable code)."""
+(``serialization_failure`` and ``deadlock_detected`` are the
+    re-submittable codes)."""
 
     code: str
     error: str

@@ -284,8 +284,8 @@ pub(crate) fn not_committed(file: &std::path::Path, err: anyhow::Error) -> RowEr
 /// given one before it compiles: safe to re-submit, check the record first,
 /// or fix the cause.
 ///
-/// `SerializationFailure` is the caller's to retry. A kernel error or a
-/// colliding intent is about the row's data. Every other error means
+/// `SerializationFailure` and `DeadlockDetected` are the caller's to retry.
+/// A kernel error or a colliding intent is about the row's data. Every other error means
 /// nothing was committed, except an unknown commit outcome. A rejection
 /// that could not be recorded is `not_committed` too: the verdict was
 /// reached, but the rollback came first, so nothing became durable.
@@ -295,6 +295,10 @@ pub(crate) fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
     let (code, context): (ProposeCode, &str) = match &err {
         PgError::SerializationFailure => (
             ProposeCode::SerializationFailure,
+            "the proposal could not be decided",
+        ),
+        PgError::DeadlockDetected => (
+            ProposeCode::DeadlockDetected,
             "the proposal could not be decided",
         ),
         PgError::Kernel(_) => (
@@ -544,6 +548,10 @@ mod tests {
     fn every_adapter_error_is_coded_and_only_one_is_unknown() {
         let not_committed = classify_pg_error(PgError::Database(sqlx::Error::PoolClosed));
         assert_eq!(not_committed.code, Some(ProposeCode::NotCommitted));
+        let conflicted = classify_pg_error(PgError::SerializationFailure);
+        assert_eq!(conflicted.code, Some(ProposeCode::SerializationFailure));
+        let deadlocked = classify_pg_error(PgError::DeadlockDetected);
+        assert_eq!(deadlocked.code, Some(ProposeCode::DeadlockDetected));
         let unknown = classify_pg_error(PgError::CommitOutcomeUnknown(sqlx::Error::PoolClosed));
         assert_eq!(unknown.code, Some(ProposeCode::CommitOutcomeUnknown));
         assert!(format!("{:#}", unknown.reason).contains("read the record"));

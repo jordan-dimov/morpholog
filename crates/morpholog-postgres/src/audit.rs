@@ -894,20 +894,6 @@ pub(crate) fn settled(cursor: AuditPosition, horizon: u64) -> Result<AuditPositi
     }
 }
 
-/// The resume horizon for a lossless audit tail: every audit row whose
-/// order is strictly below the returned one is final, committed or never
-/// to commit, and so visible to a snapshot taken after this call returns.
-///
-/// A writer draws its order under the ordering lock and holds it, as a
-/// transaction lock, until it commits or rolls back. The horizon is the
-/// least order still held in this database, a prepared transaction's
-/// included, or else the next order to be drawn, read under the same
-/// lock, so no order below it can still be drawn or be in flight. Rows
-/// from before the canonical order have order 0 and are always below it.
-///
-/// No session view is read, so the horizon needs no visibility into
-/// other roles' sessions. A prepared transaction left unresolved holds
-/// the horizon back until it is committed or rolled back.
 /// The horizon an as-of instant settles by: the watermark, and, when no
 /// order is held, the ordering clock's floor once the call has moved it
 /// up to the server clock, so every order drawn later takes an instant
@@ -936,6 +922,22 @@ where
     })
 }
 
+/// The resume horizon for a lossless audit tail: every audit row whose
+/// order is strictly below the returned one is final, committed or never
+/// to commit, and so visible to a snapshot taken after this call returns.
+///
+/// A writer draws its order under the ordering lock and holds it, as a
+/// transaction lock, until it commits or rolls back. The horizon is the
+/// least order still held in this database, a prepared transaction's
+/// included, or else the next order to be drawn, read under the same
+/// lock, so no order below it can still be drawn or be in flight. Rows
+/// from before the canonical order have order 0 and are always below it.
+///
+/// No session view is read, so the horizon needs no visibility into
+/// other roles' sessions. A prepared transaction left unresolved holds
+/// the horizon back until it is committed or rolled back. The locks are
+/// the connected server's own, so the horizon is sound only on the
+/// primary: a standby does not see the orders held open there.
 pub async fn audit_resume_watermark<'e, E>(executor: E) -> Result<u64, PgError>
 where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,
