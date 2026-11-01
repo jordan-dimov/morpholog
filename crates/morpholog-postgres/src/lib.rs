@@ -69,7 +69,7 @@ pub use actor_policy::{
 };
 pub use as_of::{
     list_claims_at, list_claims_at_for_predicates, read_claims_at, read_claims_at_for_predicates,
-    reconstruct_state_at, resolve_transition_at_or_before,
+    reconstruct_state_at, resolve_settled_instant,
 };
 pub use attestation::{ActorAttestation, AuditAttestation, Proposal};
 pub use audit::{

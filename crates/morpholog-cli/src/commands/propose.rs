@@ -330,6 +330,7 @@ pub(crate) fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
         | PgError::BaselineChunk { .. }
         | PgError::TransitionNotCovered { .. }
         | PgError::NoTransitionAtOrBefore(_)
+        | PgError::InstantNotSettled(_)
         | PgError::ActorPolicyDeclaration { .. }
         | PgError::UnknownTransformation { .. }
         | PgError::NoCheckpoint

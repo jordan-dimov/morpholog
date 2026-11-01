@@ -100,7 +100,7 @@ const COLUMNS: [(&str, &str); 4] = [
 /// which `IF NOT EXISTS` would keep; it is dropped and rebuilt instead.
 /// Beside each statement, the shape the catalog describes the index by:
 /// table, uniqueness, method, keys and predicate.
-const INDEXES: [(&str, &str, &str); 2] = [
+const INDEXES: [(&str, &str, &str); 3] = [
     (
         "audit_one_activation",
         "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS audit_one_activation \
@@ -114,6 +114,14 @@ const INDEXES: [(&str, &str, &str); 2] = [
         "CREATE INDEX CONCURRENTLY IF NOT EXISTS audit_canonical \
          ON morpholog.audit (audit_order, act_ordinal, committed_at, transition_id)",
         "ON morpholog.audit btree (audit_order, act_ordinal, committed_at, transition_id)",
+    ),
+    (
+        "audit_instant",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS audit_instant \
+         ON morpholog.audit ((coalesce(ordered_at, committed_at)), audit_order, act_ordinal, \
+         committed_at, transition_id)",
+        "ON morpholog.audit btree (COALESCE(ordered_at, committed_at), audit_order, act_ordinal, \
+         committed_at, transition_id)",
     ),
 ];
 

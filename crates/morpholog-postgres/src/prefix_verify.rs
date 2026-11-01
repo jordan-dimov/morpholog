@@ -17,7 +17,7 @@ use crate::checkpoints::{
     Checkpoint, TreeVerification, checkpoint_hash, same_tree_head, signature_crypto_violation,
     unauthorized_signature,
 };
-use crate::history::{ActivationFold, ordered_row_misplaced};
+use crate::history::{ActivationFold, Chronology, ordered_row_misplaced};
 use crate::keys::{KeyTriple, apply_key_claims};
 use crate::merkle::{Digest, Frontier, audit_leaf_hash};
 use crate::role_rebindings::RebindingFold;
@@ -36,6 +36,7 @@ pub(crate) struct PrefixVerifier<'a> {
     /// its shape.
     activation: Option<ActivationFold>,
     activation_fault: Option<String>,
+    chronology: Chronology,
     unauthorized: Option<TreeVerification>,
     anchor_unauthorized: Option<TreeVerification>,
     rebindings: RebindingFold,
@@ -55,6 +56,7 @@ impl<'a> PrefixVerifier<'a> {
             failure: anchor.and_then(|a| anchor_failure(checkpoints, a)),
             activation: None,
             activation_fault: None,
+            chronology: Chronology::default(),
             unauthorized: None,
             anchor_unauthorized: None,
             rebindings: RebindingFold::default(),
@@ -83,6 +85,11 @@ impl<'a> PrefixVerifier<'a> {
         } else if self.activation_fault.is_none()
             && let Some(why) =
                 ordered_row_misplaced(row, self.legacy_rows, self.activation.as_ref())
+        {
+            self.activation_fault = Some(format!("{}: {why}", row.transition_id));
+        }
+        if let Some(why) = self.chronology.observe(row)
+            && self.activation_fault.is_none()
         {
             self.activation_fault = Some(format!("{}: {why}", row.transition_id));
         }

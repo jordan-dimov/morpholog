@@ -26,6 +26,7 @@ const WRITES: &[(&str, &str)] = &[
     ("claims delete", "DELETE FROM morpholog.claims WHERE false"),
     // Checkpoints and the tail both read the resume horizon.
     ("writer watermark", "SELECT morpholog.audit_watermark()"),
+    ("writer horizon", "SELECT * FROM morpholog.audit_horizon()"),
     (
         "audit insert",
         "INSERT INTO morpholog.audit (transition_id) \
@@ -56,6 +57,7 @@ const READS: &[(&str, &str)] = &[
     ("claims read", "SELECT 1 FROM morpholog.claims LIMIT 0"),
     ("audit read", "SELECT 1 FROM morpholog.audit LIMIT 0"),
     ("reader watermark", "SELECT morpholog.audit_watermark()"),
+    ("reader horizon", "SELECT * FROM morpholog.audit_horizon()"),
     (
         "read cache read",
         "SELECT 1 FROM morpholog_read.derived_claims LIMIT 0",

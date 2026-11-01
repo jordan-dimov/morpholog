@@ -1,5 +1,7 @@
 use crate::audit::Operation;
-use crate::audit::{AuditPosition, audit_cursor_for, audit_resume_watermark, settled};
+use crate::audit::{
+    AuditPosition, audit_cursor_for, audit_horizon, audit_resume_watermark, settled,
+};
 use crate::audit_pages::ReplayPages;
 use crate::claims::ClaimRead;
 use crate::error::{PgError, classify, classify_checked_query};
@@ -13,9 +15,9 @@ use uuid::Uuid;
 /// Reconstruct the full [`State`] that existed immediately after
 /// `transition_id` committed.
 ///
-/// Replays every audit row up to and including the target's
-/// `(committed_at, transition_id)`, in causal order. Within a
-/// transition, retractions apply before assertions, as in the kernel.
+/// Replays every audit row up to and including the target's place in
+/// the log order ([`AuditPosition`]). Within a transition, retractions
+/// apply before assertions, as in the kernel.
 /// Asserting a claim already present is a no-op, as on commit.
 ///
 /// Errors:
@@ -134,14 +136,14 @@ fn with_asserted_in(state: &State, asserted_in: &HashMap<ClaimInstance, Uuid>) -
         })
         .collect()
 }
-/// Resolve a wall-clock instant to the last transition committed at or
-/// before it.
-///
-/// Uses the replay's total order `(committed_at, transition_id)`, so the
-/// answer is exact even when transitions share a `committed_at`. A
-/// timestamp earlier than every transition is
-/// [`PgError::NoTransitionAtOrBefore`].
-pub async fn resolve_transition_at_or_before<'e, E>(
+/// The last transition in log order whose instant is at or before `at`,
+/// as the executor's snapshot holds the log. A row's instant is its
+/// `ordered_at`, or `committed_at` for a row from before the order. The
+/// log's instants never decrease along it and every act of a transaction
+/// shares one, so the answer ends a prefix that splits no transaction.
+/// No settlement: a transaction that will take a place at or before `at`
+/// may still be open. None at all is [`PgError::NoTransitionAtOrBefore`].
+pub(crate) async fn resolve_instant_in_snapshot<'e, E>(
     executor: E,
     at: Timestamp,
 ) -> Result<Uuid, PgError>
@@ -150,8 +152,9 @@ where
 {
     let row = sqlx::query!(
         "SELECT transition_id FROM morpholog.audit
-         WHERE committed_at <= $1
-         ORDER BY committed_at DESC, transition_id DESC
+         WHERE coalesce(ordered_at, committed_at) <= $1
+         ORDER BY coalesce(ordered_at, committed_at) DESC, audit_order DESC, act_ordinal DESC,
+                  committed_at DESC, transition_id DESC
          LIMIT 1",
         at.to_sqlx(),
     )
@@ -160,6 +163,60 @@ where
     .map_err(classify_checked_query)?;
     row.map(|r| r.transition_id)
         .ok_or(PgError::NoTransitionAtOrBefore(at))
+}
+
+/// Resolve an instant to the transition the state as of it ends with,
+/// once that answer is final: no open transaction can take a place at
+/// or before `at`, and no later one will. The horizon is read first,
+/// under the ordering lock, and the log after it, so a writer that
+/// committed before the horizon is seen; with an order still held, only
+/// instants up to the last final row's are answered, since the held
+/// order's own instant is above it and unknown until it commits; with
+/// none held, instants up to the horizon's fenced clock are.
+///
+/// Errors: [`PgError::InstantNotSettled`] while the answer could still
+/// change, [`PgError::NoTransitionAtOrBefore`] once the absence is final.
+pub async fn resolve_settled_instant(pool: &PgPool, at: Timestamp) -> Result<Uuid, PgError> {
+    resolve_settled_instant_pausing(pool, at, async || {}).await
+}
+
+/// [`resolve_settled_instant`] with a pause after the horizon, so a test
+/// can commit a writer between it and the reads.
+pub(crate) async fn resolve_settled_instant_pausing(
+    pool: &PgPool,
+    at: Timestamp,
+    after_horizon: impl AsyncFnOnce(),
+) -> Result<Uuid, PgError> {
+    let mut conn = pool.acquire().await.map_err(classify)?;
+    let horizon = audit_horizon(&mut *conn).await?;
+    after_horizon().await;
+    let final_until = match horizon.quiet_at {
+        Some(quiet_at) => Some(quiet_at),
+        None => last_instant_below(&mut conn, horizon.audit_order).await?,
+    };
+    match final_until {
+        Some(until) if at <= until => resolve_instant_in_snapshot(&mut *conn, at).await,
+        _ => Err(PgError::InstantNotSettled(at)),
+    }
+}
+
+/// The instant of the last row in log order below `horizon`.
+async fn last_instant_below(
+    conn: &mut sqlx::PgConnection,
+    horizon: u64,
+) -> Result<Option<Timestamp>, PgError> {
+    let row = sqlx::query!(
+        r#"SELECT coalesce(ordered_at, committed_at) AS "instant!: jiff_sqlx::Timestamp"
+           FROM morpholog.audit
+           WHERE audit_order < $1
+           ORDER BY audit_order DESC, act_ordinal DESC, committed_at DESC, transition_id DESC
+           LIMIT 1"#,
+        horizon.cast_signed(),
+    )
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(classify_checked_query)?;
+    Ok(row.map(|r| r.instant.to_jiff()))
 }
 /// The target's position, refused while a transaction ordered before it
 /// is open: its prefix could still grow, and the same read would later
@@ -261,4 +318,79 @@ pub(crate) async fn reconstruct_inner(
         }
     }
     Ok(state)
+}
+
+#[cfg(test)]
+mod tests {
+    //! The settled resolver reads the horizon before the log, held with a
+    //! pause only the crate can reach. `DATABASE_URL`-gated.
+
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+
+    async fn pool() -> PgPool {
+        let url = std::env::var("DATABASE_URL").expect(
+            "DATABASE_URL must be set for the as-of tests (e.g. postgres:///morpholog_dev)",
+        );
+        let pool = PgPool::connect(&crate::with_default_user(&url))
+            .await
+            .expect("failed to connect to PostgreSQL test database");
+        crate::testing::reset_database(&pool).await.expect("reset");
+        pool
+    }
+
+    /// An ordered row admitting `X(k)`, placed by the trigger.
+    async fn ordered_row(executor: impl sqlx::PgExecutor<'_>, k: &str) -> Uuid {
+        let id = Uuid::now_v7();
+        sqlx::query(
+            "INSERT INTO morpholog.audit (
+                transition_id, transformation_name, arguments, actor, invariant_epoch,
+                invariants_checked, asserted_claims, retracted_claims, emitted_intents,
+                attestation, parameters, model_hash, semantics_version, drawn_subjects, operations)
+             VALUES ($1, 'admit_x', jsonb_build_array(jsonb_build_object('type', 'subject', 'value', $2::text)),
+                '{\"type\": \"subject\", \"value\": \"w\"}', 1, '[]',
+                jsonb_build_array(jsonb_build_object('predicate', 'X', 'args',
+                    jsonb_build_array(jsonb_build_object('type', 'subject', 'value', $2::text)))),
+                '[]', '[]', '{\"mode\": \"gateway\", \"authenticated_by\": \"w\"}', '[\"k\"]',
+                'sha256:' || repeat('d', 64), 1, '[]',
+                jsonb_build_array(jsonb_build_object('op', 'ins', 'predicate', 'X', 'args',
+                    jsonb_build_array(jsonb_build_object('type', 'subject', 'value', $2::text)))))",
+        )
+        .bind(id)
+        .bind(k)
+        .execute(executor)
+        .await
+        .unwrap();
+        id
+    }
+
+    /// A writer holding an order commits after the horizon was read and
+    /// before the log is. Its instant is above the last final row's, so
+    /// the horizon already refused it; a resolver that read the log first
+    /// would have answered with the row before the writer, and then found
+    /// the log quiet and called that answer final.
+    #[tokio::test]
+    async fn the_horizon_is_read_before_the_log() {
+        let pool = pool().await;
+        ordered_row(&pool, "a").await;
+        let mut writer = pool.begin().await.unwrap();
+        let w = ordered_row(&mut *writer, "w").await;
+        let at: jiff_sqlx::Timestamp =
+            sqlx::query_scalar("SELECT ordered_at FROM morpholog.audit WHERE transition_id = $1")
+                .bind(w)
+                .fetch_one(&mut *writer)
+                .await
+                .unwrap();
+        let at = at.to_jiff();
+        let paused = resolve_settled_instant_pausing(&pool, at, async move || {
+            writer.commit().await.unwrap();
+        })
+        .await;
+        assert!(
+            matches!(paused, Err(PgError::InstantNotSettled(t)) if t == at),
+            "an answer read before the writer committed was called final: {paused:?}"
+        );
+        assert_eq!(resolve_settled_instant(&pool, at).await.unwrap(), w);
+    }
 }

@@ -45,7 +45,11 @@ pub async fn activate(pool: &sqlx::PgPool) -> Result<(), crate::PgError> {
     let mut tx = pool.begin().await.map_err(classify)?;
     sqlx::raw_sql(
         "ALTER TABLE morpholog.audit ENABLE TRIGGER audit_order;
-         LOCK TABLE morpholog.claims, morpholog.audit IN EXCLUSIVE MODE;",
+         LOCK TABLE morpholog.claims, morpholog.audit IN EXCLUSIVE MODE;
+         SELECT setval('morpholog.audit_ordered_at_us',
+                       greatest((SELECT last_value FROM morpholog.audit_ordered_at_us),
+                                coalesce((SELECT floor(extract(epoch FROM max(committed_at)) * 1000000)::bigint
+                                            FROM morpholog.audit), 0)));",
     )
     .execute(&mut *tx)
     .await
@@ -62,6 +66,7 @@ BEGIN
         morpholog.audit_checkpoints, morpholog.rejections, morpholog.index_requirement,
         morpholog.managed_index, morpholog.audit_order_txn CASCADE;
     ALTER SEQUENCE morpholog.audit_order_seq RESTART;
+    ALTER SEQUENCE morpholog.audit_ordered_at_us RESTART;
     ALTER TABLE morpholog.audit ENABLE TRIGGER audit_order;
     -- The managed indexes go with their registry, so a test starts from the
     -- indexes it provisions and none another test left behind.

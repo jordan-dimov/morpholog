@@ -816,7 +816,7 @@ class Morpholog:
 
         `as_of` reads the claims as they were at a past moment - a
         transition id, or an RFC 3339 timestamp resolved to the last
-        transition committed at or before it.
+        transition placed in the audit order at or before it.
         """
         return self._claims(predicates, envelopes.ClaimRead.from_json, named=False, as_of=as_of)
 
@@ -899,7 +899,8 @@ class Morpholog:
 
         `as_of` computes the view over the state as it was at a past
         moment - a transition id, or an RFC 3339 timestamp resolved to
-        the last transition committed at or before it. Diffing the same
+        the last transition placed in the audit order at or before it.
+        Diffing the same
         view at two coordinates is the correction blast-radius read.
         """
         return self._derived(name, envelopes.ClaimInstance.from_json, named=False, as_of=as_of)

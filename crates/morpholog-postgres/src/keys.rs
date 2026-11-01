@@ -54,7 +54,7 @@ fn key_triple(claim: &ClaimInstance) -> Option<KeyTriple> {
 }
 
 /// The authorised key triples in force as of the first `tree_size` audit
-/// rows, given the rows in canonical `(committed_at, transition_id)` order.
+/// rows, given the rows in log order ([`crate::audit::AuditPosition`]).
 /// Each row's retractions are applied before its assertions, matching the
 /// kernel's candidate-build order.
 pub(crate) fn authorized_keys_as_of(rows: &[AuditRow], tree_size: i64) -> HashSet<KeyTriple> {

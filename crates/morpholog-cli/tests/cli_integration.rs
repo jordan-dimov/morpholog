@@ -1353,7 +1353,7 @@ async fn evaluate_scores_a_candidate_against_history() {
         "evaluate should succeed; {stderr}\n{stdout}"
     );
     let report: Value = serde_json::from_str(&stdout).expect("report is JSON");
-    assert_eq!(report["score_format_version"], 5);
+    assert_eq!(report["score_format_version"], 6);
     assert_eq!(report["semantics"], "case_bound_admission_v5");
     assert!(
         report["program_hash"]
@@ -1659,23 +1659,24 @@ async fn evaluate_packs_with_anchor_file_is_a_usage_error() {
 #[tokio::test(flavor = "current_thread")]
 async fn inspect_claims_as_of_timestamp_resolves_to_the_prior_state() {
     reset_db().await;
-    post_balanced_entry("entry_001", 100);
+    let first_tid = post_balanced_entry("entry_001", 100);
     post_balanced_entry("entry_002", 200);
 
-    // The first commit's exact timestamp. The boundary is inclusive: at
-    // that instant, the commit's state is what you get.
+    // The first transition's instant: when it took its place in the
+    // order. The boundary is inclusive: at that instant, its state is
+    // what you get.
     let (_s, stdout, _e) = run_cli(&["inspect", "audit"]);
     let rows = ndjson(&stdout);
-    let first_committed_at = rows[0]["committed_at"]
+    let first_placed_at = rows[0]["ordered_at"]
         .as_str()
-        .expect("audit row carries committed_at")
+        .expect("audit row carries ordered_at")
         .to_string();
 
     let (status, stdout, stderr) = run_cli(&[
         "inspect",
         "claims",
         "--as-of",
-        &first_committed_at,
+        &first_placed_at,
         "--predicate",
         "JournalEntry",
     ]);
@@ -1688,6 +1689,14 @@ async fn inspect_claims_as_of_timestamp_resolves_to_the_prior_state() {
         "only the first entry exists at the first commit's instant: {stdout}"
     );
     assert_eq!(array[0]["args"][0]["value"], "entry_001");
+
+    // The same state the transition's id gives.
+    let (_, by_time, _) = run_cli(&["inspect", "claims", "--as-of", &first_placed_at]);
+    let (_, by_id, _) = run_cli(&["inspect", "claims", "--as-of", &first_tid.to_string()]);
+    assert_eq!(
+        serde_json::from_str::<Value>(&by_time).unwrap(),
+        serde_json::from_str::<Value>(&by_id).unwrap()
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1702,7 +1711,7 @@ async fn as_of_timestamp_before_all_commits_errors() {
         "a timestamp before every commit must error"
     );
     assert!(
-        stderr.contains("no transition committed at or before"),
+        stderr.contains("no transition placed in the audit order at or before"),
         "the error should name the condition; got:\n{stderr}"
     );
 }

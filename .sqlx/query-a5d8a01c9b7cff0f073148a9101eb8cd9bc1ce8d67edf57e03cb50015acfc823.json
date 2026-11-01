@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT coalesce(ordered_at, committed_at) AS \"instant!: jiff_sqlx::Timestamp\"\n           FROM morpholog.audit\n           WHERE audit_order < $1\n           ORDER BY audit_order DESC, act_ordinal DESC, committed_at DESC, transition_id DESC\n           LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "instant!: jiff_sqlx::Timestamp",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a5d8a01c9b7cff0f073148a9101eb8cd9bc1ce8d67edf57e03cb50015acfc823"
+}

@@ -678,7 +678,7 @@ class Guarantees(unittest.TestCase):
 class Score(unittest.TestCase):
     def test_a_score_report_reads_whole_and_has_no_split_unless_asked(self):
         report = envelopes.ScoreReport.from_json(golden("score_report.json"))
-        self.assertEqual(report.score_format_version, 5)
+        self.assertEqual(report.score_format_version, 6)
         self.assertEqual(report.transitions_replayed, 1)
         self.assertIsNone(report.split, "absent, not an empty split")
         scored = report.invariants[0]

@@ -169,11 +169,14 @@ AuditRecord
                                     act's within it; with committed_at and transition_id,
                                     the total replay order every audit read (verify,
                                     coverage, as-of, the inspect-audit tail) orders by
-  ordered_at                     -- the server clock when the order was taken
+  ordered_at                     -- the instant the transaction was placed in the order,
+                                    which an as-of timestamp selects by
   operations                     -- what the commit did to the claims table, in order
 ```
 
 Rows from before the canonical order carry none of the last four. Replay reads them from the claims they proposed, which can differ from what their commit did when two writers overlapped. The activation that ends them, baseline chunks then the record, all at order 1, replaces the replayed state with the claims the table held, and every row after it applies its recorded operations. The order is taken when a transaction writes its first audit row, after it has read and written its claims, so it is the order of effects. It need not be the order in which serializable isolation placed the decisions: a transaction that read a claim before another removed it can commit after the removal and sort after it.
+
+An as-of timestamp selects by each row's instant: `ordered_at`, or `committed_at` for a row from before the order. "As of t" is the state after every transition whose instant is at or before t. Instants never decrease along the order and every act of one transaction shares its instant, so that is a prefix of the order and never splits a transaction; the verifiers hold both properties, and the migration places the activation at or after the last legacy row. The instant is when the transaction took its place, not when its effects became visible: a transaction placed at 10:00:00 that committed at 10:00:05 is in the state as of 10:00:02. The reads answer a timestamp only once the answer is final: no open transaction can be placed at or before it, and the instant has passed. Until then they refuse rather than answer one way now and another later. Deciding that moves the ordering clock up to the server clock under the ordering lock, so a later transaction cannot be placed before an answer already given even if the clock steps back; it is a write, so a timestamp read needs the primary. `evaluate --train-until <timestamp>` splits by the same instants as its snapshot holds them, settled or not.
 
 ## Surface-to-IR mapping
 

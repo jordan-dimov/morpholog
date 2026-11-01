@@ -354,7 +354,7 @@ JUNE=019e937d-0e98-7790-897e-30500c744711   # yours will differ - use your recei
 Every commit returns a `transition_id` - its exact coordinate in the audit
 log: the state immediately after that particular commit, unambiguous where a
 date is not. (When an instant is what you have, `--as-of` also accepts an RFC
-3339 timestamp and resolves it to the last commit at or before it.)
+3339 timestamp and resolves it to the last transition placed at or before it.)
 
 (In real life the bank lives in its own systems; what we model is the
 governed record on the asset's side, and the bank's decision *enters as a
