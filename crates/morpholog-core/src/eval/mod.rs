@@ -1563,14 +1563,34 @@ fn extremum_of(builtin: Builtin, a: &EvalValue, b: &EvalValue) -> Result<EvalVal
     }
 }
 
-/// All raw decimal arithmetic goes through here, checked, because the
-/// plain rust_decimal operators panic on overflow (division too, with a
-/// tiny divisor). A zero divisor gets its own error.
+/// All raw decimal arithmetic goes through here. `+`, `-` and `*` are
+/// exact or refused: the result is the mathematical one when a decimal
+/// can hold it, and an error otherwise, never a rounded figure. `/`
+/// rounds by its own rule (28 digits, half to even), since most
+/// quotients have no exact decimal. `%` is exact by construction. The
+/// plain rust_decimal operators panic on overflow, so every call is
+/// checked; a zero divisor gets its own error.
 fn checked_decimal_op(op: ArithOp, a: Decimal, b: Decimal) -> Result<Decimal, EvalError> {
+    let out_of_range =
+        || EvalError::ArithOutOfRange(format!("{a} {op:?} {b} exceeds the exact decimal range"));
     let result = match op {
-        ArithOp::Add => a.checked_add(b),
-        ArithOp::Sub => a.checked_sub(b),
-        ArithOp::Mul => a.checked_mul(b),
+        ArithOp::Add | ArithOp::Sub | ArithOp::Mul => {
+            if let Some(r) = exact_fast(op, a, b) {
+                return Ok(r);
+            }
+            let exact = Exact::op(op, a, b);
+            let fitted = match op {
+                ArithOp::Add => a.checked_add(b),
+                ArithOp::Sub => a.checked_sub(b),
+                _ => a.checked_mul(b),
+            };
+            // rust_decimal's own result where it is the exact one, so a
+            // value that fits keeps the digits it has today.
+            match fitted {
+                Some(r) if exact.equals(r) => Some(r),
+                _ => exact.fit(),
+            }
+        }
         ArithOp::Div => {
             if b == Decimal::ZERO {
                 return Err(EvalError::DivisionByZero);
@@ -1584,43 +1604,112 @@ fn checked_decimal_op(op: ArithOp, a: Decimal, b: Decimal) -> Result<Decimal, Ev
             a.checked_rem(b)
         }
     };
-    result.ok_or_else(|| {
-        EvalError::ArithOutOfRange(format!("{a} {op:?} {b} exceeds the exact decimal range"))
-    })
+    result.ok_or_else(out_of_range)
 }
 
-/// The multiple of `quantum` nearest to `v`, halves away from zero.
-/// Works from the remainder, not the quotient: `round(8, 1e-28)` is
-/// exactly 8, but the quotient 8e28 overflows. Fails only when the
-/// nearest multiple itself is out of range.
+/// The common case without a big integer: same-scale addition, and a
+/// product whose mantissas multiply within an i128. Where the exact
+/// result fits a decimal here, rust_decimal's result is that value.
+fn exact_fast(op: ArithOp, a: Decimal, b: Decimal) -> Option<Decimal> {
+    const LIMIT: i128 = 1 << 96;
+    let (ma, mb) = (a.mantissa(), b.mantissa());
+    let (m, scale, fitted) = match op {
+        ArithOp::Add if a.scale() == b.scale() => (ma + mb, a.scale(), a.checked_add(b)),
+        ArithOp::Sub if a.scale() == b.scale() => (ma - mb, a.scale(), a.checked_sub(b)),
+        ArithOp::Mul => (ma.checked_mul(mb)?, a.scale() + b.scale(), a.checked_mul(b)),
+        _ => return None,
+    };
+    if scale <= 28 && m.abs() < LIMIT {
+        fitted
+    } else {
+        None
+    }
+}
+
+/// An exact decimal: a big-integer count of units at a scale. The
+/// mathematical result of an operation, before asking whether a decimal
+/// can hold it.
+struct Exact {
+    units: num_bigint::BigInt,
+    scale: u32,
+}
+
+impl Exact {
+    fn at_scale(d: Decimal, scale: u32) -> num_bigint::BigInt {
+        num_bigint::BigInt::from(d.mantissa())
+            * num_bigint::BigInt::from(10u32).pow(scale - d.scale())
+    }
+
+    fn op(op: ArithOp, a: Decimal, b: Decimal) -> Self {
+        match op {
+            ArithOp::Add | ArithOp::Sub => {
+                let scale = a.scale().max(b.scale());
+                let (x, y) = (Self::at_scale(a, scale), Self::at_scale(b, scale));
+                let units = if op == ArithOp::Add { x + y } else { x - y };
+                Self { units, scale }
+            }
+            _ => Self {
+                units: num_bigint::BigInt::from(a.mantissa())
+                    * num_bigint::BigInt::from(b.mantissa()),
+                scale: a.scale() + b.scale(),
+            },
+        }
+    }
+
+    fn equals(&self, d: Decimal) -> bool {
+        let scale = self.scale.max(d.scale());
+        let ten = num_bigint::BigInt::from(10u32);
+        &self.units * ten.pow(scale - self.scale) == Self::at_scale(d, scale)
+    }
+
+    /// The decimal holding this value, if one does: trailing zeros are
+    /// dropped first, so only the significant digits must fit.
+    fn fit(mut self) -> Option<Decimal> {
+        let ten = num_bigint::BigInt::from(10);
+        let zero = num_bigint::BigInt::from(0);
+        while self.scale > 0 && (&self.units % &ten) == zero {
+            self.units /= &ten;
+            self.scale -= 1;
+        }
+        if self.scale > 28 {
+            return None;
+        }
+        let mantissa: i128 = self.units.try_into().ok()?;
+        Decimal::try_from_i128_with_scale(mantissa, self.scale).ok()
+    }
+}
+
+/// The multiple of `quantum` nearest to `v`, halves away from zero,
+/// computed exactly. Fails only when that multiple itself is not a
+/// decimal: an unchosen candidate or the doubled remainder the choice
+/// compares may lie outside the range without harm.
 fn round_decimal(v: Decimal, q: Decimal) -> Result<Decimal, EvalError> {
     let out_of_range = || EvalError::RoundOutOfRange {
         value: v.to_string(),
         quantum: q.to_string(),
     };
-    let rem = v.checked_rem(q).ok_or_else(out_of_range)?;
-    if rem.is_zero() {
+    let scale = v.scale().max(q.scale());
+    let (big_v, big_q) = (Exact::at_scale(v, scale), Exact::at_scale(q, scale));
+    let rem = &big_v % &big_q;
+    if rem == num_bigint::BigInt::from(0) {
         return Ok(v.normalize());
     }
-    let toward_zero = v.checked_sub(rem).ok_or_else(out_of_range)?;
+    let toward_zero = &big_v - &rem;
     let away = if v.is_sign_negative() {
-        toward_zero.checked_sub(q)
+        &toward_zero - &big_q
     } else {
-        toward_zero.checked_add(q)
+        &toward_zero + &big_q
     };
-    let abs_rem = rem.abs();
-    // Away wins when twice the remainder >= quantum; a doubling that
-    // overflows is certainly larger.
-    let away_wins = match abs_rem.checked_add(abs_rem) {
-        Some(doubled) => doubled >= q,
-        None => true,
-    };
-    let result = if away_wins {
-        away.ok_or_else(out_of_range)?
+    let doubled = rem.magnitude() * 2u32;
+    let units = if doubled >= *big_q.magnitude() {
+        away
     } else {
         toward_zero
     };
-    Ok(result.normalize())
+    Exact { units, scale }
+        .fit()
+        .map(|d| d.normalize())
+        .ok_or_else(out_of_range)
 }
 
 pub(crate) fn resolve_term(
