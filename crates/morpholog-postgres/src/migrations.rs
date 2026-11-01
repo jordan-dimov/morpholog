@@ -48,6 +48,11 @@ pub(crate) const MIGRATIONS: &[(i32, &str, &str)] = &[
         "canonical_order",
         include_str!("../sql/migrations/027_canonical_order.sql"),
     ),
+    (
+        28,
+        "exact_arithmetic",
+        include_str!("../sql/migrations/028_exact_arithmetic.sql"),
+    ),
 ];
 
 /// Whether `migrate` stops before the one transaction that pauses writers.

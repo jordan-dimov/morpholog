@@ -180,7 +180,7 @@ async fn preparation_is_idempotent_and_repairs_what_it_owns() {
             .iter()
             .map(|m| m.version)
             .collect::<Vec<_>>(),
-        vec![27]
+        (27..=morpholog_postgres::head_version()).collect::<Vec<_>>()
     );
     let preflight = prepared.activation_preflight.clone().expect("a preflight");
     assert_eq!(preflight.state, morpholog_postgres::PreparationState::Ready);
@@ -238,7 +238,7 @@ async fn preparation_is_idempotent_and_repairs_what_it_owns() {
         .unwrap();
     assert_eq!(
         done.applied.iter().map(|m| m.version).collect::<Vec<_>>(),
-        vec![27]
+        (27..=morpholog_postgres::head_version()).collect::<Vec<_>>()
     );
     assert!(done.activation_preflight.is_none());
     assert!(migration_status(&pool).await.unwrap().is_current());

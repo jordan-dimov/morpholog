@@ -587,17 +587,24 @@ mod eval_value_over {
 
     #[test]
     fn bindings_and_literals_evaluate_as_the_kernel_does() {
+        let bindings: Bindings = [(crate::ir::Var::from("x"), decimal("1.5"))]
+            .into_iter()
+            .collect();
+        let expr = crate::ir_builder::mul(term(var("x")), term(dec("0.5")));
+        assert_eq!(
+            eval_value_over(&expr, &bindings, &[]),
+            Some(Ok(decimal("0.75")))
+        );
         let bindings: Bindings = [(
             crate::ir::Var::from("x"),
             decimal("0.0000000000000000000000000001"),
         )]
         .into_iter()
         .collect();
-        let expr = crate::ir_builder::mul(term(var("x")), term(dec("0.5")));
-        assert_eq!(
+        assert!(matches!(
             eval_value_over(&expr, &bindings, &[]),
-            Some(Ok(decimal("0")))
-        );
+            Some(Err(EvalError::ArithOutOfRange(_)))
+        ));
     }
 
     /// No result for a sum, or a node that reads state another way, is
@@ -612,5 +619,130 @@ mod eval_value_over {
             default: None,
         };
         assert_eq!(eval_value_over(&lookup, &Bindings::new(), &[]), None);
+    }
+}
+
+/// `+`, `-` and `*` give the exact result or refuse; they never round. A
+/// result that fits keeps the digits rust_decimal gives it, so nothing a
+/// rule decides today on ordinary figures changes.
+mod exact_arithmetic {
+    use super::*;
+    use crate::ir_builder::{add, round, sub};
+    use rust_decimal::Decimal;
+
+    fn lit(s: &str) -> ValueExpr {
+        term(dec(s))
+    }
+
+    fn eval(expr: &ValueExpr) -> Result<EvalValue, EvalError> {
+        eval_value_over(expr, &Bindings::new(), &[]).expect("a closed expression evaluates")
+    }
+
+    fn ok(expr: &ValueExpr) -> Decimal {
+        match eval(expr) {
+            Ok(EvalValue::Decimal(d)) => d,
+            other => panic!("expected a decimal: {other:?}"),
+        }
+    }
+
+    fn refused(expr: &ValueExpr) {
+        assert!(
+            matches!(
+                eval(expr),
+                Err(EvalError::ArithOutOfRange(_) | EvalError::RoundOutOfRange { .. })
+            ),
+            "{expr:?} must refuse: {:?}",
+            eval(expr)
+        );
+    }
+
+    const MAX: &str = "79228162514264337593543950335";
+
+    #[test]
+    fn an_inexact_result_is_refused_not_rounded() {
+        refused(&mul(lit("0.0000000000000000000000000001"), lit("0.5")));
+        refused(&add(lit(MAX), lit("0.4")));
+        refused(&sub(lit(MAX), lit("-0.4")));
+        // Ten decimals times ten decimals with ten integer digits: the
+        // exact product needs thirty significant digits.
+        refused(&mul(lit("0.9876543219"), lit("9876543210.9876543219")));
+    }
+
+    /// The product of the two mantissas is the most negative i128, whose
+    /// magnitude no i128 holds: the fast path must hand it on, not panic
+    /// or wave the rounded figure through.
+    #[test]
+    fn a_product_at_the_most_negative_i128_is_refused() {
+        refused(&mul(
+            lit("-922337203.6854775808"),
+            lit("1844674407.3709551616"),
+        ));
+    }
+
+    #[test]
+    fn an_exact_result_keeps_its_digits() {
+        assert_eq!(ok(&add(lit("1.10"), lit("0.00"))).to_string(), "1.10");
+        assert_eq!(ok(&mul(lit("1.5"), lit("2"))).to_string(), "3.0");
+        assert_eq!(ok(&sub(lit("10"), lit("0.25"))).to_string(), "9.75");
+        assert_eq!(
+            ok(&mul(lit("0.1234"), lit("12345.678"))).to_string(),
+            "1523.4566652"
+        );
+    }
+
+    /// A product whose raw scale is past 28 but whose value is exact once
+    /// trailing zeros go: two values written at scale 19 that multiply to 2.
+    #[test]
+    fn a_result_exact_after_dropping_trailing_zeros_is_accepted() {
+        let two = ok(&mul(
+            lit("2.0000000000000000000"),
+            lit("1.0000000000000000000"),
+        ));
+        assert_eq!(two, Decimal::from(2));
+        assert_eq!(
+            ok(&mul(lit(MAX), lit("1.0000000000000000000"))),
+            Decimal::from_str_exact(MAX).unwrap()
+        );
+    }
+
+    /// Division keeps its own rounding rule: most quotients are inexact.
+    #[test]
+    fn division_still_rounds_by_its_rule() {
+        assert_eq!(
+            ok(&div(lit("1"), lit("3"))).to_string(),
+            "0.3333333333333333333333333333"
+        );
+    }
+
+    /// `round` is judged on the multiple it selects. A doubled remainder
+    /// or an unchosen candidate outside the range is no reason to refuse.
+    #[test]
+    fn round_refuses_only_when_the_selected_multiple_does_not_fit() {
+        assert_eq!(
+            ok(&round(lit("60000000000000000000000000000"), lit(MAX))),
+            Decimal::from_str_exact(MAX).unwrap()
+        );
+        assert_eq!(
+            ok(&round(
+                lit("50000000000000000000000000000"),
+                lit("40000000000000000000000000000")
+            ))
+            .to_string(),
+            "40000000000000000000000000000"
+        );
+        assert_eq!(ok(&round(lit("2.345"), lit("0.01"))).to_string(), "2.35");
+        assert_eq!(ok(&round(lit("-2.345"), lit("0.01"))).to_string(), "-2.35");
+        assert_eq!(
+            ok(&round(lit("8"), lit("0.0000000000000000000000000001"))).to_string(),
+            "8"
+        );
+        // The nearest multiple of 0.3 here has a tenth and 29 digits.
+        refused(&round(lit("79228162514264337593543950334"), lit("0.3")));
+        // The selected multiple is the most negative i128 in units: too
+        // wide for a decimal, and its magnitude too wide for the i128.
+        refused(&round(
+            lit("-17014118346046923173168730371"),
+            lit("3961408125713216879.6771975168"),
+        ));
     }
 }

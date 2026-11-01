@@ -1411,6 +1411,7 @@ dependencies = [
  "morpholog-surface",
  "morpholog-test-support",
  "morpholog-witness",
+ "num-bigint",
  "pkcs8",
  "rand 0.10.2",
  "rust_decimal",

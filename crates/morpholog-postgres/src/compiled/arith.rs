@@ -1,11 +1,13 @@
 //! Decimal and quantity arithmetic, and the builtins over them, rendered
 //! as SQL that computes the kernel's value. Each value is an amount and a
 //! unit read from the stored value's own tag (no unit for a bare decimal),
-//! and the amount is NULL exactly where the kernel errs: every step is
-//! the kernel's operation fitted as rust_decimal fits it
-//! (`morpholog.decimal_fit_v1` and its siblings), and a kind or unit the
-//! kernel refuses yields NULL. The kernel itself names the error, over
-//! the bindings and sum results the probe reports.
+//! and the amount is NULL exactly where the kernel errs: `+`, `-`, `*`
+//! and `%` keep their exact result only where a decimal holds it
+//! (`morpholog.decimal_exact_v1`), division rounds as the kernel's does
+//! (`decimal_div_v1`), `round` selects its multiple over exact steps
+//! (`decimal_round_v2`), and a kind or unit the kernel refuses yields
+//! NULL. The kernel itself names the error, over the bindings and sum
+//! results the probe reports.
 
 use super::Ctx;
 use super::{
@@ -254,8 +256,8 @@ fn within_budget(operands: &[&Dd]) -> Result<(), CompileReason> {
     Ok(())
 }
 
-fn fit(sql: &str) -> String {
-    format!("morpholog.decimal_fit_v1({sql})")
+fn exact(sql: &str) -> String {
+    format!("morpholog.decimal_exact_v1({sql})")
 }
 
 /// The kernel's operator table over decimals and quantities, with the
@@ -278,7 +280,7 @@ fn arith(op: ArithOp, l: &Dd, r: &Dd) -> Result<Dd, CompileReason> {
             (
                 format!(
                     "(CASE WHEN ({xu}) IS NOT DISTINCT FROM ({yu}) THEN {} END)",
-                    fit(&format!("({xa}) {sign} ({ya})"))
+                    exact(&format!("({xa}) {sign} ({ya})"))
                 ),
                 xu.clone(),
             )
@@ -286,7 +288,7 @@ fn arith(op: ArithOp, l: &Dd, r: &Dd) -> Result<Dd, CompileReason> {
         ArithOp::Mul => (
             format!(
                 "(CASE WHEN ({xu}) IS NULL OR ({yu}) IS NULL THEN {} END)",
-                fit(&format!("({xa}) * ({ya})"))
+                exact(&format!("({xa}) * ({ya})"))
             ),
             format!("COALESCE({xu}, {yu})"),
         ),
@@ -299,7 +301,7 @@ fn arith(op: ArithOp, l: &Dd, r: &Dd) -> Result<Dd, CompileReason> {
         ArithOp::Mod => (
             format!(
                 "(CASE WHEN ({xu}) IS NULL AND ({yu}) IS NULL AND ({ya}) <> 0 THEN {} END)",
-                fit(&format!("mod({xa}, {ya})"))
+                exact(&format!("mod({xa}, {ya})"))
             ),
             NO_UNIT.to_string(),
         ),
@@ -345,7 +347,7 @@ fn call(builtin: Builtin, args: &[Dd]) -> Result<Dd, CompileReason> {
             }
             Ok(Dd {
                 amount: format!(
-                    "(CASE WHEN ({}) IS NULL AND ({}) IS NULL THEN morpholog.decimal_round_v1({}, {}) END)",
+                    "(CASE WHEN ({}) IS NULL AND ({}) IS NULL THEN morpholog.decimal_round_v2({}, {}) END)",
                     v.unit, q.unit, v.amount, q.amount
                 ),
                 unit: NO_UNIT.to_string(),

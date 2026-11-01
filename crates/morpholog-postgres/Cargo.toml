@@ -26,6 +26,7 @@ jiff = { workspace = true }
 jiff-sqlx = { workspace = true }
 
 [dev-dependencies]
+num-bigint = { workspace = true }
 morpholog-examples = { path = "../morpholog-examples" }
 morpholog-surface = { path = "../morpholog-surface" }
 morpholog-test-support = { path = "../morpholog-test-support" }
