@@ -1,0 +1,14 @@
+-- The generated day fields beside two fixed parameters of other kinds:
+-- a flag and a collection, which a `--arg` must carry as JSON values.
+program flagged_days
+
+predicate Day(local_date: Date, starts_at: Timestamp, ends_at: Timestamp, tzdb_version: Subject, provisional: Bool)
+    unique by (local_date)
+
+predicate Tag(local_date: Date, tag: Subject)
+
+transformation publish(local_date, starts_at, ends_at, tzdb_version, provisional, tags):
+    require not Day(local_date: local_date, ..)
+    admit Day(local_date, starts_at, ends_at, tzdb_version, provisional)
+    for tag in tags:
+        admit Tag(local_date, tag)

@@ -21,6 +21,7 @@ pub(crate) mod evidence;
 pub(crate) mod explain;
 pub(crate) mod filter;
 pub(crate) mod generate;
+pub(crate) mod generate_days;
 pub(crate) mod generate_views;
 pub(crate) mod hash;
 pub(crate) mod init;
