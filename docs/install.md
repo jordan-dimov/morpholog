@@ -2,10 +2,9 @@
 
 Fresh machine to a running worked example, no Rust toolchain. Prebuilt
 binaries exist for linux (x86_64 and arm64) and macOS (Apple Silicon).
-Intel Macs build from source - the free Intel CI runner is gone, and
-an Intel Mac cannot run an Apple Silicon binary. This prints the asset name for the machine you are on, or a
-STOP if there is none (it deliberately does not `exit`, which would
-close an interactive shell):
+Intel Macs build from source. This prints the asset name for your
+machine, or STOP if there is none (it does not `exit`, which would close
+an interactive shell):
 
 ```bash
 TARGET=$(case "$(uname -s)/$(uname -m)" in
@@ -21,9 +20,8 @@ If it says STOP, none of the download steps below apply to this
 machine; the README's source build is the path. Otherwise `$TARGET`
 now names your asset, and the steps below use it as they are.
 
-Morpholog runs against a system PostgreSQL, by design - no Docker in the
-blessed path (containerising the database is your own ops choice, not
-something this guide assumes).
+Morpholog runs against a system PostgreSQL. This guide assumes no
+Docker; containerising the database is your own choice.
 
 ## 1. PostgreSQL 18+
 
@@ -63,8 +61,8 @@ morpholog --version
 ## 3. The examples
 
 The tarball carries only the binary; the worked examples live in the
-source tree (no toolchain needed, just the files). Fetch the tree AT
-THE RELEASE TAG, so the examples and generated client match the binary
+source tree (no toolchain needed, just the files). Fetch the tree at
+the release tag, so the examples and generated client match the binary
 you installed rather than whatever `main` has moved on to:
 
 ```bash
@@ -111,7 +109,7 @@ morpholog inspect derived examples/03_double_entry_ledger/ledger.morph TrialBala
 
 An external Python system driving a governed trade lifecycle through the
 generated client. Needs Python 3.12+ and `psql` on `PATH`, and a
-DISPOSABLE database - the script resets the schema each run:
+disposable database, since the script resets the schema each run:
 
 ```bash
 createdb morpholog_scratch
