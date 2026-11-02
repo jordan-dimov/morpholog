@@ -122,7 +122,7 @@ A verifier reads its own evidence-pack format, and the format before it when tha
 
 `morpholog init` provisions a schema; it never migrates one. That is
 deliberate - it means running `init` against a live database cannot alter
-it. Upgrading is its own verb, and it sits in a sequence:
+it. Upgrading is its own verb, and it sits in a sequence (the checklist form is [`docs/operating.md`](operating.md)):
 
 ```bash
 # 1. stop every process on the database: sessions, workers, the service

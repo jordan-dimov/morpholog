@@ -508,7 +508,7 @@ Then run the deploy sequence below with the new programme. A new rule can need n
 
 ## The deploy sequence
 
-A deployment that forgets a step still answers correctly, only slowly, so nothing fails to tell you. The sequence, every time the binary or a programme changes:
+A deployment that forgets a step still answers correctly, only slowly, so nothing fails to tell you. The sequence, every time the binary or a programme changes: The checklist form, with the upgrade and the day's close beside it, is [`docs/operating.md`](operating.md).
 
 ```bash
 morpholog init --skip-if-exists                       # day zero only; a no-op afterwards
