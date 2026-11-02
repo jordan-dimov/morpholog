@@ -412,10 +412,15 @@ async fn the_order_is_of_effects_not_of_what_each_decision_saw() {
             claims: 1
         }
     ));
-    let rehearsal = morpholog_postgres::rehearse_candidate(&pool, pg.prepared())
-        .await
-        .unwrap();
+    let mut progress = Vec::new();
+    let rehearsal =
+        morpholog_postgres::rehearse_candidate(&pool, pg.prepared(), &mut |p| progress.push(p))
+            .await
+            .unwrap();
     assert_eq!(rehearsal.totals.would_reject, 1, "{rehearsal:?}");
+    // Progress reaches the row count, control rows included on both sides.
+    let last = progress.last().unwrap();
+    assert_eq!((last.done, last.total), (3, 3), "{progress:?}");
     assert_eq!(rehearsal.differences[0].transition_id, a.to_string());
 }
 

@@ -195,14 +195,24 @@ async fn every_replay_reports_what_it_reported_before() {
     .await
     .unwrap();
     let strict_pg = pg_program(candidate());
-    let rehearsal = rehearse_candidate(&pool, strict_pg.prepared())
+    let rehearsal = rehearse_candidate(&pool, strict_pg.prepared(), &mut |_| {})
         .await
         .unwrap();
     make_checkpoint(&pool).await;
     let pack = export_pack(&pool, None).await.unwrap();
     let pack_score = score_candidate_against_pack(&validated(&strict), &pack, None, None).unwrap();
+    let mut pack_progress = Vec::new();
     let pack_rehearsal =
-        rehearse_candidate_against_pack(strict_pg.prepared(), &pack, None).unwrap();
+        rehearse_candidate_against_pack(strict_pg.prepared(), &pack, None, &mut |p| {
+            pack_progress.push(p)
+        })
+        .unwrap();
+    let last = pack_progress.last().unwrap();
+    assert_eq!(
+        (last.done, last.total),
+        (pack.rows.len() as u64, pack.rows.len() as u64),
+        "{pack_progress:?}"
+    );
 
     let report = normalise(
         json!({
