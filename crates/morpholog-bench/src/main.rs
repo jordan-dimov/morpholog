@@ -1402,6 +1402,11 @@ async fn measure_rehearse(
     noise: usize,
     repeat: usize,
 ) -> Result<CaseResult> {
+    if !noise.is_multiple_of(1000) {
+        return Err(anyhow!(
+            "--noise must be a multiple of 1000, the fold's progress step"
+        ));
+    }
     let program = register_program(refusing)?;
     let prepared =
         PreparedProgram::new(program).map_err(|errors| anyhow!("invalid programme: {errors:?}"))?;
@@ -1416,6 +1421,7 @@ async fn measure_rehearse(
 
     let mut fetch = Vec::with_capacity(repeat);
     let mut decide = Vec::with_capacity(repeat);
+    let mut decide_register = Vec::with_capacity(repeat);
     let mut serialise = Vec::with_capacity(repeat);
     let mut end_to_end = Vec::with_capacity(repeat);
     let mut peak = Vec::with_capacity(repeat);
@@ -1427,10 +1433,22 @@ async fn measure_rehearse(
         fetch.push(t.elapsed());
         let refs: Vec<&morpholog_postgres::AuditRow> = rows.iter().collect();
 
+        // The register's rows timed on their own, from the progress call
+        // that ends the noise prefix: the fold reports every thousand
+        // rows, and the prefix is a multiple of a thousand.
         let t = Instant::now();
-        let report = morpholog_postgres::rehearse_recorded(&prepared, &refs, &mut |_| {});
-        decide.push(t.elapsed());
-        peak.push(peak_rss_mb().unwrap_or(f64::NAN));
+        let mut register_from = None;
+        let report = morpholog_postgres::rehearse_recorded(&prepared, &refs, &mut |p| {
+            if p.done == noise as u64 && register_from.is_none() {
+                register_from = Some(Instant::now());
+            }
+        });
+        let total = t.elapsed();
+        decide.push(total);
+        decide_register.push(match register_from {
+            Some(from) => from.elapsed(),
+            None => total,
+        });
         // A fixture the candidate cannot replay measures nothing.
         if report.totals.unreplayable != 0 {
             return Err(anyhow!(
@@ -1444,20 +1462,34 @@ async fn measure_rehearse(
                 report.totals.same
             ));
         }
+        if refusing && report.totals.would_reject == 0 {
+            return Err(anyhow!(
+                "the refusing candidate refused nothing: the register needs more than 100 rows"
+            ));
+        }
 
         let t = Instant::now();
         let bytes = serde_json::to_vec(&report).context("serialising the report")?;
         serialise.push(t.elapsed());
-        std::hint::black_box(bytes);
+        std::hint::black_box(bytes.len());
+        // The end-to-end call fetches its own rows: the ones held so far
+        // are released first, so its footprint is its own.
+        drop(bytes);
+        drop(report);
+        drop(refs);
+        drop(rows);
 
         let t = Instant::now();
         morpholog_postgres::rehearse_candidate(pool, &prepared, &mut |_| {})
             .await
             .context("rehearse_candidate")?;
         end_to_end.push(t.elapsed());
+        // The process's high-water mark so far: the largest footprint any
+        // phase reached, the decoded rows during the decision included.
+        peak.push(peak_rss_mb().unwrap_or(f64::NAN));
     }
     // Per register row: the noise rows are the state, not the work.
-    let per_row_us: Vec<f64> = decide
+    let per_row_us: Vec<f64> = decide_register
         .iter()
         .map(|d| d.as_secs_f64() * 1e6 / n as f64)
         .collect();
@@ -1475,6 +1507,7 @@ async fn measure_rehearse(
             },
             Metric::ms("fetch_rows", &fetch),
             Metric::ms("decide_rows", &decide),
+            Metric::ms("decide_register", &decide_register),
             Metric {
                 name: "decide_per_row",
                 unit: "us",
@@ -4081,9 +4114,10 @@ mod smoke {
             .await
             .expect("replay scenario smoke, compiled");
         }
-        for (revise, refusing, noise) in [(0, false, 2), (1, false, 0), (0, true, 0)] {
+        // Past a hundred rows, so the refusing candidate refuses one.
+        for (revise, refusing, noise) in [(0, false, 1000), (1, false, 0), (0, true, 0)] {
             run_rehearse(RehearseArgs {
-                n: 3,
+                n: 101,
                 revise,
                 refusing,
                 noise,
