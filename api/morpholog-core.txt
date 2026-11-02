@@ -430,6 +430,12 @@ pub const morpholog_core::rehearse::REHEARSAL_FORMAT_VERSION: u32
 pub mod morpholog_core::schema
 pub fn morpholog_core::schema::intent_arg_schema(&morpholog_core::ValidatedProgram<'_>, &morpholog_core::IntentName) -> core::option::Option<serde_json::value::Value>
 pub fn morpholog_core::schema::transformation_arg_schema(&morpholog_core::ValidatedProgram<'_>, &morpholog_core::TransformationName) -> core::result::Result<serde_json::value::Value, morpholog_core::analysis::AnalysisError>
+pub mod morpholog_core::tally
+pub static morpholog_core::tally::CLAIMS_REBUILT: core::sync::atomic::AtomicU64
+pub static morpholog_core::tally::OVERLAY_ENTRIES_COPIED: core::sync::atomic::AtomicU64
+pub static morpholog_core::tally::STATE_CLONES: core::sync::atomic::AtomicU64
+pub static morpholog_core::tally::STATE_REBUILDS: core::sync::atomic::AtomicU64
+pub fn morpholog_core::tally::snapshot() -> [u64; 4]
 pub enum morpholog_core::AnalysisError
 pub morpholog_core::AnalysisError::UnknownTransformation
 pub morpholog_core::AnalysisError::UnknownTransformation::name: morpholog_core::TransformationName
@@ -3227,9 +3233,8 @@ pub fn morpholog_core::State::claims_for<'a>(&'a self, &str) -> impl core::iter:
 pub fn morpholog_core::State::from_claims(alloc::vec::Vec<morpholog_core::ClaimInstance>) -> Self
 pub fn morpholog_core::State::is_empty(&self) -> bool
 pub fn morpholog_core::State::len(&self) -> usize
-pub fn morpholog_core::State::settle_for_snapshots(&mut self)
 impl core::clone::Clone for morpholog_core::State
-pub fn morpholog_core::State::clone(&self) -> morpholog_core::State
+pub fn morpholog_core::State::clone(&self) -> Self
 impl core::cmp::Eq for morpholog_core::State
 impl core::cmp::PartialEq for morpholog_core::State
 pub fn morpholog_core::State::eq(&self, &Self) -> bool

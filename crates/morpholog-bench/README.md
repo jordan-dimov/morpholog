@@ -338,6 +338,19 @@ What it says, and what it does not. The per-row cost of a decision follows the l
 
 The same hundred thousand decisions cost nineteen times more behind state they never read. Nothing else differs between the first two rows: the same acts, the same keys, the same rules, the same plans, which bound every decision to its own row. The cost is in the per-proposal clone of the pre-state's overlay and the compaction that keeps it bounded, each proportional to the live set, which is what the candidate-state view in #674 removes. Peak RSS 1.14 GB with the noise, 400k decoded rows held in memory among it. The acceptance condition for the view is this table's two `decide_register` figures coming out about the same.
 
+### After the view (2026-11-02, same machine and configuration, one repeat)
+
+Two changes, each measured on its own against the ruler above. Step A reads a proposal's candidate through a view over the pre-state and its staged delta instead of cloning the overlay; step B drops the rehearsal's own compaction policy, which existed to keep those clones small, and leaves the state its ordinary maintenance. The counters are the state's own: clones made and overlay entries copied, full rebuilds and claims re-indexed, over the register's rows alone.
+
+| 100k register rows | live claims | before | step A | step B | per row after | clones, A | claims rebuilt, before / A / B |
+|---|---|---|---|---|---|---|---|
+| revise | 2,000 | 8.4 s | 3.75 s | 3.55 s | 35 us | 0 | 3.1 M / 1.5 M / 1.5 M |
+| append | 200,000 | 31.0 s | 24.5 s | 2.43 s | 24 us | 0 | 36.5 M / 36.5 M / 1.6 M |
+| refuse | 200,000 | 26.1 s | | 2.58 s | 26 us | | |
+| revise behind 300k irrelevant claims | 302,000 | 151.3 s | 155.1 s | 4.91 s | 49 us | 0 | 226 M / 154 M / 1.8 M |
+
+What each step bought. The view removed every clone and with it a fixed cost per decision that showed even at two thousand live claims: the revise case more than halved. It did not touch the 300k case, whose suffix spent its 155 s in 511 rebuilds of a 300k-claim state; the clones had been the noise prefix's cost. Dropping the rehearsal's compaction policy took that suffix from 155 s to 4.9 s and the append case from 24.5 s to 2.4 s: six rebuilds instead of 511, under the state's ordinary threshold. The acceptance condition was the two revise figures coming out about the same, 8.0 and 151.3 before; they are 3.55 and 4.91 now, and the difference is those six rebuilds of a 302k-claim state, the ordinary maintenance amortised over the run. No decision, witness or error moved; the fingerprint corpus and the kernel-SQL differential are unchanged. The read is now the larger share of an end-to-end run: 1.2 to 4.8 s of fetching and decoding against 2.4 to 4.9 s of deciding.
+
 ### Deferred
 
 - **As-of reads that cost what the answer costs.** Replay is linear in the transitions before the target, under retraction and revision alike. The TEC register made that unacceptable for an interactive read, and `asof/revise` is its ruler: a small live set over a long history, where the cost is all history.

@@ -337,22 +337,6 @@ impl State {
         self.apply_under(asserted, retracted, threshold);
     }
 
-    /// Compact when cloning this state would cost more than rebuilding
-    /// it amortises. A clone copies what changed since the base, so a
-    /// replay that snapshots the state at every row, as a rehearsal
-    /// does through `propose`, pays the overlay's size each time; the
-    /// default threshold suits a replay that never clones. The balance
-    /// point is an overlay of about the square root of the live set,
-    /// which the compaction floor exceeds until the live set passes
-    /// about a hundred and thirty thousand claims, so below that the
-    /// floor is the threshold.
-    pub fn settle_for_snapshots(&mut self) {
-        let churn = self.dead_base.len() + self.overlay.claims.len();
-        if churn > COMPACTION_FLOOR && churn * churn > 2 * self.live {
-            *self = State::from_claims(self.claims().to_vec());
-        }
-    }
-
     /// [`State::apply`] with an explicit compaction `threshold` (on
     /// retracted base positions plus overlay slots), so a test can drive
     /// every layering of one logical history.
@@ -497,12 +481,6 @@ impl State {
     #[cfg(test)]
     pub(crate) fn claims_visited(&self) -> u64 {
         self.visited.get()
-    }
-
-    /// What a clone copies: the overlay and the retracted base positions.
-    #[cfg(test)]
-    pub(crate) fn churn(&self) -> usize {
-        self.dead_base.len() + self.overlay.claims.len()
     }
 
     /// Total number of admitted claims across all predicates.
