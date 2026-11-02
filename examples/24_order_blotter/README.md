@@ -80,3 +80,9 @@ partial fills and cancelling the unfilled remainder, a cancellation
 request still on its way to the venue (here a cancel is the desk's
 record that the venue cancelled), and how a desk's trust root appoints
 the first corrector.
+
+One thing to settle before the first erratum is ever needed: the line
+must carry an identity of its own, as a cancel carries `cancel_id`. A
+line known only by its fields can be struck once per set of fields for
+ever, and an identity cannot be added to an append-only predicate that
+already has history, so it would be a new predicate.
