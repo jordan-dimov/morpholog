@@ -96,7 +96,7 @@ pub use propose::{
 pub use reads::{KeyedPattern, KnownTerm, ReadFilter, ReadPlan};
 pub use rehearse::{
     Effect, REHEARSAL_CONTRACT, REHEARSAL_FORMAT_VERSION, RecordedProposal, Rehearsal,
-    RehearsalReport, RowClass, RowReport, RuleRefusals, Totals,
+    RehearsalReport, RowClass, RowReport, RuleRefusals, Totals, Unreplayable, UnreplayableTotals,
 };
 pub use schema::{intent_arg_schema, transformation_arg_schema};
 pub use score::{

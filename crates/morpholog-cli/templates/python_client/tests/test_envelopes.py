@@ -722,8 +722,33 @@ class Rehearsal(unittest.TestCase):
         self.assertEqual(len(differing.recorded.asserted), 2)
         self.assertEqual(len(differing.candidate.asserted), 1)
         self.assertEqual(report.differences[2].error, "division by zero")
-        self.assertIn("vanished", report.differences[3].reason or "")
+        gone = report.differences[3]
+        self.assertEqual(gone.because, "no_such_act")
+        self.assertIn("vanished", gone.reason or "")
+        self.assertEqual(report.totals.unreplayable_because.no_such_act, 1)
+        self.assertEqual(report.totals.unreplayable_because.arity, 0)
         self.assertEqual(report.refusals[0].refused_transitions, [refused.transition_id])
+        # Every row names the programme that admitted it, which is not the
+        # candidate's: the refusal is by a rule newer than the row.
+        self.assertTrue(all(r.model_hash for r in report.differences))
+        self.assertNotEqual(refused.model_hash, report.program_hash)
+
+    def test_an_unreplayable_row_names_a_known_cause(self):
+        payload = golden("rehearsal_report.json")
+        payload["differences"][3]["because"] = "vibes"
+        with self.assertRaisesRegex(envelopes.EnvelopeError, "because"):
+            envelopes.RehearsalReport.from_json(payload)
+        del payload["differences"][3]["because"]
+        with self.assertRaisesRegex(envelopes.EnvelopeError, "because"):
+            envelopes.RehearsalReport.from_json(payload)
+
+    def test_a_rehearsal_row_may_predate_its_hash(self):
+        payload = golden("rehearsal_report.json")
+        del payload["differences"][0]["model_hash"]
+        del payload["differences"][0]["semantics_version"]
+        row = envelopes.RehearsalReport.from_json(payload).differences[0]
+        self.assertIsNone(row.model_hash)
+        self.assertIsNone(row.semantics_version)
 
     def test_a_rehearsal_row_carries_only_its_class_fields(self):
         payload = golden("rehearsal_report.json")

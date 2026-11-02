@@ -709,6 +709,7 @@
           }
         },
         "kind": "invariant",
+        "model_hash": "sha256:ad4909eab4a80f64f70c15795c7c04804e34975a0a0bd179aace225a6ea58f1a",
         "rule": "small_notes",
         "semantics_version": 4,
         "transformation": "note",
@@ -744,6 +745,7 @@
           }
         },
         "kind": "invariant",
+        "model_hash": "sha256:ad4909eab4a80f64f70c15795c7c04804e34975a0a0bd179aace225a6ea58f1a",
         "rule": "small_notes",
         "semantics_version": 4,
         "transformation": "note",
@@ -785,6 +787,11 @@
       "different_delta": 0,
       "same": 11,
       "unreplayable": 0,
+      "unreplayable_because": {
+        "arity": 0,
+        "draws": 0,
+        "no_such_act": 0
+      },
       "would_error": 0,
       "would_reject": 2
     },
@@ -833,6 +840,7 @@
           }
         },
         "kind": "invariant",
+        "model_hash": "sha256:ad4909eab4a80f64f70c15795c7c04804e34975a0a0bd179aace225a6ea58f1a",
         "rule": "small_notes",
         "semantics_version": 4,
         "transformation": "note",
@@ -868,6 +876,7 @@
           }
         },
         "kind": "invariant",
+        "model_hash": "sha256:ad4909eab4a80f64f70c15795c7c04804e34975a0a0bd179aace225a6ea58f1a",
         "rule": "small_notes",
         "semantics_version": 4,
         "transformation": "note",
@@ -909,6 +918,11 @@
       "different_delta": 0,
       "same": 11,
       "unreplayable": 0,
+      "unreplayable_because": {
+        "arity": 0,
+        "draws": 0,
+        "no_such_act": 0
+      },
       "would_error": 0,
       "would_reject": 2
     },

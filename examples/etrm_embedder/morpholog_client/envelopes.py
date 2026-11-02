@@ -2049,6 +2049,7 @@ _REHEARSAL_CLASSES = frozenset(
     {"different_delta", "would_reject", "would_error", "unreplayable"}
 )
 _REHEARSAL_REFUSAL_KINDS = frozenset({"require", "bind", "invariant"})
+_REHEARSAL_UNREPLAYABLE = frozenset({"no_such_act", "arity", "draws"})
 
 
 @dataclass(frozen=True)
@@ -2076,13 +2077,18 @@ class RehearsalRow:
     ``klass`` is ``different_delta`` (``recorded`` and ``candidate``
     effects), ``would_reject`` (``rule``, ``kind``, ``witness`` absent when
     no binding was pinned, ``compared`` when a comparison failed),
-    ``would_error`` (``error``) or ``unreplayable`` (``reason``).
-    ``semantics_version`` is the one the row was admitted under, ``None``
-    on rows written before it was recorded."""
+    ``would_error`` (``error``) or ``unreplayable`` (``because``, one of
+    ``no_such_act``, ``arity`` and ``draws``, with the prose ``reason``).
+    ``model_hash`` is the programme that admitted the row and
+    ``semantics_version`` the semantics, each ``None`` on rows written
+    before it was recorded. A ``would_reject`` whose rule the admitting
+    programme did not have is a rule newer than the row, not the same
+    rule deciding differently."""
 
     transition_id: str
     transformation: str
     klass: str
+    model_hash: str | None = None
     semantics_version: int | None = None
     recorded: RehearsalEffect | None = None
     candidate: RehearsalEffect | None = None
@@ -2091,6 +2097,7 @@ class RehearsalRow:
     witness: list[WitnessBinding] | None = None
     compared: Compared | None = None
     error: str | None = None
+    because: str | None = None
     reason: str | None = None
 
     @classmethod
@@ -2103,12 +2110,13 @@ class RehearsalRow:
             f"rehearsal row ({klass})",
             payload,
             base | required,
-            optional | {"semantics_version"},
+            optional | {"model_hash", "semantics_version"},
         )
         return cls(
             transition_id=data.text("transition_id"),
             transformation=data.text("transformation"),
             klass=klass,
+            model_hash=_hash(data, "model_hash") if "model_hash" in data else None,
             semantics_version=data.optional_integer("semantics_version", minimum=1),
             recorded=data.optional_nested("recorded", RehearsalEffect.from_json),
             candidate=data.optional_nested("candidate", RehearsalEffect.from_json),
@@ -2121,6 +2129,9 @@ class RehearsalRow:
             ),
             compared=data.optional_nested("compared", Compared.from_json),
             error=data.optional_text("error"),
+            because=(
+                data.member("because", _REHEARSAL_UNREPLAYABLE) if "because" in data else None
+            ),
             reason=data.optional_text("reason"),
         )
 
@@ -2129,10 +2140,22 @@ _REHEARSAL_ROW_SHAPES: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "different_delta": (frozenset({"recorded", "candidate"}), frozenset()),
     "would_reject": (frozenset({"rule", "kind"}), frozenset({"witness", "compared"})),
     "would_error": (frozenset({"error"}), frozenset()),
-    "unreplayable": (frozenset({"reason"}), frozenset()),
+    "unreplayable": (frozenset({"because", "reason"}), frozenset()),
 }
 _REHEARSAL_ROW_OPTIONAL = frozenset(
-    {"semantics_version", "recorded", "candidate", "rule", "kind", "witness", "compared", "error", "reason"}
+    {
+        "model_hash",
+        "semantics_version",
+        "recorded",
+        "candidate",
+        "rule",
+        "kind",
+        "witness",
+        "compared",
+        "error",
+        "because",
+        "reason",
+    }
 )
 
 
@@ -2160,18 +2183,39 @@ class RuleRefusals:
 
 
 @dataclass(frozen=True)
+class RehearsalUnreplayable:
+    """The unreplayable rows by cause; the three sum to ``unreplayable``."""
+
+    no_such_act: int
+    arity: int
+    draws: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> RehearsalUnreplayable:
+        keys = {"no_such_act", "arity", "draws"}
+        data = _strict("unreplayable totals", payload, keys)
+        return cls(**{k: data.integer(k, minimum=0) for k in keys})
+
+
+@dataclass(frozen=True)
 class RehearsalTotals:
     same: int
     different_delta: int
     would_reject: int
     would_error: int
     unreplayable: int
+    unreplayable_because: RehearsalUnreplayable
 
     @classmethod
     def from_json(cls, payload: object) -> RehearsalTotals:
-        keys = {"same", "different_delta", "would_reject", "would_error", "unreplayable"}
-        data = _strict("rehearsal totals", payload, keys)
-        return cls(**{k: data.integer(k, minimum=0) for k in keys})
+        counts = {"same", "different_delta", "would_reject", "would_error", "unreplayable"}
+        data = _strict("rehearsal totals", payload, counts | {"unreplayable_because"})
+        return cls(
+            **{k: data.integer(k, minimum=0) for k in counts},
+            unreplayable_because=data.nested(
+                "unreplayable_because", RehearsalUnreplayable.from_json
+            ),
+        )
 
 
 @dataclass(frozen=True)

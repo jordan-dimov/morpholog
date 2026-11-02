@@ -2000,6 +2000,9 @@ fn rehearsal_report_serializes_as_pinned() {
                 retracted: &[],
                 emitted: &[],
                 drawn: Some(&[]),
+                model_hash: Some(
+                    "sha256:8a1d8c1f0b7e4e2c9d6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e",
+                ),
                 semantics_version: Some(3),
             },
         );
