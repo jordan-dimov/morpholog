@@ -39,10 +39,11 @@ The binary moves, the programmes do not. The full account is
    then without `--check` if it exits non-zero. A new binary can need
    different indexes with no migration at all
    ([the deploy sequence](embedder-integration.md#the-deploy-sequence)).
-10. When the release notes list client contract changes:
+10. Regenerate every generated client package:
     `morpholog generate python-client a.morph --out <package> --check`,
-    then without `--check`. A client from the old release refuses the
-    first changed row by design
+    then without `--check`. On every upgrade, not only one that lists
+    contract changes: a client pins the binary version and refuses
+    another before its first call
     ([the generated client](embedder-integration.md#the-generated-python-client-generate-python-client)).
 11. Start every process on the new binary.
 
@@ -55,9 +56,12 @@ stays](embedder-integration.md#when-the-programme-changes-and-the-ledger-stays).
 1. `morpholog check --strict new.morph`. Lints become errors; `-v` lists
    which invariants are checked whole.
 2. `morpholog check --strict --database-url "$DATABASE_URL" new.morph --against b.morph`,
-   once per other programme the database serves. The new programme must
-   fit the claims stored now and agree with the others on every shared
-   predicate ([`check --database-url`](embedder-integration.md#morpholog-check---database-url)).
+   one run, with `--against` once for every other programme the database
+   serves and none when there is none. The new programme must fit the
+   claims stored now and agree with the others on every shared
+   predicate; under `--strict` a stored predicate that no programme on
+   the line declares is a failure, so every other one must be named
+   ([`check --database-url`](embedder-integration.md#morpholog-check---database-url)).
 3. `morpholog evaluate new.morph --database-url "$DATABASE_URL"`. For
    each invariant: whether it held on the empty state, and which past
    commits it would have refused. Invariants only; a programme using
@@ -71,11 +75,15 @@ stays](embedder-integration.md#when-the-programme-changes-and-the-ledger-stays).
    generated client pinned to the old hash refuses the new programme:
    `morpholog generate python-client new.morph --out <package> --check`,
    then without `--check`.
-6. `morpholog provision indexes --check a.morph new.morph --database-url "$DATABASE_URL"`,
-   naming every programme the database serves, then without `--check` if
-   it exits non-zero. A new rule can need a new index.
+6. `morpholog provision indexes --check new.morph b.morph --database-url "$DATABASE_URL"`,
+   naming every programme the database serves, the new file in place of
+   the one it replaces (two files with one programme name are refused),
+   then without `--check` if it exits non-zero. A new rule can need a new
+   index.
 7. If you read state as SQL:
-   `morpholog generate views new.morph | psql "$DATABASE_URL"`
+   `morpholog generate views new.morph | psql -v ON_ERROR_STOP=1 "$DATABASE_URL"`.
+   Without `ON_ERROR_STOP`, `psql` continues past a failed statement and
+   exits zero while the transaction rolled back
    ([reading governed state as SQL](embedder-integration.md#reading-governed-state-as-sql-generate-views)).
 8. Restart every resident session and worker that holds the old
    programme.
@@ -97,9 +105,13 @@ what is not pinned](embedder-integration.md#stability-and-what-is-not-pinned),
    `morpholog audit witness --tree-size <returned tree_size> --witness rfc3161:<url> --database-url "$DATABASE_URL"`,
    repeated until every authority the record needs has answered.
 4. `morpholog audit export --database-url "$DATABASE_URL" > close.ndjson`,
-   then `morpholog audit verify-pack close.ndjson` offline. Keep the pack
-   and a binary of the release that wrote it: only that release's
-   verifiers read its format.
+   then `morpholog audit verify-pack close.ndjson` offline; for a
+   witnessed close add `--trusted-tsa-file <cas.pem>` with authorities
+   you trust independently, and read the witness verdicts on the
+   covering head: `passes` stays true for `unverified` and `untrusted`,
+   so `passes` alone is not a trusted time. Keep the pack and a binary
+   of the release that wrote it: only that release's verifiers read its
+   format.
 
 ## What has an exit code, and what does not
 
