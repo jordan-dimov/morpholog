@@ -109,6 +109,18 @@ pub fn rehearse_candidate_against_pack(
     }
     let mut rows: Vec<&AuditRow> = pack.rows.iter().collect();
     rows.sort_by_key(|r| r.position());
+    Ok(rehearse_recorded(program, &rows, on_progress))
+}
+
+/// Rehearse a candidate over rows already in memory, in the order given,
+/// which must be the canonical one. The fold the pack path runs, and
+/// what a measurement runs when it wants the decisions apart from the
+/// read that fetched the rows.
+pub fn rehearse_recorded(
+    program: &PreparedProgram,
+    rows: &[&AuditRow],
+    on_progress: &mut dyn FnMut(RehearsalProgress),
+) -> RehearsalReport {
     let mut rehearsal = Rehearsal::new(program);
     let mut replay = State::default();
     let total = rows.len() as u64;
@@ -119,5 +131,5 @@ pub fn rehearse_candidate_against_pack(
             total,
         });
     }
-    Ok(rehearsal.into_report())
+    rehearsal.into_report()
 }

@@ -147,7 +147,9 @@ pub use receipt::{
     ReceiptCheckpoint, ReceiptForm, ReceiptQuery, ReceiptVerificationReport, VerdictKind,
     issue_receipt, parse_receipt, reproduce,
 };
-pub use rehearse::{RehearsalProgress, rehearse_candidate, rehearse_candidate_against_pack};
+pub use rehearse::{
+    RehearsalProgress, rehearse_candidate, rehearse_candidate_against_pack, rehearse_recorded,
+};
 pub use rejections::{RejectionRow, list_rejection_rows};
 pub use role_rebindings::{RebindingScope, RoleRebinding, RoleRebindings};
 pub use roles_move::{MovedLogin, RolePair, RolesMoveReport, move_deployment_roles};

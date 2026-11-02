@@ -114,6 +114,18 @@ enum Command {
     /// audit-analysis arc's cost.
     Replay(ReplayArgs),
 
+    /// Fabricate N audit rows of a register in the TEC shape (a row
+    /// predicate unique by its key, a kinds predicate pointed by the key,
+    /// one act that admits or revises a row), replayable row for row, then
+    /// time `rehearse` over them with its phases apart: the read that
+    /// fetches and decodes the rows, the kernel's decisions over rows in
+    /// memory, the report's serialisation, and the end-to-end call. With
+    /// `--revise K` the history revises K rows in turn, so the live set
+    /// stays at 2K claims however long the history grows; `--refusing`
+    /// rehearses a candidate that refuses most rows, so the diagnosis is
+    /// timed too.
+    Rehearse(RehearseArgs),
+
     /// Run the frozen canonical case matrix across per-case ladders and
     /// print one table (markdown by default; `--format json` for
     /// machine comparison). This is the whole-suite evidence a
@@ -180,6 +192,40 @@ struct ReplayArgs {
     /// establishes the index condition itself, outside every sample.
     #[arg(long, value_enum, default_value = "interpreted")]
     implementation: Implementation,
+}
+
+#[derive(clap::Args, Debug)]
+struct RehearseArgs {
+    /// Number of audit rows to fabricate.
+    n: usize,
+
+    /// Revise K rows in turn instead of admitting a new row each time:
+    /// `0` (default) admits N distinct rows.
+    #[arg(long, default_value_t = 0)]
+    revise: usize,
+
+    /// Rehearse a candidate whose added invariant refuses every row
+    /// whose version exceeds 100, so the refusal path is timed.
+    #[arg(long)]
+    refusing: bool,
+
+    /// Admit M claims of a predicate no rule reads before the register's
+    /// rows, so the live set grows while every later decision's work
+    /// stays the same: what a decision pays for state it does not touch.
+    #[arg(long, default_value_t = 0)]
+    noise: usize,
+
+    /// Timed repetitions.
+    #[arg(long, default_value_t = 3)]
+    repeat: usize,
+
+    /// PostgreSQL connection string. Falls back to `DATABASE_URL`.
+    #[arg(long, env = "DATABASE_URL")]
+    database_url: String,
+
+    /// Required: acknowledge that the target database is truncated.
+    #[arg(long)]
+    reset: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -606,6 +652,7 @@ async fn main() -> Result<()> {
         Command::Suite(args) => run_suite(args).await,
         Command::Kernel(args) => run_kernel(args),
         Command::Replay(args) => run_replay(args).await,
+        Command::Rehearse(args) => run_rehearse(args).await,
         Command::Compare(args) => run_compare(&args),
     }
 }
@@ -1169,6 +1216,335 @@ async fn run_replay(args: ReplayArgs) -> Result<()> {
         "replay",
         args.n,
         args.retract_fraction,
+        args.repeat,
+    )
+    .await?;
+    print_case_human(&result);
+    Ok(())
+}
+
+/// The register the `rehearse` scenario replays: the TEC shape, a row
+/// predicate unique by its key and a kinds predicate pointed by the key,
+/// with one act that admits a row or revises it in place.
+const REGISTER: &str = "\
+program register
+
+predicate Row(row: Subject, version: Decimal)
+    unique by (row)
+predicate RowKinds(row: Subject, kind: Subject)
+    current pointer by (row)
+predicate Noise(key: Subject, figure: Decimal)
+
+invariant kinds_describe_a_row:
+    RowKinds(row, _) implies Row(row, _)
+
+transformation admit_row(row, version, kind):
+    retract Row(row: row, ..)
+    retract RowKinds(row: row, ..)
+    admit Row(row, version)
+    admit RowKinds(row, kind)
+
+transformation note_noise(key, figure):
+    admit Noise(key, figure)
+";
+
+/// The candidate that refuses most of the register: every version past
+/// the first hundred breaks the added rule.
+const REGISTER_REFUSING: &str = "\
+invariant versions_are_small:
+    Row(_, version) implies version <= 100
+";
+
+fn register_program(refusing: bool) -> Result<Program> {
+    let source = if refusing {
+        format!("{REGISTER}\n{REGISTER_REFUSING}")
+    } else {
+        REGISTER.to_string()
+    };
+    morpholog_surface::parse_program(&source)
+        .map_err(|diagnostics| anyhow!("the register programme does not parse: {diagnostics:?}"))
+}
+
+/// Fabricate `m` rows admitting one `Noise` claim each, which no rule
+/// reads: live state a later decision never touches.
+async fn fabricate_noise_rows(pool: &PgPool, m: usize) -> Result<()> {
+    let m_i: i64 = m
+        .try_into()
+        .map_err(|_| anyhow!("noise={m} too large for i64"))?;
+    sqlx::query(
+        "INSERT INTO morpholog.audit (
+            transition_id, transformation_name, arguments, actor,
+            invariant_epoch, invariants_checked,
+            asserted_claims, retracted_claims, emitted_intents,
+            committed_at, attestation, parameters, model_hash, semantics_version,
+            drawn_subjects, operations
+        )
+        SELECT
+            gen_random_uuid(), 'note_noise',
+            jsonb_build_array(
+                jsonb_build_object('type','subject','value','noise_' || i),
+                jsonb_build_object('type','decimal','value',i::text)),
+            '{\"type\":\"subject\",\"value\":\"bench\"}'::jsonb,
+            1, '[]'::jsonb,
+            claim, '[]'::jsonb, '[]'::jsonb,
+            now() - interval '1 hour' + (i * interval '1 microsecond'),
+            '{\"mode\":\"gateway\",\"authenticated_by\":\"bench-fixture\"}'::jsonb,
+            '[\"key\",\"figure\"]'::jsonb, 'sha256:' || repeat('0', 64), 1, '[]'::jsonb,
+            (SELECT jsonb_agg(c || '{\"op\":\"ins\"}'::jsonb) FROM jsonb_array_elements(claim) c)
+        FROM (
+            SELECT i, jsonb_build_array(jsonb_build_object('predicate', 'Noise', 'args',
+                jsonb_build_array(
+                    jsonb_build_object('type','subject','value','noise_' || i),
+                    jsonb_build_object('type','decimal','value',i::text)))) AS claim
+            FROM generate_series(1, $1) AS i
+        ) noise
+        ORDER BY i",
+    )
+    .bind(m_i)
+    .execute(pool)
+    .await
+    .context("fabricate noise rows")?;
+    Ok(())
+}
+
+/// The audit table's size on disk, so a fetch time can be read beside
+/// the bytes it moved.
+async fn audit_bytes(pool: &PgPool) -> Result<f64> {
+    let row: (i64,) = sqlx::query_as("SELECT pg_total_relation_size('morpholog.audit')")
+        .fetch_one(pool)
+        .await
+        .context("audit table size")?;
+    Ok(row.0 as f64 / (1024.0 * 1024.0))
+}
+
+/// Fabricate `n` rows of the register's history, each exactly what
+/// `admit_row` records: row `i` admits version `i` of key `(i - 1) mod k`
+/// (or of its own key when `k` is 0) and, once that key exists, retracts
+/// the version admitted `k` rows earlier.
+async fn fabricate_register_rows(pool: &PgPool, n: usize, k: usize) -> Result<()> {
+    let n_i: i64 = n
+        .try_into()
+        .map_err(|_| anyhow!("n={n} too large for i64"))?;
+    let k_i: i64 = k
+        .try_into()
+        .map_err(|_| anyhow!("k={k} too large for i64"))?;
+    let claims = |version: &str, kind: &str| {
+        format!(
+            "jsonb_build_array(
+                jsonb_build_object('predicate', 'Row', 'args', jsonb_build_array(
+                    jsonb_build_object('type','subject','value','row_' || key),
+                    jsonb_build_object('type','decimal','value',({version})::text))),
+                jsonb_build_object('predicate', 'RowKinds', 'args', jsonb_build_array(
+                    jsonb_build_object('type','subject','value','row_' || key),
+                    jsonb_build_object('type','subject','value','k' || (({kind}) % 7)))))"
+        )
+    };
+    let sql = format!(
+        "INSERT INTO morpholog.audit (
+            transition_id, transformation_name, arguments, actor,
+            invariant_epoch, invariants_checked,
+            asserted_claims, retracted_claims, emitted_intents,
+            committed_at, attestation, parameters, model_hash, semantics_version,
+            drawn_subjects, operations
+        )
+        SELECT
+            gen_random_uuid(), 'admit_row',
+            jsonb_build_array(
+                jsonb_build_object('type','subject','value','row_' || key),
+                jsonb_build_object('type','decimal','value',i::text),
+                jsonb_build_object('type','subject','value','k' || (i % 7))),
+            '{{\"type\":\"subject\",\"value\":\"bench\"}}'::jsonb,
+            1, '[]'::jsonb,
+            {current},
+            CASE WHEN prev > 0 THEN {previous} ELSE '[]'::jsonb END,
+            '[]'::jsonb,
+            now() + (i * interval '1 microsecond'),
+            '{{\"mode\":\"gateway\",\"authenticated_by\":\"bench-fixture\"}}'::jsonb,
+            '[\"row\",\"version\",\"kind\"]'::jsonb, 'sha256:' || repeat('0', 64), 1, '[]'::jsonb,
+            (SELECT coalesce(jsonb_agg(c || '{{\"op\":\"del\"}}'::jsonb), '[]'::jsonb)
+               FROM jsonb_array_elements(CASE WHEN prev > 0 THEN {previous} ELSE '[]'::jsonb END) c)
+            || (SELECT jsonb_agg(c || '{{\"op\":\"ins\"}}'::jsonb)
+                  FROM jsonb_array_elements({current}) c)
+        FROM (
+            SELECT i,
+                   CASE WHEN $2 > 0 THEN (i - 1) % $2 ELSE i END AS key,
+                   CASE WHEN $2 > 0 THEN i - $2 ELSE 0 END AS prev
+            FROM generate_series(1, $1) AS i
+        ) versions
+        ORDER BY i",
+        current = claims("i", "i"),
+        previous = claims("prev", "prev"),
+    );
+    sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(n_i)
+        .bind(k_i)
+        .execute(pool)
+        .await
+        .context("fabricate register rows")?;
+    Ok(())
+}
+
+/// This process's peak resident set so far, in megabytes, from
+/// `/proc/self/status`.
+fn peak_rss_mb() -> Option<f64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|l| l.starts_with("VmHWM:"))?;
+    let kb: f64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kb / 1024.0)
+}
+
+async fn measure_rehearse(
+    pool: &PgPool,
+    case: &str,
+    n: usize,
+    revise: usize,
+    refusing: bool,
+    noise: usize,
+    repeat: usize,
+) -> Result<CaseResult> {
+    if !noise.is_multiple_of(1000) {
+        return Err(anyhow!(
+            "--noise must be a multiple of 1000, the fold's progress step"
+        ));
+    }
+    let program = register_program(refusing)?;
+    let prepared =
+        PreparedProgram::new(program).map_err(|errors| anyhow!("invalid programme: {errors:?}"))?;
+    let t = Instant::now();
+    reset_db(pool).await?;
+    fabricate_noise_rows(pool, noise).await?;
+    fabricate_register_rows(pool, n, revise).await?;
+    let fixture = t.elapsed();
+    analyze_audit(pool).await?;
+    let audit_mb = audit_bytes(pool).await?;
+    let rows_total = (n + noise) as u64;
+
+    let mut fetch = Vec::with_capacity(repeat);
+    let mut decide = Vec::with_capacity(repeat);
+    let mut decide_register = Vec::with_capacity(repeat);
+    let mut serialise = Vec::with_capacity(repeat);
+    let mut end_to_end = Vec::with_capacity(repeat);
+    let mut peak = Vec::with_capacity(repeat);
+    for _ in 0..repeat {
+        let t = Instant::now();
+        let rows = morpholog_postgres::list_audit_rows(pool)
+            .await
+            .context("list_audit_rows")?;
+        fetch.push(t.elapsed());
+        let refs: Vec<&morpholog_postgres::AuditRow> = rows.iter().collect();
+
+        // The register's rows timed on their own, from the progress call
+        // that ends the noise prefix: the fold reports every thousand
+        // rows, and the prefix is a multiple of a thousand.
+        let t = Instant::now();
+        let mut register_from = None;
+        let report = morpholog_postgres::rehearse_recorded(&prepared, &refs, &mut |p| {
+            if p.done == noise as u64 && register_from.is_none() {
+                register_from = Some(Instant::now());
+            }
+        });
+        let total = t.elapsed();
+        decide.push(total);
+        decide_register.push(match register_from {
+            Some(from) => from.elapsed(),
+            None => total,
+        });
+        // A fixture the candidate cannot replay measures nothing.
+        if report.totals.unreplayable != 0 {
+            return Err(anyhow!(
+                "{} rows unreplayable: the fixture is not the act's record",
+                report.totals.unreplayable
+            ));
+        }
+        if !refusing && report.totals.same != rows_total {
+            return Err(anyhow!(
+                "{} of {rows_total} rows decided the same; the fixture is not faithful",
+                report.totals.same
+            ));
+        }
+        if refusing && report.totals.would_reject == 0 {
+            return Err(anyhow!(
+                "the refusing candidate refused nothing: the register needs more than 100 rows"
+            ));
+        }
+
+        let t = Instant::now();
+        let bytes = serde_json::to_vec(&report).context("serialising the report")?;
+        serialise.push(t.elapsed());
+        std::hint::black_box(bytes.len());
+        // The end-to-end call fetches its own rows: the ones held so far
+        // are released first, so its footprint is its own.
+        drop(bytes);
+        drop(report);
+        drop(refs);
+        drop(rows);
+
+        let t = Instant::now();
+        morpholog_postgres::rehearse_candidate(pool, &prepared, &mut |_| {})
+            .await
+            .context("rehearse_candidate")?;
+        end_to_end.push(t.elapsed());
+        // The process's high-water mark so far: the largest footprint any
+        // phase reached, the decoded rows during the decision included.
+        peak.push(peak_rss_mb().unwrap_or(f64::NAN));
+    }
+    // Per register row: the noise rows are the state, not the work.
+    let per_row_us: Vec<f64> = decide_register
+        .iter()
+        .map(|d| d.as_secs_f64() * 1e6 / n as f64)
+        .collect();
+    Ok(CaseResult {
+        case: case.to_string(),
+        implementation: "interpreted",
+        axis: "n",
+        point: n as u64,
+        metrics: vec![
+            Metric::ms("fixture_build", &[fixture]),
+            Metric {
+                name: "audit_table",
+                unit: "MB",
+                samples: vec![audit_mb],
+            },
+            Metric::ms("fetch_rows", &fetch),
+            Metric::ms("decide_rows", &decide),
+            Metric::ms("decide_register", &decide_register),
+            Metric {
+                name: "decide_per_row",
+                unit: "us",
+                samples: per_row_us,
+            },
+            Metric::ms("serialise_report", &serialise),
+            Metric::ms("end_to_end", &end_to_end),
+            Metric {
+                name: "peak_rss",
+                unit: "MB",
+                samples: peak,
+            },
+        ],
+    })
+}
+
+async fn run_rehearse(args: RehearseArgs) -> Result<()> {
+    check_reset_ack(args.reset, &args.database_url)?;
+    require_positive_repeat(args.repeat)?;
+    let pool = connect(&args.database_url).await?;
+    require_migration_head(&pool).await?;
+    let case = match (args.revise, args.refusing) {
+        (_, true) => "rehearse/refuse",
+        (0, false) => "rehearse/append",
+        _ => "rehearse/revise",
+    };
+    println!(
+        "scenario=rehearse n={} revise={} refusing={} noise={} repeat={}",
+        args.n, args.revise, args.refusing, args.noise, args.repeat
+    );
+    let result = measure_rehearse(
+        &pool,
+        case,
+        args.n,
+        args.revise,
+        args.refusing,
+        args.noise,
         args.repeat,
     )
     .await?;
@@ -3737,6 +4113,20 @@ mod smoke {
             })
             .await
             .expect("replay scenario smoke, compiled");
+        }
+        // Past a hundred rows, so the refusing candidate refuses one.
+        for (revise, refusing, noise) in [(0, false, 1000), (1, false, 0), (0, true, 0)] {
+            run_rehearse(RehearseArgs {
+                n: 101,
+                revise,
+                refusing,
+                noise,
+                repeat: 1,
+                database_url: url.clone(),
+                reset: true,
+            })
+            .await
+            .expect("rehearse scenario smoke");
         }
 
         // Back to an unindexed configuration: the indexes the last run
