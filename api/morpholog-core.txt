@@ -1813,6 +1813,7 @@ pub morpholog_core::Widening::In
 pub morpholog_core::Widening::NoCaseVariable(morpholog_core::PredicateName)
 pub morpholog_core::Widening::Or
 pub morpholog_core::Widening::Pre
+pub morpholog_core::Widening::ScopeReadsBeforeBinding(morpholog_core::Var)
 pub morpholog_core::Widening::SumOverExpression
 pub morpholog_core::Widening::UnfollowedCall(morpholog_core::DefinitionName)
 pub morpholog_core::Widening::ValueLookup

@@ -76,6 +76,12 @@ pub enum Widening {
     /// A claim pattern binding no case variable: a delta touching it has
     /// no case to be bounded to.
     NoCaseVariable(PredicateName),
+    /// A closed scope (`exists`, `forall`, `not`, a nested rule, a sum)
+    /// reads a case variable's name before the conjunction around it has
+    /// bound it. Inside the scope the name is the scope's own binding,
+    /// not the rule's case, so a case bounded on it would miss what the
+    /// scope sees.
+    ScopeReadsBeforeBinding(Var),
 }
 
 impl fmt::Display for Widening {
@@ -92,6 +98,9 @@ impl fmt::Display for Widening {
                 write!(f, "`{name}` is a call that could not be followed")
             }
             Widening::NoCaseVariable(p) => write!(f, "`{p}` binds no case variable"),
+            Widening::ScopeReadsBeforeBinding(v) => {
+                write!(f, "`{v}` is read inside a scope before the rule binds it")
+            }
         }
     }
 }
@@ -154,6 +163,15 @@ impl ImpactPlan {
             }
             NodeKind::Inert => {}
         });
+        if widening.is_none() {
+            let frame: Frame = case_vars
+                .iter()
+                .map(|v| (v.clone(), Traced::Case(v.clone())))
+                .collect();
+            if let Some(v) = antecedent_scope_read(&inv.body, &frame, None, &mut BTreeSet::new()) {
+                widening = Some(Widening::ScopeReadsBeforeBinding(v));
+            }
+        }
         Self {
             occurrences,
             widening,
@@ -185,6 +203,12 @@ impl ImpactPlan {
             &mut out,
             &antecedent_nodes(&inv.body),
         );
+        if out.widening.is_none()
+            && let Some(v) =
+                antecedent_scope_read(&inv.body, &frame, Some(table), &mut BTreeSet::new())
+        {
+            out.widening = Some(Widening::ScopeReadsBeforeBinding(v));
+        }
         out
     }
 
@@ -486,6 +510,159 @@ fn footprint_of(inv: &Invariant, definitions: &[Definition]) -> Option<BTreeSet<
     let mut out = BTreeSet::new();
     predicates_referenced_by_prop(&inv.body, definitions, &mut out);
     Some(out)
+}
+
+/// The first case variable a closed scope in the rule's antecedent reads
+/// before the conjunction has bound it, in evaluation order, through the
+/// calls `table` follows. `None` when every scope reads only names bound
+/// at its entry, which is what lets a case be seeded before the
+/// antecedent is matched.
+fn antecedent_scope_read(
+    body: &Prop,
+    frame: &Frame,
+    table: Option<DefinitionTable<'_>>,
+    seen: &mut BTreeSet<DefinitionName>,
+) -> Option<Var> {
+    let antecedent = match body {
+        Prop::Implies { left, .. } => left,
+        Prop::Forall { source, .. } => source,
+        Prop::Not(inner) => inner,
+        _ => return None,
+    };
+    let mut bound = BTreeSet::new();
+    scope_read(antecedent, frame, &mut bound, table, seen)
+}
+
+/// Walk one conjunction in evaluation order, binding what its claim
+/// patterns and followed calls bind, and asking of every closed scope
+/// whether the case names it reads were bound before it.
+fn scope_read(
+    prop: &Prop,
+    frame: &Frame,
+    bound: &mut BTreeSet<Var>,
+    table: Option<DefinitionTable<'_>>,
+    seen: &mut BTreeSet<DefinitionName>,
+) -> Option<Var> {
+    match prop {
+        Prop::And(ps) => ps
+            .iter()
+            .find_map(|p| scope_read(p, frame, bound, table, seen)),
+        Prop::Claim { args, .. } => {
+            for term in args {
+                if let Term::Var(v) = term {
+                    bound.insert(v.clone());
+                }
+            }
+            None
+        }
+        Prop::Defined { name, args } => {
+            // Without a table the call widens the plan on its own.
+            let table = table?;
+            let (found, exported) = table.enter(name, seen, |def, seen| {
+                let mut callee_frame = Frame::new();
+                let mut callee_bound = BTreeSet::new();
+                for (param, arg) in def.parameters.iter().zip(args) {
+                    match arg {
+                        Term::Var(v) => {
+                            if let Some(t) = frame.get(v) {
+                                callee_frame.insert(param.clone(), t.clone());
+                            }
+                            if bound.contains(v) {
+                                callee_bound.insert(param.clone());
+                            }
+                        }
+                        Term::Literal(_) | Term::Actor => {
+                            callee_bound.insert(param.clone());
+                        }
+                        Term::Wildcard => {}
+                    }
+                }
+                let found = scope_read(
+                    &def.body,
+                    &callee_frame,
+                    &mut callee_bound,
+                    Some(table),
+                    seen,
+                )
+                .and_then(|p| match callee_frame.get(&p) {
+                    Some(Traced::Case(v)) => Some(v.clone()),
+                    _ => None,
+                });
+                // The caller's variables the body bound through its parameters.
+                let exported: Vec<Var> = def
+                    .parameters
+                    .iter()
+                    .zip(args)
+                    .filter_map(|(param, arg)| match arg {
+                        Term::Var(v) if callee_bound.contains(param) => Some(v.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                (found, exported)
+            });
+            bound.extend(exported);
+            found
+        }
+        Prop::Exists { .. } | Prop::Forall { .. } | Prop::Not(_) | Prop::Implies { .. } => {
+            first_case_read(prop, frame, bound)
+        }
+        Prop::Eq(l, r)
+        | Prop::Neq(l, r)
+        | Prop::Compare {
+            left: l, right: r, ..
+        } => [l, r].into_iter().find_map(|e| {
+            let mut found = None;
+            crate::fold::walk_value(e, &mut |n| {
+                if found.is_none()
+                    && let Node::Value(v @ (ValueExpr::Sum { .. } | ValueExpr::Extremum { .. })) = n
+                {
+                    found = first_case_read_in_value(v, frame, bound);
+                }
+            });
+            found
+        }),
+        // Each of these widens the plan on its own.
+        Prop::Or(_) | Prop::Xor(_, _) | Prop::In(_, _) | Prop::Pre(_) => None,
+    }
+}
+
+/// The first name under `scope` that traces to a case variable and is not
+/// yet bound, binders included: a binder of a case name is a fresh
+/// binding of it, which the plan would otherwise read as the case.
+fn first_case_read(scope: &Prop, frame: &Frame, bound: &BTreeSet<Var>) -> Option<Var> {
+    let mut found = None;
+    walk_prop(scope, &mut |n| {
+        if found.is_none() {
+            found = case_read(&n, frame, bound);
+        }
+    });
+    found
+}
+
+fn first_case_read_in_value(
+    scope: &ValueExpr,
+    frame: &Frame,
+    bound: &BTreeSet<Var>,
+) -> Option<Var> {
+    let mut found = None;
+    crate::fold::walk_value(scope, &mut |n| {
+        if found.is_none() {
+            found = case_read(&n, frame, bound);
+        }
+    });
+    found
+}
+
+fn case_read(n: &Node<'_>, frame: &Frame, bound: &BTreeSet<Var>) -> Option<Var> {
+    let name = match n {
+        Node::Slot(Term::Var(v)) | Node::Value(ValueExpr::Term(Term::Var(v))) => v,
+        Node::Binder(v) => v,
+        _ => return None,
+    };
+    match frame.get(name) {
+        Some(Traced::Case(case)) if !bound.contains(name) => Some(case.clone()),
+        _ => None,
+    }
 }
 
 /// The case variables: those the top-level antecedent's claim patterns

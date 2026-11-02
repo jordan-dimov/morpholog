@@ -1127,3 +1127,48 @@ async fn both_routes_bound_the_antecedent_to_the_touched_cases() {
         );
     }
 }
+
+/// A closed scope that reads a case name before the rule binds it is a
+/// fresh binding, so the plan checks the rule whole on both routes: one
+/// tag anywhere makes an untagged row without its Ok a violation, and a
+/// plan bounded to the tagged row would have admitted it.
+#[tokio::test]
+async fn both_routes_check_a_scope_read_before_its_binding_whole() {
+    let pool = test_pool().await;
+    let program = morpholog_surface::parse_program(
+        "program scoped\n\
+         predicate Tag(x: Subject, t: Subject)\n\
+         predicate Row(x: Subject)\n\
+         predicate Ok(x: Subject)\n\
+         invariant rows_ok_once_tagged:\n\
+         \x20   (exists y: Tag(x, y)) and Row(x) implies Ok(x)\n\
+         transformation tag(x, t):\n    admit Tag(x, t)\n",
+    )
+    .unwrap();
+    let compiled = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
+    let interpreted = PgProgram::interpreted(PreparedProgram::new(program.clone()).unwrap());
+    let seeded = [ClaimInstance {
+        predicate: "Row".into(),
+        args: vec![subj("new")],
+    }];
+    let t = Transition {
+        transformation_name: "tag".into(),
+        args: vec![subj("old"), subj("t")],
+        actor: Subject::from("route_test"),
+    };
+    let mut outcomes = Vec::new();
+    for route in [&interpreted, &compiled] {
+        reset_db(&pool).await;
+        seed_claims(&pool, &seeded).await;
+        let outcome = propose_against_pg(&pool, route, &Proposal::gateway(&t))
+            .await
+            .unwrap();
+        let PgProposalOutcome::Rejected { rule, witness, .. } = outcome else {
+            panic!("the untagged row's obligation is now live: {outcome:?}");
+        };
+        outcomes.push((rule, witness));
+    }
+    assert_eq!(outcomes[0], outcomes[1], "interpreted vs compiled");
+    assert_eq!(outcomes[0].0.as_deref(), Some("rows_ok_once_tagged"));
+    assert_eq!(outcomes[0].1[0].value, subj("new"));
+}

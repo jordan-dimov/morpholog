@@ -63,7 +63,7 @@
 //! state, so on dirty history it can name another case, with the same
 //! variables.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write as _;
 
 use morpholog_core::{
@@ -1381,6 +1381,7 @@ impl CompiledInvariant {
             Impact::Bounded(cases) => cases,
         };
         let mut disjuncts: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
         for case in &cases {
             let mut parts = Vec::new();
             for (var, ev) in case {
@@ -1393,7 +1394,7 @@ impl CompiledInvariant {
                 }
             }
             let disjunct = parts.join(" AND ");
-            if !disjuncts.contains(&disjunct) {
+            if seen.insert(disjunct.clone()) {
                 disjuncts.push(disjunct);
             }
         }

@@ -2,6 +2,7 @@
 {"case":"fixture/arithmetic/exact_product","decision":"sha256:6df9e2112c4fae9476e76fcb191c1ed4a8781856addc78fb1379db46a559daa4","input":"sha256:39438966d3d7493a43079c08b3ff526a28e7ff60eb5497f1d894c86be521d758"}
 {"case":"fixture/arithmetic/inexact_product","decision":"sha256:8eb598251f538bfbe7dc2c28a17c4fb37664a3f82b419a5a12ea3db3a701fd50","input":"sha256:8c3890354fb2ff7dbe054f68a962e7cbbad1849a856821bba21ba04d89eaac51"}
 {"case":"fixture/arithmetic/round_to_an_unrepresentable_multiple","decision":"sha256:0ae834a5b746e07b19912e97b001e3771118e438a3047f825938ddd1c8b1b21e","input":"sha256:329d54eb508da09d3113083fd443fe0602df209993972961c41a14b129622d07"}
+{"case":"fixture/bounded/scope_before_binding_checks_whole","decision":"sha256:97c6e474de14cc634b5b1f80a69f8d6d1d7a4216f85a40024620e8f5b356c51d","input":"sha256:472c5a02df0a3ea2b4d23687b69b0795cdc418044a3faa8c97b7672ecb115537"}
 {"case":"fixture/bounded/touched_error_case_errors","decision":"sha256:80ef52aff8957fc727a2b6177fac9bbea0730213bd90f511a01f6faefd3a3eb1","input":"sha256:0ab60262a78e6b83b07c854281179b1c0555e7a30b44a0f3c11dad6f7a4cede1"}
 {"case":"fixture/bounded/touched_failing_case_is_refused","decision":"sha256:ddb79dc57eddee9a772150ff41af38d5fb781927e7682a599fb5dd388477b233","input":"sha256:e179d66851f95641681abeaba4e3053dc34f06278a4f08a64bd8366e716f3581"}
 {"case":"fixture/bounded/untouched_error_case_admits","decision":"sha256:81630a9c04a626be3685f8a5c28e6362d59f2b7f6c1b27c8e45c252495f37d9c","input":"sha256:6928055e6b58858c1d3596f6d5179bb1b180c1349341a4261a387263d5cf15fb"}

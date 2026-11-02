@@ -4,10 +4,9 @@
 //! `enumerate_derived` computes a derived claim's rows, in a deterministic
 //! order.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::definitions::DefinitionTable;
-use std::collections::BTreeMap;
 
 use crate::eval::{EvalContext, EvalError, Failure, eval_value, find_failure, find_matches};
 use crate::ir::{Definition, DerivedClaim, Invariant, Prop, Var};
@@ -36,12 +35,6 @@ pub(crate) fn eval_invariant(
     })
 }
 
-/// A case restricts a binding when every variable it fixes has that
-/// value in the binding.
-fn in_case(binding: &Bindings, case: &BTreeMap<Var, EvalValue>) -> bool {
-    case.iter().all(|(v, ev)| binding.get(v) == Some(ev))
-}
-
 /// Visit the antecedent's matches in the touched cases, and only those.
 /// Each case's bindings are in the context before the antecedent is
 /// matched, so the matcher seeks through the state's index and never
@@ -56,12 +49,18 @@ fn for_each_case_match(
     cases: &[BTreeMap<Var, EvalValue>],
     mut visit: impl FnMut(&Bindings) -> Result<bool, EvalError>,
 ) -> Result<(), EvalError> {
-    for (i, case) in cases.iter().enumerate() {
+    let mut visited: HashSet<Vec<(Var, EvalValue)>> = HashSet::new();
+    for case in cases {
         let seed: Bindings = case.iter().map(|(v, ev)| (v.clone(), ev.clone())).collect();
         let seeded = ctx.with_bindings(&seed);
         for m in find_matches(antecedent, &seeded)? {
-            if cases[..i].iter().any(|earlier| in_case(&m, earlier)) {
-                continue;
+            if cases.len() > 1 {
+                let mut key: Vec<(Var, EvalValue)> =
+                    m.iter().map(|(v, ev)| (v.clone(), ev.clone())).collect();
+                key.sort_by(|a, b| a.0.cmp(&b.0));
+                if !visited.insert(key) {
+                    continue;
+                }
             }
             if !visit(&m)? {
                 return Ok(());
@@ -99,11 +98,13 @@ pub(crate) fn eval_invariant_cases(
             })?;
             Ok(holds)
         }
+        // Every case is evaluated before the answer, so an error in a
+        // later case wins over a match in an earlier one.
         Prop::Not(inner) => {
             let mut matched = false;
             for_each_case_match(inner, ctx, cases, |_| {
                 matched = true;
-                Ok(false)
+                Ok(true)
             })?;
             Ok(!matched)
         }

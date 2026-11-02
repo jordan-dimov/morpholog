@@ -30,6 +30,7 @@ fn rehearse_rows<'a>(
     for row in rows {
         if row.is_control() {
             row.effect().apply_to(replay);
+            replay.settle_for_snapshots();
             continue;
         }
         let transition_id = row.transition_id.to_string();

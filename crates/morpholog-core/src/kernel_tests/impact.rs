@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use crate::derive::eval_invariant_cases;
+use crate::derive::{eval_invariant, eval_invariant_cases};
 use crate::impact::{Bounding, Widening};
 use crate::ir::{Definition, DefinitionOrigin, Var};
 use crate::ir_builder::{
@@ -134,6 +134,27 @@ fn assert_never_narrower_over(
                 "{}: the plan says bound, but {changed:?} checks it whole",
                 inv.name
             );
+            // The whole rule, before and after: a delta that breaks it must
+            // be caught by the check admission runs, whatever the plan's
+            // cases say and whatever evaluator confirms them.
+            if eval_invariant(inv, &pre, None, defs) == Ok(true)
+                && eval_invariant(inv, &post, None, defs) == Ok(false)
+            {
+                let caught = match &impact {
+                    Impact::Untouched => false,
+                    Impact::Unbounded => true,
+                    Impact::Bounded(cases) => {
+                        eval_invariant_cases(inv, &post, None, defs, cases) == Ok(false)
+                    }
+                };
+                assert!(
+                    caught,
+                    "{}: {} {changed:?} over {pre_claims:?} breaks the whole rule, but the \
+                     plan answered {impact:?} and the bounded check passed",
+                    inv.name,
+                    if held(i) { "retracting" } else { "admitting" },
+                );
+            }
             for case in &cases {
                 if truth(&pre, case) != truth(&post, case) {
                     assert!(
@@ -843,4 +864,74 @@ fn a_followed_call_is_bound_where_the_bare_plan_names_the_call() {
         Bounding::Whole(Widening::UnfollowedCall("has".into())),
         "an undeclared call cannot be followed"
     );
+}
+
+/// A closed scope that reads a case name before the rule binds it is a
+/// fresh binding of that name, not the case, so the plan checks such a
+/// rule whole; once the binding comes first the plan bounds as before.
+#[test]
+fn a_scope_reading_a_case_name_before_its_binding_widens() {
+    use crate::ir_builder::{exists, not};
+    let tag = |x: &str, t: &str| claim_instance("Tag", &[subj(x), subj(t)]);
+    let universe = [
+        tag("old", "t"),
+        claim_instance("Row", &[subj("new")]),
+        claim_instance("Ok", &[subj("new")]),
+    ];
+    let rule = |name: &str, antecedent: Vec<Prop>| {
+        invariant(name, implies(and(antecedent), claim("Ok", vec![var("x")])))
+    };
+    let widened = |inv: &Invariant| {
+        matches!(
+            ImpactPlan::new(inv).bounding(),
+            Bounding::Whole(Widening::ScopeReadsBeforeBinding(v)) if v.as_str() == "x"
+        )
+    };
+
+    // `(exists y: Tag(x, y)) and Row(x)`: the existential is global, so a
+    // tag anywhere changes every row's obligation.
+    let early = rule(
+        "early",
+        vec![
+            exists("y", claim("Tag", vec![var("x"), var("y")])),
+            claim("Row", vec![var("x")]),
+        ],
+    );
+    assert!(widened(&early), "{:?}", ImpactPlan::new(&early).bounding());
+    assert_eq!(
+        ImpactPlan::new(&early).classify(&[tag("old", "t")], &[]),
+        Impact::Unbounded
+    );
+    assert_never_narrower(&early, &[], &universe);
+
+    // `Row(x) and (exists y: Tag(x, y))`: the scope reads the row's x.
+    let late = rule(
+        "late",
+        vec![
+            claim("Row", vec![var("x")]),
+            exists("y", claim("Tag", vec![var("x"), var("y")])),
+        ],
+    );
+    assert_eq!(ImpactPlan::new(&late).bounding(), Bounding::Bound);
+    assert_never_narrower(&late, &[], &universe);
+
+    // A negation before the binding, and a binder that reuses the case
+    // name, are fresh bindings the same way.
+    let negated = rule(
+        "negated",
+        vec![
+            not(claim("Tag", vec![var("x"), wildcard()])),
+            claim("Row", vec![var("x")]),
+        ],
+    );
+    assert!(widened(&negated));
+    assert_never_narrower(&negated, &[], &universe);
+    let rebound = rule(
+        "rebound",
+        vec![
+            exists("x", claim("Tag", vec![var("x"), var("x")])),
+            claim("Row", vec![var("x")]),
+        ],
+    );
+    assert!(widened(&rebound));
 }

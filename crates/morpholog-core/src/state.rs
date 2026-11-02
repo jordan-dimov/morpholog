@@ -285,7 +285,10 @@ impl State {
     /// replay that snapshots the state at every row, as a rehearsal
     /// does through `propose`, pays the overlay's size each time; the
     /// default threshold suits a replay that never clones. The balance
-    /// point is an overlay of about the square root of the live set.
+    /// point is an overlay of about the square root of the live set,
+    /// which the compaction floor exceeds until the live set passes
+    /// about a hundred and thirty thousand claims, so below that the
+    /// floor is the threshold.
     pub fn settle_for_snapshots(&mut self) {
         let churn = self.dead_base.len() + self.overlay.claims.len();
         if churn > COMPACTION_FLOOR && churn * churn > 2 * self.live {

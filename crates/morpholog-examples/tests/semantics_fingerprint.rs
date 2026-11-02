@@ -367,6 +367,40 @@ transformation approve(k):
         let (input, decided) = proposal_case(&program, t, args, &state);
         record(out, format!("fixture/bounded/{case}"), &input, &decided);
     }
+
+    // A scope that reads the case name before the rule binds it is a
+    // fresh binding, so the rule is checked whole: tagging one row makes
+    // every untagged-ok row's obligation live, and the untagged row
+    // without its Ok is refused (version 4 bounded the check to the
+    // tagged row and admitted).
+    let program = morpholog_surface::parse_program(
+        "
+program scoped
+
+predicate Tag(x: Subject, t: Subject)
+predicate Row(x: Subject)
+predicate Ok(x: Subject)
+
+invariant rows_ok_once_tagged:
+    (exists y: Tag(x, y)) and Row(x) implies Ok(x)
+
+transformation tag(x, t):
+    admit Tag(x, t)
+",
+    )
+    .unwrap();
+    let state = State::from_claims(vec![morpholog_core::ClaimInstance {
+        predicate: "Row".into(),
+        args: vec![subj("new")],
+    }]);
+    let tag = program.transformation("tag").unwrap();
+    let (input, decided) = proposal_case(&program, tag, vec![subj("old"), subj("t")], &state);
+    record(
+        out,
+        "fixture/bounded/scope_before_binding_checks_whole".to_string(),
+        &input,
+        &decided,
+    );
 }
 
 /// Decimal arithmetic at the edge of what a decimal can hold: a product

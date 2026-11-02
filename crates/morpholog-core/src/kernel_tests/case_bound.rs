@@ -15,7 +15,7 @@ use crate::eval::{EvalContext, find_matches};
 use crate::impact::{Impact, ImpactPlan};
 use crate::ir::{Prop, Var};
 use crate::ir_builder::{
-    and, claim, dec, div, implies, invariant, le, predicate, program, term, var,
+    and, claim, dec, div, implies, invariant, le, not, predicate, program, term, var,
 };
 use crate::kernel_tests::support::{claim_instance, dec as dv, subj};
 use crate::state::Bindings;
@@ -309,4 +309,37 @@ fn bounded_evaluation_visits_the_cases_not_the_state() {
         visited <= 16,
         "the bounded refusal visited {visited} claims"
     );
+}
+
+/// `not (Row(k, v) and 0 <= 1 / v)` over a row that matches and a row
+/// that errors: the error wins whichever case comes first, because every
+/// touched case is evaluated before the rule answers.
+#[test]
+fn a_negated_rule_evaluates_every_touched_case_before_answering() {
+    let p = program("neg")
+        .predicates(vec![predicate("Row").subject("k").decimal("v").build()])
+        .invariants(vec![invariant(
+            "no_positive_rows",
+            not(and(vec![
+                claim("Row", vec![var("k"), var("v")]),
+                le(term(dec("0")), div(term(dec("1")), term(var("v")))),
+            ])),
+        )])
+        .build();
+    let inv = &p.invariants[0];
+    let state = State::from_claims(vec![
+        claim_instance("Row", &[subj("a"), dv(1)]),
+        claim_instance("Row", &[subj("b"), dv(0)]),
+    ]);
+    let a = case(&[("k", subj("a"))]);
+    let b = case(&[("k", subj("b"))]);
+    for cases in [vec![a.clone(), b.clone()], vec![b, a]] {
+        assert!(
+            matches!(
+                eval_invariant_cases(inv, &state, None, &[], &cases),
+                Err(EvalError::DivisionByZero)
+            ),
+            "{cases:?}"
+        );
+    }
 }
