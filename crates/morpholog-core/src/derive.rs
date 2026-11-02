@@ -4,10 +4,9 @@
 //! `enumerate_derived` computes a derived claim's rows, in a deterministic
 //! order.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::definitions::DefinitionTable;
-use std::collections::BTreeMap;
 
 use crate::eval::{EvalContext, EvalError, Failure, eval_value, find_failure, find_matches};
 use crate::ir::{Definition, DerivedClaim, Invariant, Prop, Var};
@@ -36,12 +35,39 @@ pub(crate) fn eval_invariant(
     })
 }
 
-/// A case restricts a binding when every variable it fixes has that
-/// value in the binding; a binding is in scope when any case does.
-fn in_cases(binding: &Bindings, cases: &[BTreeMap<Var, EvalValue>]) -> bool {
-    cases
-        .iter()
-        .any(|case| case.iter().all(|(v, ev)| binding.get(v) == Some(ev)))
+/// Visit the antecedent's matches in the touched cases, and only those.
+/// Each case's bindings are in the context before the antecedent is
+/// matched, so the matcher seeks through the state's index and never
+/// meets a claim outside the case: the work follows the cases, not the
+/// state, and a case the transition did not reach can raise no error.
+/// Cases are visited in the plan's order and matches in state order
+/// within a case; a match in several overlapping cases is visited under
+/// the earliest. `visit` returns whether to go on.
+fn for_each_case_match(
+    antecedent: &Prop,
+    ctx: &EvalContext<'_>,
+    cases: &[BTreeMap<Var, EvalValue>],
+    mut visit: impl FnMut(&Bindings) -> Result<bool, EvalError>,
+) -> Result<(), EvalError> {
+    let mut visited: HashSet<Vec<(Var, EvalValue)>> = HashSet::new();
+    for case in cases {
+        let seed: Bindings = case.iter().map(|(v, ev)| (v.clone(), ev.clone())).collect();
+        let seeded = ctx.with_bindings(&seed);
+        for m in find_matches(antecedent, &seeded)? {
+            if cases.len() > 1 {
+                let mut key: Vec<(Var, EvalValue)> =
+                    m.iter().map(|(v, ev)| (v.clone(), ev.clone())).collect();
+                key.sort_by(|a, b| a.0.cmp(&b.0));
+                if !visited.insert(key) {
+                    continue;
+                }
+            }
+            if !visit(&m)? {
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// [`eval_invariant`] over the touched cases only: the antecedent's
@@ -64,24 +90,33 @@ pub(crate) fn eval_invariant_cases(
             ..
         } => {
             let mut holds = true;
-            for m in find_matches(left, ctx)? {
-                if !in_cases(&m, cases) {
-                    continue;
-                }
-                if find_matches(right, &ctx.with_bindings(&m))?.is_empty() {
+            for_each_case_match(left, ctx, cases, |m| {
+                if find_matches(right, &ctx.with_bindings(m))?.is_empty() {
                     holds = false;
                 }
-            }
+                Ok(true)
+            })?;
             Ok(holds)
         }
-        Prop::Not(inner) => Ok(!find_matches(inner, ctx)?.iter().any(|m| in_cases(m, cases))),
+        // Every case is evaluated before the answer, so an error in a
+        // later case wins over a match in an earlier one.
+        Prop::Not(inner) => {
+            let mut matched = false;
+            for_each_case_match(inner, ctx, cases, |_| {
+                matched = true;
+                Ok(true)
+            })?;
+            Ok(!matched)
+        }
         _ => Ok(!find_matches(&inv.body, ctx)?.is_empty()),
     })
 }
 
 /// [`invariant_witness`] drawn from the touched cases only, so a
 /// bounded refusal never blames a case the transition did not reach.
-/// A negated top-level body witnesses nothing, as it does whole.
+/// The witness is the first failing match of the earliest touched case,
+/// in state order within it. A negated top-level body witnesses
+/// nothing, as it does whole.
 pub(crate) fn invariant_witness_cases(
     inv: &Invariant,
     state: &State,
@@ -102,18 +137,18 @@ pub(crate) fn invariant_witness_cases(
                 ));
             }
         };
-        for m in find_matches(left, ctx)? {
-            if !in_cases(&m, cases) {
-                continue;
-            }
-            let ext = ctx.with_bindings(&m);
+        let mut diagnosis = Diagnosis::default();
+        for_each_case_match(left, ctx, cases, |m| {
+            let ext = ctx.with_bindings(m);
             if find_matches(right, &ext)?.is_empty() {
                 let failure =
                     find_failure(right, &ext).unwrap_or_else(|| Failure::here(right, &ext));
-                return Ok(Diagnosis::of(failure));
+                diagnosis = Diagnosis::of(failure);
+                return Ok(false);
             }
-        }
-        Ok(Diagnosis::default())
+            Ok(true)
+        })?;
+        Ok(diagnosis)
     })
 }
 

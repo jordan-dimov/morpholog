@@ -5,6 +5,7 @@
 mod admission;
 mod calendar_properties;
 mod canonical;
+mod case_bound;
 mod checked_arith;
 mod cond_semantics;
 mod date_arithmetic;

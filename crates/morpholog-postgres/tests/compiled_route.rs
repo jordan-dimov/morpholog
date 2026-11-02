@@ -949,3 +949,226 @@ async fn a_consequent_or_decides_and_raises_as_the_kernel_does_on_both_routes() 
         "the two drifts are in different domains and word differently"
     );
 }
+
+// ============================================================
+// A bounded obligation evaluates nothing outside its cases, on both routes
+// ============================================================
+
+/// The kernel seeds each touched case before matching the antecedent, so
+/// a case the change did not reach is never evaluated and can raise no
+/// error; the compiled route filters its rows to the cases. Both admit a
+/// change beside a row that would error, and when several cases fail at
+/// once both name the earliest case in the plan's order, which is the
+/// delta's order, whatever order the state holds them in.
+#[tokio::test]
+async fn both_routes_bound_the_antecedent_to_the_touched_cases() {
+    let pool = test_pool().await;
+    let program = morpholog_surface::parse_program(
+        "program bounded\n\
+         predicate Row(k: Subject, v: Decimal)\n\
+             unique by (k)\n\
+         predicate Ok(k: Subject)\n\
+         predicate Cap(vessel: Subject, cap: Decimal)\n\
+             unique by (vessel)\n\
+         predicate Parcel(parcel: Subject, vessel: Subject, qty: Decimal)\n\
+             unique by (parcel)\n\
+         predicate A(x: Subject, y: Subject)\n\
+         predicate B(y: Subject, z: Subject)\n\
+         predicate C(x: Subject, z: Subject)\n\
+         invariant rows_are_ok:\n\
+         \x20   Row(k, v) and (1 / v) > 0 implies Ok(k)\n\
+         invariant within_capacity:\n\
+         \x20   Cap(v, cap) implies sum(q | Parcel(_, v, q)) <= cap\n\
+         invariant chained:\n\
+         \x20   A(x, y) and B(y, z) implies C(x, z)\n\
+         transformation approve(k):\n    admit Ok(k)\n\
+         transformation note(k, v):\n    admit Row(k, v)\n\
+         transformation load_two(p1, v1, q1, p2, v2, q2):\n\
+         \x20   admit Parcel(p1, v1, q1)\n\
+         \x20   admit Parcel(p2, v2, q2)\n\
+         transformation link(x, y, z):\n    admit A(x, y)\n    admit B(y, z)\n",
+    )
+    .unwrap();
+    let compiled = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
+    assert!(
+        matches!(compiled.plan(), InvariantPlan::Compiled),
+        "{:?}",
+        compiled.plan()
+    );
+    let interpreted = PgProgram::interpreted(PreparedProgram::new(program.clone()).unwrap());
+    let seeded = vec![
+        // A row the antecedent divides by zero on: untouched by every
+        // proposal below, so never evaluated.
+        ClaimInstance {
+            predicate: "Row".into(),
+            args: vec![subj("zero"), dec(0)],
+        },
+        ClaimInstance {
+            predicate: "Row".into(),
+            args: vec![subj("good"), dec(1)],
+        },
+        ClaimInstance {
+            predicate: "Ok".into(),
+            args: vec![subj("good")],
+        },
+        ClaimInstance {
+            predicate: "Cap".into(),
+            args: vec![subj("v1"), dec(10)],
+        },
+        ClaimInstance {
+            predicate: "Cap".into(),
+            args: vec![subj("v2"), dec(10)],
+        },
+    ];
+    let both = |t: Transition| {
+        let compiled = &compiled;
+        let interpreted = &interpreted;
+        let seeded = &seeded;
+        let pool = &pool;
+        async move {
+            let mut out = Vec::new();
+            for route in [interpreted, compiled] {
+                reset_db(pool).await;
+                seed_claims(pool, seeded).await;
+                let outcome = propose_against_pg(pool, route, &Proposal::gateway(&t))
+                    .await
+                    .unwrap();
+                out.push(match outcome {
+                    PgProposalOutcome::Committed { .. } => "committed".to_string(),
+                    PgProposalOutcome::Rejected {
+                        rule,
+                        witness,
+                        compared,
+                        ..
+                    } => format!("rejected {rule:?} {witness:?} {compared:?}"),
+                });
+            }
+            out
+        }
+    };
+    let t = |name: &str, args: Vec<EvalValue>| Transition {
+        transformation_name: name.into(),
+        args,
+        actor: Subject::from("route_test"),
+    };
+
+    // A change to a case beside the erroring row is admitted on both.
+    let outcomes = both(t("approve", vec![subj("good")])).await;
+    assert_eq!(
+        outcomes,
+        ["committed", "committed"],
+        "interpreted vs compiled"
+    );
+
+    // The erroring case itself, touched, errors on both.
+    for route in [&interpreted, &compiled] {
+        reset_db(&pool).await;
+        seed_claims(&pool, &seeded).await;
+        let err = propose_against_pg(
+            &pool,
+            route,
+            &Proposal::gateway(&t("note", vec![subj("another"), dec(0)])),
+        )
+        .await
+        .expect_err("dividing by the touched row's zero errors");
+        assert!(
+            matches!(err, PgError::Kernel(EvalError::DivisionByZero)),
+            "{err:?}"
+        );
+    }
+
+    // A case that fails the rule is refused, not lost behind the error.
+    let outcomes = both(t("note", vec![subj("new"), dec(2)])).await;
+    assert_eq!(outcomes[0], outcomes[1], "interpreted vs compiled");
+    assert!(
+        outcomes[0].starts_with("rejected Some(\"rows_are_ok\")"),
+        "{outcomes:?}"
+    );
+
+    // Two cases fail in one act: the witness names the first statement's
+    // vessel, whichever the state orders first, on both routes.
+    for (first, second) in [("v1", "v2"), ("v2", "v1")] {
+        let outcomes = both(t(
+            "load_two",
+            vec![
+                subj("pa"),
+                subj(first),
+                dec(20),
+                subj("pb"),
+                subj(second),
+                dec(20),
+            ],
+        ))
+        .await;
+        assert_eq!(
+            outcomes[0], outcomes[1],
+            "interpreted vs compiled, {first} first"
+        );
+        assert!(
+            outcomes[0].contains(&format!(
+                "var: Var(\"v\"), value: Subject(Subject(\"{first}\"))"
+            )),
+            "the earliest case is the witness: {outcomes:?}"
+        );
+    }
+
+    // Overlapping partial cases: one match in both, judged once, both
+    // routes naming the same bindings.
+    let outcomes = both(t("link", vec![subj("x1"), subj("y1"), subj("z1")])).await;
+    assert_eq!(outcomes[0], outcomes[1], "interpreted vs compiled");
+    assert!(
+        outcomes[0].starts_with("rejected Some(\"chained\")"),
+        "{outcomes:?}"
+    );
+    for var in ["x", "y", "z"] {
+        assert!(
+            outcomes[0].contains(&format!("var: Var(\"{var}\")")),
+            "{outcomes:?}"
+        );
+    }
+}
+
+/// A closed scope that reads a case name before the rule binds it is a
+/// fresh binding, so the plan checks the rule whole on both routes: one
+/// tag anywhere makes an untagged row without its Ok a violation, and a
+/// plan bounded to the tagged row would have admitted it.
+#[tokio::test]
+async fn both_routes_check_a_scope_read_before_its_binding_whole() {
+    let pool = test_pool().await;
+    let program = morpholog_surface::parse_program(
+        "program scoped\n\
+         predicate Tag(x: Subject, t: Subject)\n\
+         predicate Row(x: Subject)\n\
+         predicate Ok(x: Subject)\n\
+         invariant rows_ok_once_tagged:\n\
+         \x20   (exists y: Tag(x, y)) and Row(x) implies Ok(x)\n\
+         transformation tag(x, t):\n    admit Tag(x, t)\n",
+    )
+    .unwrap();
+    let compiled = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
+    let interpreted = PgProgram::interpreted(PreparedProgram::new(program.clone()).unwrap());
+    let seeded = [ClaimInstance {
+        predicate: "Row".into(),
+        args: vec![subj("new")],
+    }];
+    let t = Transition {
+        transformation_name: "tag".into(),
+        args: vec![subj("old"), subj("t")],
+        actor: Subject::from("route_test"),
+    };
+    let mut outcomes = Vec::new();
+    for route in [&interpreted, &compiled] {
+        reset_db(&pool).await;
+        seed_claims(&pool, &seeded).await;
+        let outcome = propose_against_pg(&pool, route, &Proposal::gateway(&t))
+            .await
+            .unwrap();
+        let PgProposalOutcome::Rejected { rule, witness, .. } = outcome else {
+            panic!("the untagged row's obligation is now live: {outcome:?}");
+        };
+        outcomes.push((rule, witness));
+    }
+    assert_eq!(outcomes[0], outcomes[1], "interpreted vs compiled");
+    assert_eq!(outcomes[0].0.as_deref(), Some("rows_ok_once_tagged"));
+    assert_eq!(outcomes[0].1[0].value, subj("new"));
+}

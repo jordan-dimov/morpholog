@@ -147,3 +147,49 @@ fn a_readmitted_claim_moves_to_the_tail() {
     assert_eq!(state.claims().to_vec(), vec![c(1), c(3), c(4), c(2)]);
     assert_eq!(state.len(), 4);
 }
+
+/// A register revised in place, settled for snapshots after every row:
+/// the logical state is the naive rebuild at every step, and what a
+/// clone would copy stays near the square root of the live set.
+#[test]
+fn settling_for_snapshots_keeps_the_state_and_bounds_the_overlay() {
+    let row = |i: usize, version: u32| ClaimInstance {
+        predicate: "Row".into(),
+        args: vec![
+            EvalValue::Subject(format!("r{i}").into()),
+            EvalValue::Decimal(rust_decimal::Decimal::from(version)),
+        ],
+    };
+    // Large enough that the default threshold, an eighth of the base,
+    // sits far above the square root the settling compacts at.
+    let live = 20_000usize;
+    let mut versions = vec![0u32; live];
+    let mut naive_claims: Vec<ClaimInstance> = (0..live).map(|i| row(i, 0)).collect();
+    let mut state = State::from_claims(naive_claims.clone());
+    let mut compactions = 0;
+    for step in 0..3_000usize {
+        let i = (step * 7919) % live;
+        let retracted = [row(i, versions[i])];
+        versions[i] += 1;
+        let asserted = [row(i, versions[i])];
+        naive_claims = naive(&naive_claims, &asserted, &retracted);
+        state.apply(&asserted, &retracted);
+        let before = state.churn();
+        state.settle_for_snapshots();
+        if state.churn() < before {
+            compactions += 1;
+        }
+        assert!(
+            state.churn() <= 512.max((2 * live).isqrt() + 2),
+            "step {step}: churn {}",
+            state.churn()
+        );
+        if step % 250 == 249 {
+            assert_eq!(state.claims().to_vec(), naive_claims, "step {step}");
+        }
+    }
+    assert!(
+        compactions > 5,
+        "the settling compacted {compactions} times"
+    );
+}

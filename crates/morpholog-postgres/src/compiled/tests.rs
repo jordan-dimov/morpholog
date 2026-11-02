@@ -139,7 +139,7 @@ fn post_simple_entry_delta_bounds_every_ledger_invariant_to_the_entry() {
 /// The bound a case filter rendered, or a panic naming what it did instead.
 fn bounded(filter: CaseFilter) -> String {
     match filter {
-        CaseFilter::Bounded(sql) => sql,
+        CaseFilter::Bounded(cases) => cases.filter(),
         other => panic!("expected a bounded filter, got {other:?}"),
     }
 }
@@ -525,9 +525,10 @@ invariant closed_on_the_open_date:
             morpholog_test_support::date("2026-01-31"),
         ],
     }];
-    let CaseFilter::Bounded(filter) = set.invariants[0].case_filter(&asserted, &[]) else {
+    let CaseFilter::Bounded(cases) = set.invariants[0].case_filter(&asserted, &[]) else {
         panic!("a date-keyed delta must bound, not widen");
     };
+    let filter = cases.filter();
     assert!(
         filter.contains(r#"(morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 1))) = morpholog.claim_digest(morpholog.value_key_v1('{"type":"date","value":"2026-01-31"}'::jsonb))"#),
         "the digest of the constant's key, got: {filter}"

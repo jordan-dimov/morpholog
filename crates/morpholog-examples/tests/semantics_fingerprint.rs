@@ -315,6 +315,94 @@ transformation mark_b(x):
     );
 }
 
+/// A bounded obligation evaluates nothing outside its cases. The
+/// antecedent divides by a figure one row holds as zero; a change to
+/// another case is admitted (version 4 scanned that row and errored),
+/// a change to that case errors, and a change to a case that fails the
+/// rule is refused rather than lost behind the untouched case's error.
+fn bounded_fixtures(out: &mut BTreeMap<String, Fingerprints>) {
+    use morpholog_test_support::{dec, subj};
+    let program = morpholog_surface::parse_program(
+        "
+program bounded
+
+predicate Row(k: Subject, v: Decimal)
+predicate Ok(k: Subject)
+
+invariant rows_are_ok:
+    Row(k, v) and (1 / v) > 0 implies Ok(k)
+
+transformation note(k, v):
+    admit Row(k, v)
+
+transformation approve(k):
+    admit Ok(k)
+",
+    )
+    .unwrap();
+    let row = |k: &str, v: i64| morpholog_core::ClaimInstance {
+        predicate: "Row".into(),
+        args: vec![subj(k), dec(v)],
+    };
+    let ok = |k: &str| morpholog_core::ClaimInstance {
+        predicate: "Ok".into(),
+        args: vec![subj(k)],
+    };
+    let state = State::from_claims(vec![row("zero", 0), row("good", 1), ok("good")]);
+    let approve = program.transformation("approve").unwrap();
+    let note = program.transformation("note").unwrap();
+    for (case, t, args) in [
+        ("untouched_error_case_admits", approve, vec![subj("good")]),
+        (
+            "touched_error_case_errors",
+            note,
+            vec![subj("other"), dec(0)],
+        ),
+        (
+            "touched_failing_case_is_refused",
+            note,
+            vec![subj("new"), dec(2)],
+        ),
+    ] {
+        let (input, decided) = proposal_case(&program, t, args, &state);
+        record(out, format!("fixture/bounded/{case}"), &input, &decided);
+    }
+
+    // A scope that reads the case name before the rule binds it is a
+    // fresh binding, so the rule is checked whole: tagging one row makes
+    // every untagged-ok row's obligation live, and the untagged row
+    // without its Ok is refused (version 4 bounded the check to the
+    // tagged row and admitted).
+    let program = morpholog_surface::parse_program(
+        "
+program scoped
+
+predicate Tag(x: Subject, t: Subject)
+predicate Row(x: Subject)
+predicate Ok(x: Subject)
+
+invariant rows_ok_once_tagged:
+    (exists y: Tag(x, y)) and Row(x) implies Ok(x)
+
+transformation tag(x, t):
+    admit Tag(x, t)
+",
+    )
+    .unwrap();
+    let state = State::from_claims(vec![morpholog_core::ClaimInstance {
+        predicate: "Row".into(),
+        args: vec![subj("new")],
+    }]);
+    let tag = program.transformation("tag").unwrap();
+    let (input, decided) = proposal_case(&program, tag, vec![subj("old"), subj("t")], &state);
+    record(
+        out,
+        "fixture/bounded/scope_before_binding_checks_whole".to_string(),
+        &input,
+        &decided,
+    );
+}
+
 /// Decimal arithmetic at the edge of what a decimal can hold: a product
 /// and a rounding whose exact result does not fit, beside one that does.
 fn arithmetic_fixtures(out: &mut BTreeMap<String, Fingerprints>) {
@@ -368,6 +456,7 @@ fn corpus() -> BTreeMap<String, Fingerprints> {
     }
     fixtures(&mut out);
     arithmetic_fixtures(&mut out);
+    bounded_fixtures(&mut out);
     out
 }
 

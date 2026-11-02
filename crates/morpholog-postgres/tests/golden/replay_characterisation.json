@@ -711,7 +711,7 @@
         "kind": "invariant",
         "model_hash": "sha256:ad4909eab4a80f64f70c15795c7c04804e34975a0a0bd179aace225a6ea58f1a",
         "rule": "small_notes",
-        "semantics_version": 4,
+        "semantics_version": 5,
         "transformation": "note",
         "transition_id": "t3",
         "witness": [
@@ -747,7 +747,7 @@
         "kind": "invariant",
         "model_hash": "sha256:ad4909eab4a80f64f70c15795c7c04804e34975a0a0bd179aace225a6ea58f1a",
         "rule": "small_notes",
-        "semantics_version": 4,
+        "semantics_version": 5,
         "transformation": "note",
         "transition_id": "t9",
         "witness": [
@@ -782,7 +782,7 @@
       }
     ],
     "rehearsal_format_version": 1,
-    "semantics_version": 4,
+    "semantics_version": 5,
     "totals": {
       "different_delta": 0,
       "same": 11,
@@ -820,7 +820,7 @@
     "program": "replay_characterisation",
     "program_hash": "sha256:528f80e80c6f345c0c3439f4d8dab6e8123948939cd8dd1a3d332ff0cd893f50",
     "score_format_version": 6,
-    "semantics": "case_bound_admission_v5",
+    "semantics": "case_bound_admission_v6",
     "transitions_replayed": 13
   },
   "rehearsal": {
@@ -842,7 +842,7 @@
         "kind": "invariant",
         "model_hash": "sha256:ad4909eab4a80f64f70c15795c7c04804e34975a0a0bd179aace225a6ea58f1a",
         "rule": "small_notes",
-        "semantics_version": 4,
+        "semantics_version": 5,
         "transformation": "note",
         "transition_id": "t3",
         "witness": [
@@ -878,7 +878,7 @@
         "kind": "invariant",
         "model_hash": "sha256:ad4909eab4a80f64f70c15795c7c04804e34975a0a0bd179aace225a6ea58f1a",
         "rule": "small_notes",
-        "semantics_version": 4,
+        "semantics_version": 5,
         "transformation": "note",
         "transition_id": "t9",
         "witness": [
@@ -913,7 +913,7 @@
       }
     ],
     "rehearsal_format_version": 1,
-    "semantics_version": 4,
+    "semantics_version": 5,
     "totals": {
       "different_delta": 0,
       "same": 11,
@@ -951,7 +951,7 @@
     "program": "replay_characterisation",
     "program_hash": "sha256:528f80e80c6f345c0c3439f4d8dab6e8123948939cd8dd1a3d332ff0cd893f50",
     "score_format_version": 6,
-    "semantics": "case_bound_admission_v5",
+    "semantics": "case_bound_admission_v6",
     "transitions_replayed": 13
   },
   "score_split_after_t4": {
@@ -977,7 +977,7 @@
     "program": "replay_characterisation",
     "program_hash": "sha256:528f80e80c6f345c0c3439f4d8dab6e8123948939cd8dd1a3d332ff0cd893f50",
     "score_format_version": 6,
-    "semantics": "case_bound_admission_v5",
+    "semantics": "case_bound_admission_v6",
     "split": {
       "boundary": {
         "requested": "t4",
