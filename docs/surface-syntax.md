@@ -322,6 +322,13 @@ predicate CurrentPrice(trade: Subject, price_id: Subject)
     superseded via PriceSupersedes
 predicate PriceSupersedes(successor: Subject, prior: Subject)
 
+-- A pointer with no lineage to keep: move it by retracting whatever is
+-- there (a no-op when nothing is) and admitting the new one, in one act.
+-- `superseded via` is for when the chain of replacements must itself be
+-- on the record.
+predicate RateFloor(status: Subject, gbp_day: Decimal)
+    current pointer by (status)
+
 -- Versions dated from a day. "The one in force on a date" becomes a
 -- definition the declaration writes for you, `terms_in_force_on`, taking
 -- the keys, the date as `as_of`, then the other fields in declared order.
@@ -352,6 +359,10 @@ transformation correct_price(trade, prior, successor):
     retract CurrentPrice(trade, prior)
     admit CurrentPrice(trade, successor)
     admit PriceSupersedes(successor, prior)
+
+transformation set_rate_floor(status, gbp_day):
+    retract RateFloor(status, _)
+    admit RateFloor(status, gbp_day)
 
 transformation agree_terms(trade, version, qty, effective_from):
     admit Terms(trade, version, qty, effective_from)
