@@ -10,7 +10,12 @@
     "different_delta": 1,
     "would_reject": 1,
     "would_error": 1,
-    "unreplayable": 1
+    "unreplayable": 1,
+    "unreplayable_because": {
+      "no_such_act": 1,
+      "arity": 0,
+      "draws": 0
+    }
   },
   "refusals": [
     {
@@ -26,6 +31,7 @@
     {
       "transition_id": "01900000-0000-7000-8000-000000000002",
       "transformation": "book_position",
+      "model_hash": "sha256:8a1d8c1f0b7e4e2c9d6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e",
       "semantics_version": 3,
       "class": "would_reject",
       "rule": "position_within_limit",
@@ -68,6 +74,7 @@
     {
       "transition_id": "01900000-0000-7000-8000-000000000003",
       "transformation": "book_position",
+      "model_hash": "sha256:8a1d8c1f0b7e4e2c9d6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e",
       "semantics_version": 3,
       "class": "different_delta",
       "recorded": {
@@ -121,6 +128,7 @@
     {
       "transition_id": "01900000-0000-7000-8000-000000000004",
       "transformation": "erring",
+      "model_hash": "sha256:8a1d8c1f0b7e4e2c9d6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e",
       "semantics_version": 3,
       "class": "would_error",
       "error": "division by zero"
@@ -128,8 +136,10 @@
     {
       "transition_id": "01900000-0000-7000-8000-000000000005",
       "transformation": "vanished",
+      "model_hash": "sha256:8a1d8c1f0b7e4e2c9d6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e",
       "semantics_version": 3,
       "class": "unreplayable",
+      "because": "no_such_act",
       "reason": "the candidate has no transformation `vanished`"
     }
   ]

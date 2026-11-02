@@ -42,6 +42,8 @@ pub struct RecordedProposal<'a> {
     pub emitted: &'a [IntentInstance],
     /// `None` on a row written before draws were recorded.
     pub drawn: Option<&'a [Subject]>,
+    /// The programme that admitted the row, `None` before it was recorded.
+    pub model_hash: Option<&'a str>,
     pub semantics_version: Option<u32>,
 }
 
@@ -68,6 +70,15 @@ pub struct Totals {
     pub would_reject: u64,
     pub would_error: u64,
     pub unreplayable: u64,
+    pub unreplayable_because: UnreplayableTotals,
+}
+
+/// The unreplayable rows by what made them so.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct UnreplayableTotals {
+    pub no_such_act: u64,
+    pub arity: u64,
+    pub draws: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -82,6 +93,11 @@ pub struct RuleRefusals {
 pub struct RowReport {
     pub transition_id: String,
     pub transformation: String,
+    /// The programme that admitted the row, when recorded. A refusal by
+    /// a rule this programme did not have is a rule newer than the row,
+    /// not the same rule deciding differently.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_hash: Option<String>,
     /// The semantics the row was admitted under, when recorded.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub semantics_version: Option<u32>,
@@ -111,8 +127,20 @@ pub enum RowClass {
         error: String,
     },
     Unreplayable {
+        because: Unreplayable,
         reason: String,
     },
+}
+
+/// Why a recorded proposal cannot be re-decided under the candidate: the
+/// act is gone, its parameters no longer take the recorded arguments, or
+/// it draws more fresh subjects than the row recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Unreplayable {
+    NoSuchAct,
+    Arity,
+    Draws,
 }
 
 /// The effective change of one admission: what it added and removed
@@ -181,12 +209,21 @@ impl<'p> Rehearsal<'p> {
                     .push(row.transition_id.to_string());
             }
             RowClass::WouldError { .. } => self.totals.would_error += 1,
-            RowClass::Unreplayable { .. } => self.totals.unreplayable += 1,
+            RowClass::Unreplayable { because, .. } => {
+                self.totals.unreplayable += 1;
+                let split = &mut self.totals.unreplayable_because;
+                match because {
+                    Unreplayable::NoSuchAct => split.no_such_act += 1,
+                    Unreplayable::Arity => split.arity += 1,
+                    Unreplayable::Draws => split.draws += 1,
+                }
+            }
         }
         if !matches!(class, RowClass::Same) {
             self.differences.push(RowReport {
                 transition_id: row.transition_id.to_string(),
                 transformation: row.transformation.to_string(),
+                model_hash: row.model_hash.map(str::to_string),
                 semantics_version: row.semantics_version,
                 class,
             });
@@ -197,6 +234,7 @@ impl<'p> Rehearsal<'p> {
         let name = TransformationName::from(row.transformation.to_string());
         let Some(transformation) = self.program.transformation(&name) else {
             return RowClass::Unreplayable {
+                because: Unreplayable::NoSuchAct,
                 reason: format!(
                     "the candidate has no transformation `{}`",
                     row.transformation
@@ -205,6 +243,7 @@ impl<'p> Rehearsal<'p> {
         };
         if transformation.parameters.len() != row.args.len() {
             return RowClass::Unreplayable {
+                because: Unreplayable::Arity,
                 reason: format!(
                     "`{}` takes {} arguments; the row records {}",
                     row.transformation,
@@ -224,6 +263,7 @@ impl<'p> Rehearsal<'p> {
             Ok(None) => unreachable!("the transformation was looked up above"),
             Err(EvalError::SubjectSourceExhausted) => {
                 return RowClass::Unreplayable {
+                    because: Unreplayable::Draws,
                     reason: if row.drawn.is_none() {
                         "the act draws a fresh subject and the row records no draws".to_string()
                     } else {
@@ -410,6 +450,7 @@ mod tests {
                 retracted: &[],
                 emitted: &[],
                 drawn: Some(&[]),
+                model_hash: None,
                 semantics_version: None,
             },
         );
@@ -426,6 +467,7 @@ mod tests {
                 retracted: &[],
                 emitted: &[],
                 drawn: Some(&[]),
+                model_hash: None,
                 semantics_version: None,
             },
         );
@@ -482,11 +524,88 @@ mod tests {
                 retracted: &[],
                 emitted: &[],
                 drawn: Some(&[]),
+                model_hash: None,
                 semantics_version: None,
             },
         );
         let report = rehearsal.into_report();
         assert_eq!(report.totals.same, 1, "{:?}", report.differences);
+    }
+
+    /// Each unreplayable row names its cause once, and the split under
+    /// `totals` sums to the unreplayable count.
+    #[test]
+    fn unreplayable_rows_are_split_by_cause() {
+        let candidate = program("candidate")
+            .predicates(vec![predicate("Book").subject("book").build()])
+            .transformations(vec![
+                transformation(
+                    "open",
+                    params(&["name"]),
+                    vec![let_new_subject("book"), assert_("Book", vec![var("book")])],
+                ),
+                transformation(
+                    "name",
+                    params(&["book", "name"]),
+                    vec![assert_("Book", vec![var("book")])],
+                ),
+            ])
+            .build();
+        let prepared = PreparedProgram::new(candidate).expect("validates");
+        let mut rehearsal = Rehearsal::new(&prepared);
+        let pre = State::from_claims(vec![]);
+        let desk = Subject::from("desk");
+        let rows: [(&str, Vec<EvalValue>); 3] = [
+            ("vanished", vec![]),
+            ("name", vec![EvalValue::Subject(Subject::from("b"))]),
+            ("open", vec![EvalValue::Subject(Subject::from("alpha"))]),
+        ];
+        for (i, (transformation, args)) in rows.iter().enumerate() {
+            rehearsal.observe(
+                &pre,
+                &RecordedProposal {
+                    transition_id: &format!("t{i}"),
+                    transformation,
+                    args,
+                    actor: &desk,
+                    asserted: &[],
+                    retracted: &[],
+                    emitted: &[],
+                    drawn: Some(&[]),
+                    model_hash: Some("sha256:abc"),
+                    semantics_version: None,
+                },
+            );
+        }
+        let report = rehearsal.into_report();
+        let because: Vec<Unreplayable> = report
+            .differences
+            .iter()
+            .map(|d| match &d.class {
+                RowClass::Unreplayable { because, .. } => *because,
+                other => panic!("expected unreplayable, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            because,
+            [
+                Unreplayable::NoSuchAct,
+                Unreplayable::Arity,
+                Unreplayable::Draws
+            ]
+        );
+        let split = &report.totals.unreplayable_because;
+        assert_eq!((split.no_such_act, split.arity, split.draws), (1, 1, 1));
+        assert_eq!(
+            split.no_such_act + split.arity + split.draws,
+            report.totals.unreplayable
+        );
+        assert!(
+            report
+                .differences
+                .iter()
+                .all(|d| d.model_hash.as_deref() == Some("sha256:abc"))
+        );
     }
 
     /// A row from before draws were recorded: an act that draws is
@@ -513,6 +632,7 @@ mod tests {
                 retracted: &[],
                 emitted: &[],
                 drawn: None,
+                model_hash: None,
                 semantics_version: None,
             },
         );
@@ -529,13 +649,14 @@ mod tests {
                 retracted: &[],
                 emitted: &[],
                 drawn: None,
+                model_hash: None,
                 semantics_version: None,
             },
         );
         let report = rehearsal.into_report();
         assert_eq!((report.totals.same, report.totals.unreplayable), (1, 1));
         assert!(
-            matches!(&report.differences[0].class, RowClass::Unreplayable { reason } if reason.contains("records no draws")),
+            matches!(&report.differences[0].class, RowClass::Unreplayable { reason, .. } if reason.contains("records no draws")),
             "{:?}",
             report.differences[0].class
         );

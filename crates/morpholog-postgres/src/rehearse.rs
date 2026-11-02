@@ -33,6 +33,7 @@ fn rehearse_rows<'a>(
                 retracted: &row.retracted_claims,
                 emitted: &row.emitted_intents,
                 drawn: row.drawn_subjects.as_deref(),
+                model_hash: row.model_hash.as_deref(),
                 semantics_version: row.semantics_version,
             },
         );

@@ -1124,13 +1124,24 @@
         "totals": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["same", "different_delta", "would_reject", "would_error", "unreplayable"],
+          "required": ["same", "different_delta", "would_reject", "would_error", "unreplayable", "unreplayable_because"],
           "properties": {
             "same": { "type": "integer", "minimum": 0 },
             "different_delta": { "type": "integer", "minimum": 0 },
             "would_reject": { "type": "integer", "minimum": 0 },
             "would_error": { "type": "integer", "minimum": 0 },
-            "unreplayable": { "type": "integer", "minimum": 0 }
+            "unreplayable": { "type": "integer", "minimum": 0 },
+            "unreplayable_because": {
+              "description": "The unreplayable rows by cause; the three sum to `unreplayable`.",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["no_such_act", "arity", "draws"],
+              "properties": {
+                "no_such_act": { "type": "integer", "minimum": 0 },
+                "arity": { "type": "integer", "minimum": 0 },
+                "draws": { "type": "integer", "minimum": 0 }
+              }
+            }
           }
         },
         "refusals": { "type": "array", "items": { "$ref": "#/$defs/rule_refusals" } },
@@ -1161,7 +1172,7 @@
       }
     },
     "rehearsal_row": {
-      "description": "A proposal the candidate does not decide the same way. `semantics_version` is the one the row was admitted under, absent on rows written before it was recorded.",
+      "description": "A proposal the candidate does not decide the same way. `model_hash` is the programme that admitted the row and `semantics_version` the semantics, each absent on rows written before it was recorded. A refusal by a rule the admitting programme did not have is a rule newer than the row, not the same rule deciding differently.",
       "oneOf": [
         {
           "type": "object",
@@ -1170,6 +1181,7 @@
           "properties": {
             "transition_id": { "type": "string", "format": "uuid" },
             "transformation": { "type": "string" },
+            "model_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
             "semantics_version": { "type": "integer", "minimum": 1 },
             "class": { "const": "different_delta" },
             "recorded": { "$ref": "#/$defs/rehearsal_effect" },
@@ -1183,6 +1195,7 @@
           "properties": {
             "transition_id": { "type": "string", "format": "uuid" },
             "transformation": { "type": "string" },
+            "model_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
             "semantics_version": { "type": "integer", "minimum": 1 },
             "class": { "const": "would_reject" },
             "rule": { "type": "string" },
@@ -1198,6 +1211,7 @@
           "properties": {
             "transition_id": { "type": "string", "format": "uuid" },
             "transformation": { "type": "string" },
+            "model_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
             "semantics_version": { "type": "integer", "minimum": 1 },
             "class": { "const": "would_error" },
             "error": { "type": "string" }
@@ -1206,12 +1220,14 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["transition_id", "transformation", "class", "reason"],
+          "required": ["transition_id", "transformation", "class", "because", "reason"],
           "properties": {
             "transition_id": { "type": "string", "format": "uuid" },
             "transformation": { "type": "string" },
+            "model_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
             "semantics_version": { "type": "integer", "minimum": 1 },
             "class": { "const": "unreplayable" },
+            "because": { "enum": ["no_such_act", "arity", "draws"] },
             "reason": { "type": "string" }
           }
         }

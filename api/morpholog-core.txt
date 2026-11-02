@@ -226,6 +226,7 @@ pub morpholog_core::rehearse::RowClass::DifferentDelta::candidate: morpholog_cor
 pub morpholog_core::rehearse::RowClass::DifferentDelta::recorded: morpholog_core::rehearse::Effect
 pub morpholog_core::rehearse::RowClass::Same
 pub morpholog_core::rehearse::RowClass::Unreplayable
+pub morpholog_core::rehearse::RowClass::Unreplayable::because: morpholog_core::rehearse::Unreplayable
 pub morpholog_core::rehearse::RowClass::Unreplayable::reason: alloc::string::String
 pub morpholog_core::rehearse::RowClass::WouldError
 pub morpholog_core::rehearse::RowClass::WouldError::error: alloc::string::String
@@ -247,6 +248,29 @@ impl core::marker::Unpin for morpholog_core::rehearse::RowClass
 impl core::marker::UnsafeUnpin for morpholog_core::rehearse::RowClass
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::RowClass
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::RowClass
+pub enum morpholog_core::rehearse::Unreplayable
+pub morpholog_core::rehearse::Unreplayable::Arity
+pub morpholog_core::rehearse::Unreplayable::Draws
+pub morpholog_core::rehearse::Unreplayable::NoSuchAct
+impl core::clone::Clone for morpholog_core::rehearse::Unreplayable
+pub fn morpholog_core::rehearse::Unreplayable::clone(&self) -> morpholog_core::rehearse::Unreplayable
+impl core::clone::TrivialClone for morpholog_core::rehearse::Unreplayable
+impl core::cmp::Eq for morpholog_core::rehearse::Unreplayable
+impl core::cmp::PartialEq for morpholog_core::rehearse::Unreplayable
+pub fn morpholog_core::rehearse::Unreplayable::eq(&self, &morpholog_core::rehearse::Unreplayable) -> bool
+impl core::fmt::Debug for morpholog_core::rehearse::Unreplayable
+pub fn morpholog_core::rehearse::Unreplayable::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for morpholog_core::rehearse::Unreplayable
+impl core::marker::StructuralPartialEq for morpholog_core::rehearse::Unreplayable
+impl serde_core::ser::Serialize for morpholog_core::rehearse::Unreplayable
+pub fn morpholog_core::rehearse::Unreplayable::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_core::rehearse::Unreplayable
+impl core::marker::Send for morpholog_core::rehearse::Unreplayable
+impl core::marker::Sync for morpholog_core::rehearse::Unreplayable
+impl core::marker::Unpin for morpholog_core::rehearse::Unreplayable
+impl core::marker::UnsafeUnpin for morpholog_core::rehearse::Unreplayable
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::Unreplayable
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::Unreplayable
 pub struct morpholog_core::rehearse::Effect
 pub morpholog_core::rehearse::Effect::asserted: alloc::vec::Vec<morpholog_core::ClaimInstance>
 pub morpholog_core::rehearse::Effect::emitted: alloc::vec::Vec<morpholog_core::IntentInstance>
@@ -270,6 +294,7 @@ pub morpholog_core::rehearse::RecordedProposal::args: &'a [morpholog_core::EvalV
 pub morpholog_core::rehearse::RecordedProposal::asserted: &'a [morpholog_core::ClaimInstance]
 pub morpholog_core::rehearse::RecordedProposal::drawn: core::option::Option<&'a [morpholog_core::Subject]>
 pub morpholog_core::rehearse::RecordedProposal::emitted: &'a [morpholog_core::IntentInstance]
+pub morpholog_core::rehearse::RecordedProposal::model_hash: core::option::Option<&'a str>
 pub morpholog_core::rehearse::RecordedProposal::retracted: &'a [morpholog_core::ClaimInstance]
 pub morpholog_core::rehearse::RecordedProposal::semantics_version: core::option::Option<u32>
 pub morpholog_core::rehearse::RecordedProposal::transformation: &'a str
@@ -324,6 +349,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::Rehea
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::RehearsalReport
 pub struct morpholog_core::rehearse::RowReport
 pub morpholog_core::rehearse::RowReport::class: morpholog_core::rehearse::RowClass
+pub morpholog_core::rehearse::RowReport::model_hash: core::option::Option<alloc::string::String>
 pub morpholog_core::rehearse::RowReport::semantics_version: core::option::Option<u32>
 pub morpholog_core::rehearse::RowReport::transformation: alloc::string::String
 pub morpholog_core::rehearse::RowReport::transition_id: alloc::string::String
@@ -362,6 +388,7 @@ pub struct morpholog_core::rehearse::Totals
 pub morpholog_core::rehearse::Totals::different_delta: u64
 pub morpholog_core::rehearse::Totals::same: u64
 pub morpholog_core::rehearse::Totals::unreplayable: u64
+pub morpholog_core::rehearse::Totals::unreplayable_because: morpholog_core::rehearse::UnreplayableTotals
 pub morpholog_core::rehearse::Totals::would_error: u64
 pub morpholog_core::rehearse::Totals::would_reject: u64
 impl core::clone::Clone for morpholog_core::rehearse::Totals
@@ -379,6 +406,25 @@ impl core::marker::Unpin for morpholog_core::rehearse::Totals
 impl core::marker::UnsafeUnpin for morpholog_core::rehearse::Totals
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::Totals
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::Totals
+pub struct morpholog_core::rehearse::UnreplayableTotals
+pub morpholog_core::rehearse::UnreplayableTotals::arity: u64
+pub morpholog_core::rehearse::UnreplayableTotals::draws: u64
+pub morpholog_core::rehearse::UnreplayableTotals::no_such_act: u64
+impl core::clone::Clone for morpholog_core::rehearse::UnreplayableTotals
+pub fn morpholog_core::rehearse::UnreplayableTotals::clone(&self) -> morpholog_core::rehearse::UnreplayableTotals
+impl core::default::Default for morpholog_core::rehearse::UnreplayableTotals
+pub fn morpholog_core::rehearse::UnreplayableTotals::default() -> morpholog_core::rehearse::UnreplayableTotals
+impl core::fmt::Debug for morpholog_core::rehearse::UnreplayableTotals
+pub fn morpholog_core::rehearse::UnreplayableTotals::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for morpholog_core::rehearse::UnreplayableTotals
+pub fn morpholog_core::rehearse::UnreplayableTotals::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_core::rehearse::UnreplayableTotals
+impl core::marker::Send for morpholog_core::rehearse::UnreplayableTotals
+impl core::marker::Sync for morpholog_core::rehearse::UnreplayableTotals
+impl core::marker::Unpin for morpholog_core::rehearse::UnreplayableTotals
+impl core::marker::UnsafeUnpin for morpholog_core::rehearse::UnreplayableTotals
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::UnreplayableTotals
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::UnreplayableTotals
 pub const morpholog_core::rehearse::REHEARSAL_CONTRACT: &str
 pub const morpholog_core::rehearse::REHEARSAL_FORMAT_VERSION: u32
 pub mod morpholog_core::schema
@@ -1175,6 +1221,7 @@ pub morpholog_core::RowClass::DifferentDelta::candidate: morpholog_core::rehears
 pub morpholog_core::RowClass::DifferentDelta::recorded: morpholog_core::rehearse::Effect
 pub morpholog_core::RowClass::Same
 pub morpholog_core::RowClass::Unreplayable
+pub morpholog_core::RowClass::Unreplayable::because: morpholog_core::rehearse::Unreplayable
 pub morpholog_core::RowClass::Unreplayable::reason: alloc::string::String
 pub morpholog_core::RowClass::WouldError
 pub morpholog_core::RowClass::WouldError::error: alloc::string::String
@@ -1393,6 +1440,29 @@ impl core::marker::Unpin for morpholog_core::TracedProposal
 impl core::marker::UnsafeUnpin for morpholog_core::TracedProposal
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::TracedProposal
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::TracedProposal
+pub enum morpholog_core::Unreplayable
+pub morpholog_core::Unreplayable::Arity
+pub morpholog_core::Unreplayable::Draws
+pub morpholog_core::Unreplayable::NoSuchAct
+impl core::clone::Clone for morpholog_core::rehearse::Unreplayable
+pub fn morpholog_core::rehearse::Unreplayable::clone(&self) -> morpholog_core::rehearse::Unreplayable
+impl core::clone::TrivialClone for morpholog_core::rehearse::Unreplayable
+impl core::cmp::Eq for morpholog_core::rehearse::Unreplayable
+impl core::cmp::PartialEq for morpholog_core::rehearse::Unreplayable
+pub fn morpholog_core::rehearse::Unreplayable::eq(&self, &morpholog_core::rehearse::Unreplayable) -> bool
+impl core::fmt::Debug for morpholog_core::rehearse::Unreplayable
+pub fn morpholog_core::rehearse::Unreplayable::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for morpholog_core::rehearse::Unreplayable
+impl core::marker::StructuralPartialEq for morpholog_core::rehearse::Unreplayable
+impl serde_core::ser::Serialize for morpholog_core::rehearse::Unreplayable
+pub fn morpholog_core::rehearse::Unreplayable::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_core::rehearse::Unreplayable
+impl core::marker::Send for morpholog_core::rehearse::Unreplayable
+impl core::marker::Sync for morpholog_core::rehearse::Unreplayable
+impl core::marker::Unpin for morpholog_core::rehearse::Unreplayable
+impl core::marker::UnsafeUnpin for morpholog_core::rehearse::Unreplayable
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::Unreplayable
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::Unreplayable
 pub enum morpholog_core::ValidationContext
 pub morpholog_core::ValidationContext::Definition
 pub morpholog_core::ValidationContext::Definition::name: alloc::string::String
@@ -2892,6 +2962,7 @@ pub morpholog_core::RecordedProposal::args: &'a [morpholog_core::EvalValue]
 pub morpholog_core::RecordedProposal::asserted: &'a [morpholog_core::ClaimInstance]
 pub morpholog_core::RecordedProposal::drawn: core::option::Option<&'a [morpholog_core::Subject]>
 pub morpholog_core::RecordedProposal::emitted: &'a [morpholog_core::IntentInstance]
+pub morpholog_core::RecordedProposal::model_hash: core::option::Option<&'a str>
 pub morpholog_core::RecordedProposal::retracted: &'a [morpholog_core::ClaimInstance]
 pub morpholog_core::RecordedProposal::semantics_version: core::option::Option<u32>
 pub morpholog_core::RecordedProposal::transformation: &'a str
@@ -2986,6 +3057,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::RenderedClaim
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::RenderedClaim
 pub struct morpholog_core::RowReport
 pub morpholog_core::RowReport::class: morpholog_core::rehearse::RowClass
+pub morpholog_core::RowReport::model_hash: core::option::Option<alloc::string::String>
 pub morpholog_core::RowReport::semantics_version: core::option::Option<u32>
 pub morpholog_core::RowReport::transformation: alloc::string::String
 pub morpholog_core::RowReport::transition_id: alloc::string::String
@@ -3213,6 +3285,7 @@ pub struct morpholog_core::Totals
 pub morpholog_core::Totals::different_delta: u64
 pub morpholog_core::Totals::same: u64
 pub morpholog_core::Totals::unreplayable: u64
+pub morpholog_core::Totals::unreplayable_because: morpholog_core::rehearse::UnreplayableTotals
 pub morpholog_core::Totals::would_error: u64
 pub morpholog_core::Totals::would_reject: u64
 impl core::clone::Clone for morpholog_core::rehearse::Totals
@@ -3424,6 +3497,25 @@ impl core::marker::Unpin for morpholog_core::Unit
 impl core::marker::UnsafeUnpin for morpholog_core::Unit
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Unit
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Unit
+pub struct morpholog_core::UnreplayableTotals
+pub morpholog_core::UnreplayableTotals::arity: u64
+pub morpholog_core::UnreplayableTotals::draws: u64
+pub morpholog_core::UnreplayableTotals::no_such_act: u64
+impl core::clone::Clone for morpholog_core::rehearse::UnreplayableTotals
+pub fn morpholog_core::rehearse::UnreplayableTotals::clone(&self) -> morpholog_core::rehearse::UnreplayableTotals
+impl core::default::Default for morpholog_core::rehearse::UnreplayableTotals
+pub fn morpholog_core::rehearse::UnreplayableTotals::default() -> morpholog_core::rehearse::UnreplayableTotals
+impl core::fmt::Debug for morpholog_core::rehearse::UnreplayableTotals
+pub fn morpholog_core::rehearse::UnreplayableTotals::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for morpholog_core::rehearse::UnreplayableTotals
+pub fn morpholog_core::rehearse::UnreplayableTotals::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_core::rehearse::UnreplayableTotals
+impl core::marker::Send for morpholog_core::rehearse::UnreplayableTotals
+impl core::marker::Sync for morpholog_core::rehearse::UnreplayableTotals
+impl core::marker::Unpin for morpholog_core::rehearse::UnreplayableTotals
+impl core::marker::UnsafeUnpin for morpholog_core::rehearse::UnreplayableTotals
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::UnreplayableTotals
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::UnreplayableTotals
 pub struct morpholog_core::ValidatedProgram<'a>
 impl<'a> morpholog_core::ValidatedProgram<'a>
 pub fn morpholog_core::ValidatedProgram<'a>::as_program(&self) -> &'a morpholog_core::Program

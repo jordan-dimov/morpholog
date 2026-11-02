@@ -72,6 +72,20 @@ fn totals(report: &Value) -> Value {
     report["totals"].clone()
 }
 
+fn hash_of(file: &Path) -> String {
+    let output = Command::new(common::bin())
+        .args(["hash", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    report["hash"].as_str().unwrap().to_string()
+}
+
+fn no_unreplayable() -> Value {
+    serde_json::json!({"no_such_act": 0, "arity": 0, "draws": 0})
+}
+
 fn classes(report: &Value) -> Vec<(String, String)> {
     report["differences"]
         .as_array()
@@ -103,7 +117,7 @@ async fn every_recorded_proposal_is_re_decided_under_the_candidate() {
     assert_eq!(report["transitions_replayed"], 5);
     assert_eq!(
         totals(&report),
-        serde_json::json!({"same": 5, "different_delta": 0, "would_reject": 0, "would_error": 0, "unreplayable": 0}),
+        serde_json::json!({"same": 5, "different_delta": 0, "would_reject": 0, "would_error": 0, "unreplayable": 0, "unreplayable_because": no_unreplayable()}),
         "{report}"
     );
     assert_eq!(report["differences"], serde_json::json!([]));
@@ -125,6 +139,10 @@ async fn every_recorded_proposal_is_re_decided_under_the_candidate() {
     assert_eq!(refused["kind"], "invariant");
     assert_eq!(refused["compared"]["op"], "<=", "{refused}");
     assert_eq!(refused["semantics_version"], report["semantics_version"]);
+    // The row names the programme that admitted it, which is not the
+    // candidate: the refusing rule is newer than the row.
+    assert_eq!(refused["model_hash"], hash_of(&ledger), "{refused}");
+    assert_ne!(refused["model_hash"], report["program_hash"]);
     assert_eq!(
         report["refusals"],
         serde_json::json!([{"rule": "position_within_limit", "kind": "invariant", "would_refuse": 1, "refused_transitions": [over]}])
@@ -229,6 +247,11 @@ async fn every_recorded_proposal_is_re_decided_under_the_candidate() {
             .contains("no transformation `book_position`"),
         "{report}"
     );
+    assert_eq!(report["differences"][0]["because"], "no_such_act");
+    assert_eq!(
+        totals(&report)["unreplayable_because"],
+        serde_json::json!({"no_such_act": 2, "arity": 0, "draws": 0})
+    );
     let arity = common::write_fixture(
         "arity",
         &LEDGER
@@ -249,6 +272,11 @@ async fn every_recorded_proposal_is_re_decided_under_the_candidate() {
             .unwrap()
             .contains("takes 3 arguments; the row records 2"),
         "{report}"
+    );
+    assert_eq!(report["differences"][0]["because"], "arity");
+    assert_eq!(
+        totals(&report)["unreplayable_because"],
+        serde_json::json!({"no_such_act": 0, "arity": 2, "draws": 0})
     );
 
     // Arguments accepted, the kernel errors in execution.
@@ -294,5 +322,10 @@ async fn every_recorded_proposal_is_re_decided_under_the_candidate() {
             .unwrap()
             .contains("more fresh subjects than the row records"),
         "{report}"
+    );
+    assert_eq!(report["differences"][0]["because"], "draws");
+    assert_eq!(
+        totals(&report)["unreplayable_because"],
+        serde_json::json!({"no_such_act": 0, "arity": 0, "draws": 1})
     );
 }
