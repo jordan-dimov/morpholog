@@ -1614,6 +1614,15 @@ pub(crate) struct SessionArgs {
     /// canonical rules-identity hash.
     pub(crate) file: PathBuf,
 
+    /// The canonical hash (`sha256:...`, as `morpholog hash` reports
+    /// it) the programme must have. A file that hashes to anything
+    /// else is refused before the session connects or prints its ready
+    /// line, so a deployment that starts the session with the hash it
+    /// authorised cannot be made to serve other rules by an edited
+    /// file.
+    #[arg(long, value_name = "SHA256")]
+    pub(crate) expect_hash: Option<String>,
+
     #[command(flatten)]
     pub(crate) db: DatabaseArgs,
 }

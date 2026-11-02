@@ -564,6 +564,88 @@ async fn a_session_commit_names_the_programme_the_session_loaded() {
     assert_eq!(row["model_hash"], ready["model_hash"]);
 }
 
+/// `--expect-hash` names the programme a deployment authorised. A file
+/// that hashes to anything else is refused before the session connects:
+/// the database here does not exist, and the refusal names the hashes,
+/// not the connection.
+#[test]
+fn a_session_refuses_to_start_under_another_hash() {
+    let fixture = common::write_fixture("session_fixture", FIXTURE);
+    let expected = format!("sha256:{}", "0".repeat(64));
+    let output = Command::new(common::bin())
+        .arg("session")
+        .arg(&fixture.path)
+        .args(["--expect-hash", &expected])
+        .args([
+            "--database-url",
+            &common::with_database(&database_url(), "no_such_database_for_expect_hash"),
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "a mismatched hash must refuse");
+    assert!(
+        output.stdout.is_empty(),
+        "no ready line under a refused hash: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let actual = hash_of(&fixture.path);
+    assert!(
+        stderr.contains(&expected),
+        "names the expected hash: {stderr}"
+    );
+    assert!(
+        stderr.contains(&actual),
+        "names the programme's hash: {stderr}"
+    );
+    assert!(stderr.contains("nothing was started"), "{stderr}");
+    assert!(
+        !stderr.contains("failed to connect"),
+        "refused before connecting: {stderr}"
+    );
+}
+
+/// The hash `morpholog hash` reports is the one the session accepts and
+/// prints on its ready line.
+#[test]
+fn a_session_starts_under_its_own_hash() {
+    let fixture = common::write_fixture("session_fixture", FIXTURE);
+    let expected = hash_of(&fixture.path);
+    let mut child = Command::new(common::bin())
+        .arg("session")
+        .arg(&fixture.path)
+        .args(["--expect-hash", &expected])
+        .args(["--database-url", &database_url()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdin.take());
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let ready: serde_json::Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
+    assert_eq!(ready["status"], "ready");
+    assert_eq!(ready["model_hash"], expected);
+}
+
+fn hash_of(file: &std::path::Path) -> String {
+    let output = Command::new(common::bin())
+        .arg("hash")
+        .arg(file)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    report["hash"].as_str().unwrap().to_string()
+}
+
 /// Lines from a running session, read on a thread so a test can wait
 /// with a deadline.
 fn lines_of(child: &mut std::process::Child) -> std::sync::mpsc::Receiver<String> {
