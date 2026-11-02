@@ -18,7 +18,7 @@ use crate::coverage::RefusalKind;
 use crate::eval::EvalError;
 use crate::ir::{Subject, TransformationName};
 use crate::prepared::PreparedProgram;
-use crate::propose::{Compared, Outcome, RejectionReason, Transition, WitnessBinding};
+use crate::propose::{Compared, Decided, RejectionReason, Transition, WitnessBinding};
 use crate::state::{ClaimInstance, IntentInstance, State};
 use crate::{EvalValue, SEMANTICS_VERSION};
 
@@ -258,8 +258,8 @@ impl<'p> Rehearsal<'p> {
             actor: row.actor.clone(),
         };
         let mut draws = row.drawn.unwrap_or(&[]).iter().cloned();
-        let outcome = match self.program.propose(&transition, pre, &mut draws) {
-            Ok(Some(outcome)) => outcome,
+        let decided = match self.program.decide(&transition, pre, &mut draws) {
+            Ok(Some(decided)) => decided,
             Ok(None) => unreachable!("the transformation was looked up above"),
             Err(EvalError::SubjectSourceExhausted) => {
                 return RowClass::Unreplayable {
@@ -277,22 +277,18 @@ impl<'p> Rehearsal<'p> {
                 };
             }
         };
-        match outcome {
-            Outcome::Rejected { reason } => refusal(reason),
-            Outcome::Accepted {
-                asserted_claims,
-                retracted_claims,
+        match decided {
+            Decided::Rejected { reason } => refusal(reason),
+            Decided::Accepted {
                 emitted_intents,
+                effective,
                 ..
             } => {
                 let recorded = Effect::new(
                     effective_delta(pre, row.asserted, row.retracted),
                     row.emitted,
                 );
-                let candidate = Effect::new(
-                    effective_delta(pre, &asserted_claims, &retracted_claims),
-                    &emitted_intents,
-                );
+                let candidate = Effect::new(effective, &emitted_intents);
                 if recorded.same_as(&candidate) {
                     RowClass::Same
                 } else {

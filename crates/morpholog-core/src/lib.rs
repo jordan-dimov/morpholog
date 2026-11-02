@@ -104,6 +104,8 @@ pub use score::{
     SCORE_FORMAT_VERSION, SCORE_SEMANTICS, ScoreError, SliceInvariantScore, SliceScore,
     SplitBoundaryReport, SplitScore, invariants_using_pre,
 };
+#[doc(hidden)]
+pub use state::tally;
 pub use state::{ClaimInstance, Claims, EvalValue, IntentInstance, State};
 pub use sums::lower_sum_seeds;
 pub use validate::{ValidatedProgram, ValidationContext, ValidationError, VocabularyKind};

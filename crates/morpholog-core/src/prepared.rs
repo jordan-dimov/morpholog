@@ -147,6 +147,32 @@ impl PreparedProgram {
         .map(Some)
     }
 
+    /// [`Self::propose`] without the candidate state: the decision and
+    /// the effective delta it was judged on, for a caller that advances
+    /// its own state afterwards, as a rehearsal does. `Ok(None)` when no
+    /// transformation has that name.
+    pub(crate) fn decide(
+        &self,
+        transition: &Transition,
+        pre_state: &State,
+        subjects: &mut dyn SubjectSource,
+    ) -> Result<Option<crate::propose::Decided>, EvalError> {
+        let Some(transformation) = self.transformation(&transition.transformation_name) else {
+            return Ok(None);
+        };
+        let mut trace = crate::propose::TraceSink::Off;
+        let staged = crate::propose::stage_delta_inner(
+            transformation,
+            transition,
+            pre_state,
+            self.program.definitions.as_slice(),
+            &mut trace,
+            subjects,
+        )?;
+        crate::propose::decide_staged(staged, pre_state, &self.admission(), None, &mut trace)
+            .map(Some)
+    }
+
     /// [`Self::propose`], recording the execution trace. `None` when no
     /// transformation has that name.
     pub fn propose_with_trace(

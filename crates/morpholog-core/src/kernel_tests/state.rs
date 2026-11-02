@@ -4,6 +4,8 @@
 use proptest::prelude::*;
 
 use super::*;
+use crate::ir::PredicateName;
+use crate::state::{Candidate, StateRef};
 
 /// The claims a history draws from: few enough that duplicate
 /// admissions, retractions of absent claims, and retract-then-readmit
@@ -192,4 +194,63 @@ fn settling_for_snapshots_keeps_the_state_and_bounds_the_overlay() {
         compactions > 5,
         "the settling compacted {compactions} times"
     );
+}
+
+/// What the evaluator reads of a candidate, through the view over the
+/// pre-state and the staged delta, is what it reads of the owned
+/// candidate `with_delta` builds: every predicate's claims in order, and
+/// every argument bucket, retractions and re-admissions included.
+fn view_reads(state: StateRef<'_>, domain: &[EvalValue]) -> Vec<(String, Vec<ClaimInstance>)> {
+    let mut out = Vec::new();
+    for predicate in ["P", "Q", "R"] {
+        let name = PredicateName::from(predicate);
+        out.push((
+            predicate.to_string(),
+            state.claims_for_name(&name).cloned().collect(),
+        ));
+        for pos in 0..2 {
+            for value in domain {
+                let bucket: Option<Vec<ClaimInstance>> = state
+                    .claim_candidates(&name, pos, value)
+                    .map(|b| b.iter().cloned().collect());
+                out.push((
+                    format!("{predicate}[{pos}]={value:?}"),
+                    bucket.unwrap_or_default(),
+                ));
+            }
+        }
+    }
+    out
+}
+
+proptest! {
+    #[test]
+    fn a_candidate_view_reads_as_the_owned_candidate(
+        seed in proptest::collection::vec(claim_strategy(), 0..12),
+        history in proptest::collection::vec(delta_strategy(), 1..6),
+        (asserted, retracted) in delta_strategy(),
+    ) {
+        // A pre-state with an overlay and dead entries of its own.
+        let mut pre = State::from_claims(naive(&[], &seed, &[]));
+        for (a, r) in &history {
+            pre.apply_under(a, r, 2);
+        }
+        let domain: Vec<EvalValue> = seed
+            .iter()
+            .chain(&asserted)
+            .chain(&retracted)
+            .flat_map(|c| c.args.clone())
+            .collect();
+        let owned = pre.with_delta(&asserted, &retracted);
+        let candidate = Candidate::new(&pre, &asserted, &retracted);
+        prop_assert_eq!(
+            view_reads(StateRef::Candidate(&candidate), &domain),
+            view_reads(StateRef::Owned(&owned), &domain)
+        );
+        // The pre-state itself reads the same through either door.
+        prop_assert_eq!(
+            view_reads(StateRef::Owned(&pre), &domain),
+            view_reads((&pre).into(), &domain)
+        );
+    }
 }

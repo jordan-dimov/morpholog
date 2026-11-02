@@ -121,7 +121,39 @@ pub struct ClaimInstance {
 /// Indexed by predicate and by `(predicate, arg position, arg value)`,
 /// so a ground argument narrows a lookup to the smallest bucket.
 /// Construct via [`State::from_claims`] or [`State::default`].
-#[derive(Clone, Default)]
+/// What the state does that costs in proportion to its size, counted so
+/// a measurement can attribute a run to copies and rebuilds apart. Plain
+/// relaxed increments at the clone and the rebuild, never on a lookup.
+#[doc(hidden)]
+pub mod tally {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Clones of a `State`: each copies the overlay and the retracted
+    /// base positions.
+    pub static STATE_CLONES: AtomicU64 = AtomicU64::new(0);
+    /// Overlay claims and retracted positions those clones copied.
+    pub static OVERLAY_ENTRIES_COPIED: AtomicU64 = AtomicU64::new(0);
+    /// Compactions that rebuilt the whole state from its live claims.
+    pub static STATE_REBUILDS: AtomicU64 = AtomicU64::new(0);
+    /// Live claims those rebuilds copied and indexed again.
+    pub static CLAIMS_REBUILT: AtomicU64 = AtomicU64::new(0);
+
+    pub(super) fn add(counter: &AtomicU64, n: usize) {
+        counter.fetch_add(n as u64, Ordering::Relaxed);
+    }
+
+    /// The four counts, in the order declared.
+    pub fn snapshot() -> [u64; 4] {
+        [
+            STATE_CLONES.load(Ordering::Relaxed),
+            OVERLAY_ENTRIES_COPIED.load(Ordering::Relaxed),
+            STATE_REBUILDS.load(Ordering::Relaxed),
+            CLAIMS_REBUILT.load(Ordering::Relaxed),
+        ]
+    }
+}
+
+#[derive(Default)]
 pub struct State {
     base: Arc<Layer>,
     /// Claims admitted since the base, in admission order.
@@ -137,6 +169,25 @@ pub struct State {
     /// evaluation does to the cases it was given.
     #[cfg(test)]
     visited: std::cell::Cell<u64>,
+}
+
+impl Clone for State {
+    fn clone(&self) -> Self {
+        tally::add(&tally::STATE_CLONES, 1);
+        tally::add(
+            &tally::OVERLAY_ENTRIES_COPIED,
+            self.overlay.claims.len() + self.dead_base.len(),
+        );
+        Self {
+            base: Arc::clone(&self.base),
+            overlay: self.overlay.clone(),
+            dead_overlay: self.dead_overlay.clone(),
+            dead_base: self.dead_base.clone(),
+            live: self.live,
+            #[cfg(test)]
+            visited: self.visited.clone(),
+        }
+    }
 }
 
 /// One indexed run of claims: the base, or the overlay.
@@ -202,6 +253,12 @@ impl Layer {
             .and_then(|idx| idx.by_arg.get(position))
             .and_then(|m| m.get(value))
             .map(Vec::as_slice)
+    }
+
+    fn contains(&self, claim: &ClaimInstance) -> bool {
+        self.candidates_for(claim)
+            .iter()
+            .any(|&i| self.claims[i] == *claim)
     }
 
     /// The positions to check for an exact copy of `claim`: the
@@ -317,8 +374,16 @@ impl State {
         }
         let churn = self.dead_base.len() + self.overlay.claims.len();
         if churn > threshold {
-            *self = State::from_claims(self.claims().to_vec());
+            self.rebuild();
         }
+    }
+
+    /// The whole state from its live claims, in logical order, indexed
+    /// afresh: what a compaction does.
+    fn rebuild(&mut self) {
+        tally::add(&tally::STATE_REBUILDS, 1);
+        tally::add(&tally::CLAIMS_REBUILT, self.live);
+        *self = State::from_claims(self.claims().to_vec());
     }
 
     fn retract(&mut self, claim: &ClaimInstance) {
@@ -384,23 +449,15 @@ impl State {
 
     /// Like [`State::claims_for`] but takes the typed name the hot
     /// evaluator path already holds, so no name is allocated per call.
-    pub(crate) fn claims_for_name<'a>(
-        &'a self,
-        predicate: &PredicateName,
-    ) -> impl Iterator<Item = &'a ClaimInstance> + 'a {
+    pub(crate) fn claims_for_name<'a>(&'a self, predicate: &PredicateName) -> NamedClaims<'a> {
         self.visit(self.base.bucket(predicate).len() + self.overlay.bucket(predicate).len());
-        self.base
-            .bucket(predicate)
-            .iter()
-            .filter(move |i| !self.dead_base.contains(i))
-            .map(move |&i| &self.base.claims[i])
-            .chain(
-                self.overlay
-                    .bucket(predicate)
-                    .iter()
-                    .filter(move |&&i| !self.dead_overlay[i])
-                    .map(move |&i| &self.overlay.claims[i]),
-            )
+        NamedClaims {
+            state: self,
+            base: self.base.bucket(predicate).iter(),
+            overlay: self.overlay.bucket(predicate).iter(),
+            retracted: None,
+            extra: None,
+        }
     }
 
     /// Every admitted claim of `predicate` with `value` at `position`.
@@ -422,6 +479,8 @@ impl State {
             state: self,
             base: base.unwrap_or(&[]),
             overlay: overlay.unwrap_or(&[]),
+            retracted: None,
+            extra: None,
         })
     }
 
@@ -453,6 +512,141 @@ impl State {
 
     pub fn is_empty(&self) -> bool {
         self.live == 0
+    }
+}
+
+/// The admitted claims of one predicate, in logical order: the state's,
+/// and over a candidate view the staged admissions after them, with
+/// the staged retractions left out.
+pub(crate) struct NamedClaims<'a> {
+    state: &'a State,
+    base: std::slice::Iter<'a, usize>,
+    overlay: std::slice::Iter<'a, usize>,
+    retracted: Option<&'a HashSet<ClaimInstance>>,
+    extra: Option<(&'a Layer, std::slice::Iter<'a, usize>)>,
+}
+
+impl<'a> Iterator for NamedClaims<'a> {
+    type Item = &'a ClaimInstance;
+
+    fn next(&mut self) -> Option<&'a ClaimInstance> {
+        let kept = |retracted: Option<&HashSet<ClaimInstance>>, c: &ClaimInstance| {
+            retracted.is_none_or(|r| !r.contains(c))
+        };
+        for &i in self.base.by_ref() {
+            if !self.state.dead_base.contains(&i) {
+                let c = &self.state.base.claims[i];
+                if kept(self.retracted, c) {
+                    return Some(c);
+                }
+            }
+        }
+        for &i in self.overlay.by_ref() {
+            if !self.state.dead_overlay[i] {
+                let c = &self.state.overlay.claims[i];
+                if kept(self.retracted, c) {
+                    return Some(c);
+                }
+            }
+        }
+        let (layer, positions) = self.extra.as_mut()?;
+        positions.next().map(|&i| &layer.claims[i])
+    }
+}
+
+/// A proposal's candidate state read without being built: the pre-state
+/// with the staged delta over it. It answers as the owned candidate
+/// [`State::with_delta`] would: retractions first, admissions not already
+/// present after everything else, a claim retracted and admitted in one
+/// delta at the tail. Nothing of the pre-state is copied; the delta is
+/// indexed on its own.
+pub struct Candidate<'a> {
+    pre: &'a State,
+    /// The retractions that remove something: those present before.
+    retracted: HashSet<ClaimInstance>,
+    /// The admissions that add something, in order, each once.
+    asserted: Layer,
+}
+
+impl<'a> Candidate<'a> {
+    pub fn new(pre: &'a State, asserted: &[ClaimInstance], retracted: &[ClaimInstance]) -> Self {
+        let retracted: HashSet<ClaimInstance> = retracted
+            .iter()
+            .filter(|c| pre.contains(c))
+            .cloned()
+            .collect();
+        let mut layer = Layer::default();
+        for claim in asserted {
+            let present = pre.contains(claim) && !retracted.contains(claim);
+            if !present && !layer.contains(claim) {
+                layer.push(claim.clone());
+            }
+        }
+        Self {
+            pre,
+            retracted,
+            asserted: layer,
+        }
+    }
+}
+
+/// The state an evaluation reads: one it owns, or a candidate view.
+#[derive(Clone, Copy)]
+pub(crate) enum StateRef<'a> {
+    Owned(&'a State),
+    Candidate(&'a Candidate<'a>),
+}
+
+impl<'a> From<&'a State> for StateRef<'a> {
+    fn from(state: &'a State) -> Self {
+        StateRef::Owned(state)
+    }
+}
+
+impl<'a> From<&'a Candidate<'a>> for StateRef<'a> {
+    fn from(candidate: &'a Candidate<'a>) -> Self {
+        StateRef::Candidate(candidate)
+    }
+}
+
+impl<'a> StateRef<'a> {
+    pub(crate) fn claims_for_name(self, predicate: &PredicateName) -> NamedClaims<'a> {
+        match self {
+            StateRef::Owned(state) => state.claims_for_name(predicate),
+            StateRef::Candidate(c) => {
+                let mut named = c.pre.claims_for_name(predicate);
+                named.retracted = Some(&c.retracted);
+                named.extra = Some((&c.asserted, c.asserted.bucket(predicate).iter()));
+                named
+            }
+        }
+    }
+
+    pub(crate) fn claim_candidates(
+        self,
+        predicate: &PredicateName,
+        position: usize,
+        value: &EvalValue,
+    ) -> Option<CandidateBucket<'a>> {
+        match self {
+            StateRef::Owned(state) => state.claim_candidates(predicate, position, value),
+            StateRef::Candidate(c) => {
+                let extra = c.asserted.arg_bucket(predicate, position, value);
+                let Some(mut bucket) = c.pre.claim_candidates(predicate, position, value) else {
+                    let extra = extra?;
+                    return Some(CandidateBucket {
+                        state: c.pre,
+                        base: &[],
+                        overlay: &[],
+                        retracted: Some(&c.retracted),
+                        extra: Some((&c.asserted, extra)),
+                    });
+                };
+                bucket.retracted = Some(&c.retracted);
+                bucket.extra = extra.map(|e| (&c.asserted, e));
+                Some(bucket)
+            }
+        }
     }
 }
 
@@ -517,27 +711,40 @@ pub(crate) struct CandidateBucket<'a> {
     state: &'a State,
     base: &'a [usize],
     overlay: &'a [usize],
+    /// Over a candidate view: the staged retractions, left out.
+    retracted: Option<&'a HashSet<ClaimInstance>>,
+    /// Over a candidate view: the staged admissions in this bucket.
+    extra: Option<(&'a Layer, &'a [usize])>,
 }
 
 impl<'a> CandidateBucket<'a> {
     /// An upper bound on the claims the bucket yields, for choosing the
     /// smallest bucket; retracted entries still count.
     pub(crate) fn estimate_len(&self) -> usize {
-        self.base.len() + self.overlay.len()
+        self.base.len() + self.overlay.len() + self.extra.map_or(0, |(_, e)| e.len())
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &'a ClaimInstance> + 'a {
-        self.state.visit(self.base.len() + self.overlay.len());
+        self.state.visit(self.estimate_len());
         let state = self.state;
+        let retracted = self.retracted;
+        let kept = move |c: &&'a ClaimInstance| retracted.is_none_or(|r| !r.contains(*c));
         self.base
             .iter()
             .filter(move |i| !state.dead_base.contains(i))
             .map(move |&i| &state.base.claims[i])
+            .filter(kept)
             .chain(
                 self.overlay
                     .iter()
                     .filter(move |&&i| !state.dead_overlay[i])
-                    .map(move |&i| &state.overlay.claims[i]),
+                    .map(move |&i| &state.overlay.claims[i])
+                    .filter(kept),
+            )
+            .chain(
+                self.extra.into_iter().flat_map(|(layer, positions)| {
+                    positions.iter().map(move |&i| &layer.claims[i])
+                }),
             )
     }
 }

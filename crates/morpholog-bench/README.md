@@ -314,8 +314,6 @@ Everything above runs in-process. A non-Rust embedder (the reference ETRM) drive
 
 So the fixed per-call tax a subprocess embedder pays is **single-digit milliseconds** - ~3 ms of spawn/parse/validate plus ~6 ms of connect/propose/commit against a small ledger. That sustains roughly 100 governed transitions/second single-threaded, which is comfortable for lifecycle events (capture, confirm, settle, approve) and admin/audit flows. The propose component grows with in-scope state exactly as the `write` scenario measures; the spawn/parse/validate floor does not. A long-lived worker (load + validate once, keep a pool warm, speak HTTP/socket) is the answer only if a high-frequency path needs it - and per the doctrine those paths should not run through the governed core anyway.
 
-### Deferred
-
 ## The `rehearse` ruler (2026-11-02)
 
 Release build, `cdba18ad`, one laptop (Intel Core Ultra 7 155H, governor `powersave`, PostgreSQL 18 on the disposable cluster), two repeats, steady medians. The fixture is the register in the TEC shape; every row decides `same` except in the refusing case, where every version past 100 is refused.
@@ -339,6 +337,8 @@ What it says, and what it does not. The per-row cost of a decision follows the l
 | 300k noise, then 100k revise | 302,000 | 234.6 s | 151.3 s | 1,513 us |
 
 The same hundred thousand decisions cost nineteen times more behind state they never read. Nothing else differs between the first two rows: the same acts, the same keys, the same rules, the same plans, which bound every decision to its own row. The cost is in the per-proposal clone of the pre-state's overlay and the compaction that keeps it bounded, each proportional to the live set, which is what the candidate-state view in #674 removes. Peak RSS 1.14 GB with the noise, 400k decoded rows held in memory among it. The acceptance condition for the view is this table's two `decide_register` figures coming out about the same.
+
+### Deferred
 
 - **As-of reads that cost what the answer costs.** Replay is linear in the transitions before the target, under retraction and revision alike. The TEC register made that unacceptable for an interactive read, and `asof/revise` is its ruler: a small live set over a long history, where the cost is all history.
 - **Streaming `sqlx::query::fetch`** instead of `fetch_all`. Memory scales with audit rows fetched; not pressing until past N=1M (per-row payload is ~200-500 bytes).

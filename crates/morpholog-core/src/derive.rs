@@ -11,7 +11,7 @@ use crate::definitions::DefinitionTable;
 use crate::eval::{EvalContext, EvalError, Failure, eval_value, find_failure, find_matches};
 use crate::ir::{Definition, DerivedClaim, Invariant, Prop, Var};
 use crate::propose::WitnessBinding;
-use crate::state::{Bindings, ClaimInstance, EvalValue, State};
+use crate::state::{Bindings, ClaimInstance, EvalValue, State, StateRef};
 
 /// Evaluate an invariant against a state. Returns true if the invariant
 /// holds, false if it fails.
@@ -26,6 +26,17 @@ use crate::state::{Bindings, ClaimInstance, EvalValue, State};
 pub(crate) fn eval_invariant(
     inv: &Invariant,
     state: &State,
+    pre_state: Option<&State>,
+    definitions: &[Definition],
+) -> Result<bool, EvalError> {
+    eval_invariant_over(inv, state.into(), pre_state, definitions)
+}
+
+/// [`eval_invariant`] over whatever the evaluation reads, a candidate
+/// view included.
+pub(crate) fn eval_invariant_over(
+    inv: &Invariant,
+    state: StateRef<'_>,
     pre_state: Option<&State>,
     definitions: &[Definition],
 ) -> Result<bool, EvalError> {
@@ -82,6 +93,16 @@ pub(crate) fn eval_invariant_cases(
     definitions: &[Definition],
     cases: &[BTreeMap<Var, EvalValue>],
 ) -> Result<bool, EvalError> {
+    eval_invariant_cases_over(inv, state.into(), pre_state, definitions, cases)
+}
+
+pub(crate) fn eval_invariant_cases_over(
+    inv: &Invariant,
+    state: StateRef<'_>,
+    pre_state: Option<&State>,
+    definitions: &[Definition],
+    cases: &[BTreeMap<Var, EvalValue>],
+) -> Result<bool, EvalError> {
     in_invariant_context(state, pre_state, definitions, |ctx| match &inv.body {
         Prop::Implies { left, right }
         | Prop::Forall {
@@ -117,9 +138,20 @@ pub(crate) fn eval_invariant_cases(
 /// The witness is the first failing match of the earliest touched case,
 /// in state order within it. A negated top-level body witnesses
 /// nothing, as it does whole.
+#[cfg(test)]
 pub(crate) fn invariant_witness_cases(
     inv: &Invariant,
     state: &State,
+    pre_state: Option<&State>,
+    definitions: &[Definition],
+    cases: &[BTreeMap<Var, EvalValue>],
+) -> Result<Diagnosis, EvalError> {
+    invariant_witness_cases_over(inv, state.into(), pre_state, definitions, cases)
+}
+
+pub(crate) fn invariant_witness_cases_over(
+    inv: &Invariant,
+    state: StateRef<'_>,
     pre_state: Option<&State>,
     definitions: &[Definition],
     cases: &[BTreeMap<Var, EvalValue>],
@@ -193,9 +225,19 @@ pub(crate) fn sorted_witness(bindings: Bindings) -> Vec<WitnessBinding> {
 ///
 /// Call this only after [`eval_invariant`] returned `false`. It explains a
 /// rejection; it never decides one.
+#[cfg(test)]
 pub(crate) fn invariant_witness(
     inv: &Invariant,
     state: &State,
+    pre_state: Option<&State>,
+    definitions: &[Definition],
+) -> Result<Diagnosis, EvalError> {
+    invariant_witness_over(inv, state.into(), pre_state, definitions)
+}
+
+pub(crate) fn invariant_witness_over(
+    inv: &Invariant,
+    state: StateRef<'_>,
     pre_state: Option<&State>,
     definitions: &[Definition],
 ) -> Result<Diagnosis, EvalError> {
@@ -215,13 +257,13 @@ pub(crate) fn invariant_witness(
 /// Invariants evaluate with no actor in scope, so `Term::Actor` in a body
 /// is `EvalError::UnboundActor`. Authority checks belong in `require`.
 fn in_invariant_context<T>(
-    state: &State,
+    state: StateRef<'_>,
     pre_state: Option<&State>,
     definitions: &[Definition],
     body: impl FnOnce(&EvalContext<'_>) -> Result<T, EvalError>,
 ) -> Result<T, EvalError> {
     let bindings = Bindings::new();
-    let ctx = EvalContext::new(
+    let ctx = EvalContext::over(
         state,
         pre_state,
         &bindings,
