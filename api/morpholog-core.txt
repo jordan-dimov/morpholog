@@ -3226,6 +3226,7 @@ pub fn morpholog_core::State::claims_for<'a>(&'a self, &str) -> impl core::iter:
 pub fn morpholog_core::State::from_claims(alloc::vec::Vec<morpholog_core::ClaimInstance>) -> Self
 pub fn morpholog_core::State::is_empty(&self) -> bool
 pub fn morpholog_core::State::len(&self) -> usize
+pub fn morpholog_core::State::settle_for_snapshots(&mut self)
 impl core::clone::Clone for morpholog_core::State
 pub fn morpholog_core::State::clone(&self) -> morpholog_core::State
 impl core::cmp::Eq for morpholog_core::State

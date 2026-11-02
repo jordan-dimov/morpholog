@@ -130,7 +130,7 @@ async fn assert_required_indexes_used(pool: &PgPool, program: &Program, planner_
     ];
     for inv in &set.invariants {
         let filter = match inv.case_filter(&asserted, &[]) {
-            CaseFilter::Bounded(filter) => Some(filter),
+            CaseFilter::Bounded(cases) => Some(cases.filter()),
             CaseFilter::Unbounded => None,
             CaseFilter::Untouched => {
                 panic!("{}: the probe delta touches every ledger rule", inv.name)
@@ -474,11 +474,12 @@ transformation record(item, amount):
     .unwrap();
     let set = compiled_set(&program);
     let inv = &set.invariants[0];
-    let CaseFilter::Bounded(filter) =
+    let CaseFilter::Bounded(cases) =
         inv.case_filter(&[claim_instance("Bounded", &[subj("item_7"), dec(7)])], &[])
     else {
         panic!("the delta bounds the rule to its case");
     };
+    let filter = cases.filter();
     let sql = inv.violation_sql(Some(&filter));
     let used = indexes_in_plan(&pool, &sql, true).await;
     assert!(

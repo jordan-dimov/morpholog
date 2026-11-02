@@ -133,6 +133,10 @@ pub struct State {
     dead_base: HashSet<usize>,
     /// The logical claim count.
     live: usize,
+    /// Claims the readers below examined, so a test can hold the work an
+    /// evaluation does to the cases it was given.
+    #[cfg(test)]
+    visited: std::cell::Cell<u64>,
 }
 
 /// One indexed run of claims: the base, or the overlay.
@@ -247,6 +251,8 @@ impl State {
             dead_overlay: Vec::new(),
             dead_base: HashSet::new(),
             live,
+            #[cfg(test)]
+            visited: Default::default(),
         }
     }
 
@@ -272,6 +278,19 @@ impl State {
     pub fn apply(&mut self, asserted: &[ClaimInstance], retracted: &[ClaimInstance]) {
         let threshold = (self.base.claims.len() / 8).max(COMPACTION_FLOOR);
         self.apply_under(asserted, retracted, threshold);
+    }
+
+    /// Compact when cloning this state would cost more than rebuilding
+    /// it amortises. A clone copies what changed since the base, so a
+    /// replay that snapshots the state at every row, as a rehearsal
+    /// does through `propose`, pays the overlay's size each time; the
+    /// default threshold suits a replay that never clones. The balance
+    /// point is an overlay of about the square root of the live set.
+    pub fn settle_for_snapshots(&mut self) {
+        let churn = self.dead_base.len() + self.overlay.claims.len();
+        if churn > COMPACTION_FLOOR && churn * churn > 2 * self.live {
+            *self = State::from_claims(self.claims().to_vec());
+        }
     }
 
     /// [`State::apply`] with an explicit compaction `threshold` (on
@@ -348,6 +367,7 @@ impl State {
         let name = PredicateName::from(predicate);
         let base = self.base.bucket(&name);
         let overlay = self.overlay.bucket(&name);
+        self.visit(base.len() + overlay.len());
         base.iter()
             .filter(move |i| !self.dead_base.contains(i))
             .map(move |&i| &self.base.claims[i])
@@ -365,6 +385,7 @@ impl State {
         &'a self,
         predicate: &PredicateName,
     ) -> impl Iterator<Item = &'a ClaimInstance> + 'a {
+        self.visit(self.base.bucket(predicate).len() + self.overlay.bucket(predicate).len());
         self.base
             .bucket(predicate)
             .iter()
@@ -399,6 +420,27 @@ impl State {
             base: base.unwrap_or(&[]),
             overlay: overlay.unwrap_or(&[]),
         })
+    }
+
+    #[cfg(test)]
+    fn visit(&self, claims: usize) {
+        self.visited.set(self.visited.get() + claims as u64);
+    }
+
+    #[cfg(not(test))]
+    #[inline(always)]
+    fn visit(&self, _claims: usize) {}
+
+    /// Claims the readers examined since this state was built or cloned.
+    #[cfg(test)]
+    pub(crate) fn claims_visited(&self) -> u64 {
+        self.visited.get()
+    }
+
+    /// What a clone copies: the overlay and the retracted base positions.
+    #[cfg(test)]
+    pub(crate) fn churn(&self) -> usize {
+        self.dead_base.len() + self.overlay.claims.len()
     }
 
     /// Total number of admitted claims across all predicates.
@@ -482,6 +524,7 @@ impl<'a> CandidateBucket<'a> {
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &'a ClaimInstance> + 'a {
+        self.state.visit(self.base.len() + self.overlay.len());
         let state = self.state;
         self.base
             .iter()

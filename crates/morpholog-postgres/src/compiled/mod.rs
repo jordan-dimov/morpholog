@@ -274,14 +274,15 @@ impl CompiledInvariantSet {
         steps: &[DeltaStep],
     ) -> Result<Option<SqlViolation>, PgError> {
         for inv in &self.invariants[run] {
-            let case_filter = match stage {
+            let cases = match stage {
                 Stage::Full => None,
                 Stage::CaseBound => match inv.case_filter(asserted, retracted) {
                     CaseFilter::Untouched => continue,
-                    CaseFilter::Bounded(filter) => Some(filter),
+                    CaseFilter::Bounded(cases) => Some(cases),
                     CaseFilter::Unbounded => None,
                 },
             };
+            let case_filter = cases.as_ref().map(BoundedCases::filter);
             let sql = inv.violation_sql(case_filter.as_deref());
             // Safe: this module renders the SQL from a validated programme,
             // with identifiers quoted, literals escaped and the name comment
@@ -302,7 +303,7 @@ impl CompiledInvariantSet {
                     return Err(PgError::Kernel(decode_error(&erroring, &inv.values)?));
                 }
             }
-            let (witness, compared) = inv.diagnose(tx, case_filter.as_deref(), steps).await?;
+            let (witness, compared) = inv.diagnose(tx, cases.as_ref(), steps).await?;
             return Ok(Some(SqlViolation {
                 name: inv.name.clone(),
                 version: inv.version,
@@ -737,11 +738,41 @@ pub(crate) fn seek_expression(qualifier: &str, position: usize) -> String {
 pub(crate) enum CaseFilter {
     /// Delta disjoint from the invariant's occurrences: skip it entirely.
     Untouched,
-    /// The touched cases, as a SQL disjunction over the antecedent's
-    /// columns, spliced into the full query.
-    Bounded(String),
+    /// The touched cases, each a SQL conjunction over the antecedent's
+    /// columns, in the plan's order.
+    Bounded(BoundedCases),
     /// Touched, but not boundable to antecedent columns: run the full check.
     Unbounded,
+}
+
+/// The touched cases rendered onto the antecedent's columns, in the
+/// order the impact plan lists them: the filter is their disjunction,
+/// and the rank says which case a row belongs to first, so the
+/// diagnosis picks the earliest case's first failing row, as the kernel
+/// does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BoundedCases {
+    disjuncts: Vec<String>,
+}
+
+impl BoundedCases {
+    /// The disjunction, parenthesised; `(false)` for no case at all.
+    pub(crate) fn filter(&self) -> String {
+        if self.disjuncts.is_empty() {
+            return "(false)".to_string();
+        }
+        format!("({})", self.disjuncts.join(") OR ("))
+    }
+
+    /// The index of the first case a row matches, for an `ORDER BY`.
+    fn rank(&self) -> String {
+        let mut sql = String::from("CASE");
+        for (i, d) in self.disjuncts.iter().enumerate() {
+            let _ = write!(sql, " WHEN ({d}) THEN {i}");
+        }
+        sql.push_str(" END");
+        sql
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1209,7 +1240,7 @@ impl CompiledInvariant {
     async fn diagnose(
         &self,
         tx: &mut Transaction<'_, Postgres>,
-        case_filter: Option<&str>,
+        cases: Option<&BoundedCases>,
         steps: &[DeltaStep],
     ) -> Result<(Vec<WitnessBinding>, Option<Compared>), PgError> {
         let Some(d) = &self.diagnosis else {
@@ -1229,11 +1260,12 @@ impl CompiledInvariant {
         );
         let mut chosen = Chosen::default();
         let mut level = d;
-        // The case bounds the invariant's own antecedent: the first level.
-        let mut filter = case_filter;
+        // The cases bound the invariant's own antecedent: the first level,
+        // where the earliest case's rows come first.
+        let mut bounded = cases;
         let mut witness = BTreeMap::new();
         loop {
-            let level_filter = filter.take();
+            let level_cases = bounded.take();
             if let Some(choice) = &level.choice {
                 let mut sql = format!(
                     "{label}\nSELECT {}{}\nWHERE {}",
@@ -1241,11 +1273,18 @@ impl CompiledInvariant {
                     chosen.sources_clause(&choice.from),
                     chosen.pins(&choice.where_)
                 );
-                if let Some(filter) = level_filter {
-                    let _ = write!(sql, "\n  AND ({filter})");
+                if let Some(cases) = level_cases {
+                    let _ = write!(sql, "\n  AND ({})", cases.filter());
+                }
+                let mut order_by = Vec::new();
+                if let Some(cases) = level_cases {
+                    order_by.push(cases.rank());
                 }
                 if !choice.aliases.is_empty() {
-                    let _ = write!(sql, "\nORDER BY {}", order(&choice.aliases)?);
+                    order_by.push(order(&choice.aliases)?);
+                }
+                if !order_by.is_empty() {
+                    let _ = write!(sql, "\nORDER BY {}", order_by.join(", "));
                 }
                 sql.push_str("\nLIMIT 1");
                 match fetch(tx, sql).await? {
@@ -1341,7 +1380,7 @@ impl CompiledInvariant {
             Impact::Unbounded => return CaseFilter::Unbounded,
             Impact::Bounded(cases) => cases,
         };
-        let mut disjuncts: BTreeSet<String> = BTreeSet::new();
+        let mut disjuncts: Vec<String> = Vec::new();
         for case in &cases {
             let mut parts = Vec::new();
             for (var, ev) in case {
@@ -1353,13 +1392,12 @@ impl CompiledInvariant {
                     None => return CaseFilter::Unbounded,
                 }
             }
-            disjuncts.insert(parts.join(" AND "));
+            let disjunct = parts.join(" AND ");
+            if !disjuncts.contains(&disjunct) {
+                disjuncts.push(disjunct);
+            }
         }
-        if disjuncts.is_empty() {
-            return CaseFilter::Bounded("(false)".to_string());
-        }
-        let filter = disjuncts.into_iter().collect::<Vec<_>>().join(") OR (");
-        CaseFilter::Bounded(format!("({filter})"))
+        CaseFilter::Bounded(BoundedCases { disjuncts })
     }
 }
 

@@ -49,6 +49,7 @@ fn rehearse_rows<'a>(
             },
         );
         row.effect().apply_to(replay);
+        replay.settle_for_snapshots();
     }
 }
 

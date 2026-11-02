@@ -294,12 +294,22 @@ figures but cannot say which row carried them; bind the subject and the
 refusal can name it. The variables a rule binds but never uses are not
 noise; they are what its refusals can say.
 
-When several subjects violate the same rule, the witness reports the
-first violation in state order, not every one - sorting the bindings
-fixes how one assignment reads, not which assignment is chosen. The
-PostgreSQL path therefore loads claims in primary-key order, so the same
-database explains a refusal the same way twice; a hand-built `State` gets
-whatever order it was built in. The key order rather than the causal one
+When several subjects violate the same rule, the witness reports one
+violation, not every one - sorting the bindings fixes how one assignment
+reads, not which assignment is chosen. Checked whole, it is the first in
+state order. Checked over the touched cases, as admission checks, it is
+the first failing match of the earliest touched case, in state order
+within that case; the cases are ordered as the plan lists them, from the
+effective delta's claims (admitted then retracted, each in statement
+order) meeting the rule's claim patterns in body order, each case once,
+and a match that several overlapping partial cases share belongs to the
+earliest. Both evaluators follow that order: the compiled route ranks a
+row by the first case it matches before it orders by key, so the SQL
+diagnosis names the row the kernel would. The order is part of the
+semantics, not of the plan: a change to how the plan lists cases that
+moved a witness would move the version. The PostgreSQL path loads claims
+in primary-key order, so the same database explains a refusal the same
+way twice; a hand-built `State` gets whatever order it was built in. The key order rather than the causal one
 because any total order gives determinism and this one the index already
 provides - ordering by admission time would force a sort every accepted
 proposal paid so that refusals reproduce. Naming every violator, and
@@ -666,9 +676,10 @@ A test holds the version to its meaning. It asks a fixed corpus of questions (ev
 | 1 | The first semantics recorded. It is not a claim about anything decided before it was named. |
 | 2 | Admission bounds more and dismisses more. Arithmetic, an extremum or a builtin over terms a rule's pattern bound no longer makes the rule checked whole, so one such rule's historical violation no longer refuses every later act; and a change that touches no predicate a state rule reads no longer checks that rule at all, whatever its shape. A rule over `pre` is still checked on every change. Fewer refusals on a history that already violates a rule; no change on a clean one. |
 | 3 | A consequent `or` no longer makes a rule checked whole: a change to one case of `A(x) implies (B(x) or C(x))` is judged over that case, so a history violating the rule at another case no longer refuses it. An `or` in an antecedent still widens. |
+| 5 | A bounded obligation evaluates nothing outside its cases. The interpreter used to find every match of a rule's antecedent over the whole state and then keep the touched cases, so an antecedent that errors on a case the change did not reach (an exact product too wide for a decimal, a comparison across kinds) errored the proposal; now each case's bindings are in place before the antecedent is matched, the matcher seeks through the state's index, and an untouched case can raise nothing, which is what admission always said and what the compiled route always did. A refusal's witness follows one stated order on both routes: the touched cases in the order the plan lists them (the effective delta's claims, admitted then retracted, each in statement order, meeting the rule's claim patterns in body order, each case once), the first failing match of the earliest case, state order within it, and a match in several overlapping cases belonging to the earliest. Fewer errors, the same admissions and refusals, and a witness that may name another case where several fail at once: a `unique by` rule's refusal now binds the claim being admitted to its first pattern's variables (`amount_a`) and the claim already held to the second's, where version 4 gave whichever the state held first. |
 | 4 | `+`, `-` and `*` over decimals and quantities are exact or refused. Before, a result that did not fit was rounded half to even to the digits that did, so `1e-28 * 0.5` was `0` and the largest decimal plus `0.4` was unchanged; now each is a kernel error, as a `sum` that does not fit already was. `round(v, q)` is judged on the multiple it selects: it refuses when that multiple is not a decimal, and no longer returns a figure that is not a multiple of `q`. Division keeps its rounding rule. A result that fits is unchanged, digits included, so a rule over ordinary figures decides as before. |
 
-`evaluate` reports two other names, and neither is this version. `score_format_version` is the shape of its report. `semantics`, such as `case_bound_admission_v5`, names the rule `evaluate` counts refusals by. That rule follows admission, so a semantics move usually moves it too: v5 arrived with version 3. It can also move on its own, when the counting or the report changes and no decision does.
+`evaluate` reports two other names, and neither is this version. `score_format_version` is the shape of its report. `semantics`, such as `case_bound_admission_v5`, names the rule `evaluate` counts refusals by. That rule follows admission, so a semantics move usually moves it too: v5 arrived with version 3, v6 with version 5. It can also move on its own, when the counting or the report changes and no decision does.
 
 The layers are judged in order, so a receipt from before a semantics move meets the evidence layer first: a pack in a format this verifier does not read is `unsupported_pack` there, and the receipt is `not_checked` and `not_evaluated` before any version is compared. Export the pack again with a current release, at the receipt's own checkpoint, and the verifier then reaches the semantics line and says `not_re_evaluated`. A receipt written under the older semantics is re-evaluated only by a release that implements it.
 
