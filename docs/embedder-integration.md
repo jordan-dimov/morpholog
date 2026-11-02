@@ -945,6 +945,17 @@ against the wrong model asserts the hash at open - which
 `open_session` does for you, and `Session(expected_model_hash=...)`
 does explicitly.
 
+**The runtime can hold the hash itself.** `morpholog session
+<file.morph> --expect-hash sha256:... --database-url ...` refuses to
+start, before it connects and before any ready line, when the file
+hashes to anything else; the refusal names both hashes and exits
+non-zero. The client's pin says what the client was generated for.
+This flag says what the deployment authorised, and it lives with
+whoever starts the process, so an edited file cannot make a
+runtime started under one hash serve other rules. A caller that
+spawns the session itself still chooses the file; the flag holds a
+process a deployment starts, it does not hold the caller.
+
 **Requests.** One JSON object per line, an `op` field naming the
 operation, remaining fields exactly the generated client's
 parameters. Unknown fields are refused, not ignored - a misspelt
