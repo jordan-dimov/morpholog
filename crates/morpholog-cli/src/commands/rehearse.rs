@@ -74,8 +74,71 @@ impl ProgressLine {
         }
         self.shown = reached;
         Some(format!(
-            "rehearse: re-decided {} of {} rows",
+            "rehearse: processed {} of {} audit rows",
             progress.done, progress.total
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The lines a record of `total` rows prints when the fold reports
+    /// every `chunk` rows: 1024 on the database path, 1000 on the pack
+    /// path.
+    fn lines(total: u64, chunk: u64) -> Vec<String> {
+        let mut progress = ProgressLine::default();
+        (1..=total.div_ceil(chunk))
+            .filter_map(|n| {
+                progress.line(RehearsalProgress {
+                    done: (n * chunk).min(total),
+                    total,
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_short_record_prints_nothing() {
+        assert!(lines(9_999, 1024).is_empty());
+        assert!(lines(9_999, 1000).is_empty());
+    }
+
+    #[test]
+    fn one_line_per_ten_thousand_rows_crossed_on_either_cadence() {
+        assert_eq!(
+            lines(25_000, 1024),
+            [
+                "rehearse: processed 10240 of 25000 audit rows",
+                "rehearse: processed 20480 of 25000 audit rows",
+            ]
+        );
+        assert_eq!(
+            lines(25_000, 1000),
+            [
+                "rehearse: processed 10000 of 25000 audit rows",
+                "rehearse: processed 20000 of 25000 audit rows",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_threshold_prints_once_however_many_reports_cross_it() {
+        let mut progress = ProgressLine::default();
+        let at = |done| RehearsalProgress {
+            done,
+            total: 50_000,
+        };
+        assert!(progress.line(at(10_000)).is_some());
+        assert!(progress.line(at(10_001)).is_none());
+        assert!(progress.line(at(19_999)).is_none());
+        assert!(progress.line(at(20_000)).is_some());
+        // A jump over two thresholds prints one line, not two.
+        assert_eq!(
+            progress.line(at(45_000)).as_deref(),
+            Some("rehearse: processed 45000 of 50000 audit rows")
+        );
+        assert!(progress.line(at(49_999)).is_none());
     }
 }
