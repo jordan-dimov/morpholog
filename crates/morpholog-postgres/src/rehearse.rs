@@ -11,6 +11,17 @@ use crate::txn::{TxIsolation, begin_isolated_tx};
 use morpholog_core::{PreparedProgram, RecordedProposal, Rehearsal, RehearsalReport, State};
 use sqlx::PgPool;
 
+/// How far a rehearsal has got: rows re-decided so far, out of the rows
+/// the record holds, control rows counted on both sides.
+#[derive(Debug, Clone, Copy)]
+pub struct RehearsalProgress {
+    pub done: u64,
+    pub total: u64,
+}
+
+/// Rows between progress calls on the pack path, where there are no pages.
+const PROGRESS_CHUNK: usize = 1_000;
+
 fn rehearse_rows<'a>(
     replay: &mut State,
     rehearsal: &mut Rehearsal<'_>,
@@ -42,21 +53,32 @@ fn rehearse_rows<'a>(
 }
 
 /// Rehearse a candidate over the full committed audit log, read in one
-/// serializable snapshot.
+/// serializable snapshot. `on_progress` is called after each page.
 pub async fn rehearse_candidate(
     pool: &PgPool,
     program: &PreparedProgram,
+    on_progress: &mut dyn FnMut(RehearsalProgress),
 ) -> Result<RehearsalReport, PgError> {
     let mut rehearsal = Rehearsal::new(program);
     let mut tx = begin_isolated_tx(pool, TxIsolation::SerializableReadOnlyDeferrable).await?;
+    // count(*) is never null, but Postgres cannot prove it.
+    let rows = sqlx::query!(r#"SELECT count(*) AS "count!" FROM morpholog.audit"#)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(classify)?
+        .count;
+    let total = u64::try_from(rows).unwrap_or(0);
     let mut replay = State::default();
     let mut pages = AuditPages::new(None);
+    let mut done = 0u64;
     loop {
         let page = pages.next(&mut tx).await?;
         if page.is_empty() {
             break;
         }
         rehearse_rows(&mut replay, &mut rehearsal, &page);
+        done += page.len() as u64;
+        on_progress(RehearsalProgress { done, total });
     }
     tx.commit().await.map_err(classify)?;
     Ok(rehearsal.into_report())
@@ -68,6 +90,7 @@ pub fn rehearse_candidate_against_pack(
     program: &PreparedProgram,
     pack: &EvidencePack,
     anchor: Option<&Checkpoint>,
+    on_progress: &mut dyn FnMut(RehearsalProgress),
 ) -> Result<RehearsalReport, PgError> {
     match verify_pack(pack, anchor) {
         Ok(TreeVerification::Intact { .. }) => {}
@@ -86,6 +109,13 @@ pub fn rehearse_candidate_against_pack(
     rows.sort_by_key(|r| r.position());
     let mut rehearsal = Rehearsal::new(program);
     let mut replay = State::default();
-    rehearse_rows(&mut replay, &mut rehearsal, rows);
+    let total = rows.len() as u64;
+    for (done, chunk) in rows.chunks(PROGRESS_CHUNK).enumerate() {
+        rehearse_rows(&mut replay, &mut rehearsal, chunk.iter().copied());
+        on_progress(RehearsalProgress {
+            done: ((done + 1) * PROGRESS_CHUNK).min(rows.len()) as u64,
+            total,
+        });
+    }
     Ok(rehearsal.into_report())
 }
