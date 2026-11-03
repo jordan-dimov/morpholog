@@ -1,10 +1,10 @@
 //! A rehearsal's decisions cost what they touch, not what the state
-//! holds. The fold a rehearsal runs, decide then apply the recorded
-//! effect, over a small register revised behind a large live set no rule
-//! reads: no candidate state is cloned, and the state is not rebuilt
-//! where the old per-row compaction policy would have rebuilt it. The
-//! structural property behind the bench's `--noise` ruler, held without a
-//! clock.
+//! holds. The rehearsal's own observer re-deciding a small register
+//! revised behind a large live set no rule reads, the recorded effect
+//! applied after each row as the adapter's fold applies it: no candidate
+//! state is cloned, and the state is not rebuilt where the old per-row
+//! compaction policy would have rebuilt it. The structural property
+//! behind the bench's `--noise` ruler, held without a clock.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -14,6 +14,7 @@ use crate::ir_builder::{
 };
 use crate::kernel_tests::support::{claim_instance, dec, subj, test_actor};
 use crate::propose::Decided;
+use crate::rehearse::{RecordedProposal, Rehearsal, RowClass};
 use crate::{PreparedProgram, Program, State, Transition};
 
 /// A register in the TEC shape: a row predicate unique by its key, a
@@ -92,6 +93,7 @@ fn a_rehearsal_behind_unrelated_state_clones_nothing_and_rebuilds_nothing() {
     };
 
     let before = crate::tally::snapshot();
+    let mut rehearsal = Rehearsal::new(&prepared);
     let mut admitted = 0;
     for i in 0..revisions {
         let key = subj(&format!("row_{}", i % keys));
@@ -105,6 +107,24 @@ fn a_rehearsal_behind_unrelated_state_clones_nothing_and_rebuilds_nothing() {
         else {
             panic!("revision {i} is admissible");
         };
+        // The rehearsal's own observer re-decides the row as recorded,
+        // the way the adapter's fold feeds it.
+        let id = format!("t{i}");
+        rehearsal.observe(
+            &state,
+            &RecordedProposal {
+                transition_id: &id,
+                transformation: "admit_row",
+                args: &t.args,
+                actor: &t.actor,
+                asserted: &asserted_claims,
+                retracted: &retracted_claims,
+                emitted: &[],
+                drawn: Some(&[]),
+                model_hash: None,
+                semantics_version: None,
+            },
+        );
         // The effective delta is the revision and nothing else. A key's
         // first row admits the row and its kind; a revision admits the new
         // version and retracts the previous one, and the kind re-admitted
@@ -129,17 +149,47 @@ fn a_rehearsal_behind_unrelated_state_clones_nothing_and_rebuilds_nothing() {
     }
     // A kind for a row the register does not hold is refused by the rule
     // that reads both predicates, behind the same noise.
-    let Decided::Rejected { reason } =
-        decide(&state, &act("note_kind", vec![subj("ghost"), subj("k")]))
-    else {
+    let ghost = act("note_kind", vec![subj("ghost"), subj("k")]);
+    let Decided::Rejected { reason } = decide(&state, &ghost) else {
         panic!("a kind without its row is refused");
     };
+    // As a recorded row it is a would_reject under this candidate.
+    rehearsal.observe(
+        &state,
+        &RecordedProposal {
+            transition_id: "ghost",
+            transformation: "note_kind",
+            args: &ghost.args,
+            actor: &ghost.actor,
+            asserted: &[claim_instance("RowKinds", &[subj("ghost"), subj("k")])],
+            retracted: &[],
+            emitted: &[],
+            drawn: Some(&[]),
+            model_hash: None,
+            semantics_version: None,
+        },
+    );
     assert!(
         reason.to_string().contains("kinds_describe_a_row"),
         "{reason}"
     );
     let after = crate::tally::snapshot();
 
+    let report = rehearsal.into_report();
+    assert_eq!(
+        (
+            report.totals.same,
+            report.totals.would_reject,
+            report.totals.unreplayable
+        ),
+        (revisions as u64, 1, 0),
+        "{:?}",
+        report.totals
+    );
+    assert!(matches!(
+        &report.differences[0].class,
+        RowClass::WouldReject { rule, .. } if rule == "kinds_describe_a_row"
+    ));
     assert_eq!(admitted, revisions);
     assert_eq!(state.len(), noise + 2 * keys);
     let [clones, entries_copied, rebuilds, claims_rebuilt] =
