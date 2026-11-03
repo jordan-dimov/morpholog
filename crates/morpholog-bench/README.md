@@ -367,14 +367,14 @@ What it measures. Executing the act is about 1 us a row and preparing the candid
 
 ### The state's advance in its parts (2026-11-03, `rehearse --phases`, two repeats)
 
-The same rows again, the recorded operations applied one at a time with the compaction held off: each retraction, each admission's presence check on its own, and each admission (the check again, then the index entries). Then one rebuild of the final state, which is what a compaction does at that size. The run's absolutes read 15 to 30 percent above the table before, on the same idle machine; only shares within one run are compared.
+The same rows again, two ways. First the production advance, with the calls that compacted timed apart: a call counts as compacting when the state's rebuild counter moved during it. Then the recorded operations applied one at a time with the compaction held off: each retraction, each admission's presence check on its own, and each admission (the check again, then the index entries). The run's absolutes read 20 to 30 percent above the table before, on the same idle machine; only shares within one run are compared.
 
-| 100k rows | advance, whole | retractions | presence checks | admissions | one rebuild at the end | compactions over the run | claims they re-indexed |
+| 100k rows | advance, whole | calls that compacted | compactions | claims re-indexed | retractions | presence checks | admissions |
 |---|---|---|---|---|---|---|---|
-| append, 200k live | 1,236 ms | 0 ms | 20 ms | 126 ms | 125 ms | 40 | 1.58 M |
-| revise, 2k live | 1,229 ms | 104 ms | 29 ms | 110 ms | 1 ms | 775 | 1.55 M |
+| append, 200k live | 1,311 ms | 1,148 ms | 40 | 1.58 M | 0 ms | 22 ms | 146 ms |
+| revise, 2k live | 1,334 ms | 1,065 ms | 775 | 1.55 M | 106 ms | 31 ms | 115 ms |
 
-What it measures. The incremental work, finding what to retract, checking presence, and adding the index entries, is 1.5 to 2.5 us a row. The rest of the advance, about 1 s of 1.2 s in both cases, is the compactions: each re-indexes every live claim, at about 0.6 us a claim, and over either run they re-index about sixteen claims for every row applied. They get there by different routes. In the growing register the threshold is an eighth of the base, so the state is rebuilt each time it grows by an eighth, about eight times its final size in all. In the revised register the live set never passes the fixed floor, so a 2k state is rebuilt every 130 revisions or so, each adding about four entries of churn against a floor of 512. The state's index maintenance is not where its advance goes; its compaction policy is. Whether a different policy keeps the reads it was made for as fast is a separate question this ruler does not answer: a state never compacted carries every retracted overlay entry as a dead slot that reads skip.
+What it measures. The calls that compacted are 80 to 90 percent of the advance, about 0.7 us for each claim they re-indexed. The incremental work held apart, finding what to retract, checking presence, and adding the index entries, is 1.5 to 2.5 us a row, and it agrees with the advance less its compacting calls. Over either run the compactions re-index about sixteen claims for every row applied. They get there by different routes. In the growing register the threshold is an eighth of the base, so the state is rebuilt each time it grows by an eighth, about eight times its final size in all, with few retractions to reclaim. In the revised register the live set never passes the fixed floor, so a 2k state is rebuilt every 130 revisions or so, each adding about four entries of churn against a floor of 512, most of them dead. The state's index maintenance is not where its advance goes; its compaction policy is. Whether a different policy keeps the rest as fast is a separate question this ruler does not answer: a state that compacts less carries more overlay, which reads search and an ordinary proposal's owned candidate copies.
 
 ### Deferred
 
