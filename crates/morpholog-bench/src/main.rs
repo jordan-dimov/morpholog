@@ -1460,16 +1460,16 @@ fn decision_phases(
     Ok([stage, candidate, decide, apply])
 }
 
-async fn measure_rehearse(
-    pool: &PgPool,
-    case: &str,
-    n: usize,
-    revise: usize,
-    refusing: bool,
-    noise: usize,
-    phases: bool,
-    repeat: usize,
-) -> Result<CaseResult> {
+async fn measure_rehearse(pool: &PgPool, case: &str, args: &RehearseArgs) -> Result<CaseResult> {
+    let &RehearseArgs {
+        n,
+        revise,
+        refusing,
+        noise,
+        phases,
+        repeat,
+        ..
+    } = args;
     if !noise.is_multiple_of(1000) {
         return Err(anyhow!(
             "--noise must be a multiple of 1000, the fold's progress step"
@@ -1679,17 +1679,7 @@ async fn run_rehearse(args: RehearseArgs) -> Result<()> {
         "scenario=rehearse n={} revise={} refusing={} noise={} repeat={}",
         args.n, args.revise, args.refusing, args.noise, args.repeat
     );
-    let result = measure_rehearse(
-        &pool,
-        case,
-        args.n,
-        args.revise,
-        args.refusing,
-        args.noise,
-        args.phases,
-        args.repeat,
-    )
-    .await?;
+    let result = measure_rehearse(&pool, case, &args).await?;
     print_case_human(&result);
     Ok(())
 }
