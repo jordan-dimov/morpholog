@@ -548,8 +548,8 @@ impl<'a> Iterator for NamedClaims<'a> {
 }
 
 /// A proposal's candidate state read without being built: the pre-state
-/// with the staged delta over it. It answers as the owned candidate
-/// [`State::with_delta`] would: retractions first, admissions not already
+/// with the staged delta over it. It answers as
+/// the owned form built from the same delta would: retractions first, admissions not already
 /// present after everything else, a claim retracted and admitted in one
 /// delta at the tail. Nothing of the pre-state is copied; the delta is
 /// indexed on its own.
