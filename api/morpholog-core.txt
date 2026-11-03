@@ -2909,7 +2909,6 @@ impl core::panic::unwind_safe::UnwindSafe for morpholog_core::PredicateName
 pub struct morpholog_core::PreparedProgram
 impl morpholog_core::PreparedProgram
 pub fn morpholog_core::PreparedProgram::admission(&self) -> morpholog_core::Admission<'_>
-pub fn morpholog_core::PreparedProgram::decide(&self, &morpholog_core::Transition, &morpholog_core::State, &mut dyn morpholog_core::SubjectSource) -> core::result::Result<core::option::Option<morpholog_core::Decided>, morpholog_core::EvalError>
 pub fn morpholog_core::PreparedProgram::definition(&self, &morpholog_core::DefinitionName) -> core::option::Option<&morpholog_core::Definition>
 pub fn morpholog_core::PreparedProgram::derived_claim(&self, &morpholog_core::PredicateName) -> core::option::Option<&morpholog_core::DerivedClaim>
 pub fn morpholog_core::PreparedProgram::explain(&self, &morpholog_core::Transition, &morpholog_core::State, &mut dyn morpholog_core::SubjectSource) -> morpholog_core::Explanation

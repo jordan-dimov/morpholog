@@ -108,9 +108,9 @@ pub struct ClaimInstance {
 /// a measurement can attribute a run to copies and rebuilds apart, and a
 /// test can hold a fold to doing neither. Per thread, so tests running
 /// beside each other read their own. Only in test builds and under the
-/// `tally` feature the bench enables; an ordinary build compiles the
+/// `measure` feature the bench enables; an ordinary build compiles the
 /// increments to nothing.
-#[cfg(any(test, feature = "tally"))]
+#[cfg(any(test, feature = "measure"))]
 #[doc(hidden)]
 pub mod tally {
     use std::cell::Cell;
@@ -183,7 +183,7 @@ pub struct State {
 }
 
 /// The counters' absence: the same calls, compiled to nothing.
-#[cfg(not(any(test, feature = "tally")))]
+#[cfg(not(any(test, feature = "measure")))]
 mod tally {
     #[inline(always)]
     pub(super) fn clone_of(_overlay_entries: usize) {}

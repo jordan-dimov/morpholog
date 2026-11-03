@@ -28,7 +28,7 @@ jiff-sqlx = { workspace = true }
 [dev-dependencies]
 num-bigint = { workspace = true }
 # The state's copy and rebuild counters, for the locality guard.
-morpholog-core = { path = "../morpholog-core", features = ["tally"] }
+morpholog-core = { path = "../morpholog-core", features = ["measure"] }
 morpholog-examples = { path = "../morpholog-examples" }
 morpholog-surface = { path = "../morpholog-surface" }
 morpholog-test-support = { path = "../morpholog-test-support" }

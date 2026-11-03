@@ -2907,6 +2907,7 @@ pub async fn morpholog_postgres::testing::AlwaysNonRetryable::deliver(&self, &mo
 impl morpholog_postgres::Deliverer for morpholog_postgres::testing::AlwaysTransient
 pub async fn morpholog_postgres::testing::AlwaysTransient::deliver(&self, &morpholog_postgres::OutboxRow) -> morpholog_postgres::DeliveryOutcome
 pub async fn morpholog_postgres::activation_preflight(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::ActivationPreflight, morpholog_postgres::PgError>
+pub fn morpholog_postgres::advance_recorded(&mut morpholog_core::state::State, &morpholog_postgres::AuditRow)
 pub async fn morpholog_postgres::apply_migrations(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::apply_migrations_paused(&sqlx_postgres::PgPool, morpholog_postgres::MigrateMode, &morpholog_postgres::LockPolicy, impl core::future::future::Future<Output = ()>) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::apply_migrations_with(&sqlx_postgres::PgPool, morpholog_postgres::MigrateMode, &morpholog_postgres::LockPolicy) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>

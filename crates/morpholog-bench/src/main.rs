@@ -1402,9 +1402,10 @@ fn peak_rss_mb() -> Option<f64> {
 }
 
 /// The decision step by step over rows in memory: what a rehearsal does
-/// per row, each step on its own clock. The candidate's preparation is
-/// repeated outside the decision to be timed, so the steps sum to more
-/// than the decision.
+/// per row, each step on its own clock, the state advanced by each row's
+/// recorded effect as the rehearsal's fold advances it. The candidate's
+/// preparation is repeated outside the decision to be timed, so the
+/// steps sum to more than the decision.
 fn decision_phases(
     prepared: &PreparedProgram,
     rows: &[&morpholog_postgres::AuditRow],
@@ -1426,35 +1427,35 @@ fn decision_phases(
         let t = Instant::now();
         let staged = prepared
             .stage_delta(&transition, &state, &mut subjects)
-            .context("staging")?
-            .ok_or_else(|| anyhow!("the row's act is not in the programme"))?;
+            .context("staging")?;
         stage += t.elapsed();
-        if let StagedDelta::Staged {
-            asserted,
-            retracted,
-            ..
-        } = &staged
-        {
+        // A row of an act the programme lacks (a control row, or one the
+        // rehearsal reports unreplayable) is not decided; its recorded
+        // effect still advances the state, as the fold's does.
+        if let Some(staged) = staged {
+            if let StagedDelta::Staged {
+                asserted,
+                retracted,
+                ..
+            } = &staged
+            {
+                let t = Instant::now();
+                let effective = effective_delta(&state, asserted, retracted);
+                let view = Candidate::new(&state, asserted, retracted);
+                candidate += t.elapsed();
+                std::hint::black_box((effective, view));
+            }
             let t = Instant::now();
-            let effective = effective_delta(&state, asserted, retracted);
-            let view = Candidate::new(&state, asserted, retracted);
-            candidate += t.elapsed();
-            std::hint::black_box((effective, view));
+            let decided = morpholog_core::decide_staged_delta_with(staged, &state, &admission)
+                .context("deciding")?;
+            decide += t.elapsed();
+            std::hint::black_box(matches!(decided, Decided::Accepted { .. }));
         }
+        // The recorded effect, whatever the candidate decided: the
+        // production fold's own step, so a refusing candidate's later
+        // rows are decided over the state the record built.
         let t = Instant::now();
-        let decided = morpholog_core::decide_staged_delta_with(staged, &state, &admission)
-            .context("deciding")?;
-        decide += t.elapsed();
-        let Decided::Accepted {
-            asserted_claims,
-            retracted_claims,
-            ..
-        } = decided
-        else {
-            continue;
-        };
-        let t = Instant::now();
-        state.apply(&asserted_claims, &retracted_claims);
+        morpholog_postgres::advance_recorded(&mut state, row);
         apply += t.elapsed();
     }
     Ok([stage, candidate, decide, apply])

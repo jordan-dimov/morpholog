@@ -29,7 +29,7 @@ fn rehearse_rows<'a>(
 ) {
     for row in rows {
         if row.is_control() {
-            row.effect().apply_to(replay);
+            advance_recorded(replay, row);
             continue;
         }
         let transition_id = row.transition_id.to_string();
@@ -48,8 +48,16 @@ fn rehearse_rows<'a>(
                 semantics_version: row.semantics_version,
             },
         );
-        row.effect().apply_to(replay);
+        advance_recorded(replay, row);
     }
+}
+
+/// The fold's step after each decision: the replay state advanced by the
+/// row's recorded effect, whatever the candidate decided. Public for a
+/// measurement that times the decisions apart from this step.
+#[doc(hidden)]
+pub fn advance_recorded(replay: &mut State, row: &AuditRow) {
+    row.effect().apply_to(replay);
 }
 
 /// Rehearse a candidate over the full committed audit log, read in one
