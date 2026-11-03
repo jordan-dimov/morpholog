@@ -151,7 +151,7 @@ impl PreparedProgram {
     /// the effective delta it was judged on, for a caller that advances
     /// its own state afterwards, as a rehearsal does. `Ok(None)` when no
     /// transformation has that name.
-    pub(crate) fn decide(
+    pub fn decide(
         &self,
         transition: &Transition,
         pre_state: &State,

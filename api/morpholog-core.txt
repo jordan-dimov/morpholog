@@ -619,6 +619,30 @@ impl core::marker::Unpin for morpholog_core::CoverageVerdict
 impl core::marker::UnsafeUnpin for morpholog_core::CoverageVerdict
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::CoverageVerdict
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::CoverageVerdict
+pub enum morpholog_core::Decided
+pub morpholog_core::Decided::Accepted
+pub morpholog_core::Decided::Accepted::asserted_claims: alloc::vec::Vec<morpholog_core::ClaimInstance>
+pub morpholog_core::Decided::Accepted::effective: morpholog_core::EffectiveDelta
+pub morpholog_core::Decided::Accepted::emitted_intents: alloc::vec::Vec<morpholog_core::IntentInstance>
+pub morpholog_core::Decided::Accepted::retracted_claims: alloc::vec::Vec<morpholog_core::ClaimInstance>
+pub morpholog_core::Decided::Rejected
+pub morpholog_core::Decided::Rejected::reason: morpholog_core::RejectionReason
+impl core::clone::Clone for morpholog_core::Decided
+pub fn morpholog_core::Decided::clone(&self) -> morpholog_core::Decided
+impl core::cmp::Eq for morpholog_core::Decided
+pub fn morpholog_core::Decided::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_core::Decided
+pub fn morpholog_core::Decided::eq(&self, &morpholog_core::Decided) -> bool
+impl core::fmt::Debug for morpholog_core::Decided
+pub fn morpholog_core::Decided::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_core::Decided
+impl core::marker::Freeze for morpholog_core::Decided
+impl core::marker::Send for morpholog_core::Decided
+impl core::marker::Sync for morpholog_core::Decided
+impl core::marker::Unpin for morpholog_core::Decided
+impl core::marker::UnsafeUnpin for morpholog_core::Decided
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Decided
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Decided
 pub enum morpholog_core::DefinitionOrigin
 pub morpholog_core::DefinitionOrigin::Authored
 pub morpholog_core::DefinitionOrigin::Discipline
@@ -1891,6 +1915,16 @@ impl core::marker::Unpin for morpholog_core::BatchScore
 impl core::marker::UnsafeUnpin for morpholog_core::BatchScore
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::BatchScore
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::BatchScore
+pub struct morpholog_core::Candidate<'a>
+impl<'a> morpholog_core::Candidate<'a>
+pub fn morpholog_core::Candidate<'a>::new(&'a morpholog_core::State, &[morpholog_core::ClaimInstance], &[morpholog_core::ClaimInstance]) -> Self
+impl<'a> core::marker::Freeze for morpholog_core::Candidate<'a>
+impl<'a> core::marker::Send for morpholog_core::Candidate<'a>
+impl<'a> core::marker::Sync for morpholog_core::Candidate<'a>
+impl<'a> core::marker::Unpin for morpholog_core::Candidate<'a>
+impl<'a> core::marker::UnsafeUnpin for morpholog_core::Candidate<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Candidate<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for morpholog_core::Candidate<'a>
 pub struct morpholog_core::CandidateScore
 pub morpholog_core::CandidateScore::invariants: alloc::vec::Vec<morpholog_core::InvariantScore>
 pub morpholog_core::CandidateScore::program: alloc::string::String
@@ -2875,6 +2909,7 @@ impl core::panic::unwind_safe::UnwindSafe for morpholog_core::PredicateName
 pub struct morpholog_core::PreparedProgram
 impl morpholog_core::PreparedProgram
 pub fn morpholog_core::PreparedProgram::admission(&self) -> morpholog_core::Admission<'_>
+pub fn morpholog_core::PreparedProgram::decide(&self, &morpholog_core::Transition, &morpholog_core::State, &mut dyn morpholog_core::SubjectSource) -> core::result::Result<core::option::Option<morpholog_core::Decided>, morpholog_core::EvalError>
 pub fn morpholog_core::PreparedProgram::definition(&self, &morpholog_core::DefinitionName) -> core::option::Option<&morpholog_core::Definition>
 pub fn morpholog_core::PreparedProgram::derived_claim(&self, &morpholog_core::PredicateName) -> core::option::Option<&morpholog_core::DerivedClaim>
 pub fn morpholog_core::PreparedProgram::explain(&self, &morpholog_core::Transition, &morpholog_core::State, &mut dyn morpholog_core::SubjectSource) -> morpholog_core::Explanation
@@ -3614,6 +3649,7 @@ impl<I: core::iter::traits::iterator::Iterator<Item = morpholog_core::Subject>> 
 pub fn I::next_subject(&mut self) -> core::option::Option<morpholog_core::Subject>
 pub fn morpholog_core::client_refuses_name(&str) -> bool
 pub fn morpholog_core::controls(&morpholog_core::PreparedProgram) -> morpholog_core::ControlMatrix
+pub fn morpholog_core::decide_staged_delta_with(morpholog_core::StagedDelta, &morpholog_core::State, &morpholog_core::Admission<'_>) -> core::result::Result<morpholog_core::Decided, morpholog_core::EvalError>
 pub fn morpholog_core::effective_delta(&morpholog_core::State, &[morpholog_core::ClaimInstance], &[morpholog_core::ClaimInstance]) -> morpholog_core::EffectiveDelta
 pub fn morpholog_core::eval_value_over(&morpholog_core::ValueExpr, &std::collections::hash::map::HashMap<morpholog_core::Var, morpholog_core::EvalValue>, &[core::result::Result<morpholog_core::EvalValue, morpholog_core::EvalError>]) -> core::option::Option<core::result::Result<morpholog_core::EvalValue, morpholog_core::EvalError>>
 pub fn morpholog_core::finish_staged_delta_with(morpholog_core::StagedDelta, &morpholog_core::State, &morpholog_core::Admission<'_>) -> core::result::Result<morpholog_core::Outcome, morpholog_core::EvalError>

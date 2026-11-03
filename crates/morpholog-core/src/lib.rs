@@ -89,9 +89,9 @@ pub use lint::{
 };
 pub use prepared::PreparedProgram;
 pub use propose::{
-    BindOneOutcome, Compared, ForIterationTrace, Outcome, RejectionReason, RequireOutcome,
+    BindOneOutcome, Compared, Decided, ForIterationTrace, Outcome, RejectionReason, RequireOutcome,
     StagedDelta, SubjectSource, TraceEntry, TracedProposal, Transition, WitnessBinding,
-    finish_staged_delta_with,
+    decide_staged_delta_with, finish_staged_delta_with,
 };
 pub use reads::{KeyedPattern, KnownTerm, ReadFilter, ReadPlan};
 pub use rehearse::{
@@ -107,7 +107,7 @@ pub use score::{
 #[cfg(any(test, feature = "tally"))]
 #[doc(hidden)]
 pub use state::tally;
-pub use state::{ClaimInstance, Claims, EvalValue, IntentInstance, State};
+pub use state::{Candidate, ClaimInstance, Claims, EvalValue, IntentInstance, State};
 pub use sums::lower_sum_seeds;
 pub use validate::{ValidatedProgram, ValidationContext, ValidationError, VocabularyKind};
 

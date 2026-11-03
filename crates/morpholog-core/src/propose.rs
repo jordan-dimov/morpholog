@@ -640,9 +640,9 @@ pub(crate) fn stage_delta_inner(
 
 /// A proposal decided: refused, or admitted with its change and the
 /// effective delta the admission was judged on. No candidate state is
-/// built; a caller that wants one asks for it.
+/// built; a caller that wants one proposes instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Decided {
+pub enum Decided {
     Accepted {
         asserted_claims: Vec<ClaimInstance>,
         retracted_claims: Vec<ClaimInstance>,
@@ -714,6 +714,17 @@ fn judge_invariants(
     }
 
     Ok(None)
+}
+
+/// [`finish_staged_delta_with`] without the candidate state: the verdict
+/// and the effective delta, for a caller that advances its own state
+/// afterwards, as a rehearsal does.
+pub fn decide_staged_delta_with(
+    staged: StagedDelta,
+    pre_state: &State,
+    admission: &Admission<'_>,
+) -> Result<Decided, EvalError> {
+    decide_staged(staged, pre_state, admission, None, &mut TraceSink::Off)
 }
 
 /// Judge a staged delta without building its candidate: the invariants

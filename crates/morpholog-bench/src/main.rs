@@ -215,6 +215,14 @@ struct RehearseArgs {
     #[arg(long, default_value_t = 0)]
     noise: usize,
 
+    /// Also run the decision step by step over the same rows, each step
+    /// timed on its own: the act's execution, the candidate's
+    /// preparation, the whole decision, and the state's advance. The
+    /// preparation is repeated outside the decision to be timed, so the
+    /// steps sum to more than the decision.
+    #[arg(long)]
+    phases: bool,
+
     /// Timed repetitions.
     #[arg(long, default_value_t = 3)]
     repeat: usize,
@@ -1393,6 +1401,65 @@ fn peak_rss_mb() -> Option<f64> {
     Some(kb / 1024.0)
 }
 
+/// The decision step by step over rows in memory: what a rehearsal does
+/// per row, each step on its own clock. The candidate's preparation is
+/// repeated outside the decision to be timed, so the steps sum to more
+/// than the decision.
+fn decision_phases(
+    prepared: &PreparedProgram,
+    rows: &[&morpholog_postgres::AuditRow],
+) -> Result<[Duration; 4]> {
+    use morpholog_core::{Candidate, Decided, StagedDelta, effective_delta};
+    let admission = prepared.admission();
+    let mut state = State::default();
+    let mut subjects = morpholog_postgres::runtime_subjects();
+    let mut stage = Duration::ZERO;
+    let mut candidate = Duration::ZERO;
+    let mut decide = Duration::ZERO;
+    let mut apply = Duration::ZERO;
+    for row in rows {
+        let transition = Transition {
+            transformation_name: row.transformation_name.clone(),
+            args: row.arguments.clone(),
+            actor: row.actor.clone(),
+        };
+        let t = Instant::now();
+        let staged = prepared
+            .stage_delta(&transition, &state, &mut subjects)
+            .context("staging")?
+            .ok_or_else(|| anyhow!("the row's act is not in the programme"))?;
+        stage += t.elapsed();
+        if let StagedDelta::Staged {
+            asserted,
+            retracted,
+            ..
+        } = &staged
+        {
+            let t = Instant::now();
+            let effective = effective_delta(&state, asserted, retracted);
+            let view = Candidate::new(&state, asserted, retracted);
+            candidate += t.elapsed();
+            std::hint::black_box((effective, view));
+        }
+        let t = Instant::now();
+        let decided = morpholog_core::decide_staged_delta_with(staged, &state, &admission)
+            .context("deciding")?;
+        decide += t.elapsed();
+        let Decided::Accepted {
+            asserted_claims,
+            retracted_claims,
+            ..
+        } = decided
+        else {
+            continue;
+        };
+        let t = Instant::now();
+        state.apply(&asserted_claims, &retracted_claims);
+        apply += t.elapsed();
+    }
+    Ok([stage, candidate, decide, apply])
+}
+
 async fn measure_rehearse(
     pool: &PgPool,
     case: &str,
@@ -1400,6 +1467,7 @@ async fn measure_rehearse(
     revise: usize,
     refusing: bool,
     noise: usize,
+    phases: bool,
     repeat: usize,
 ) -> Result<CaseResult> {
     if !noise.is_multiple_of(1000) {
@@ -1424,6 +1492,7 @@ async fn measure_rehearse(
     let mut decide_register = Vec::with_capacity(repeat);
     let mut tallies: [Vec<f64>; 4] = Default::default();
     let mut register_tallies: [Vec<f64>; 4] = Default::default();
+    let mut phase_times: [Vec<Duration>; 4] = Default::default();
     let mut serialise = Vec::with_capacity(repeat);
     let mut end_to_end = Vec::with_capacity(repeat);
     let mut peak = Vec::with_capacity(repeat);
@@ -1479,6 +1548,13 @@ async fn measure_rehearse(
             ));
         }
 
+        if phases {
+            let split = decision_phases(&prepared, &refs)?;
+            for (i, v) in phase_times.iter_mut().enumerate() {
+                v.push(split[i]);
+            }
+        }
+
         let t = Instant::now();
         let bytes = serde_json::to_vec(&report).context("serialising the report")?;
         serialise.push(t.elapsed());
@@ -1504,74 +1580,88 @@ async fn measure_rehearse(
         .iter()
         .map(|d| d.as_secs_f64() * 1e6 / n as f64)
         .collect();
+    let mut metrics = vec![
+        Metric::ms("fixture_build", &[fixture]),
+        Metric {
+            name: "audit_table",
+            unit: "MB",
+            samples: vec![audit_mb],
+        },
+        Metric::ms("fetch_rows", &fetch),
+        Metric::ms("decide_rows", &decide),
+        Metric::ms("decide_register", &decide_register),
+        Metric {
+            name: "state_clones",
+            unit: "count",
+            samples: tallies[0].clone(),
+        },
+        Metric {
+            name: "overlay_entries_copied",
+            unit: "count",
+            samples: tallies[1].clone(),
+        },
+        Metric {
+            name: "state_rebuilds",
+            unit: "count",
+            samples: tallies[2].clone(),
+        },
+        Metric {
+            name: "claims_rebuilt",
+            unit: "count",
+            samples: tallies[3].clone(),
+        },
+        Metric {
+            name: "register_clones",
+            unit: "count",
+            samples: register_tallies[0].clone(),
+        },
+        Metric {
+            name: "register_entries_copied",
+            unit: "count",
+            samples: register_tallies[1].clone(),
+        },
+        Metric {
+            name: "register_rebuilds",
+            unit: "count",
+            samples: register_tallies[2].clone(),
+        },
+        Metric {
+            name: "register_claims_rebuilt",
+            unit: "count",
+            samples: register_tallies[3].clone(),
+        },
+        Metric {
+            name: "decide_per_row",
+            unit: "us",
+            samples: per_row_us,
+        },
+        Metric::ms("serialise_report", &serialise),
+        Metric::ms("end_to_end", &end_to_end),
+        Metric {
+            name: "peak_rss",
+            unit: "MB",
+            samples: peak,
+        },
+    ];
+    if phases {
+        for (name, times) in [
+            "phase_stage",
+            "phase_candidate",
+            "phase_decide",
+            "phase_apply",
+        ]
+        .into_iter()
+        .zip(&phase_times)
+        {
+            metrics.push(Metric::ms(name, times));
+        }
+    }
     Ok(CaseResult {
         case: case.to_string(),
         implementation: "interpreted",
         axis: "n",
         point: n as u64,
-        metrics: vec![
-            Metric::ms("fixture_build", &[fixture]),
-            Metric {
-                name: "audit_table",
-                unit: "MB",
-                samples: vec![audit_mb],
-            },
-            Metric::ms("fetch_rows", &fetch),
-            Metric::ms("decide_rows", &decide),
-            Metric::ms("decide_register", &decide_register),
-            Metric {
-                name: "state_clones",
-                unit: "count",
-                samples: tallies[0].clone(),
-            },
-            Metric {
-                name: "overlay_entries_copied",
-                unit: "count",
-                samples: tallies[1].clone(),
-            },
-            Metric {
-                name: "state_rebuilds",
-                unit: "count",
-                samples: tallies[2].clone(),
-            },
-            Metric {
-                name: "claims_rebuilt",
-                unit: "count",
-                samples: tallies[3].clone(),
-            },
-            Metric {
-                name: "register_clones",
-                unit: "count",
-                samples: register_tallies[0].clone(),
-            },
-            Metric {
-                name: "register_entries_copied",
-                unit: "count",
-                samples: register_tallies[1].clone(),
-            },
-            Metric {
-                name: "register_rebuilds",
-                unit: "count",
-                samples: register_tallies[2].clone(),
-            },
-            Metric {
-                name: "register_claims_rebuilt",
-                unit: "count",
-                samples: register_tallies[3].clone(),
-            },
-            Metric {
-                name: "decide_per_row",
-                unit: "us",
-                samples: per_row_us,
-            },
-            Metric::ms("serialise_report", &serialise),
-            Metric::ms("end_to_end", &end_to_end),
-            Metric {
-                name: "peak_rss",
-                unit: "MB",
-                samples: peak,
-            },
-        ],
+        metrics,
     })
 }
 
@@ -1596,6 +1686,7 @@ async fn run_rehearse(args: RehearseArgs) -> Result<()> {
         args.revise,
         args.refusing,
         args.noise,
+        args.phases,
         args.repeat,
     )
     .await?;
@@ -4172,6 +4263,7 @@ mod smoke {
                 revise,
                 refusing,
                 noise,
+                phases: true,
                 repeat: 1,
                 database_url: url.clone(),
                 reset: true,
