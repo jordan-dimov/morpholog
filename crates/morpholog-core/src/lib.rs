@@ -93,6 +93,9 @@ pub use propose::{
     StagedDelta, SubjectSource, TraceEntry, TracedProposal, Transition, WitnessBinding,
     finish_staged_delta_with,
 };
+#[cfg(any(test, feature = "measure"))]
+#[doc(hidden)]
+pub use propose::{Decided, decide_staged_delta_with};
 pub use reads::{KeyedPattern, KnownTerm, ReadFilter, ReadPlan};
 pub use rehearse::{
     Effect, REHEARSAL_CONTRACT, REHEARSAL_FORMAT_VERSION, RecordedProposal, Rehearsal,
@@ -104,9 +107,9 @@ pub use score::{
     SCORE_FORMAT_VERSION, SCORE_SEMANTICS, ScoreError, SliceInvariantScore, SliceScore,
     SplitBoundaryReport, SplitScore, invariants_using_pre,
 };
-#[cfg(any(test, feature = "tally"))]
+#[cfg(any(test, feature = "measure"))]
 #[doc(hidden)]
-pub use state::tally;
+pub use state::{Candidate, tally};
 pub use state::{ClaimInstance, Claims, EvalValue, IntentInstance, State};
 pub use sums::lower_sum_seeds;
 pub use validate::{ValidatedProgram, ValidationContext, ValidationError, VocabularyKind};

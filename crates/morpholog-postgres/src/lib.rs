@@ -148,7 +148,8 @@ pub use receipt::{
     issue_receipt, parse_receipt, reproduce,
 };
 pub use rehearse::{
-    RehearsalProgress, rehearse_candidate, rehearse_candidate_against_pack, rehearse_recorded,
+    RehearsalProgress, advance_recorded, rehearse_candidate, rehearse_candidate_against_pack,
+    rehearse_recorded,
 };
 pub use rejections::{RejectionRow, list_rejection_rows};
 pub use role_rebindings::{RebindingScope, RoleRebinding, RoleRebindings};

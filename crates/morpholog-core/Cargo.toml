@@ -16,9 +16,10 @@ thiserror = { workspace = true }
 sha2 = { workspace = true }
 
 [features]
-# Counters at the state's clone and rebuild, for the bench; an ordinary
-# build compiles the increments to nothing.
-tally = []
+# The measurement surface, for the bench and the locality guards:
+# counters at the state's clone and rebuild, and the decision apart from
+# the candidate state. An ordinary build has neither.
+measure = []
 
 [dev-dependencies]
 morpholog-test-support = { path = "../morpholog-test-support" }

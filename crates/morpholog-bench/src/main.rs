@@ -215,6 +215,14 @@ struct RehearseArgs {
     #[arg(long, default_value_t = 0)]
     noise: usize,
 
+    /// Also run the decision step by step over the same rows, each step
+    /// timed on its own: the act's execution, the candidate's
+    /// preparation, the whole decision, and the state's advance. The
+    /// preparation is repeated outside the decision to be timed, so the
+    /// steps sum to more than the decision.
+    #[arg(long)]
+    phases: bool,
+
     /// Timed repetitions.
     #[arg(long, default_value_t = 3)]
     repeat: usize,
@@ -1393,15 +1401,76 @@ fn peak_rss_mb() -> Option<f64> {
     Some(kb / 1024.0)
 }
 
-async fn measure_rehearse(
-    pool: &PgPool,
-    case: &str,
-    n: usize,
-    revise: usize,
-    refusing: bool,
-    noise: usize,
-    repeat: usize,
-) -> Result<CaseResult> {
+/// The decision step by step over rows in memory: what a rehearsal does
+/// per row, each step on its own clock, the state advanced by each row's
+/// recorded effect as the rehearsal's fold advances it. The candidate's
+/// preparation is repeated outside the decision to be timed, so the
+/// steps sum to more than the decision.
+fn decision_phases(
+    prepared: &PreparedProgram,
+    rows: &[&morpholog_postgres::AuditRow],
+) -> Result<[Duration; 4]> {
+    use morpholog_core::{Candidate, Decided, StagedDelta, effective_delta};
+    let admission = prepared.admission();
+    let mut state = State::default();
+    let mut subjects = morpholog_postgres::runtime_subjects();
+    let mut stage = Duration::ZERO;
+    let mut candidate = Duration::ZERO;
+    let mut decide = Duration::ZERO;
+    let mut apply = Duration::ZERO;
+    for row in rows {
+        let transition = Transition {
+            transformation_name: row.transformation_name.clone(),
+            args: row.arguments.clone(),
+            actor: row.actor.clone(),
+        };
+        let t = Instant::now();
+        let staged = prepared
+            .stage_delta(&transition, &state, &mut subjects)
+            .context("staging")?;
+        stage += t.elapsed();
+        // A row of an act the programme lacks (a control row, or one the
+        // rehearsal reports unreplayable) is not decided; its recorded
+        // effect still advances the state, as the fold's does.
+        if let Some(staged) = staged {
+            if let StagedDelta::Staged {
+                asserted,
+                retracted,
+                ..
+            } = &staged
+            {
+                let t = Instant::now();
+                let effective = effective_delta(&state, asserted, retracted);
+                let view = Candidate::new(&state, asserted, retracted);
+                candidate += t.elapsed();
+                std::hint::black_box((effective, view));
+            }
+            let t = Instant::now();
+            let decided = morpholog_core::decide_staged_delta_with(staged, &state, &admission)
+                .context("deciding")?;
+            decide += t.elapsed();
+            std::hint::black_box(matches!(decided, Decided::Accepted { .. }));
+        }
+        // The recorded effect, whatever the candidate decided: the
+        // production fold's own step, so a refusing candidate's later
+        // rows are decided over the state the record built.
+        let t = Instant::now();
+        morpholog_postgres::advance_recorded(&mut state, row);
+        apply += t.elapsed();
+    }
+    Ok([stage, candidate, decide, apply])
+}
+
+async fn measure_rehearse(pool: &PgPool, case: &str, args: &RehearseArgs) -> Result<CaseResult> {
+    let &RehearseArgs {
+        n,
+        revise,
+        refusing,
+        noise,
+        phases,
+        repeat,
+        ..
+    } = args;
     if !noise.is_multiple_of(1000) {
         return Err(anyhow!(
             "--noise must be a multiple of 1000, the fold's progress step"
@@ -1424,6 +1493,7 @@ async fn measure_rehearse(
     let mut decide_register = Vec::with_capacity(repeat);
     let mut tallies: [Vec<f64>; 4] = Default::default();
     let mut register_tallies: [Vec<f64>; 4] = Default::default();
+    let mut phase_times: [Vec<Duration>; 4] = Default::default();
     let mut serialise = Vec::with_capacity(repeat);
     let mut end_to_end = Vec::with_capacity(repeat);
     let mut peak = Vec::with_capacity(repeat);
@@ -1479,6 +1549,13 @@ async fn measure_rehearse(
             ));
         }
 
+        if phases {
+            let split = decision_phases(&prepared, &refs)?;
+            for (i, v) in phase_times.iter_mut().enumerate() {
+                v.push(split[i]);
+            }
+        }
+
         let t = Instant::now();
         let bytes = serde_json::to_vec(&report).context("serialising the report")?;
         serialise.push(t.elapsed());
@@ -1504,74 +1581,88 @@ async fn measure_rehearse(
         .iter()
         .map(|d| d.as_secs_f64() * 1e6 / n as f64)
         .collect();
+    let mut metrics = vec![
+        Metric::ms("fixture_build", &[fixture]),
+        Metric {
+            name: "audit_table",
+            unit: "MB",
+            samples: vec![audit_mb],
+        },
+        Metric::ms("fetch_rows", &fetch),
+        Metric::ms("decide_rows", &decide),
+        Metric::ms("decide_register", &decide_register),
+        Metric {
+            name: "state_clones",
+            unit: "count",
+            samples: tallies[0].clone(),
+        },
+        Metric {
+            name: "overlay_entries_copied",
+            unit: "count",
+            samples: tallies[1].clone(),
+        },
+        Metric {
+            name: "state_rebuilds",
+            unit: "count",
+            samples: tallies[2].clone(),
+        },
+        Metric {
+            name: "claims_rebuilt",
+            unit: "count",
+            samples: tallies[3].clone(),
+        },
+        Metric {
+            name: "register_clones",
+            unit: "count",
+            samples: register_tallies[0].clone(),
+        },
+        Metric {
+            name: "register_entries_copied",
+            unit: "count",
+            samples: register_tallies[1].clone(),
+        },
+        Metric {
+            name: "register_rebuilds",
+            unit: "count",
+            samples: register_tallies[2].clone(),
+        },
+        Metric {
+            name: "register_claims_rebuilt",
+            unit: "count",
+            samples: register_tallies[3].clone(),
+        },
+        Metric {
+            name: "decide_per_row",
+            unit: "us",
+            samples: per_row_us,
+        },
+        Metric::ms("serialise_report", &serialise),
+        Metric::ms("end_to_end", &end_to_end),
+        Metric {
+            name: "peak_rss",
+            unit: "MB",
+            samples: peak,
+        },
+    ];
+    if phases {
+        for (name, times) in [
+            "phase_stage",
+            "phase_candidate",
+            "phase_decide",
+            "phase_apply",
+        ]
+        .into_iter()
+        .zip(&phase_times)
+        {
+            metrics.push(Metric::ms(name, times));
+        }
+    }
     Ok(CaseResult {
         case: case.to_string(),
         implementation: "interpreted",
         axis: "n",
         point: n as u64,
-        metrics: vec![
-            Metric::ms("fixture_build", &[fixture]),
-            Metric {
-                name: "audit_table",
-                unit: "MB",
-                samples: vec![audit_mb],
-            },
-            Metric::ms("fetch_rows", &fetch),
-            Metric::ms("decide_rows", &decide),
-            Metric::ms("decide_register", &decide_register),
-            Metric {
-                name: "state_clones",
-                unit: "count",
-                samples: tallies[0].clone(),
-            },
-            Metric {
-                name: "overlay_entries_copied",
-                unit: "count",
-                samples: tallies[1].clone(),
-            },
-            Metric {
-                name: "state_rebuilds",
-                unit: "count",
-                samples: tallies[2].clone(),
-            },
-            Metric {
-                name: "claims_rebuilt",
-                unit: "count",
-                samples: tallies[3].clone(),
-            },
-            Metric {
-                name: "register_clones",
-                unit: "count",
-                samples: register_tallies[0].clone(),
-            },
-            Metric {
-                name: "register_entries_copied",
-                unit: "count",
-                samples: register_tallies[1].clone(),
-            },
-            Metric {
-                name: "register_rebuilds",
-                unit: "count",
-                samples: register_tallies[2].clone(),
-            },
-            Metric {
-                name: "register_claims_rebuilt",
-                unit: "count",
-                samples: register_tallies[3].clone(),
-            },
-            Metric {
-                name: "decide_per_row",
-                unit: "us",
-                samples: per_row_us,
-            },
-            Metric::ms("serialise_report", &serialise),
-            Metric::ms("end_to_end", &end_to_end),
-            Metric {
-                name: "peak_rss",
-                unit: "MB",
-                samples: peak,
-            },
-        ],
+        metrics,
     })
 }
 
@@ -1589,16 +1680,7 @@ async fn run_rehearse(args: RehearseArgs) -> Result<()> {
         "scenario=rehearse n={} revise={} refusing={} noise={} repeat={}",
         args.n, args.revise, args.refusing, args.noise, args.repeat
     );
-    let result = measure_rehearse(
-        &pool,
-        case,
-        args.n,
-        args.revise,
-        args.refusing,
-        args.noise,
-        args.repeat,
-    )
-    .await?;
+    let result = measure_rehearse(&pool, case, &args).await?;
     print_case_human(&result);
     Ok(())
 }
@@ -4172,6 +4254,7 @@ mod smoke {
                 revise,
                 refusing,
                 noise,
+                phases: true,
                 repeat: 1,
                 database_url: url.clone(),
                 reset: true,
