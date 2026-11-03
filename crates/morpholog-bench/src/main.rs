@@ -1600,32 +1600,58 @@ struct PolicyRun {
     state: State,
 }
 
+/// The most entries a fold's state held, and the most of them dead, seen
+/// after every operation and before any compaction it triggers.
+#[derive(Default)]
+struct Peaks {
+    entries: usize,
+    dead: usize,
+}
+
+impl Peaks {
+    fn see(&mut self, l: morpholog_core::Layering) {
+        self.entries = self.entries.max(l.base + l.overlay_live + l.overlay_dead);
+        self.dead = self.dead.max(l.base_dead + l.overlay_dead);
+    }
+}
+
 /// A row's recorded effect applied as `advance_recorded` applies it, one
 /// operation at a time, with `policy` deciding each compaction.
-fn advance_under(state: &mut State, row: &morpholog_postgres::AuditRow, policy: Policy) {
+fn advance_under(
+    state: &mut State,
+    row: &morpholog_postgres::AuditRow,
+    policy: Policy,
+    peaks: &mut Peaks,
+) {
     use morpholog_postgres::OperationKind;
+    let mut decide = |l| {
+        peaks.see(l);
+        policy.compacts(l)
+    };
     let Some(operations) = &row.operations else {
-        state.apply_compacting_when(&row.asserted_claims, &row.retracted_claims, |l| {
-            policy.compacts(l)
-        });
+        state.apply_compacting_when(&row.asserted_claims, &row.retracted_claims, &mut decide);
         return;
     };
     for op in operations {
         match op.op {
-            OperationKind::Del => {
-                state.apply_compacting_when(&[], &[op.claim()], |l| policy.compacts(l));
-            }
-            OperationKind::Ins => {
-                state.apply_compacting_when(&[op.claim()], &[], |l| policy.compacts(l));
-            }
+            OperationKind::Del => state.apply_compacting_when(&[], &[op.claim()], &mut decide),
+            OperationKind::Ins => state.apply_compacting_when(&[op.claim()], &[], &mut decide),
             OperationKind::Noop => {}
         }
     }
 }
 
+/// Which row of each thousand builds a sampled owned candidate: one per
+/// block, at an offset that wanders from block to block, so the samples
+/// do not fall at the same point of a policy's rebuild period. The same
+/// rows for every policy.
+fn samples_owned_candidate(i: usize) -> bool {
+    i % 1000 == (i / 1000 * 7919 + 499) % 1000
+}
+
 /// The rehearsal's fold over `rows` with `policy` deciding compaction:
 /// each row decided over the state the record built, then advanced by
-/// its recorded effect. Every thousandth row also builds the owned
+/// its recorded effect. One row in each thousand also builds the owned
 /// candidate an ordinary proposal builds, a copy of the state with the
 /// row's change applied, and drops it.
 fn policy_fold(
@@ -1640,7 +1666,7 @@ fn policy_fold(
     let (mut decide, mut advance, mut owned) = (Duration::ZERO, Duration::ZERO, Duration::ZERO);
     let mut owned_samples = 0u32;
     let (mut rebuilds, mut claims_rebuilt) = (0u64, 0u64);
-    let (mut peak_entries, mut peak_dead) = (0usize, 0usize);
+    let mut peaks = Peaks::default();
     for (i, row) in rows.iter().enumerate() {
         let transition = Transition {
             transformation_name: row.transformation_name.clone(),
@@ -1657,7 +1683,7 @@ fn policy_fold(
             std::hint::black_box(matches!(decided, Decided::Accepted { .. }));
         }
         decide += t.elapsed();
-        if i % 1000 == 999 {
+        if samples_owned_candidate(i) {
             let t = Instant::now();
             {
                 let mut candidate = state.clone();
@@ -1671,14 +1697,11 @@ fn policy_fold(
         }
         let before = tally::snapshot();
         let t = Instant::now();
-        advance_under(&mut state, row, policy);
+        advance_under(&mut state, row, policy, &mut peaks);
         advance += t.elapsed();
         let after = tally::snapshot();
         rebuilds += after[2] - before[2];
         claims_rebuilt += after[3] - before[3];
-        let l = state.layering();
-        peak_entries = peak_entries.max(l.base + l.overlay_live + l.overlay_dead);
-        peak_dead = peak_dead.max(l.base_dead + l.overlay_dead);
     }
     let owned_us = if owned_samples == 0 {
         0.0
@@ -1692,8 +1715,8 @@ fn policy_fold(
             owned_us,
             rebuilds as f64,
             claims_rebuilt as f64,
-            peak_entries as f64,
-            peak_dead as f64,
+            peaks.entries as f64,
+            peaks.dead as f64,
         ],
         rebuilds,
         state,
@@ -4247,6 +4270,68 @@ mod smoke {
     /// The compare table pairs rows by case, axis, point, and metric,
     /// reads each run's steady median (the first sample when there is
     /// only one), and refuses two rulers.
+    /// The split policy compacts on each of its two causes exactly where
+    /// its bound is crossed, and a compaction moves nothing in the logical
+    /// state: the claims and their order are those of the state's own
+    /// policy over the same changes, a re-admission at the tail included.
+    #[test]
+    fn the_split_policy_compacts_on_each_cause_and_keeps_the_logical_state() {
+        use morpholog_core::{ClaimInstance, EvalValue, tally};
+        let x = |i: usize| ClaimInstance {
+            predicate: "X".into(),
+            args: vec![EvalValue::Subject(format!("s{i}").as_str().into())],
+        };
+        let rebuilds = || tally::snapshot()[2];
+        let mut state = State::default();
+        // Every change, so the state's own policy can fold the same ones
+        // afterwards, outside the counted stretches below.
+        let mut changes: Vec<(Vec<ClaimInstance>, Vec<ClaimInstance>)> = Vec::new();
+        let mut apply =
+            |state: &mut State, asserted: Vec<ClaimInstance>, retracted: Vec<ClaimInstance>| {
+                state.apply_compacting_when(&asserted, &retracted, |l| Policy::Split.compacts(l));
+                changes.push((asserted, retracted));
+            };
+
+        // Live overlay growth: past 4,096 live overlay entries over an
+        // empty base, and not before.
+        let before = rebuilds();
+        for i in 0..4096 {
+            apply(&mut state, vec![x(i)], vec![]);
+        }
+        assert_eq!(rebuilds() - before, 0, "4,096 live entries do not compact");
+        apply(&mut state, vec![x(4096)], vec![]);
+        assert_eq!(rebuilds() - before, 1, "the 4,097th live entry compacts");
+        assert_eq!(state.layering().overlay_live, 0);
+
+        // Dead entries: more dead than live, here past 2,048 retractions
+        // of the 4,097, and not before.
+        let before = rebuilds();
+        for i in 0..2048 {
+            apply(&mut state, vec![], vec![x(i)]);
+        }
+        assert_eq!(rebuilds() - before, 0, "2,048 dead against 2,049 live");
+        apply(&mut state, vec![], vec![x(2048)]);
+        assert_eq!(rebuilds() - before, 1, "the 2,049th dead entry compacts");
+        assert_eq!(state.layering().base_dead, 0);
+
+        // A claim retracted and admitted again goes to the tail.
+        apply(&mut state, vec![x(0)], vec![]);
+        let mut expected: Vec<ClaimInstance> = (2049..4097).map(x).collect();
+        expected.push(x(0));
+        assert_eq!(state.claims().to_vec(), expected);
+
+        let mut reference = State::default();
+        let before = rebuilds();
+        for (asserted, retracted) in &changes {
+            reference.apply(asserted, retracted);
+        }
+        assert!(rebuilds() > before, "the state's own policy compacted too");
+        assert!(
+            state == reference,
+            "the same logical state as the state's own policy"
+        );
+    }
+
     #[test]
     fn compare_pairs_rows_and_refuses_different_rulers() {
         let report = |contract: u32, ladder: &str, unit: &str, samples: Vec<f64>| {
