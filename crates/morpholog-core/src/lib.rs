@@ -109,7 +109,7 @@ pub use score::{
 };
 #[cfg(any(test, feature = "measure"))]
 #[doc(hidden)]
-pub use state::{Candidate, tally};
+pub use state::{Candidate, Layering, tally};
 pub use state::{ClaimInstance, Claims, EvalValue, IntentInstance, State};
 pub use sums::lower_sum_seeds;
 pub use validate::{ValidatedProgram, ValidationContext, ValidationError, VocabularyKind};

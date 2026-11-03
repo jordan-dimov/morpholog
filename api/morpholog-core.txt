@@ -2788,6 +2788,22 @@ impl core::marker::Unpin for morpholog_core::KeyedPattern
 impl core::marker::UnsafeUnpin for morpholog_core::KeyedPattern
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::KeyedPattern
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::KeyedPattern
+pub struct morpholog_core::Layering
+pub morpholog_core::Layering::base: usize
+pub morpholog_core::Layering::base_dead: usize
+pub morpholog_core::Layering::overlay_dead: usize
+pub morpholog_core::Layering::overlay_live: usize
+impl core::clone::Clone for morpholog_core::Layering
+pub fn morpholog_core::Layering::clone(&self) -> morpholog_core::Layering
+impl core::clone::TrivialClone for morpholog_core::Layering
+impl core::cmp::Eq for morpholog_core::Layering
+pub fn morpholog_core::Layering::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_core::Layering
+pub fn morpholog_core::Layering::eq(&self, &morpholog_core::Layering) -> bool
+impl core::fmt::Debug for morpholog_core::Layering
+pub fn morpholog_core::Layering::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for morpholog_core::Layering
+impl core::marker::StructuralPartialEq for morpholog_core::Layering
 pub struct morpholog_core::LiteralDecimal(_)
 impl morpholog_core::LiteralDecimal
 pub const morpholog_core::LiteralDecimal::ZERO: Self
@@ -3259,11 +3275,12 @@ pub struct morpholog_core::State
 impl morpholog_core::State
 pub fn morpholog_core::State::admits(&self, &morpholog_core::ClaimInstance) -> bool
 pub fn morpholog_core::State::apply(&mut self, &[morpholog_core::ClaimInstance], &[morpholog_core::ClaimInstance])
-pub fn morpholog_core::State::apply_without_compaction(&mut self, &[morpholog_core::ClaimInstance], &[morpholog_core::ClaimInstance])
+pub fn morpholog_core::State::apply_compacting_when(&mut self, &[morpholog_core::ClaimInstance], &[morpholog_core::ClaimInstance], impl core::ops::function::FnOnce(morpholog_core::Layering) -> bool)
 pub fn morpholog_core::State::claims(&self) -> morpholog_core::Claims<'_>
 pub fn morpholog_core::State::claims_for<'a>(&'a self, &str) -> impl core::iter::traits::iterator::Iterator<Item = &'a morpholog_core::ClaimInstance> + 'a
 pub fn morpholog_core::State::from_claims(alloc::vec::Vec<morpholog_core::ClaimInstance>) -> Self
 pub fn morpholog_core::State::is_empty(&self) -> bool
+pub fn morpholog_core::State::layering(&self) -> morpholog_core::Layering
 pub fn morpholog_core::State::len(&self) -> usize
 impl core::clone::Clone for morpholog_core::State
 pub fn morpholog_core::State::clone(&self) -> Self
