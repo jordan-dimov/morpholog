@@ -105,46 +105,45 @@ pub struct ClaimInstance {
 }
 
 /// What the state does that costs in proportion to its size, counted so
-/// a measurement can attribute a run to copies and rebuilds apart. Only
-/// in test builds and under the `tally` feature the bench enables; an
-/// ordinary build compiles the increments to nothing.
+/// a measurement can attribute a run to copies and rebuilds apart, and a
+/// test can hold a fold to doing neither. Per thread, so tests running
+/// beside each other read their own. Only in test builds and under the
+/// `tally` feature the bench enables; an ordinary build compiles the
+/// increments to nothing.
 #[cfg(any(test, feature = "tally"))]
 #[doc(hidden)]
 pub mod tally {
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::cell::Cell;
 
-    /// Clones of a `State`: each copies the overlay and the retracted
-    /// base positions.
-    pub static STATE_CLONES: AtomicU64 = AtomicU64::new(0);
-    /// Overlay claims and retracted positions those clones copied.
-    pub static OVERLAY_ENTRIES_COPIED: AtomicU64 = AtomicU64::new(0);
-    /// Compactions that rebuilt the whole state from its live claims.
-    pub static STATE_REBUILDS: AtomicU64 = AtomicU64::new(0);
-    /// Live claims those rebuilds copied and indexed again.
-    pub static CLAIMS_REBUILT: AtomicU64 = AtomicU64::new(0);
+    thread_local! {
+        /// Clones of a `State` (each copies the overlay and the retracted
+        /// base positions), the entries they copied, compactions that
+        /// rebuilt the whole state, and the live claims they re-indexed.
+        static COUNTS: Cell<[u64; 4]> = const { Cell::new([0; 4]) };
+    }
 
-    pub(super) fn add(counter: &AtomicU64, n: usize) {
-        counter.fetch_add(n as u64, Ordering::Relaxed);
+    fn add(index: usize, n: usize) {
+        COUNTS.with(|c| {
+            let mut counts = c.get();
+            counts[index] += n as u64;
+            c.set(counts);
+        });
     }
 
     pub(super) fn clone_of(overlay_entries: usize) {
-        add(&STATE_CLONES, 1);
-        add(&OVERLAY_ENTRIES_COPIED, overlay_entries);
+        add(0, 1);
+        add(1, overlay_entries);
     }
 
     pub(super) fn rebuild_of(live: usize) {
-        add(&STATE_REBUILDS, 1);
-        add(&CLAIMS_REBUILT, live);
+        add(2, 1);
+        add(3, live);
     }
 
-    /// The four counts, in the order declared.
+    /// This thread's counts: clones, overlay entries copied, rebuilds,
+    /// claims rebuilt.
     pub fn snapshot() -> [u64; 4] {
-        [
-            STATE_CLONES.load(Ordering::Relaxed),
-            OVERLAY_ENTRIES_COPIED.load(Ordering::Relaxed),
-            STATE_REBUILDS.load(Ordering::Relaxed),
-            CLAIMS_REBUILT.load(Ordering::Relaxed),
-        ]
+        COUNTS.with(Cell::get)
     }
 }
 
