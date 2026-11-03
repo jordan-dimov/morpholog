@@ -182,6 +182,19 @@ pub struct State {
     visited: std::cell::Cell<u64>,
 }
 
+/// How a state's claims are laid out: the base it was last rebuilt to,
+/// the base positions retracted since, and the overlay's live and dead
+/// entries. What a compaction policy decides on.
+#[cfg(any(test, feature = "measure"))]
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Layering {
+    pub base: usize,
+    pub base_dead: usize,
+    pub overlay_live: usize,
+    pub overlay_dead: usize,
+}
+
 /// The counters' absence: the same calls, compiled to nothing.
 #[cfg(not(any(test, feature = "measure")))]
 mod tally {
@@ -378,17 +391,34 @@ impl State {
         }
     }
 
-    /// [`State::apply`] with the compaction held off, and the presence
-    /// check on its own: the state's advance in its parts, so a
-    /// measurement can time each.
+    /// [`State::apply`] with the compaction decided by the caller from
+    /// the layering after the change, so a measurement can hold it off
+    /// or compare policies over one history.
     #[cfg(any(test, feature = "measure"))]
     #[doc(hidden)]
-    pub fn apply_without_compaction(
+    pub fn apply_compacting_when(
         &mut self,
         asserted: &[ClaimInstance],
         retracted: &[ClaimInstance],
+        compact: impl FnOnce(Layering) -> bool,
     ) {
         self.apply_under(asserted, retracted, usize::MAX);
+        if compact(self.layering()) {
+            self.rebuild();
+        }
+    }
+
+    #[cfg(any(test, feature = "measure"))]
+    #[doc(hidden)]
+    pub fn layering(&self) -> Layering {
+        let base_live = self.base.claims.len() - self.dead_base.len();
+        let overlay_live = self.live - base_live;
+        Layering {
+            base: self.base.claims.len(),
+            base_dead: self.dead_base.len(),
+            overlay_live,
+            overlay_dead: self.overlay.claims.len() - overlay_live,
+        }
     }
 
     #[cfg(any(test, feature = "measure"))]

@@ -225,6 +225,13 @@ struct RehearseArgs {
     #[arg(long)]
     phases: bool,
 
+    /// Also fold the same rows under each compaction policy the
+    /// experiment compares, each timed on its decisions, its advance,
+    /// and an ordinary proposal's owned candidate sampled every thousand
+    /// rows, with its rebuilds and the most entries it held.
+    #[arg(long)]
+    policies: bool,
+
     /// Timed repetitions.
     #[arg(long, default_value_t = 3)]
     repeat: usize,
@@ -1484,7 +1491,7 @@ fn advance_phases(rows: &[&morpholog_postgres::AuditRow]) -> [Duration; 3] {
     for row in rows {
         let Some(operations) = &row.operations else {
             let t = Instant::now();
-            state.apply_without_compaction(&[], &row.retracted_claims);
+            state.apply_compacting_when(&[], &row.retracted_claims, |_| false);
             retract += t.elapsed();
             let t = Instant::now();
             for claim in &row.asserted_claims {
@@ -1492,7 +1499,7 @@ fn advance_phases(rows: &[&morpholog_postgres::AuditRow]) -> [Duration; 3] {
             }
             contains += t.elapsed();
             let t = Instant::now();
-            state.apply_without_compaction(&row.asserted_claims, &[]);
+            state.apply_compacting_when(&row.asserted_claims, &[], |_| false);
             admit += t.elapsed();
             continue;
         };
@@ -1500,7 +1507,7 @@ fn advance_phases(rows: &[&morpholog_postgres::AuditRow]) -> [Duration; 3] {
             match op.op {
                 OperationKind::Del => {
                     let t = Instant::now();
-                    state.apply_without_compaction(&[], &[op.claim()]);
+                    state.apply_compacting_when(&[], &[op.claim()], |_| false);
                     retract += t.elapsed();
                 }
                 OperationKind::Ins => {
@@ -1509,7 +1516,7 @@ fn advance_phases(rows: &[&morpholog_postgres::AuditRow]) -> [Duration; 3] {
                     std::hint::black_box(state.admits(&claim));
                     contains += t.elapsed();
                     let t = Instant::now();
-                    state.apply_without_compaction(&[op.claim()], &[]);
+                    state.apply_compacting_when(&[op.claim()], &[], |_| false);
                     admit += t.elapsed();
                 }
                 OperationKind::Noop => {}
@@ -1520,6 +1527,202 @@ fn advance_phases(rows: &[&morpholog_postgres::AuditRow]) -> [Duration; 3] {
     [retract, contains, admit]
 }
 
+/// When the state folds its overlay into a new base. Experiment only:
+/// the state's own policy is `Current`, and the bench refuses a run in
+/// which `Current` does not rebuild exactly as the production fold did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Policy {
+    /// The state's own: overlay entries, live or dead, plus retracted
+    /// base positions, past an eighth of the base or 512.
+    Current,
+    /// The same measure past half the base or 2,048.
+    Relaxed,
+    /// Two causes bounded apart. Dead entries cost memory and the slots
+    /// a lookup skips, so they are held to the live count (or 1,024).
+    /// Live overlay entries cost only an owned candidate's copy, so the
+    /// overlay may grow to the base's size (or 4,096) before it is
+    /// folded, which re-indexes about twice the final state over a
+    /// growing history rather than eight times.
+    Split,
+}
+
+impl Policy {
+    const ALL: [Policy; 3] = [Policy::Current, Policy::Relaxed, Policy::Split];
+
+    fn compacts(self, l: morpholog_core::Layering) -> bool {
+        let churn = l.base_dead + l.overlay_live + l.overlay_dead;
+        let live = l.base - l.base_dead + l.overlay_live;
+        match self {
+            Policy::Current => churn > (l.base / 8).max(512),
+            Policy::Relaxed => churn > (l.base / 2).max(2048),
+            Policy::Split => {
+                l.base_dead + l.overlay_dead > live.max(1024) || l.overlay_live > l.base.max(4096)
+            }
+        }
+    }
+}
+
+/// The names of each policy's metrics, in `PolicyRun::samples` order.
+const POLICY_METRICS: [[&str; 7]; 3] = [
+    [
+        "current_decide",
+        "current_advance",
+        "current_owned_candidate",
+        "current_rebuilds",
+        "current_claims_rebuilt",
+        "current_peak_entries",
+        "current_peak_dead",
+    ],
+    [
+        "relaxed_decide",
+        "relaxed_advance",
+        "relaxed_owned_candidate",
+        "relaxed_rebuilds",
+        "relaxed_claims_rebuilt",
+        "relaxed_peak_entries",
+        "relaxed_peak_dead",
+    ],
+    [
+        "split_decide",
+        "split_advance",
+        "split_owned_candidate",
+        "split_rebuilds",
+        "split_claims_rebuilt",
+        "split_peak_entries",
+        "split_peak_dead",
+    ],
+];
+const POLICY_UNITS: [&str; 7] = ["ms", "ms", "us", "count", "count", "count", "count"];
+
+struct PolicyRun {
+    samples: [f64; 7],
+    rebuilds: u64,
+    state: State,
+}
+
+/// The most entries a fold's state held, and the most of them dead, seen
+/// after every operation and before any compaction it triggers.
+#[derive(Default)]
+struct Peaks {
+    entries: usize,
+    dead: usize,
+}
+
+impl Peaks {
+    fn see(&mut self, l: morpholog_core::Layering) {
+        self.entries = self.entries.max(l.base + l.overlay_live + l.overlay_dead);
+        self.dead = self.dead.max(l.base_dead + l.overlay_dead);
+    }
+}
+
+/// A row's recorded effect applied as `advance_recorded` applies it, one
+/// operation at a time, with `policy` deciding each compaction.
+fn advance_under(
+    state: &mut State,
+    row: &morpholog_postgres::AuditRow,
+    policy: Policy,
+    peaks: &mut Peaks,
+) {
+    use morpholog_postgres::OperationKind;
+    let mut decide = |l| {
+        peaks.see(l);
+        policy.compacts(l)
+    };
+    let Some(operations) = &row.operations else {
+        state.apply_compacting_when(&row.asserted_claims, &row.retracted_claims, &mut decide);
+        return;
+    };
+    for op in operations {
+        match op.op {
+            OperationKind::Del => state.apply_compacting_when(&[], &[op.claim()], &mut decide),
+            OperationKind::Ins => state.apply_compacting_when(&[op.claim()], &[], &mut decide),
+            OperationKind::Noop => {}
+        }
+    }
+}
+
+/// Which row of each thousand builds a sampled owned candidate: one per
+/// block, at an offset that wanders from block to block, so the samples
+/// do not fall at the same point of a policy's rebuild period. The same
+/// rows for every policy.
+fn samples_owned_candidate(i: usize) -> bool {
+    i % 1000 == (i / 1000 * 7919 + 499) % 1000
+}
+
+/// The rehearsal's fold over `rows` with `policy` deciding compaction:
+/// each row decided over the state the record built, then advanced by
+/// its recorded effect. One row in each thousand also builds the owned
+/// candidate an ordinary proposal builds, a copy of the state with the
+/// row's change applied, and drops it.
+fn policy_fold(
+    prepared: &PreparedProgram,
+    rows: &[&morpholog_postgres::AuditRow],
+    policy: Policy,
+) -> Result<PolicyRun> {
+    use morpholog_core::{Decided, tally};
+    let admission = prepared.admission();
+    let mut state = State::default();
+    let mut subjects = morpholog_postgres::runtime_subjects();
+    let (mut decide, mut advance, mut owned) = (Duration::ZERO, Duration::ZERO, Duration::ZERO);
+    let mut owned_samples = 0u32;
+    let (mut rebuilds, mut claims_rebuilt) = (0u64, 0u64);
+    let mut peaks = Peaks::default();
+    for (i, row) in rows.iter().enumerate() {
+        let transition = Transition {
+            transformation_name: row.transformation_name.clone(),
+            args: row.arguments.clone(),
+            actor: row.actor.clone(),
+        };
+        let t = Instant::now();
+        if let Some(staged) = prepared
+            .stage_delta(&transition, &state, &mut subjects)
+            .context("staging")?
+        {
+            let decided = morpholog_core::decide_staged_delta_with(staged, &state, &admission)
+                .context("deciding")?;
+            std::hint::black_box(matches!(decided, Decided::Accepted { .. }));
+        }
+        decide += t.elapsed();
+        if samples_owned_candidate(i) {
+            let t = Instant::now();
+            {
+                let mut candidate = state.clone();
+                candidate.apply_compacting_when(&row.asserted_claims, &row.retracted_claims, |l| {
+                    policy.compacts(l)
+                });
+                std::hint::black_box(candidate.len());
+            }
+            owned += t.elapsed();
+            owned_samples += 1;
+        }
+        let before = tally::snapshot();
+        let t = Instant::now();
+        advance_under(&mut state, row, policy, &mut peaks);
+        advance += t.elapsed();
+        let after = tally::snapshot();
+        rebuilds += after[2] - before[2];
+        claims_rebuilt += after[3] - before[3];
+    }
+    let owned_us = if owned_samples == 0 {
+        0.0
+    } else {
+        owned.as_secs_f64() * 1e6 / f64::from(owned_samples)
+    };
+    Ok(PolicyRun {
+        samples: [
+            decide.as_secs_f64() * 1000.0,
+            advance.as_secs_f64() * 1000.0,
+            owned_us,
+            rebuilds as f64,
+            claims_rebuilt as f64,
+            peaks.entries as f64,
+            peaks.dead as f64,
+        ],
+        rebuilds,
+        state,
+    })
+}
+
 async fn measure_rehearse(pool: &PgPool, case: &str, args: &RehearseArgs) -> Result<CaseResult> {
     let &RehearseArgs {
         n,
@@ -1527,6 +1730,7 @@ async fn measure_rehearse(pool: &PgPool, case: &str, args: &RehearseArgs) -> Res
         refusing,
         noise,
         phases,
+        policies,
         repeat,
         ..
     } = args;
@@ -1553,10 +1757,11 @@ async fn measure_rehearse(pool: &PgPool, case: &str, args: &RehearseArgs) -> Res
     let mut tallies: [Vec<f64>; 4] = Default::default();
     let mut register_tallies: [Vec<f64>; 4] = Default::default();
     let mut phase_times: [Vec<Duration>; 8] = Default::default();
+    let mut policy_samples: [[Vec<f64>; 7]; 3] = Default::default();
     let mut serialise = Vec::with_capacity(repeat);
     let mut end_to_end = Vec::with_capacity(repeat);
     let mut peak = Vec::with_capacity(repeat);
-    for _ in 0..repeat {
+    for round in 0..repeat {
         let t = Instant::now();
         let rows = morpholog_postgres::list_audit_rows(pool)
             .await
@@ -1606,6 +1811,37 @@ async fn measure_rehearse(pool: &PgPool, case: &str, args: &RehearseArgs) -> Res
             return Err(anyhow!(
                 "the refusing candidate refused nothing: the register needs more than 100 rows"
             ));
+        }
+
+        if policies {
+            // Each round starts the order one policy later, so no policy
+            // is always first after the fixture or last before the next.
+            let production_rebuilds = after[2] - before[2];
+            let mut current_state = None;
+            for k in 0..Policy::ALL.len() {
+                let index = (k + round) % Policy::ALL.len();
+                let policy = Policy::ALL[index];
+                let run = policy_fold(&prepared, &refs, policy)?;
+                if policy == Policy::Current && run.rebuilds != production_rebuilds {
+                    return Err(anyhow!(
+                        "the current policy rebuilt {} times where the production fold \
+                         rebuilt {production_rebuilds}: it is not the state's own policy",
+                        run.rebuilds
+                    ));
+                }
+                match &current_state {
+                    None => current_state = Some(run.state),
+                    Some(first) if *first == run.state => {}
+                    Some(_) => {
+                        return Err(anyhow!(
+                            "the {policy:?} policy ends in a different state over the same rows"
+                        ));
+                    }
+                }
+                for (v, x) in policy_samples[index].iter_mut().zip(run.samples) {
+                    v.push(x);
+                }
+            }
         }
 
         if phases {
@@ -1722,6 +1958,13 @@ async fn measure_rehearse(pool: &PgPool, case: &str, args: &RehearseArgs) -> Res
         .zip(&phase_times)
         {
             metrics.push(Metric::ms(name, times));
+        }
+    }
+    if policies {
+        for (names, samples) in POLICY_METRICS.iter().zip(policy_samples) {
+            for ((name, unit), v) in names.iter().zip(POLICY_UNITS).zip(samples) {
+                metrics.push(Metric::series(name, unit, v));
+            }
         }
     }
     Ok(CaseResult {
@@ -4027,6 +4270,68 @@ mod smoke {
     /// The compare table pairs rows by case, axis, point, and metric,
     /// reads each run's steady median (the first sample when there is
     /// only one), and refuses two rulers.
+    /// The split policy compacts on each of its two causes exactly where
+    /// its bound is crossed, and a compaction moves nothing in the logical
+    /// state: the claims and their order are those of the state's own
+    /// policy over the same changes, a re-admission at the tail included.
+    #[test]
+    fn the_split_policy_compacts_on_each_cause_and_keeps_the_logical_state() {
+        use morpholog_core::{ClaimInstance, EvalValue, tally};
+        let x = |i: usize| ClaimInstance {
+            predicate: "X".into(),
+            args: vec![EvalValue::Subject(format!("s{i}").as_str().into())],
+        };
+        let rebuilds = || tally::snapshot()[2];
+        let mut state = State::default();
+        // Every change, so the state's own policy can fold the same ones
+        // afterwards, outside the counted stretches below.
+        let mut changes: Vec<(Vec<ClaimInstance>, Vec<ClaimInstance>)> = Vec::new();
+        let mut apply =
+            |state: &mut State, asserted: Vec<ClaimInstance>, retracted: Vec<ClaimInstance>| {
+                state.apply_compacting_when(&asserted, &retracted, |l| Policy::Split.compacts(l));
+                changes.push((asserted, retracted));
+            };
+
+        // Live overlay growth: past 4,096 live overlay entries over an
+        // empty base, and not before.
+        let before = rebuilds();
+        for i in 0..4096 {
+            apply(&mut state, vec![x(i)], vec![]);
+        }
+        assert_eq!(rebuilds() - before, 0, "4,096 live entries do not compact");
+        apply(&mut state, vec![x(4096)], vec![]);
+        assert_eq!(rebuilds() - before, 1, "the 4,097th live entry compacts");
+        assert_eq!(state.layering().overlay_live, 0);
+
+        // Dead entries: more dead than live, here past 2,048 retractions
+        // of the 4,097, and not before.
+        let before = rebuilds();
+        for i in 0..2048 {
+            apply(&mut state, vec![], vec![x(i)]);
+        }
+        assert_eq!(rebuilds() - before, 0, "2,048 dead against 2,049 live");
+        apply(&mut state, vec![], vec![x(2048)]);
+        assert_eq!(rebuilds() - before, 1, "the 2,049th dead entry compacts");
+        assert_eq!(state.layering().base_dead, 0);
+
+        // A claim retracted and admitted again goes to the tail.
+        apply(&mut state, vec![x(0)], vec![]);
+        let mut expected: Vec<ClaimInstance> = (2049..4097).map(x).collect();
+        expected.push(x(0));
+        assert_eq!(state.claims().to_vec(), expected);
+
+        let mut reference = State::default();
+        let before = rebuilds();
+        for (asserted, retracted) in &changes {
+            reference.apply(asserted, retracted);
+        }
+        assert!(rebuilds() > before, "the state's own policy compacted too");
+        assert!(
+            state == reference,
+            "the same logical state as the state's own policy"
+        );
+    }
+
     #[test]
     fn compare_pairs_rows_and_refuses_different_rulers() {
         let report = |contract: u32, ladder: &str, unit: &str, samples: Vec<f64>| {
@@ -4322,6 +4627,7 @@ mod smoke {
                 refusing,
                 noise,
                 phases: true,
+                policies: true,
                 repeat: 1,
                 database_url: url.clone(),
                 reset: true,
