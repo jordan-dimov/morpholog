@@ -376,6 +376,33 @@ The same rows again, two ways. First the production advance, with the calls that
 
 What it measures. The calls that compacted are 80 to 90 percent of the advance, about 0.7 us for each claim they re-indexed. The incremental work held apart, finding what to retract, checking presence, and adding the index entries, is 1.5 to 2.5 us a row, and it agrees with the advance less its compacting calls. Over either run the compactions re-index about sixteen claims for every row applied. They get there by different routes. In the growing register the threshold is an eighth of the base, so the state is rebuilt each time it grows by an eighth, about eight times its final size in all, with few retractions to reclaim. In the revised register the live set never passes the fixed floor, so a 2k state is rebuilt every 130 revisions or so, each adding about four entries of churn against a floor of 512, most of them dead. The state's index maintenance is not where its advance goes; its compaction policy is. Whether a different policy keeps the rest as fast is a separate question this ruler does not answer: a state that compacts less carries more overlay, which reads search and an ordinary proposal's owned candidate copies.
 
+### Compaction policies over one recorded history (2026-11-03, `rehearse --policies`, three rounds)
+
+The rehearsal's fold over the same rows three times, under three policies for when the state folds its overlay into a new base: the state's own (overlay entries plus retracted base positions past an eighth of the base, or 512), a relaxed threshold (the same past half the base, or 2,048), and a split one that bounds two causes apart (dead entries held to the live count, or 1,024; live overlay entries allowed to reach the base's size, or 4,096). Each fold decides every row over the state the record built, advances it by the recorded effect, and every thousandth row builds the owned candidate an ordinary proposal builds, a copy of the state with the row's change applied. The run is refused unless the state's own policy rebuilds exactly as the production fold did and every policy ends in the same state; both checks were broken and seen to refuse. The order rotates each round; steady medians of the two later rounds.
+
+| | current | relaxed | split |
+|---|---|---|---|
+| **append, 200k live** | | | |
+| advance | 1,311 ms | 509 ms | 393 ms |
+| decisions | 1,428 ms | 1,373 ms | 1,368 ms |
+| owned candidate, each | 2.3 ms | 7.0 ms | 11.2 ms |
+| rebuilds, claims re-indexed | 40, 1.58 M | 11, 0.47 M | 6, 0.26 M |
+| most entries held, of them dead | 200k, 0 | 200k, 0 | 200k, 0 |
+| **revise 1,000, 2k live** | | | |
+| advance | 1,333 ms | 618 ms | 485 ms |
+| decisions | 2,516 ms | 2,547 ms | 2,579 ms |
+| owned candidate, each | 68 us | 212 us | 855 us |
+| rebuilds, claims re-indexed | 775, 1.55 M | 194, 0.39 M | 99, 0.20 M |
+| most entries held, of them dead | 2,256, 256 | 3,024, 1,024 | 3,998, 1,998 |
+| **revise behind 2M unrelated claims** | | | |
+| advance | 21.5 s | 7.6 s | 4.4 s |
+| decisions | 4.48 s | 4.45 s | 4.43 s |
+| owned candidate, each | 20 ms | 65 ms | 135 ms |
+| rebuilds, claims re-indexed | 61, 18.9 M | 17, 5.4 M | 9, 2.1 M |
+| most entries held, of them dead | 2.11 M, 111k | 2.20 M, 198k | 2.20 M, 198k |
+
+What it measures. The advance falls two to three times under the relaxed threshold and three to five times under the split policy, by 17 s behind two million unrelated claims, where the state's own policy spends 21.5 s of the fold's 28 s re-indexing 18.9 M claims. The decisions, the reads and the invariants over the touched cases, do not move with the policy on any of these histories. Memory stays bounded: the split policy holds at most as many dead entries as live ones, so never more than twice the live state; it held 3,998 entries for 2,000 live claims in the revised register. The cost is the owned candidate, which copies the overlay: three times dearer under the relaxed threshold and five to thirteen times under the split policy, because the overlay is let grow. Who pays that matters. The database proposal path loads its state afresh for every proposal, a base with no overlay, so its candidate copies nothing whatever the policy; the copy is paid by a caller that keeps a state in memory and proposes against it across many changes. On these histories the split policy is the cheapest fold and the dearest owned candidate; which matters more is a decision about who the state is for, and this ruler does not make it.
+
 ### Deferred
 
 - **As-of reads that cost what the answer costs.** Replay is linear in the transitions before the target, under retraction and revision alike. The TEC register made that unacceptable for an interactive read, and `asof/revise` is its ruler: a small live set over a long history, where the cost is all history.
