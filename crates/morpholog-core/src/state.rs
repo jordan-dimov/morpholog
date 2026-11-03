@@ -378,6 +378,25 @@ impl State {
         }
     }
 
+    /// [`State::apply`] with the compaction held off, and the presence
+    /// check on its own: the state's advance in its parts, so a
+    /// measurement can time each.
+    #[cfg(any(test, feature = "measure"))]
+    #[doc(hidden)]
+    pub fn apply_without_compaction(
+        &mut self,
+        asserted: &[ClaimInstance],
+        retracted: &[ClaimInstance],
+    ) {
+        self.apply_under(asserted, retracted, usize::MAX);
+    }
+
+    #[cfg(any(test, feature = "measure"))]
+    #[doc(hidden)]
+    pub fn admits(&self, claim: &ClaimInstance) -> bool {
+        self.contains(claim)
+    }
+
     /// The whole state from its live claims, in logical order, indexed
     /// afresh: what a compaction does.
     fn rebuild(&mut self) {

@@ -3257,7 +3257,9 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::SplitScore
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::SplitScore
 pub struct morpholog_core::State
 impl morpholog_core::State
+pub fn morpholog_core::State::admits(&self, &morpholog_core::ClaimInstance) -> bool
 pub fn morpholog_core::State::apply(&mut self, &[morpholog_core::ClaimInstance], &[morpholog_core::ClaimInstance])
+pub fn morpholog_core::State::apply_without_compaction(&mut self, &[morpholog_core::ClaimInstance], &[morpholog_core::ClaimInstance])
 pub fn morpholog_core::State::claims(&self) -> morpholog_core::Claims<'_>
 pub fn morpholog_core::State::claims_for<'a>(&'a self, &str) -> impl core::iter::traits::iterator::Iterator<Item = &'a morpholog_core::ClaimInstance> + 'a
 pub fn morpholog_core::State::from_claims(alloc::vec::Vec<morpholog_core::ClaimInstance>) -> Self
