@@ -20,7 +20,7 @@ use crate::ir::{
     Subject, Term, Value, ValueExpr, Var,
 };
 use crate::propose::Compared;
-use crate::state::{Bindings, CandidateBucket, ClaimInstance, EvalValue, State};
+use crate::state::{Bindings, CandidateBucket, ClaimInstance, EvalValue, State, StateRef};
 
 /// Errors raised by the evaluator and the transformation runner: an
 /// expression or transformation was structurally ill-formed and cannot
@@ -153,7 +153,7 @@ pub(crate) struct EvalContext<'a> {
     /// The state lookups read: the candidate (post) state when checking a
     /// proposal's invariants, the pre-transition state inside `pre(...)`,
     /// otherwise the only state there is.
-    pub(crate) state: &'a State,
+    pub(crate) state: StateRef<'a>,
     /// Pre-transition state when both states are in scope. Cleared inside
     /// a `Pre` subtree, so `pre(pre(...))` surfaces `PreStateUnavailable`.
     pub(crate) pre_state: Option<&'a State>,
@@ -173,6 +173,24 @@ type SumResults<'a> = std::collections::HashMap<*const ValueExpr, &'a Result<Eva
 impl<'a> EvalContext<'a> {
     pub(crate) fn new(
         state: &'a State,
+        pre_state: Option<&'a State>,
+        bindings: &'a Bindings,
+        actor: Option<&'a Subject>,
+        definitions: DefinitionTable<'a>,
+    ) -> Self {
+        Self::over(
+            StateRef::Owned(state),
+            pre_state,
+            bindings,
+            actor,
+            definitions,
+        )
+    }
+
+    /// A context over whatever the evaluation reads: an owned state or a
+    /// candidate view.
+    pub(crate) fn over(
+        state: StateRef<'a>,
         pre_state: Option<&'a State>,
         bindings: &'a Bindings,
         actor: Option<&'a Subject>,
@@ -199,7 +217,7 @@ impl<'a> EvalContext<'a> {
     /// in scope; caller surfaces `PreStateUnavailable`.
     pub(crate) fn enter_pre(&self) -> Option<Self> {
         Some(Self {
-            state: self.pre_state?,
+            state: StateRef::Owned(self.pre_state?),
             pre_state: None,
             ..*self
         })

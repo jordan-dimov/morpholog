@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::admission::{Admission, EffectiveDelta, effective_delta};
 use crate::definitions::DefinitionTable;
-use crate::derive::{eval_invariant, sorted_witness};
+use crate::derive::{eval_invariant_over, sorted_witness};
 use crate::eval::{
     EvalContext, EvalError, RenderedClaim, eval_value, find_failure, find_matches, matching_claims,
     resolve_term, unsatisfied_positive_claims,
@@ -24,7 +24,9 @@ use crate::ir::{
     Claim, Definition, Intent, Invariant, InvariantName, PredicateName, Prop, RuleName, Stmt,
     Subject, Term, Transformation, TransformationName, Var,
 };
-use crate::state::{Bindings, ClaimInstance, EvalValue, IntentInstance, State};
+use crate::state::{
+    Bindings, Candidate, ClaimInstance, EvalValue, IntentInstance, State, StateRef,
+};
 
 /// A proposed state transition. Persisted to the audit log when accepted.
 ///
@@ -636,33 +638,33 @@ pub(crate) fn stage_delta_inner(
     })
 }
 
-pub(crate) fn finish_staged_inner(
-    staged: StagedDelta,
+/// A proposal decided: refused, or admitted with its change and the
+/// effective delta the admission was judged on. No candidate state is
+/// built; a caller that wants one asks for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Decided {
+    Accepted {
+        asserted_claims: Vec<ClaimInstance>,
+        retracted_claims: Vec<ClaimInstance>,
+        emitted_intents: Vec<IntentInstance>,
+        effective: EffectiveDelta,
+    },
+    Rejected {
+        reason: RejectionReason,
+    },
+}
+
+/// The invariants over the cases an effective change could affect, read
+/// through `view`: the candidate as the caller holds it, owned or a view
+/// over the pre-state and the delta. The first refusal, or none.
+fn judge_invariants(
+    view: StateRef<'_>,
     pre_state: &State,
     admission: &Admission<'_>,
-    established: Option<&EffectiveDelta>,
+    effective: &EffectiveDelta,
     trace: &mut TraceSink<'_>,
-) -> Result<Outcome, EvalError> {
-    let (asserted, retracted, emitted) = match staged {
-        StagedDelta::Rejected { reason } => return Ok(Outcome::Rejected { reason }),
-        StagedDelta::Staged {
-            asserted,
-            retracted,
-            emitted,
-        } => (asserted, retracted, emitted),
-    };
-
-    let candidate = pre_state.with_delta(&asserted, &retracted);
+) -> Result<Option<RejectionReason>, EvalError> {
     let definitions = admission.definitions();
-    let computed;
-    let effective = match established {
-        Some(effective) => effective,
-        None => {
-            computed = effective_delta(pre_state, &asserted, &retracted);
-            &computed
-        }
-    };
-
     for (inv, plan) in admission.invariants().iter().zip(admission.plans()) {
         // Check only the cases the change could affect.
         let cases = match plan.classify(&effective.asserted, &effective.retracted) {
@@ -671,10 +673,10 @@ pub(crate) fn finish_staged_inner(
             Impact::Bounded(cases) => Some(cases),
         };
         let held = match &cases {
-            None => eval_invariant(inv, &candidate, Some(pre_state), definitions)?,
-            Some(cases) => crate::derive::eval_invariant_cases(
+            None => eval_invariant_over(inv, view, Some(pre_state), definitions)?,
+            Some(cases) => crate::derive::eval_invariant_cases_over(
                 inv,
-                &candidate,
+                view,
                 Some(pre_state),
                 definitions,
                 cases,
@@ -692,27 +694,99 @@ pub(crate) fn finish_staged_inner(
             // it never blames a case the transition did not touch.
             let diagnosis = match &cases {
                 None => {
-                    crate::derive::invariant_witness(inv, &candidate, Some(pre_state), definitions)?
+                    crate::derive::invariant_witness_over(inv, view, Some(pre_state), definitions)?
                 }
-                Some(cases) => crate::derive::invariant_witness_cases(
+                Some(cases) => crate::derive::invariant_witness_cases_over(
                     inv,
-                    &candidate,
+                    view,
                     Some(pre_state),
                     definitions,
                     cases,
                 )?,
             };
-            return Ok(Outcome::Rejected {
-                reason: RejectionReason::Invariant {
-                    name: inv.name.clone(),
-                    version: inv.version,
-                    witness: diagnosis.witness,
-                    compared: diagnosis.compared,
-                },
-            });
+            return Ok(Some(RejectionReason::Invariant {
+                name: inv.name.clone(),
+                version: inv.version,
+                witness: diagnosis.witness,
+                compared: diagnosis.compared,
+            }));
         }
     }
 
+    Ok(None)
+}
+
+/// Judge a staged delta without building its candidate: the invariants
+/// read a view of the pre-state with the delta over it, so nothing of
+/// the pre-state is copied. For a caller that advances its own state
+/// afterwards, as a rehearsal does.
+pub(crate) fn decide_staged(
+    staged: StagedDelta,
+    pre_state: &State,
+    admission: &Admission<'_>,
+    established: Option<&EffectiveDelta>,
+    trace: &mut TraceSink<'_>,
+) -> Result<Decided, EvalError> {
+    let (asserted, retracted, emitted) = match staged {
+        StagedDelta::Rejected { reason } => return Ok(Decided::Rejected { reason }),
+        StagedDelta::Staged {
+            asserted,
+            retracted,
+            emitted,
+        } => (asserted, retracted, emitted),
+    };
+    let effective = match established {
+        Some(effective) => effective.clone(),
+        None => effective_delta(pre_state, &asserted, &retracted),
+    };
+    let candidate = Candidate::new(pre_state, &asserted, &retracted);
+    let view = StateRef::Candidate(&candidate);
+    if let Some(reason) = judge_invariants(view, pre_state, admission, &effective, trace)? {
+        return Ok(Decided::Rejected { reason });
+    }
+    Ok(Decided::Accepted {
+        asserted_claims: asserted,
+        retracted_claims: retracted,
+        emitted_intents: emitted,
+        effective,
+    })
+}
+
+/// Judge a staged delta and return the owned candidate the outcome
+/// carries: the candidate is built once and the invariants read it.
+pub(crate) fn finish_staged_inner(
+    staged: StagedDelta,
+    pre_state: &State,
+    admission: &Admission<'_>,
+    established: Option<&EffectiveDelta>,
+    trace: &mut TraceSink<'_>,
+) -> Result<Outcome, EvalError> {
+    let (asserted, retracted, emitted) = match staged {
+        StagedDelta::Rejected { reason } => return Ok(Outcome::Rejected { reason }),
+        StagedDelta::Staged {
+            asserted,
+            retracted,
+            emitted,
+        } => (asserted, retracted, emitted),
+    };
+    let candidate = pre_state.with_delta(&asserted, &retracted);
+    let computed;
+    let effective = match established {
+        Some(effective) => effective,
+        None => {
+            computed = effective_delta(pre_state, &asserted, &retracted);
+            &computed
+        }
+    };
+    if let Some(reason) = judge_invariants(
+        StateRef::Owned(&candidate),
+        pre_state,
+        admission,
+        effective,
+        trace,
+    )? {
+        return Ok(Outcome::Rejected { reason });
+    }
     Ok(Outcome::Accepted {
         asserted_claims: asserted,
         retracted_claims: retracted,

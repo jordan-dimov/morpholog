@@ -1422,6 +1422,8 @@ async fn measure_rehearse(
     let mut fetch = Vec::with_capacity(repeat);
     let mut decide = Vec::with_capacity(repeat);
     let mut decide_register = Vec::with_capacity(repeat);
+    let mut tallies: [Vec<f64>; 4] = Default::default();
+    let mut register_tallies: [Vec<f64>; 4] = Default::default();
     let mut serialise = Vec::with_capacity(repeat);
     let mut end_to_end = Vec::with_capacity(repeat);
     let mut peak = Vec::with_capacity(repeat);
@@ -1436,17 +1438,26 @@ async fn measure_rehearse(
         // The register's rows timed on their own, from the progress call
         // that ends the noise prefix: the fold reports every thousand
         // rows, and the prefix is a multiple of a thousand.
+        let before = morpholog_core::tally::snapshot();
         let t = Instant::now();
         let mut register_from = None;
         let report = morpholog_postgres::rehearse_recorded(&prepared, &refs, &mut |p| {
             if p.done == noise as u64 && register_from.is_none() {
-                register_from = Some(Instant::now());
+                register_from = Some((Instant::now(), morpholog_core::tally::snapshot()));
             }
         });
         let total = t.elapsed();
+        let after = morpholog_core::tally::snapshot();
+        let register_before = register_from.map_or(before, |(_, at)| at);
+        for (i, v) in tallies.iter_mut().enumerate() {
+            v.push((after[i] - before[i]) as f64);
+        }
+        for (i, v) in register_tallies.iter_mut().enumerate() {
+            v.push((after[i] - register_before[i]) as f64);
+        }
         decide.push(total);
         decide_register.push(match register_from {
-            Some(from) => from.elapsed(),
+            Some((from, _)) => from.elapsed(),
             None => total,
         });
         // A fixture the candidate cannot replay measures nothing.
@@ -1508,6 +1519,46 @@ async fn measure_rehearse(
             Metric::ms("fetch_rows", &fetch),
             Metric::ms("decide_rows", &decide),
             Metric::ms("decide_register", &decide_register),
+            Metric {
+                name: "state_clones",
+                unit: "count",
+                samples: tallies[0].clone(),
+            },
+            Metric {
+                name: "overlay_entries_copied",
+                unit: "count",
+                samples: tallies[1].clone(),
+            },
+            Metric {
+                name: "state_rebuilds",
+                unit: "count",
+                samples: tallies[2].clone(),
+            },
+            Metric {
+                name: "claims_rebuilt",
+                unit: "count",
+                samples: tallies[3].clone(),
+            },
+            Metric {
+                name: "register_clones",
+                unit: "count",
+                samples: register_tallies[0].clone(),
+            },
+            Metric {
+                name: "register_entries_copied",
+                unit: "count",
+                samples: register_tallies[1].clone(),
+            },
+            Metric {
+                name: "register_rebuilds",
+                unit: "count",
+                samples: register_tallies[2].clone(),
+            },
+            Metric {
+                name: "register_claims_rebuilt",
+                unit: "count",
+                samples: register_tallies[3].clone(),
+            },
             Metric {
                 name: "decide_per_row",
                 unit: "us",

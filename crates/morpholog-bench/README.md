@@ -314,8 +314,6 @@ Everything above runs in-process. A non-Rust embedder (the reference ETRM) drive
 
 So the fixed per-call tax a subprocess embedder pays is **single-digit milliseconds** - ~3 ms of spawn/parse/validate plus ~6 ms of connect/propose/commit against a small ledger. That sustains roughly 100 governed transitions/second single-threaded, which is comfortable for lifecycle events (capture, confirm, settle, approve) and admin/audit flows. The propose component grows with in-scope state exactly as the `write` scenario measures; the spawn/parse/validate floor does not. A long-lived worker (load + validate once, keep a pool warm, speak HTTP/socket) is the answer only if a high-frequency path needs it - and per the doctrine those paths should not run through the governed core anyway.
 
-### Deferred
-
 ## The `rehearse` ruler (2026-11-02)
 
 Release build, `cdba18ad`, one laptop (Intel Core Ultra 7 155H, governor `powersave`, PostgreSQL 18 on the disposable cluster), two repeats, steady medians. The fixture is the register in the TEC shape; every row decides `same` except in the refusing case, where every version past 100 is refused.
@@ -339,6 +337,23 @@ What it says, and what it does not. The per-row cost of a decision follows the l
 | 300k noise, then 100k revise | 302,000 | 234.6 s | 151.3 s | 1,513 us |
 
 The same hundred thousand decisions cost nineteen times more behind state they never read. Nothing else differs between the first two rows: the same acts, the same keys, the same rules, the same plans, which bound every decision to its own row. The cost is in the per-proposal clone of the pre-state's overlay and the compaction that keeps it bounded, each proportional to the live set, which is what the candidate-state view in #674 removes. Peak RSS 1.14 GB with the noise, 400k decoded rows held in memory among it. The acceptance condition for the view is this table's two `decide_register` figures coming out about the same.
+
+### After the view (2026-11-02, same machine and configuration, one repeat)
+
+Two changes, each measured on its own against the ruler above. Step A reads a proposal's candidate through a view over the pre-state and its staged delta instead of cloning the overlay; step B drops the rehearsal's own compaction policy, which existed to keep those clones small, and leaves the state its ordinary maintenance. The counters are the state's own: clones made and overlay entries copied, full rebuilds and claims re-indexed, over the register's rows alone; the boundary counters arrived with step A, so the noisy row's `before` count is not split by rows (the whole run, noise prefix included, rebuilt 226 M).
+
+| 100k register rows | live claims | before | step A | step B | per row after | clones, A | claims rebuilt, before / A / B |
+|---|---|---|---|---|---|---|---|
+| revise | 2,000 | 8.4 s | 3.75 s | 3.55 s | 35 us | 0 | 3.1 M / 1.5 M / 1.5 M |
+| append | 200,000 | 31.0 s | 24.5 s | 2.43 s | 24 us | 0 | 36.5 M / 36.5 M / 1.6 M |
+| refuse | 200,000 | 26.1 s | | 2.58 s | 26 us | | |
+| revise behind 300k irrelevant claims | 302,000 | 151.3 s | 155.1 s | 4.91 s | 49 us | 0 | not counted by rows before / 154 M / 1.8 M |
+
+What each step bought. The view removed every clone and with it a fixed cost per decision that showed even at two thousand live claims: the revise case more than halved. It did not touch the 300k case, whose suffix spent its 155 s in 511 rebuilds of a 300k-claim state; the clones had been the noise prefix's cost. Dropping the rehearsal's compaction policy took that suffix from 155 s to 4.9 s and the append case from 24.5 s to 2.4 s: six rebuilds instead of 511, under the state's ordinary threshold. The acceptance condition was the two revise figures coming out about the same, 8.0 and 151.3 before; they are 3.55 and 4.91 now, so it is substantially met, with a penalty of about two fifths left. That remainder is the six rebuilds of a 302k-claim state the ordinary threshold still makes: the state's maintenance keeps a global component, and whether a large state can compact locally, without re-indexing predicates no rule read, is a question of its own, worth asking at millions of live claims. No decision, witness or error moved; the fingerprint corpus and the kernel-SQL differential are unchanged. The read is now the larger share of an end-to-end run: 1.2 to 4.8 s of fetching and decoding against 2.4 to 4.9 s of deciding.
+
+**The ordinary proposal path, paired against the parent commit.** The view changes `propose` as well as the rehearsal, so the quick suite ran interleaved, four runs a side, parent against candidate (`scripts/bench_ab.sh 15a31914`, session clean, both sides throttled alike). Every `write`, `read`, `replay` and `wide` metric was within noise, and so was the chained `acts_sequential`; the one finding was at the kernel's own scale, where a bare `propose` with no invariants ran 1.33 to 1.37 times slower, about 3 us on 10, because the owned path built the view and then the owned candidate. The owned path now builds its owned candidate once and judges it, as before, through the one judgement the view path shares; a second interleaved compare, four runs a side, has `propose_no_invariants` at 1.00 and 0.97, `propose_one` at 0.98 and 0.99 and every kernel phase within noise. The counters are compiled only for tests and under the bench's `tally` feature, so an ordinary build carries none.
+
+### Deferred
 
 - **As-of reads that cost what the answer costs.** Replay is linear in the transitions before the target, under retraction and revision alike. The TEC register made that unacceptable for an interactive read, and `asof/revise` is its ruler: a small live set over a long history, where the cost is all history.
 - **Streaming `sqlx::query::fetch`** instead of `fetch_all`. Memory scales with audit rows fetched; not pressing until past N=1M (per-row payload is ~200-500 bytes).
