@@ -217,9 +217,11 @@ struct RehearseArgs {
 
     /// Also run the decision step by step over the same rows, each step
     /// timed on its own: the act's execution, the candidate's
-    /// preparation, the whole decision, and the state's advance. The
-    /// preparation is repeated outside the decision to be timed, so the
-    /// steps sum to more than the decision.
+    /// preparation, the whole decision, and the state's advance, with
+    /// the advance calls that compacted timed apart; then the advance in
+    /// its parts, retractions, the presence check and admissions with
+    /// the compaction held off. The preparation is repeated outside the
+    /// decision to be timed, so the steps sum to more than the decision.
     #[arg(long)]
     phases: bool,
 
@@ -1403,13 +1405,14 @@ fn peak_rss_mb() -> Option<f64> {
 
 /// The decision step by step over rows in memory: what a rehearsal does
 /// per row, each step on its own clock, the state advanced by each row's
-/// recorded effect as the rehearsal's fold advances it. The candidate's
-/// preparation is repeated outside the decision to be timed, so the
-/// steps sum to more than the decision.
+/// recorded effect as the rehearsal's fold advances it, and the advance
+/// calls that compacted timed apart. The candidate's preparation is
+/// repeated outside the decision to be timed, so the steps sum to more
+/// than the decision.
 fn decision_phases(
     prepared: &PreparedProgram,
     rows: &[&morpholog_postgres::AuditRow],
-) -> Result<[Duration; 4]> {
+) -> Result<[Duration; 5]> {
     use morpholog_core::{Candidate, Decided, StagedDelta, effective_delta};
     let admission = prepared.admission();
     let mut state = State::default();
@@ -1418,6 +1421,7 @@ fn decision_phases(
     let mut candidate = Duration::ZERO;
     let mut decide = Duration::ZERO;
     let mut apply = Duration::ZERO;
+    let mut compacting = Duration::ZERO;
     for row in rows {
         let transition = Transition {
             transformation_name: row.transformation_name.clone(),
@@ -1454,11 +1458,66 @@ fn decision_phases(
         // The recorded effect, whatever the candidate decided: the
         // production fold's own step, so a refusing candidate's later
         // rows are decided over the state the record built.
+        let rebuilds = morpholog_core::tally::snapshot()[2];
         let t = Instant::now();
         morpholog_postgres::advance_recorded(&mut state, row);
-        apply += t.elapsed();
+        let elapsed = t.elapsed();
+        apply += elapsed;
+        if morpholog_core::tally::snapshot()[2] != rebuilds {
+            compacting += elapsed;
+        }
     }
-    Ok([stage, candidate, decide, apply])
+    Ok([stage, candidate, decide, apply, compacting])
+}
+
+/// The state's advance in its parts over the same rows, the compaction
+/// held off: each retraction, each admission's presence check on its
+/// own, and each admission (the check again, then the index), the
+/// recorded operations applied one at a time as the fold applies them.
+/// Transition rows only: the fixture has no activation.
+fn advance_phases(rows: &[&morpholog_postgres::AuditRow]) -> [Duration; 3] {
+    use morpholog_postgres::OperationKind;
+    let mut state = State::default();
+    let mut retract = Duration::ZERO;
+    let mut contains = Duration::ZERO;
+    let mut admit = Duration::ZERO;
+    for row in rows {
+        let Some(operations) = &row.operations else {
+            let t = Instant::now();
+            state.apply_without_compaction(&[], &row.retracted_claims);
+            retract += t.elapsed();
+            let t = Instant::now();
+            for claim in &row.asserted_claims {
+                std::hint::black_box(state.admits(claim));
+            }
+            contains += t.elapsed();
+            let t = Instant::now();
+            state.apply_without_compaction(&row.asserted_claims, &[]);
+            admit += t.elapsed();
+            continue;
+        };
+        for op in operations {
+            match op.op {
+                OperationKind::Del => {
+                    let t = Instant::now();
+                    state.apply_without_compaction(&[], &[op.claim()]);
+                    retract += t.elapsed();
+                }
+                OperationKind::Ins => {
+                    let claim = op.claim();
+                    let t = Instant::now();
+                    std::hint::black_box(state.admits(&claim));
+                    contains += t.elapsed();
+                    let t = Instant::now();
+                    state.apply_without_compaction(&[op.claim()], &[]);
+                    admit += t.elapsed();
+                }
+                OperationKind::Noop => {}
+            }
+        }
+    }
+    std::hint::black_box(state.len());
+    [retract, contains, admit]
 }
 
 async fn measure_rehearse(pool: &PgPool, case: &str, args: &RehearseArgs) -> Result<CaseResult> {
@@ -1493,7 +1552,7 @@ async fn measure_rehearse(pool: &PgPool, case: &str, args: &RehearseArgs) -> Res
     let mut decide_register = Vec::with_capacity(repeat);
     let mut tallies: [Vec<f64>; 4] = Default::default();
     let mut register_tallies: [Vec<f64>; 4] = Default::default();
-    let mut phase_times: [Vec<Duration>; 4] = Default::default();
+    let mut phase_times: [Vec<Duration>; 8] = Default::default();
     let mut serialise = Vec::with_capacity(repeat);
     let mut end_to_end = Vec::with_capacity(repeat);
     let mut peak = Vec::with_capacity(repeat);
@@ -1550,9 +1609,13 @@ async fn measure_rehearse(pool: &PgPool, case: &str, args: &RehearseArgs) -> Res
         }
 
         if phases {
-            let split = decision_phases(&prepared, &refs)?;
-            for (i, v) in phase_times.iter_mut().enumerate() {
-                v.push(split[i]);
+            let decision = decision_phases(&prepared, &refs)?;
+            let advance = advance_phases(&refs);
+            for (v, d) in phase_times
+                .iter_mut()
+                .zip(decision.into_iter().chain(advance))
+            {
+                v.push(d);
             }
         }
 
@@ -1650,6 +1713,10 @@ async fn measure_rehearse(pool: &PgPool, case: &str, args: &RehearseArgs) -> Res
             "phase_candidate",
             "phase_decide",
             "phase_apply",
+            "apply_compacting",
+            "apply_retract",
+            "apply_contains",
+            "apply_admit",
         ]
         .into_iter()
         .zip(&phase_times)
