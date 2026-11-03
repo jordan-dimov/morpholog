@@ -104,26 +104,11 @@ pub struct ClaimInstance {
     pub args: Vec<EvalValue>,
 }
 
-/// The admitted state: a set of grounded [`ClaimInstance`]s that
-/// invariants are evaluated against. Identity is `(predicate, args)`.
-/// The PG adapter persists it as rows in `morpholog.claims`.
-///
-/// Two layers: a base shared with every state derived from it, and an
-/// overlay of what changed since. A candidate built by `with_delta`
-/// copies only the overlay, never the base. Once the overlay grows past
-/// a fraction of the base, it is folded into a fresh base.
-///
-/// Logical order is the base in construction order minus retractions,
-/// then additions in order. A claim retracted and re-admitted moves to
-/// the tail. Two states are equal when their logical sequences are
-/// equal, whatever their layering.
-///
-/// Indexed by predicate and by `(predicate, arg position, arg value)`,
-/// so a ground argument narrows a lookup to the smallest bucket.
-/// Construct via [`State::from_claims`] or [`State::default`].
 /// What the state does that costs in proportion to its size, counted so
-/// a measurement can attribute a run to copies and rebuilds apart. Plain
-/// relaxed increments at the clone and the rebuild, never on a lookup.
+/// a measurement can attribute a run to copies and rebuilds apart. Only
+/// in test builds and under the `tally` feature the bench enables; an
+/// ordinary build compiles the increments to nothing.
+#[cfg(any(test, feature = "tally"))]
 #[doc(hidden)]
 pub mod tally {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -142,6 +127,16 @@ pub mod tally {
         counter.fetch_add(n as u64, Ordering::Relaxed);
     }
 
+    pub(super) fn clone_of(overlay_entries: usize) {
+        add(&STATE_CLONES, 1);
+        add(&OVERLAY_ENTRIES_COPIED, overlay_entries);
+    }
+
+    pub(super) fn rebuild_of(live: usize) {
+        add(&STATE_REBUILDS, 1);
+        add(&CLAIMS_REBUILT, live);
+    }
+
     /// The four counts, in the order declared.
     pub fn snapshot() -> [u64; 4] {
         [
@@ -153,6 +148,23 @@ pub mod tally {
     }
 }
 
+/// The admitted state: a set of grounded [`ClaimInstance`]s that
+/// invariants are evaluated against. Identity is `(predicate, args)`.
+/// The PG adapter persists it as rows in `morpholog.claims`.
+///
+/// Two layers: a base shared with every state derived from it, and an
+/// overlay of what changed since. A candidate built by `with_delta`
+/// copies only the overlay, never the base. Once the overlay grows past
+/// a fraction of the base, it is folded into a fresh base.
+///
+/// Logical order is the base in construction order minus retractions,
+/// then additions in order. A claim retracted and re-admitted moves to
+/// the tail. Two states are equal when their logical sequences are
+/// equal, whatever their layering.
+///
+/// Indexed by predicate and by `(predicate, arg position, arg value)`,
+/// so a ground argument narrows a lookup to the smallest bucket.
+/// Construct via [`State::from_claims`] or [`State::default`].
 #[derive(Default)]
 pub struct State {
     base: Arc<Layer>,
@@ -171,13 +183,18 @@ pub struct State {
     visited: std::cell::Cell<u64>,
 }
 
+/// The counters' absence: the same calls, compiled to nothing.
+#[cfg(not(any(test, feature = "tally")))]
+mod tally {
+    #[inline(always)]
+    pub(super) fn clone_of(_overlay_entries: usize) {}
+    #[inline(always)]
+    pub(super) fn rebuild_of(_live: usize) {}
+}
+
 impl Clone for State {
     fn clone(&self) -> Self {
-        tally::add(&tally::STATE_CLONES, 1);
-        tally::add(
-            &tally::OVERLAY_ENTRIES_COPIED,
-            self.overlay.claims.len() + self.dead_base.len(),
-        );
+        tally::clone_of(self.overlay.claims.len() + self.dead_base.len());
         Self {
             base: Arc::clone(&self.base),
             overlay: self.overlay.clone(),
@@ -365,8 +382,7 @@ impl State {
     /// The whole state from its live claims, in logical order, indexed
     /// afresh: what a compaction does.
     fn rebuild(&mut self) {
-        tally::add(&tally::STATE_REBUILDS, 1);
-        tally::add(&tally::CLAIMS_REBUILT, self.live);
+        tally::rebuild_of(self.live);
         *self = State::from_claims(self.claims().to_vec());
     }
 

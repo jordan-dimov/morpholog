@@ -104,6 +104,7 @@ pub use score::{
     SCORE_FORMAT_VERSION, SCORE_SEMANTICS, ScoreError, SliceInvariantScore, SliceScore,
     SplitBoundaryReport, SplitScore, invariants_using_pre,
 };
+#[cfg(any(test, feature = "tally"))]
 #[doc(hidden)]
 pub use state::tally;
 pub use state::{ClaimInstance, Claims, EvalValue, IntentInstance, State};

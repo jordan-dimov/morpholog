@@ -189,8 +189,11 @@ proptest! {
         for (a, r) in &history {
             pre.apply_under(a, r, 2);
         }
+        // Every value the history ever carried, so a bucket a past step
+        // created or emptied is asked for too.
         let domain: Vec<EvalValue> = seed
             .iter()
+            .chain(history.iter().flat_map(|(a, r)| a.iter().chain(r)))
             .chain(&asserted)
             .chain(&retracted)
             .flat_map(|c| c.args.clone())

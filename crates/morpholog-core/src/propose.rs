@@ -654,37 +654,17 @@ pub(crate) enum Decided {
     },
 }
 
-/// Judge a staged delta: the invariants over the cases its effective
-/// change could affect, read through a view of the pre-state with the
-/// delta over it, so nothing of the pre-state is copied to decide.
-pub(crate) fn decide_staged(
-    staged: StagedDelta,
+/// The invariants over the cases an effective change could affect, read
+/// through `view`: the candidate as the caller holds it, owned or a view
+/// over the pre-state and the delta. The first refusal, or none.
+fn judge_invariants(
+    view: StateRef<'_>,
     pre_state: &State,
     admission: &Admission<'_>,
-    established: Option<&EffectiveDelta>,
+    effective: &EffectiveDelta,
     trace: &mut TraceSink<'_>,
-) -> Result<Decided, EvalError> {
-    let (asserted, retracted, emitted) = match staged {
-        StagedDelta::Rejected { reason } => return Ok(Decided::Rejected { reason }),
-        StagedDelta::Staged {
-            asserted,
-            retracted,
-            emitted,
-        } => (asserted, retracted, emitted),
-    };
-
-    let candidate = Candidate::new(pre_state, &asserted, &retracted);
-    let view = StateRef::Candidate(&candidate);
+) -> Result<Option<RejectionReason>, EvalError> {
     let definitions = admission.definitions();
-    let computed;
-    let effective = match established {
-        Some(effective) => effective,
-        None => {
-            computed = effective_delta(pre_state, &asserted, &retracted);
-            &computed
-        }
-    };
-
     for (inv, plan) in admission.invariants().iter().zip(admission.plans()) {
         // Check only the cases the change could affect.
         let cases = match plan.classify(&effective.asserted, &effective.retracted) {
@@ -724,25 +704,56 @@ pub(crate) fn decide_staged(
                     cases,
                 )?,
             };
-            return Ok(Decided::Rejected {
-                reason: RejectionReason::Invariant {
-                    name: inv.name.clone(),
-                    version: inv.version,
-                    witness: diagnosis.witness,
-                    compared: diagnosis.compared,
-                },
-            });
+            return Ok(Some(RejectionReason::Invariant {
+                name: inv.name.clone(),
+                version: inv.version,
+                witness: diagnosis.witness,
+                compared: diagnosis.compared,
+            }));
         }
     }
 
+    Ok(None)
+}
+
+/// Judge a staged delta without building its candidate: the invariants
+/// read a view of the pre-state with the delta over it, so nothing of
+/// the pre-state is copied. For a caller that advances its own state
+/// afterwards, as a rehearsal does.
+pub(crate) fn decide_staged(
+    staged: StagedDelta,
+    pre_state: &State,
+    admission: &Admission<'_>,
+    established: Option<&EffectiveDelta>,
+    trace: &mut TraceSink<'_>,
+) -> Result<Decided, EvalError> {
+    let (asserted, retracted, emitted) = match staged {
+        StagedDelta::Rejected { reason } => return Ok(Decided::Rejected { reason }),
+        StagedDelta::Staged {
+            asserted,
+            retracted,
+            emitted,
+        } => (asserted, retracted, emitted),
+    };
+    let effective = match established {
+        Some(effective) => effective.clone(),
+        None => effective_delta(pre_state, &asserted, &retracted),
+    };
+    let candidate = Candidate::new(pre_state, &asserted, &retracted);
+    let view = StateRef::Candidate(&candidate);
+    if let Some(reason) = judge_invariants(view, pre_state, admission, &effective, trace)? {
+        return Ok(Decided::Rejected { reason });
+    }
     Ok(Decided::Accepted {
         asserted_claims: asserted,
         retracted_claims: retracted,
         emitted_intents: emitted,
-        effective: effective.clone(),
+        effective,
     })
 }
 
+/// Judge a staged delta and return the owned candidate the outcome
+/// carries: the candidate is built once and the invariants read it.
 pub(crate) fn finish_staged_inner(
     staged: StagedDelta,
     pre_state: &State,
@@ -750,23 +761,38 @@ pub(crate) fn finish_staged_inner(
     established: Option<&EffectiveDelta>,
     trace: &mut TraceSink<'_>,
 ) -> Result<Outcome, EvalError> {
-    match decide_staged(staged, pre_state, admission, established, trace)? {
-        Decided::Rejected { reason } => Ok(Outcome::Rejected { reason }),
-        Decided::Accepted {
-            asserted_claims,
-            retracted_claims,
-            emitted_intents,
-            ..
-        } => {
-            let candidate_state = pre_state.with_delta(&asserted_claims, &retracted_claims);
-            Ok(Outcome::Accepted {
-                asserted_claims,
-                retracted_claims,
-                emitted_intents,
-                candidate_state,
-            })
+    let (asserted, retracted, emitted) = match staged {
+        StagedDelta::Rejected { reason } => return Ok(Outcome::Rejected { reason }),
+        StagedDelta::Staged {
+            asserted,
+            retracted,
+            emitted,
+        } => (asserted, retracted, emitted),
+    };
+    let candidate = pre_state.with_delta(&asserted, &retracted);
+    let computed;
+    let effective = match established {
+        Some(effective) => effective,
+        None => {
+            computed = effective_delta(pre_state, &asserted, &retracted);
+            &computed
         }
+    };
+    if let Some(reason) = judge_invariants(
+        StateRef::Owned(&candidate),
+        pre_state,
+        admission,
+        effective,
+        trace,
+    )? {
+        return Ok(Outcome::Rejected { reason });
     }
+    Ok(Outcome::Accepted {
+        asserted_claims: asserted,
+        retracted_claims: retracted,
+        emitted_intents: emitted,
+        candidate_state: candidate,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
