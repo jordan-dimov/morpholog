@@ -9,6 +9,7 @@
 //! cannot tell which true statement a receipt originally made, since an
 //! unsigned receipt rewritten into another true one still recomputes.
 
+use crate::replay::Upkeep;
 use std::collections::BTreeSet;
 
 use morpholog_core::format::canonical_hash;
@@ -159,7 +160,7 @@ fn state_of(pack: &EvidencePack) -> State {
     rows.sort_by_key(|r| r.position());
     let mut state = State::default();
     for row in rows {
-        row.effect().apply_to(&mut state);
+        row.effect().apply_to(&mut state, Upkeep::Replay);
     }
     state
 }

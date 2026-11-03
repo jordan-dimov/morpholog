@@ -8,7 +8,7 @@ use crate::history::{
     HistoryCheck, HistoryVerdict, LegacyDisagreement, ReplayConflict, sort_key, sorted,
 };
 use crate::propose::{REJECTION_KIND_BIND, REJECTION_KIND_INVARIANT, REJECTION_KIND_REQUIRE};
-use crate::replay::{EffectKind, RowEffect};
+use crate::replay::{EffectKind, RowEffect, Upkeep};
 use crate::role_rebindings::RoleRebindings;
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use crate::witnesses::WitnessesReport;
@@ -417,7 +417,9 @@ pub async fn coverage_replay(
                 transition_id,
                 kind,
             }
-            .apply_to(&mut replay);
+            // The ordinary upkeep: this fold copies its state after a row
+            // when a rule reads the previous one.
+            .apply_to(&mut replay, Upkeep::Ordinary);
             if activation {
                 continue;
             }

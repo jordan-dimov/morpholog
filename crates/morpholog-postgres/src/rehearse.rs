@@ -7,6 +7,7 @@ use crate::audit_pages::AuditPages;
 use crate::checkpoints::{Checkpoint, TreeVerification};
 use crate::error::{PgError, classify};
 use crate::pack::{EvidencePack, verify_pack};
+use crate::replay::Upkeep;
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use morpholog_core::{PreparedProgram, RecordedProposal, Rehearsal, RehearsalReport, State};
 use sqlx::PgPool;
@@ -26,10 +27,11 @@ fn rehearse_rows<'a>(
     replay: &mut State,
     rehearsal: &mut Rehearsal<'_>,
     rows: impl IntoIterator<Item = &'a AuditRow>,
+    upkeep: Upkeep,
 ) {
     for row in rows {
         if row.is_control() {
-            advance_recorded(replay, row);
+            row.effect().apply_to(replay, upkeep);
             continue;
         }
         let transition_id = row.transition_id.to_string();
@@ -48,7 +50,7 @@ fn rehearse_rows<'a>(
                 semantics_version: row.semantics_version,
             },
         );
-        advance_recorded(replay, row);
+        row.effect().apply_to(replay, upkeep);
     }
 }
 
@@ -57,7 +59,7 @@ fn rehearse_rows<'a>(
 /// measurement that times the decisions apart from this step.
 #[doc(hidden)]
 pub fn advance_recorded(replay: &mut State, row: &AuditRow) {
-    row.effect().apply_to(replay);
+    row.effect().apply_to(replay, Upkeep::Replay);
 }
 
 /// Rehearse a candidate over the full committed audit log, read in one
@@ -84,7 +86,7 @@ pub async fn rehearse_candidate(
         if page.is_empty() {
             break;
         }
-        rehearse_rows(&mut replay, &mut rehearsal, &page);
+        rehearse_rows(&mut replay, &mut rehearsal, &page, Upkeep::Replay);
         done += page.len() as u64;
         on_progress(RehearsalProgress { done, total });
     }
@@ -131,7 +133,12 @@ pub fn rehearse_recorded(
     let mut replay = State::default();
     let total = rows.len() as u64;
     for (done, chunk) in rows.chunks(PROGRESS_CHUNK).enumerate() {
-        rehearse_rows(&mut replay, &mut rehearsal, chunk.iter().copied());
+        rehearse_rows(
+            &mut replay,
+            &mut rehearsal,
+            chunk.iter().copied(),
+            Upkeep::Replay,
+        );
         on_progress(RehearsalProgress {
             done: ((done + 1) * PROGRESS_CHUNK).min(rows.len()) as u64,
             total,
@@ -185,6 +192,150 @@ mod tests {
         }
     }
 
+    /// A replay's upkeep changes when the fold's state is re-indexed and
+    /// nothing else: the production fold run row by row under both
+    /// upkeeps holds the same claims in the same order after every row,
+    /// and decides every row alike, refusals, errors and their witnesses
+    /// included. The history crosses both of the replay's bounds: legacy
+    /// rows grow the overlay past its floor, an activation resets the
+    /// state to a baseline, and ordered rows revise it, re-admit claims to
+    /// the tail and carry no-op operations until the dead entries pass
+    /// the live ones.
+    #[test]
+    fn a_replay_upkeep_folds_to_the_same_state_and_report_at_every_row() {
+        use crate::activation::{ACTIVATE, BASELINE};
+        use crate::audit::{Operation, OperationKind};
+        let program = morpholog_surface::parse_program(
+            "program register\n\
+             predicate Row(row: Subject, version: Decimal)\n\
+                 unique by (row)\n\
+             predicate Note(key: Subject)\n\
+             invariant versions_stay_small:\n\
+             \x20   Row(_, v) implies v < 1000\n\
+             invariant no_version_at_501:\n\
+             \x20   Row(_, v) implies 1 / (v - 501) > -1000\n\
+             transformation admit_row(row, version):\n\
+             \x20   retract Row(row: row, ..)\n\
+             \x20   admit Row(row, version)\n\
+             transformation touch(row, version):\n\
+             \x20   retract Row(row, version)\n\
+             \x20   admit Row(row, version)\n\
+             transformation note(key):\n\
+             \x20   admit Note(key)\n",
+        )
+        .unwrap();
+        let prepared = PreparedProgram::new(program).unwrap();
+        let ordered = |mut r: AuditRow, ordinal: u32, operations: Vec<Operation>| {
+            r.act_ordinal = Some(ordinal);
+            r.operations = Some(operations);
+            r
+        };
+        let row_claim = |key: &str, version: i64| claim("Row", &[subj(key), dec(version)]);
+        let mut rows = Vec::new();
+        let mut id = 0u128;
+        let mut next_id = || {
+            id += 1;
+            id
+        };
+
+        // Legacy rows: the overlay grows past the replay's floor of 4,096.
+        for i in 0..4_200 {
+            let key = subj(&format!("k{i}"));
+            rows.push(row(
+                next_id(),
+                "note",
+                vec![key.clone()],
+                vec![claim("Note", &[key])],
+                vec![],
+            ));
+        }
+        // The activation: two baseline chunks, then the record.
+        let baseline = 200usize;
+        for (ordinal, chunk) in [(0u32, 0..baseline / 2), (1, baseline / 2..baseline)] {
+            let operations = chunk
+                .map(|j| Operation::new(OperationKind::Ins, &row_claim(&format!("b{j}"), 1)))
+                .collect();
+            rows.push(ordered(
+                row(next_id(), BASELINE, vec![], vec![], vec![]),
+                ordinal,
+                operations,
+            ));
+        }
+        rows.push(ordered(
+            row(next_id(), ACTIVATE, vec![], vec![], vec![]),
+            2,
+            vec![],
+        ));
+        // Ordered rows: revisions, a re-admission every seventh row and a
+        // no-op operation every eleventh, until the dead pass the replay's
+        // floor of 1,024.
+        let mut version = vec![1i64; baseline];
+        for i in 0..1_200usize {
+            let j = i % baseline;
+            let key = format!("b{j}");
+            let before = row_claim(&key, version[j]);
+            let (act, after) = if i % 7 == 0 {
+                ("touch", before.clone())
+            } else {
+                version[j] = 2 + i as i64;
+                ("admit_row", row_claim(&key, version[j]))
+            };
+            let mut operations = vec![
+                Operation::new(OperationKind::Del, &before),
+                Operation::new(OperationKind::Ins, &after),
+            ];
+            if i % 11 == 0 {
+                operations.push(Operation::new(OperationKind::Noop, &after));
+            }
+            let args = vec![subj(&key), after.args[1].clone()];
+            rows.push(ordered(
+                row(next_id(), act, args, vec![after], vec![before]),
+                0,
+                operations,
+            ));
+        }
+
+        let mut ordinary = State::default();
+        let mut replayed = State::default();
+        let mut ordinary_rehearsal = Rehearsal::new(&prepared);
+        let mut replay_rehearsal = Rehearsal::new(&prepared);
+        let (mut ordinary_rebuilds, mut replay_rebuilds) = (0, 0);
+        let rebuilds = || morpholog_core::tally::snapshot()[2];
+        for (n, row) in rows.iter().enumerate() {
+            let before = rebuilds();
+            rehearse_rows(
+                &mut ordinary,
+                &mut ordinary_rehearsal,
+                [row],
+                Upkeep::Ordinary,
+            );
+            ordinary_rebuilds += rebuilds() - before;
+            let before = rebuilds();
+            rehearse_rows(&mut replayed, &mut replay_rehearsal, [row], Upkeep::Replay);
+            replay_rebuilds += rebuilds() - before;
+            assert!(ordinary == replayed, "the states part after row {n}");
+        }
+        let ordinary_report = ordinary_rehearsal.into_report();
+        let replay_report = replay_rehearsal.into_report();
+        assert_eq!(
+            serde_json::to_value(&ordinary_report).unwrap(),
+            serde_json::to_value(&replay_report).unwrap(),
+            "the reports part"
+        );
+        let totals = &replay_report.totals;
+        assert!(
+            totals.same > 0 && totals.would_reject > 0 && totals.would_error > 0,
+            "the history decides alike, refuses and errors: {totals:?}"
+        );
+        // The replay compacted once for each cause: its overlay bound in
+        // the legacy rows, its dead bound in the ordered ones.
+        assert_eq!(replay_rebuilds, 2);
+        assert!(
+            ordinary_rebuilds > replay_rebuilds,
+            "{ordinary_rebuilds} vs {replay_rebuilds}"
+        );
+    }
+
     /// The fold this module runs, over rows in memory: a register revised
     /// behind claims no rule reads clones no state and rebuilds none, and
     /// decides every row as recorded. The kernel holds the same of its own
@@ -212,9 +363,8 @@ mod tests {
         let prepared = PreparedProgram::new(program).unwrap();
         let noise = 20_000u128;
         let keys = 50u128;
-        // Under the ordinary threshold at this live set, an eighth of the
-        // base; the old per-row policy's floor of 512 would have rebuilt
-        // several times over these.
+        // Under a replay's floors at this live set; the old per-row
+        // policy's floor of 512 would have rebuilt several times over these.
         let revisions = 500u128;
         let mut rows = Vec::new();
         for i in 0..noise {
@@ -263,9 +413,9 @@ mod tests {
         assert_eq!(report.totals.unreplayable, 0);
         let [clones, _, rebuilds, _] = std::array::from_fn(|i| after[i] - before[i]);
         assert_eq!(clones, 0, "the fold clones no state");
-        // The noise prefix grows the live set from nothing, which the
-        // ordinary threshold compacts a few times; the register's revisions
-        // behind it reach no rebuild on their own.
+        // The noise prefix grows the live set from nothing, which a
+        // replay compacts a few times; the register's revisions behind it
+        // reach no rebuild on their own.
         let noise_only: Vec<&AuditRow> = rows[..noise as usize].iter().collect();
         let before = morpholog_core::tally::snapshot();
         rehearse_recorded(&prepared, &noise_only, &mut |_| {});

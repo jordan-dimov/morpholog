@@ -719,6 +719,7 @@ fn judge_invariants(
 /// [`finish_staged_delta_with`] without the candidate state: the verdict
 /// and the effective delta. For a measurement that times the decision
 /// apart from the state's advance; an embedder proposes.
+#[cfg(any(test, feature = "measure"))]
 pub fn decide_staged_delta_with(
     staged: StagedDelta,
     pre_state: &State,

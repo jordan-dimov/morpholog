@@ -185,7 +185,6 @@ pub struct State {
 /// How a state's claims are laid out: the base it was last rebuilt to,
 /// the base positions retracted since, and the overlay's live and dead
 /// entries. What a compaction policy decides on.
-#[cfg(any(test, feature = "measure"))]
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Layering {
@@ -193,6 +192,36 @@ pub struct Layering {
     pub base_dead: usize,
     pub overlay_live: usize,
     pub overlay_dead: usize,
+}
+
+impl Layering {
+    /// The ordinary upkeep: fold once the overlay's entries, live or
+    /// dead, and the base's retracted positions pass an eighth of the
+    /// base. It keeps the overlay small, so a copy of the state, which an
+    /// owned candidate is, stays cheap.
+    #[doc(hidden)]
+    pub fn compacts_ordinarily(self) -> bool {
+        self.base_dead + self.overlay_live + self.overlay_dead
+            > (self.base / 8).max(COMPACTION_FLOOR)
+    }
+
+    /// A replay's upkeep, for a fold that never copies the state it
+    /// advances. Dead entries cost memory and the slots a lookup skips,
+    /// so they are held to the live count; live overlay entries cost only
+    /// a copy, so the overlay may grow to the base's size before it is
+    /// folded, and a growing history is re-indexed about twice over in
+    /// all rather than eight times.
+    #[cfg(any(test, feature = "measure"))]
+    #[doc(hidden)]
+    pub fn compacts_in_replay(self) -> bool {
+        self.compacts_in_replay_under(REPLAY_DEAD_FLOOR, REPLAY_OVERLAY_FLOOR)
+    }
+
+    fn compacts_in_replay_under(self, dead_floor: usize, overlay_floor: usize) -> bool {
+        let live = self.base - self.base_dead + self.overlay_live;
+        self.base_dead + self.overlay_dead > live.max(dead_floor)
+            || self.overlay_live > self.base.max(overlay_floor)
+    }
 }
 
 /// The counters' absence: the same calls, compiled to nothing.
@@ -310,6 +339,12 @@ impl Layer {
 /// base's size. A performance setting; the logical state is unaffected.
 const COMPACTION_FLOOR: usize = 512;
 
+/// A replay's floors: below these many dead entries, or live overlay
+/// entries, its state is not folded for that cause. Performance
+/// settings, like the floor above.
+const REPLAY_DEAD_FLOOR: usize = 1024;
+const REPLAY_OVERLAY_FLOOR: usize = 4096;
+
 impl std::fmt::Debug for State {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("State")
@@ -358,12 +393,40 @@ impl State {
     }
 
     /// Advance this state in place by one transition's delta:
-    /// retractions first, then admissions not already present. A replay
-    /// calls this once per audit row. `clone()` is a cheap snapshot: it
-    /// copies only what changed since the base.
+    /// retractions first, then admissions not already present.
+    /// `clone()` is a cheap snapshot: it copies only what changed since
+    /// the base, which this keeps small.
     pub fn apply(&mut self, asserted: &[ClaimInstance], retracted: &[ClaimInstance]) {
-        let threshold = (self.base.claims.len() / 8).max(COMPACTION_FLOOR);
-        self.apply_under(asserted, retracted, threshold);
+        self.apply_under(asserted, retracted, usize::MAX);
+        if self.layering_now().compacts_ordinarily() {
+            self.rebuild();
+        }
+    }
+
+    /// [`State::apply`] for a fold over recorded history that never
+    /// copies the state it advances: the same claims in the same order,
+    /// kept up for the fold rather than for copies. The overlay is let
+    /// grow, so a copy taken from a state advanced this way costs more.
+    pub fn apply_replayed(&mut self, asserted: &[ClaimInstance], retracted: &[ClaimInstance]) {
+        self.apply_replayed_under(asserted, retracted, REPLAY_DEAD_FLOOR, REPLAY_OVERLAY_FLOOR);
+    }
+
+    /// [`State::apply_replayed`] with explicit floors, so a test can
+    /// drive its compactions at any size.
+    pub(crate) fn apply_replayed_under(
+        &mut self,
+        asserted: &[ClaimInstance],
+        retracted: &[ClaimInstance],
+        dead_floor: usize,
+        overlay_floor: usize,
+    ) {
+        self.apply_under(asserted, retracted, usize::MAX);
+        if self
+            .layering_now()
+            .compacts_in_replay_under(dead_floor, overlay_floor)
+        {
+            self.rebuild();
+        }
     }
 
     /// [`State::apply`] with an explicit compaction `threshold` (on
@@ -411,6 +474,10 @@ impl State {
     #[cfg(any(test, feature = "measure"))]
     #[doc(hidden)]
     pub fn layering(&self) -> Layering {
+        self.layering_now()
+    }
+
+    fn layering_now(&self) -> Layering {
         let base_live = self.base.claims.len() - self.dead_base.len();
         let overlay_live = self.live - base_live;
         Layering {
