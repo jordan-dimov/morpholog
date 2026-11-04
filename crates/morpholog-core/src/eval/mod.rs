@@ -438,7 +438,7 @@ fn find_defined_matches(
 
     let mut out: Vec<Bindings> = Vec::new();
     for m in body_matches {
-        let mut extended = ctx.bindings.clone();
+        let mut extended = copy_bindings(ctx.bindings);
         let mut admit = true;
         for (param, arg) in def.parameters.iter().zip(args) {
             // Validation guarantees the body binds every parameter;
@@ -472,7 +472,18 @@ fn find_defined_matches(
 /// A predicate-shaped truth: the unchanged binding set when `holds`,
 /// no bindings otherwise.
 fn verdict(base: &Bindings, holds: bool) -> Vec<Bindings> {
-    if holds { vec![base.clone()] } else { vec![] }
+    if holds {
+        vec![copy_bindings(base)]
+    } else {
+        vec![]
+    }
+}
+
+/// A copy of `bindings` for a match to extend or keep: the matcher's one
+/// copy, counted under the measurement feature.
+fn copy_bindings(bindings: &Bindings) -> Bindings {
+    crate::state::tally::binding_copy(bindings.len());
+    bindings.clone()
 }
 
 pub(crate) fn find_matches(p: &Prop, ctx: &EvalContext<'_>) -> Result<Vec<Bindings>, EvalError> {
@@ -932,7 +943,7 @@ pub(crate) fn unify_args(
     actor: Option<&Subject>,
 ) -> Option<Bindings> {
     let new = match_args(patterns, values, base, actor)?;
-    let mut b = base.clone();
+    let mut b = copy_bindings(base);
     for (name, v) in new {
         b.insert(name.clone(), v.clone());
     }
@@ -955,7 +966,7 @@ pub(crate) fn find_conjunction(
     props: &[Prop],
     ctx: &EvalContext<'_>,
 ) -> Result<Vec<Bindings>, EvalError> {
-    let mut current = vec![ctx.bindings.clone()];
+    let mut current = vec![copy_bindings(ctx.bindings)];
     for prop in props {
         let mut next = vec![];
         for b in &current {
@@ -1007,7 +1018,7 @@ pub(crate) fn find_in_matches(
                 Ok(items
                     .into_iter()
                     .map(|v| {
-                        let mut b = base.clone();
+                        let mut b = copy_bindings(base);
                         b.insert(name.clone(), v);
                         b
                     })

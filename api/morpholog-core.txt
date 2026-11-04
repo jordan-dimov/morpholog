@@ -431,6 +431,7 @@ pub mod morpholog_core::schema
 pub fn morpholog_core::schema::intent_arg_schema(&morpholog_core::ValidatedProgram<'_>, &morpholog_core::IntentName) -> core::option::Option<serde_json::value::Value>
 pub fn morpholog_core::schema::transformation_arg_schema(&morpholog_core::ValidatedProgram<'_>, &morpholog_core::TransformationName) -> core::result::Result<serde_json::value::Value, morpholog_core::analysis::AnalysisError>
 pub mod morpholog_core::tally
+pub fn morpholog_core::tally::bindings() -> [u64; 2]
 pub fn morpholog_core::tally::snapshot() -> [u64; 4]
 pub enum morpholog_core::AnalysisError
 pub morpholog_core::AnalysisError::UnknownTransformation
