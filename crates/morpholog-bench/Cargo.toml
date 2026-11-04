@@ -11,6 +11,12 @@ publish = false
 name = "morpholog-bench"
 path = "src/main.rs"
 
+# The matcher's binding pressure, apart from the suite: its counting
+# allocator would slow every allocation the suite times.
+[[bin]]
+name = "morpholog-matcher"
+path = "src/bin/matcher.rs"
+
 [dependencies]
 morpholog-core = { path = "../morpholog-core", features = ["measure"] }
 morpholog-examples = { path = "../morpholog-examples" }
@@ -25,6 +31,7 @@ uuid = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+stats_alloc = { workspace = true }
 
 [lints]
 workspace = true

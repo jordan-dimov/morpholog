@@ -145,6 +145,24 @@ pub mod tally {
     pub fn snapshot() -> [u64; 4] {
         COUNTS.with(Cell::get)
     }
+
+    thread_local! {
+        /// Binding maps the evaluator copied to extend or keep a match,
+        /// and the entries those copies held.
+        static BINDINGS: Cell<[u64; 2]> = const { Cell::new([0; 2]) };
+    }
+
+    pub(crate) fn binding_copy(entries: usize) {
+        BINDINGS.with(|c| {
+            let [copies, copied] = c.get();
+            c.set([copies + 1, copied + entries as u64]);
+        });
+    }
+
+    /// This thread's binding counts: maps copied, entries copied.
+    pub fn bindings() -> [u64; 2] {
+        BINDINGS.with(Cell::get)
+    }
 }
 
 /// The admitted state: a set of grounded [`ClaimInstance`]s that
@@ -153,8 +171,10 @@ pub mod tally {
 ///
 /// Two layers: a base shared with every state derived from it, and an
 /// overlay of what changed since. A candidate built by `with_delta`
-/// copies only the overlay, never the base. Once the overlay grows past
-/// a fraction of the base, it is folded into a fresh base.
+/// copies only the overlay, never the base. The overlay is folded into a
+/// fresh base by one of two upkeeps: [`State::apply`] keeps it small, so
+/// a copy stays cheap; [`State::apply_replayed`] lets it grow, for a fold
+/// that never copies.
 ///
 /// Logical order is the base in construction order minus retractions,
 /// then additions in order. A claim retracted and re-admitted moves to
@@ -226,11 +246,13 @@ impl Layering {
 
 /// The counters' absence: the same calls, compiled to nothing.
 #[cfg(not(any(test, feature = "measure")))]
-mod tally {
+pub(crate) mod tally {
     #[inline(always)]
     pub(super) fn clone_of(_overlay_entries: usize) {}
     #[inline(always)]
     pub(super) fn rebuild_of(_live: usize) {}
+    #[inline(always)]
+    pub(crate) fn binding_copy(_entries: usize) {}
 }
 
 impl Clone for State {

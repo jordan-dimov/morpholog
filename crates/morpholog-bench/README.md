@@ -425,6 +425,27 @@ The last baseline run of the large case came a day after the other three, the se
 
 The bench suite, four runs a side interleaved by `scripts/bench_ab.sh`, completed clean with both sides throttled alike. Every proposal metric, `propose_one` on every scenario and the kernel's sequential acts, is within noise or lower. As-of reconstruction of a thousand admissions is 21 percent faster. One read is slower: a derived read at a thousand revisions, 4 percent or about 1 ms. Its history leaves 30 claims live beside 990 dead, under the replay's dead floor of 1,024, so the read skips slots the ordinary upkeep would have cleared. Three reads this change does not reach read 4 to 6 percent higher (`build_state` twice, one `list_scoped`).
 
+### The matcher's binding pressure (2026-11-04, `morpholog-matcher`)
+
+A separate binary, so its counting allocator never slows the suite. Six shapes from #352, each one rule or one act over an in-memory state built outside every timer: a long `and` chain whose conjuncts bind what the next reads, an `or` whose branches export the same bindings, `forall` over a claim pattern with an `exists` inside, a defined call projecting a variable its caller never sees, a sum over many witnesses, and an act's `for` with a `bind` per item. Each point reports the median of 31 evaluations, and for one more the allocations it made and the binding maps the evaluator copied, counted behind the `measure` feature at the matcher's copy sites and the `for` loop's frame restore. The counts are exact and repeat run to run; the times are one laptop's, under `powersave`.
+
+| shape | witnesses | live vars | per witness | allocations | binding copies | entries copied |
+|---|--:|--:|--:|--:|--:|--:|
+| and chain | 10,000 | 2 | 0.9 us | 19 | 3 | 3 |
+| and chain | 10,000 | 4 | 2.5 us | 46 | 5 | 10 |
+| and chain | 10,000 | 8 | 6.8 us | 123 | 9 | 36 |
+| or branches | 10,000 | 2 | 1.0 us | 20 | 3 | 4 |
+| forall, exists | 10,000 | 2 | 2.1 us | 50 | 8 | 8 |
+| defined call | 10,000 | 2 | 3.3 us | 73 | 11 | 13 |
+| sum | 10,000 | 3 | 3.8 us | 70 | 10 | 10 |
+| for, bind | 100 | 2 | 10 us | 229 | 2 | 3 |
+| for, bind | 1,000 | 2 | 84 us | 2,042 | 2 | 3 |
+| for, bind | 10,000 | 2 | 808 us | 20,042 | 2 | 3 |
+
+What it measures. Every rule shape costs about the same per witness at 100, 1,000 and 10,000 witnesses, within a fifth: the matcher is linear in its witnesses. Per witness it is not cheap. The chain's cost grows with the variables live in the frame, 0.9 us at two and 6.8 us at eight, and its allocations with it, 19 to 123. Each copy of a binding map copies every entry, and every entry is a variable name and a value that each own a string, so the entries copied grow with the square of the chain's length (3, 10, 36). Which share of the time those allocations take, the counts do not say; they say where to look.
+
+The act's `for` is quadratic in its collection: per item 10 us at a hundred items, 808 us at ten thousand. Its binding copies stay at two per item, but its allocations per item are twice the collection's size plus a constant at every size. The collection is an argument of the act, so it sits in the binding map, and each of the two copies per item, the loop's frame restore and the `bind`'s match, copies the whole collection. That is a defect on the ordinary proposal path, apart from this measurement (#686).
+
 ### Deferred
 
 - **As-of reads that cost what the answer costs.** Replay is linear in the transitions before the target, under retraction and revision alike. The TEC register made that unacceptable for an interactive read, and `asof/revise` is its ruler: a small live set over a long history, where the cost is all history.

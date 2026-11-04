@@ -26,7 +26,10 @@ use uuid::Uuid;
 /// - [`PgError::Database`] / [`PgError::Encoding`] from the underlying
 ///   queries.
 ///
-/// Replay cost is O(transitions up to T).
+/// Replay cost is O(transitions up to T). The state is kept up for the
+/// replay, not for copies (see [`State::apply_replayed`]): reading it is
+/// as cheap as ever, but a clone of it, or a proposal's owned candidate
+/// built over it, copies a larger overlay.
 pub async fn reconstruct_state_at(pool: &PgPool, transition_id: Uuid) -> Result<State, PgError> {
     let mut conn = pool.acquire().await.map_err(classify)?;
     reconstruct_inner(&mut conn, transition_id, None, None, None).await

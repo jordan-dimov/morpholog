@@ -992,6 +992,7 @@ pub(crate) fn execute_stmt(
             if trace.is_on() {
                 let mut iterations: Vec<ForIterationTrace> = vec![];
                 for item in items {
+                    crate::state::tally::binding_copy(outer.len());
                     bindings.clone_from(&outer);
                     let item_for_trace = item.clone();
                     bindings.insert(binding.clone(), item);
@@ -1058,6 +1059,7 @@ pub(crate) fn execute_stmt(
             } else {
                 let mut off = TraceSink::Off;
                 for item in items {
+                    crate::state::tally::binding_copy(outer.len());
                     bindings.clone_from(&outer);
                     bindings.insert(binding.clone(), item);
                     for inner in body {
