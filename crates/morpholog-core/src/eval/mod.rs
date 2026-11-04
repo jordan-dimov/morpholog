@@ -13,7 +13,6 @@
 use jiff::civil::Date;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 use crate::definitions::DefinitionTable;
 use crate::ir::{
@@ -21,7 +20,7 @@ use crate::ir::{
     Subject, Term, Value, ValueExpr, Var,
 };
 use crate::propose::Compared;
-use crate::state::{Bindings, CandidateBucket, ClaimInstance, EvalValue, State, StateRef};
+use crate::state::{Bindings, Bound, CandidateBucket, ClaimInstance, EvalValue, State, StateRef};
 
 /// Errors raised by the evaluator and the transformation runner: an
 /// expression or transformation was structurally ill-formed and cannot
@@ -276,7 +275,7 @@ pub fn eval_value_over(
     let empty = State::default();
     let bindings: Bindings = bindings
         .iter()
-        .map(|(var, value)| (var.clone(), Arc::new(value.clone())))
+        .map(|(var, value)| (var.clone(), Bound::from(value.clone())))
         .collect();
     let ctx = EvalContext {
         sums: Some(&table),
@@ -418,7 +417,7 @@ pub(crate) fn definition_call_frame(
             other => {
                 frame.insert(
                     param.clone(),
-                    Arc::new(resolve_term(other, ctx.bindings, ctx.actor)?),
+                    Bound::from(resolve_term(other, ctx.bindings, ctx.actor)?),
                 );
             }
         }
@@ -953,7 +952,7 @@ pub(crate) fn unify_args(
     let new = match_args(patterns, values, base, actor)?;
     let mut b = copy_bindings(base);
     for (name, v) in new {
-        b.insert(name.clone(), Arc::new(v.clone()));
+        b.insert(name.clone(), Bound::from(v.clone()));
     }
     Some(b)
 }
@@ -1027,7 +1026,7 @@ pub(crate) fn find_in_matches(
                     .iter()
                     .map(|v| {
                         let mut b = copy_bindings(base);
-                        b.insert(name.clone(), Arc::new(v.clone()));
+                        b.insert(name.clone(), Bound::from(v.clone()));
                         b
                     })
                     .collect())
@@ -1831,13 +1830,13 @@ pub(crate) fn resolve_term_shared(
     t: &Term,
     bindings: &Bindings,
     actor: Option<&Subject>,
-) -> Result<Arc<EvalValue>, EvalError> {
+) -> Result<Bound, EvalError> {
     match t {
         Term::Var(name) => bindings
             .get(name)
-            .map(Arc::clone)
+            .cloned()
             .ok_or_else(|| EvalError::UnboundVariable(name.to_string())),
-        other => resolve_term(other, bindings, actor).map(Arc::new),
+        other => resolve_term(other, bindings, actor).map(Bound::from),
     }
 }
 
