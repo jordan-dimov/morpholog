@@ -5,6 +5,7 @@
 //! order.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::sync::Arc;
 
 use crate::definitions::DefinitionTable;
 
@@ -60,14 +61,19 @@ fn for_each_case_match(
     cases: &[BTreeMap<Var, EvalValue>],
     mut visit: impl FnMut(&Bindings) -> Result<bool, EvalError>,
 ) -> Result<(), EvalError> {
-    let mut visited: HashSet<Vec<(Var, EvalValue)>> = HashSet::new();
+    let mut visited: HashSet<Vec<(Var, Arc<EvalValue>)>> = HashSet::new();
     for case in cases {
-        let seed: Bindings = case.iter().map(|(v, ev)| (v.clone(), ev.clone())).collect();
+        let seed: Bindings = case
+            .iter()
+            .map(|(v, ev)| (v.clone(), Arc::new(ev.clone())))
+            .collect();
         let seeded = ctx.with_bindings(&seed);
         for m in find_matches(antecedent, &seeded)? {
             if cases.len() > 1 {
-                let mut key: Vec<(Var, EvalValue)> =
-                    m.iter().map(|(v, ev)| (v.clone(), ev.clone())).collect();
+                let mut key: Vec<(Var, Arc<EvalValue>)> = m
+                    .iter()
+                    .map(|(v, ev)| (v.clone(), Arc::clone(ev)))
+                    .collect();
                 key.sort_by(|a, b| a.0.cmp(&b.0));
                 if !visited.insert(key) {
                     continue;
@@ -205,7 +211,10 @@ impl Diagnosis {
 pub(crate) fn sorted_witness(bindings: Bindings) -> Vec<WitnessBinding> {
     let mut witness: Vec<WitnessBinding> = bindings
         .into_iter()
-        .map(|(var, value)| WitnessBinding { var, value })
+        .map(|(var, value)| WitnessBinding {
+            var,
+            value: Arc::unwrap_or_clone(value),
+        })
         .collect();
     witness.sort_by(|a, b| a.var.cmp(&b.var));
     witness
@@ -304,7 +313,7 @@ pub(crate) fn enumerate_derived(
                     derived.predicate, key
                 ))
             })?;
-            tuple.push(EvalValueOrd(v.clone()));
+            tuple.push(EvalValueOrd((**v).clone()));
         }
         key_tuples.insert(tuple);
     }
@@ -313,7 +322,7 @@ pub(crate) fn enumerate_derived(
     for tuple in key_tuples {
         let mut per_key = Bindings::new();
         for (key, v) in derived.keys.iter().zip(tuple.iter()) {
-            per_key.insert(key.clone(), v.0.clone());
+            per_key.insert(key.clone(), Arc::new(v.0.clone()));
         }
         let mut args: Vec<EvalValue> = tuple.iter().map(|w| w.0.clone()).collect();
         let value_ctx = EvalContext::new(state, None, &per_key, None, index);

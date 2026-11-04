@@ -244,7 +244,7 @@ fn claim_matches_agrees_with_unify_args_and_extends_base() {
     let lit = |x: &str| Term::Literal(Value::Subject(x.into()));
     let actor = Subject::from("alice");
     let mut base = Bindings::new();
-    base.insert(Var::from("known"), s("k"));
+    base.insert(Var::from("known"), s("k").into());
 
     let cases: Vec<(Vec<Term>, Vec<EvalValue>, bool)> = vec![
         (vec![var("x"), var("y")], vec![s("a"), s("b")], true), // fresh vars
@@ -268,8 +268,8 @@ fn claim_matches_agrees_with_unify_args_and_extends_base() {
 
     // A match extends the base with the new binding and keeps base entries.
     let u = unify_args(&[var("x")], &[s("a")], &base, Some(&actor)).unwrap();
-    assert_eq!(u.get(&Var::from("x")), Some(&s("a")));
-    assert_eq!(u.get(&Var::from("known")), Some(&s("k")));
+    assert_eq!(u.get(&Var::from("x")).map(|v| &**v), Some(&s("a")));
+    assert_eq!(u.get(&Var::from("known")).map(|v| &**v), Some(&s("k")));
 }
 
 // Evaluate a literal-only value expression against empty state/bindings.
@@ -542,7 +542,7 @@ mod eval_value_over {
     use crate::eval::{EvalError, eval_value_over};
     use crate::ir::ValueExpr;
     use crate::ir_builder::{add, claim, dec, div, sum, term, var};
-    use crate::state::{Bindings, EvalValue};
+    use crate::state::EvalValue;
     use rust_decimal::Decimal;
     use std::str::FromStr;
 
@@ -564,12 +564,12 @@ mod eval_value_over {
     fn the_left_error_wins_over_a_failing_sum_on_the_right() {
         let expr = add(div(term(dec("1")), term(dec("0"))), total());
         assert_eq!(
-            eval_value_over(&expr, &Bindings::new(), &[Err(range())]),
+            eval_value_over(&expr, &std::collections::HashMap::new(), &[Err(range())]),
             Some(Err(EvalError::DivisionByZero))
         );
         let expr = add(total(), div(term(dec("1")), term(dec("0"))));
         assert_eq!(
-            eval_value_over(&expr, &Bindings::new(), &[Err(range())]),
+            eval_value_over(&expr, &std::collections::HashMap::new(), &[Err(range())]),
             Some(Err(range()))
         );
     }
@@ -579,7 +579,11 @@ mod eval_value_over {
     fn each_sum_takes_the_result_given_for_it() {
         let expr = div(total(), total());
         let got = |a: &str, b: &str| {
-            eval_value_over(&expr, &Bindings::new(), &[Ok(decimal(a)), Ok(decimal(b))])
+            eval_value_over(
+                &expr,
+                &std::collections::HashMap::new(),
+                &[Ok(decimal(a)), Ok(decimal(b))],
+            )
         };
         assert_eq!(got("6", "3"), Some(Ok(decimal("2"))));
         assert_eq!(got("3", "6"), Some(Ok(decimal("0.5"))));
@@ -587,15 +591,16 @@ mod eval_value_over {
 
     #[test]
     fn bindings_and_literals_evaluate_as_the_kernel_does() {
-        let bindings: Bindings = [(crate::ir::Var::from("x"), decimal("1.5"))]
-            .into_iter()
-            .collect();
+        let bindings: std::collections::HashMap<_, _> =
+            [(crate::ir::Var::from("x"), decimal("1.5"))]
+                .into_iter()
+                .collect();
         let expr = crate::ir_builder::mul(term(var("x")), term(dec("0.5")));
         assert_eq!(
             eval_value_over(&expr, &bindings, &[]),
             Some(Ok(decimal("0.75")))
         );
-        let bindings: Bindings = [(
+        let bindings: std::collections::HashMap<_, _> = [(
             crate::ir::Var::from("x"),
             decimal("0.0000000000000000000000000001"),
         )]
@@ -611,14 +616,20 @@ mod eval_value_over {
     /// not evaluated against an empty state.
     #[test]
     fn an_expression_it_cannot_evaluate_alone_is_refused() {
-        assert_eq!(eval_value_over(&total(), &Bindings::new(), &[]), None);
+        assert_eq!(
+            eval_value_over(&total(), &std::collections::HashMap::new(), &[]),
+            None
+        );
         let lookup = ValueExpr::ValueOf {
             predicate: "Price".into(),
             args: vec![var("p")],
             extract: 0,
             default: None,
         };
-        assert_eq!(eval_value_over(&lookup, &Bindings::new(), &[]), None);
+        assert_eq!(
+            eval_value_over(&lookup, &std::collections::HashMap::new(), &[]),
+            None
+        );
     }
 }
 
@@ -635,7 +646,8 @@ mod exact_arithmetic {
     }
 
     fn eval(expr: &ValueExpr) -> Result<EvalValue, EvalError> {
-        eval_value_over(expr, &Bindings::new(), &[]).expect("a closed expression evaluates")
+        eval_value_over(expr, &std::collections::HashMap::new(), &[])
+            .expect("a closed expression evaluates")
     }
 
     fn ok(expr: &ValueExpr) -> Decimal {

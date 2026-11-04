@@ -95,7 +95,7 @@ fn whole_then_filter(
     for m in find_matches(left, &ctx)? {
         if !cases
             .iter()
-            .any(|c| c.iter().all(|(v, ev)| m.get(v) == Some(ev)))
+            .any(|c| c.iter().all(|(v, ev)| m.get(v).map(|b| &**b) == Some(ev)))
         {
             continue;
         }

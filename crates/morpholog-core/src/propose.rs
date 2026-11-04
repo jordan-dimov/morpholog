@@ -10,6 +10,7 @@
 //! trace storage is allocated.
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::admission::{Admission, EffectiveDelta, effective_delta};
 use crate::definitions::DefinitionTable;
@@ -604,7 +605,7 @@ pub(crate) fn stage_delta_inner(
         .iter()
         .zip(transition.args.iter().cloned())
     {
-        bindings.insert(name.clone(), val);
+        bindings.insert(name.clone(), Arc::new(val));
     }
 
     let mut asserted: Vec<ClaimInstance> = vec![];
@@ -897,7 +898,7 @@ pub(crate) fn execute_stmt(
                             .iter()
                             .map(|(k, v)| WitnessBinding {
                                 var: k.clone(),
-                                value: v.clone(),
+                                value: EvalValue::clone(v),
                             })
                             .collect();
                         sorted.sort_by(|a, b| a.var.cmp(&b.var));
@@ -935,7 +936,7 @@ pub(crate) fn execute_stmt(
                     value: v.clone(),
                 });
             }
-            bindings.insert(name.clone(), v);
+            bindings.insert(name.clone(), Arc::new(v));
             Ok(StmtOutcome::Continue)
         }
         Stmt::LetNewSubject { name } => {
@@ -950,7 +951,7 @@ pub(crate) fn execute_stmt(
                     subject: subject.clone(),
                 });
             }
-            bindings.insert(name.clone(), subject);
+            bindings.insert(name.clone(), Arc::new(subject));
             Ok(StmtOutcome::Continue)
         }
         Stmt::Assert(claim) => {
@@ -995,7 +996,7 @@ pub(crate) fn execute_stmt(
                     crate::state::tally::binding_copy(outer.len());
                     bindings.clone_from(&outer);
                     let item_for_trace = item.clone();
-                    bindings.insert(binding.clone(), item);
+                    bindings.insert(binding.clone(), Arc::new(item));
                     let mut iter_entries: Vec<TraceEntry> = vec![];
                     // The block ends iter_sink's borrow before
                     // iter_entries moves.
@@ -1061,7 +1062,7 @@ pub(crate) fn execute_stmt(
                 for item in items {
                     crate::state::tally::binding_copy(outer.len());
                     bindings.clone_from(&outer);
-                    bindings.insert(binding.clone(), item);
+                    bindings.insert(binding.clone(), Arc::new(item));
                     for inner in body {
                         match execute_stmt(
                             inner,

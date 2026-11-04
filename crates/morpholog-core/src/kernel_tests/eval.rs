@@ -561,7 +561,7 @@ fn or_returns_union_of_branch_binding_sets() {
     let bound_x: Vec<_> = matches
         .iter()
         .map(
-            |b| match b.get(&Var::from("x")).expect("x bound in every extension") {
+            |b| match &**b.get(&Var::from("x")).expect("x bound in every extension") {
                 EvalValue::Subject(s) => s.as_str().to_string(),
                 _ => panic!("x must be a subject"),
             },

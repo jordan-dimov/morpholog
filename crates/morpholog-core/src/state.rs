@@ -882,8 +882,11 @@ impl<'a> CandidateBucket<'a> {
 
 /// Variable bindings used during expression evaluation and
 /// transformation execution. Maps variable name to resolved
-/// [`EvalValue`].
-pub type Bindings = HashMap<Var, EvalValue>;
+/// [`EvalValue`], shared: the evaluator copies these maps to extend a
+/// match or restore a loop's frame, and a shared value makes each copy
+/// cost the map's entries, not the size of what they hold (an act's
+/// collection argument, say).
+pub type Bindings = HashMap<Var, Arc<EvalValue>>;
 /// A resolved intent: all args are values, ready to be enqueued in an outbox.
 ///
 /// JSON encoding shape: `{ "name": "...", "args": [ ... ] }`.
