@@ -93,6 +93,14 @@ fn expected_buckets(claims: &[ClaimInstance]) -> Vec<(String, Vec<ClaimInstance>
     out
 }
 
+/// How a test advances one of its layerings: the ordinary upkeep at a
+/// given threshold, or a replay's at given dead and overlay floors.
+#[derive(Clone, Copy)]
+enum Upkeep {
+    Threshold(usize),
+    Replay(usize, usize),
+}
+
 proptest! {
     #[test]
     fn every_layering_reads_as_the_naive_rebuild(
@@ -101,15 +109,35 @@ proptest! {
     ) {
         let mut naive_claims = naive(&[], &seed, &[]);
         let base = State::from_claims(naive_claims.clone());
-        // Compaction on every change, every few, and never: one logical
-        // history, four physical ones.
-        let mut layered = [base.clone(), base.clone(), base.clone(), base];
-        let thresholds = [0usize, 2, 7, usize::MAX];
+        // Compaction on every change, every few, and never, then a
+        // replay's upkeep at floors this history crosses constantly: one
+        // logical history, six physical ones.
+        let mut layered = [
+            base.clone(),
+            base.clone(),
+            base.clone(),
+            base.clone(),
+            base.clone(),
+            base,
+        ];
+        let upkeeps = [
+            Upkeep::Threshold(0),
+            Upkeep::Threshold(2),
+            Upkeep::Threshold(7),
+            Upkeep::Threshold(usize::MAX),
+            Upkeep::Replay(0, 0),
+            Upkeep::Replay(2, 3),
+        ];
         for (asserted, retracted) in &history {
             naive_claims = naive(&naive_claims, asserted, retracted);
             let oracle = State::from_claims(naive_claims.clone());
-            for (state, threshold) in layered.iter_mut().zip(thresholds) {
-                state.apply_under(asserted, retracted, threshold);
+            for (state, upkeep) in layered.iter_mut().zip(upkeeps) {
+                match upkeep {
+                    Upkeep::Threshold(threshold) => state.apply_under(asserted, retracted, threshold),
+                    Upkeep::Replay(dead, overlay) => {
+                        state.apply_replayed_under(asserted, retracted, dead, overlay);
+                    }
+                }
                 prop_assert_eq!(state.claims().to_vec(), naive_claims.clone());
                 prop_assert_eq!(&*state, &oracle);
                 prop_assert_eq!(state.len(), naive_claims.len());
@@ -210,4 +238,65 @@ proptest! {
             view_reads((&pre).into(), &domain)
         );
     }
+}
+
+/// A replay's upkeep compacts on each of its two causes exactly where
+/// its floor is crossed, and a compaction moves nothing in the logical
+/// state: the claims and their order are those of the ordinary upkeep
+/// over the same changes, a re-admission at the tail included.
+#[test]
+fn a_replay_compacts_on_each_cause_and_keeps_the_logical_state() {
+    let x = |i: usize| ClaimInstance {
+        predicate: "X".into(),
+        args: vec![EvalValue::Subject(format!("s{i}").into())],
+    };
+    let rebuilds = || crate::tally::snapshot()[2];
+    let mut state = State::default();
+    // Every change, so the ordinary upkeep can fold the same ones
+    // afterwards, outside the counted stretches below.
+    let mut changes: Vec<(Vec<ClaimInstance>, Vec<ClaimInstance>)> = Vec::new();
+    let mut apply =
+        |state: &mut State, asserted: Vec<ClaimInstance>, retracted: Vec<ClaimInstance>| {
+            state.apply_replayed(&asserted, &retracted);
+            changes.push((asserted, retracted));
+        };
+
+    // Live overlay growth: past 4,096 live overlay entries over an
+    // empty base, and not before.
+    let before = rebuilds();
+    for i in 0..4096 {
+        apply(&mut state, vec![x(i)], vec![]);
+    }
+    assert_eq!(rebuilds() - before, 0, "4,096 live entries do not compact");
+    apply(&mut state, vec![x(4096)], vec![]);
+    assert_eq!(rebuilds() - before, 1, "the 4,097th live entry compacts");
+    assert_eq!(state.layering().overlay_live, 0);
+
+    // Dead entries: more dead than live, here past 2,048 retractions
+    // of the 4,097, and not before.
+    let before = rebuilds();
+    for i in 0..2048 {
+        apply(&mut state, vec![], vec![x(i)]);
+    }
+    assert_eq!(rebuilds() - before, 0, "2,048 dead against 2,049 live");
+    apply(&mut state, vec![], vec![x(2048)]);
+    assert_eq!(rebuilds() - before, 1, "the 2,049th dead entry compacts");
+    assert_eq!(state.layering().base_dead, 0);
+
+    // A claim retracted and admitted again goes to the tail.
+    apply(&mut state, vec![x(0)], vec![]);
+    let mut expected: Vec<ClaimInstance> = (2049..4097).map(x).collect();
+    expected.push(x(0));
+    assert_eq!(state.claims().to_vec(), expected);
+
+    let mut reference = State::default();
+    let before = rebuilds();
+    for (asserted, retracted) in &changes {
+        reference.apply(asserted, retracted);
+    }
+    assert!(rebuilds() > before, "the ordinary upkeep compacted too");
+    assert!(
+        state == reference,
+        "the same logical state as the ordinary upkeep"
+    );
 }

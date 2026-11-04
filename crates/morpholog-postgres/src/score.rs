@@ -11,6 +11,7 @@ use crate::audit_pages::AuditPages;
 use crate::checkpoints::{Checkpoint, TreeVerification};
 use crate::error::{PgError, classify};
 use crate::pack::{EvidencePack, verify_pack};
+use crate::replay::Upkeep;
 use crate::txn::{TxIsolation, begin_isolated_tx};
 use jiff::Timestamp;
 use morpholog_core::{
@@ -91,11 +92,11 @@ fn fold_rows<'a>(
         // Read the effective delta before the state advances in place,
         // so no per-row snapshot is needed.
         if row.is_control() {
-            row.effect().apply_to(replay);
+            row.effect().apply_to(replay, Upkeep::Replay);
             continue;
         }
         let effective = effective_delta(replay, &row.asserted_claims, &row.retracted_claims);
-        row.effect().apply_to(replay);
+        row.effect().apply_to(replay, Upkeep::Replay);
         scorer.observe_transition(replay, &effective, &row.transition_id.to_string())?;
     }
     Ok(())

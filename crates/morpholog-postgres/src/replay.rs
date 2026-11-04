@@ -21,6 +21,19 @@ use uuid::Uuid;
 use crate::activation::{ACTIVATE, BASELINE};
 use crate::audit::{AuditRow, Operation, OperationKind};
 
+/// How a fold keeps its state up as it advances. The claims and their
+/// order are the same either way; only when the state is re-indexed
+/// differs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Upkeep {
+    /// For a state something copies as the fold goes, as a verifier
+    /// keeping the previous state does: the overlay stays small.
+    Ordinary,
+    /// For a fold that never copies the state it advances: re-indexed
+    /// far less often, the overlay let grow.
+    Replay,
+}
+
 /// What replay takes one row to have done.
 pub(crate) struct RowEffect<'r> {
     pub(crate) transition_id: Uuid,
@@ -140,20 +153,24 @@ impl RowEffect<'_> {
         }
     }
 
-    pub(crate) fn apply_to(&self, state: &mut State) {
+    pub(crate) fn apply_to(&self, state: &mut State, upkeep: Upkeep) {
+        let apply = match upkeep {
+            Upkeep::Ordinary => State::apply,
+            Upkeep::Replay => State::apply_replayed,
+        };
         if let EffectKind::Legacy {
             retracted,
             asserted,
         } = &self.kind
         {
-            state.apply(asserted, retracted);
+            apply(state, asserted, retracted);
             return;
         }
         for change in self.changes() {
             match change {
                 Change::Reset => *state = State::default(),
-                Change::Retract(claim) => state.apply(&[], std::slice::from_ref(&*claim)),
-                Change::Admit(claim) => state.apply(std::slice::from_ref(&*claim), &[]),
+                Change::Retract(claim) => apply(state, &[], std::slice::from_ref(&*claim)),
+                Change::Admit(claim) => apply(state, std::slice::from_ref(&*claim), &[]),
             }
         }
     }

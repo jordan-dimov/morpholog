@@ -2793,6 +2793,9 @@ pub morpholog_core::Layering::base: usize
 pub morpholog_core::Layering::base_dead: usize
 pub morpholog_core::Layering::overlay_dead: usize
 pub morpholog_core::Layering::overlay_live: usize
+impl morpholog_core::Layering
+pub fn morpholog_core::Layering::compacts_in_replay(self) -> bool
+pub fn morpholog_core::Layering::compacts_ordinarily(self) -> bool
 impl core::clone::Clone for morpholog_core::Layering
 pub fn morpholog_core::Layering::clone(&self) -> morpholog_core::Layering
 impl core::clone::TrivialClone for morpholog_core::Layering
@@ -3276,6 +3279,7 @@ impl morpholog_core::State
 pub fn morpholog_core::State::admits(&self, &morpholog_core::ClaimInstance) -> bool
 pub fn morpholog_core::State::apply(&mut self, &[morpholog_core::ClaimInstance], &[morpholog_core::ClaimInstance])
 pub fn morpholog_core::State::apply_compacting_when(&mut self, &[morpholog_core::ClaimInstance], &[morpholog_core::ClaimInstance], impl core::ops::function::FnOnce(morpholog_core::Layering) -> bool)
+pub fn morpholog_core::State::apply_replayed(&mut self, &[morpholog_core::ClaimInstance], &[morpholog_core::ClaimInstance])
 pub fn morpholog_core::State::claims(&self) -> morpholog_core::Claims<'_>
 pub fn morpholog_core::State::claims_for<'a>(&'a self, &str) -> impl core::iter::traits::iterator::Iterator<Item = &'a morpholog_core::ClaimInstance> + 'a
 pub fn morpholog_core::State::from_claims(alloc::vec::Vec<morpholog_core::ClaimInstance>) -> Self

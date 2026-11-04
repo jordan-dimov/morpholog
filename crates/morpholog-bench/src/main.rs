@@ -1527,22 +1527,19 @@ fn advance_phases(rows: &[&morpholog_postgres::AuditRow]) -> [Duration; 3] {
     [retract, contains, admit]
 }
 
-/// When the state folds its overlay into a new base. Experiment only:
-/// the state's own policy is `Current`, and the bench refuses a run in
-/// which `Current` does not rebuild exactly as the production fold did.
+/// When the state folds its overlay into a new base. `Current` and
+/// `Split` are the state's own two rules, its ordinary upkeep and a
+/// replay's; `Relaxed` exists only here. The bench refuses a run in which
+/// `Split` does not rebuild as many times as the production fold did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Policy {
-    /// The state's own: overlay entries, live or dead, plus retracted
+    /// The ordinary upkeep: overlay entries, live or dead, plus retracted
     /// base positions, past an eighth of the base or 512.
     Current,
     /// The same measure past half the base or 2,048.
     Relaxed,
-    /// Two causes bounded apart. Dead entries cost memory and the slots
-    /// a lookup skips, so they are held to the live count (or 1,024).
-    /// Live overlay entries cost only an owned candidate's copy, so the
-    /// overlay may grow to the base's size (or 4,096) before it is
-    /// folded, which re-indexes about twice the final state over a
-    /// growing history rather than eight times.
+    /// A replay's upkeep: dead entries held to the live count (or 1,024),
+    /// live overlay entries allowed to reach the base's size (or 4,096).
     Split,
 }
 
@@ -1550,14 +1547,12 @@ impl Policy {
     const ALL: [Policy; 3] = [Policy::Current, Policy::Relaxed, Policy::Split];
 
     fn compacts(self, l: morpholog_core::Layering) -> bool {
-        let churn = l.base_dead + l.overlay_live + l.overlay_dead;
-        let live = l.base - l.base_dead + l.overlay_live;
         match self {
-            Policy::Current => churn > (l.base / 8).max(512),
-            Policy::Relaxed => churn > (l.base / 2).max(2048),
-            Policy::Split => {
-                l.base_dead + l.overlay_dead > live.max(1024) || l.overlay_live > l.base.max(4096)
+            Policy::Current => l.compacts_ordinarily(),
+            Policy::Relaxed => {
+                l.base_dead + l.overlay_live + l.overlay_dead > (l.base / 2).max(2048)
             }
+            Policy::Split => l.compacts_in_replay(),
         }
     }
 }
@@ -1822,10 +1817,10 @@ async fn measure_rehearse(pool: &PgPool, case: &str, args: &RehearseArgs) -> Res
                 let index = (k + round) % Policy::ALL.len();
                 let policy = Policy::ALL[index];
                 let run = policy_fold(&prepared, &refs, policy)?;
-                if policy == Policy::Current && run.rebuilds != production_rebuilds {
+                if policy == Policy::Split && run.rebuilds != production_rebuilds {
                     return Err(anyhow!(
-                        "the current policy rebuilt {} times where the production fold \
-                         rebuilt {production_rebuilds}: it is not the state's own policy",
+                        "the split policy rebuilt {} times where the production fold \
+                         rebuilt {production_rebuilds}: the fold does not keep a replay's upkeep",
                         run.rebuilds
                     ));
                 }
@@ -4270,68 +4265,6 @@ mod smoke {
     /// The compare table pairs rows by case, axis, point, and metric,
     /// reads each run's steady median (the first sample when there is
     /// only one), and refuses two rulers.
-    /// The split policy compacts on each of its two causes exactly where
-    /// its bound is crossed, and a compaction moves nothing in the logical
-    /// state: the claims and their order are those of the state's own
-    /// policy over the same changes, a re-admission at the tail included.
-    #[test]
-    fn the_split_policy_compacts_on_each_cause_and_keeps_the_logical_state() {
-        use morpholog_core::{ClaimInstance, EvalValue, tally};
-        let x = |i: usize| ClaimInstance {
-            predicate: "X".into(),
-            args: vec![EvalValue::Subject(format!("s{i}").as_str().into())],
-        };
-        let rebuilds = || tally::snapshot()[2];
-        let mut state = State::default();
-        // Every change, so the state's own policy can fold the same ones
-        // afterwards, outside the counted stretches below.
-        let mut changes: Vec<(Vec<ClaimInstance>, Vec<ClaimInstance>)> = Vec::new();
-        let mut apply =
-            |state: &mut State, asserted: Vec<ClaimInstance>, retracted: Vec<ClaimInstance>| {
-                state.apply_compacting_when(&asserted, &retracted, |l| Policy::Split.compacts(l));
-                changes.push((asserted, retracted));
-            };
-
-        // Live overlay growth: past 4,096 live overlay entries over an
-        // empty base, and not before.
-        let before = rebuilds();
-        for i in 0..4096 {
-            apply(&mut state, vec![x(i)], vec![]);
-        }
-        assert_eq!(rebuilds() - before, 0, "4,096 live entries do not compact");
-        apply(&mut state, vec![x(4096)], vec![]);
-        assert_eq!(rebuilds() - before, 1, "the 4,097th live entry compacts");
-        assert_eq!(state.layering().overlay_live, 0);
-
-        // Dead entries: more dead than live, here past 2,048 retractions
-        // of the 4,097, and not before.
-        let before = rebuilds();
-        for i in 0..2048 {
-            apply(&mut state, vec![], vec![x(i)]);
-        }
-        assert_eq!(rebuilds() - before, 0, "2,048 dead against 2,049 live");
-        apply(&mut state, vec![], vec![x(2048)]);
-        assert_eq!(rebuilds() - before, 1, "the 2,049th dead entry compacts");
-        assert_eq!(state.layering().base_dead, 0);
-
-        // A claim retracted and admitted again goes to the tail.
-        apply(&mut state, vec![x(0)], vec![]);
-        let mut expected: Vec<ClaimInstance> = (2049..4097).map(x).collect();
-        expected.push(x(0));
-        assert_eq!(state.claims().to_vec(), expected);
-
-        let mut reference = State::default();
-        let before = rebuilds();
-        for (asserted, retracted) in &changes {
-            reference.apply(asserted, retracted);
-        }
-        assert!(rebuilds() > before, "the state's own policy compacted too");
-        assert!(
-            state == reference,
-            "the same logical state as the state's own policy"
-        );
-    }
-
     #[test]
     fn compare_pairs_rows_and_refuses_different_rulers() {
         let report = |contract: u32, ladder: &str, unit: &str, samples: Vec<f64>| {

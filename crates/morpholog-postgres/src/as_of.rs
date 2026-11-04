@@ -5,7 +5,7 @@ use crate::audit::{
 use crate::audit_pages::ReplayPages;
 use crate::claims::ClaimRead;
 use crate::error::{PgError, classify, classify_checked_query};
-use crate::replay::{EffectKind, RowEffect};
+use crate::replay::{EffectKind, RowEffect, Upkeep};
 use jiff::Timestamp;
 use jiff_sqlx::ToSqlx;
 use morpholog_core::{ClaimInstance, State};
@@ -311,7 +311,7 @@ pub(crate) async fn reconstruct_inner(
             if let Some(map) = asserted_in.as_deref_mut() {
                 effect.apply_to_provenance(map);
             }
-            effect.apply_to(&mut state);
+            effect.apply_to(&mut state, Upkeep::Replay);
         }
         if let Some(report) = on_page.as_deref_mut() {
             report(replayed);
