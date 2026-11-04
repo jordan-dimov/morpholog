@@ -238,3 +238,48 @@ fn the_trace_records_only_the_obligations_evaluated() {
         "nothing to evaluate: {trace:?}"
     );
 }
+
+/// The effective delta as first written: a scan of the output so far
+/// per claim, and of the admissions per retraction.
+fn effective_by_scan(
+    asserted: &[crate::ClaimInstance],
+    retracted: &[crate::ClaimInstance],
+    present: impl Fn(&crate::ClaimInstance) -> bool,
+) -> crate::EffectiveDelta {
+    let mut out = crate::EffectiveDelta::default();
+    for claim in asserted {
+        if !present(claim) && !out.asserted.contains(claim) {
+            out.asserted.push(claim.clone());
+        }
+    }
+    for claim in retracted {
+        if present(claim) && !asserted.contains(claim) && !out.retracted.contains(claim) {
+            out.retracted.push(claim.clone());
+        }
+    }
+    out
+}
+
+proptest::proptest! {
+    /// The effective delta is the same list, in the same order, whether
+    /// it is built by scanning or, for a large delta, through a set.
+    /// The claims come from a small universe, so duplicates, re-admitted
+    /// retractions and retractions of absent claims are the rule, and the
+    /// sizes cross the point where a set takes over.
+    #[test]
+    fn a_large_delta_is_the_scanned_delta(
+        asserted in proptest::collection::vec(0..40u8, 0..80),
+        retracted in proptest::collection::vec(0..40u8, 0..80),
+        pre in proptest::collection::hash_set(0..40u8, 0..40),
+    ) {
+        let claim = |i: &u8| claim_instance("X", &[dec(i64::from(*i))]);
+        let asserted: Vec<_> = asserted.iter().map(claim).collect();
+        let retracted: Vec<_> = retracted.iter().map(claim).collect();
+        let pre: std::collections::HashSet<_> = pre.iter().map(claim).collect();
+        let present = |c: &crate::ClaimInstance| pre.contains(c);
+        proptest::prop_assert_eq!(
+            crate::EffectiveDelta::of(&asserted, &retracted, present),
+            effective_by_scan(&asserted, &retracted, present)
+        );
+    }
+}
