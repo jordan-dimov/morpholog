@@ -1,0 +1,1005 @@
+{
+  "a name bound afresh each iteration": {
+    "outcome": "accepted [ClaimInstance { predicate: PredicateName(\"Seen\"), args: [Subject(Subject(\"a\")), Decimal(1)] }, ClaimInstance { predicate: PredicateName(\"Seen\"), args: [Subject(Subject(\"b\")), Decimal(2)] }, ClaimInstance { predicate: PredicateName(\"Seen\"), args: [Subject(Subject(\"c\")), Decimal(3)] }]",
+    "trace": [
+      {
+        "binding": "x",
+        "iterations": [
+          {
+            "item": {
+              "type": "subject",
+              "value": "a"
+            },
+            "trace": [
+              {
+                "expression": "Node(x, v)",
+                "kind": "bind_one",
+                "outcome": {
+                  "bindings": [
+                    {
+                      "value": {
+                        "type": "decimal",
+                        "value": "1"
+                      },
+                      "var": "v"
+                    },
+                    {
+                      "value": {
+                        "type": "subject",
+                        "value": "a"
+                      },
+                      "var": "x"
+                    },
+                    {
+                      "value": {
+                        "type": "collection",
+                        "value": [
+                          {
+                            "type": "subject",
+                            "value": "a"
+                          },
+                          {
+                            "type": "subject",
+                            "value": "b"
+                          },
+                          {
+                            "type": "subject",
+                            "value": "c"
+                          }
+                        ]
+                      },
+                      "var": "xs"
+                    }
+                  ],
+                  "status": "bound"
+                }
+              },
+              {
+                "claim": {
+                  "args": [
+                    {
+                      "type": "subject",
+                      "value": "a"
+                    },
+                    {
+                      "type": "decimal",
+                      "value": "1"
+                    }
+                  ],
+                  "predicate": "Seen"
+                },
+                "kind": "assert"
+              }
+            ]
+          },
+          {
+            "item": {
+              "type": "subject",
+              "value": "b"
+            },
+            "trace": [
+              {
+                "expression": "Node(x, v)",
+                "kind": "bind_one",
+                "outcome": {
+                  "bindings": [
+                    {
+                      "value": {
+                        "type": "decimal",
+                        "value": "2"
+                      },
+                      "var": "v"
+                    },
+                    {
+                      "value": {
+                        "type": "subject",
+                        "value": "b"
+                      },
+                      "var": "x"
+                    },
+                    {
+                      "value": {
+                        "type": "collection",
+                        "value": [
+                          {
+                            "type": "subject",
+                            "value": "a"
+                          },
+                          {
+                            "type": "subject",
+                            "value": "b"
+                          },
+                          {
+                            "type": "subject",
+                            "value": "c"
+                          }
+                        ]
+                      },
+                      "var": "xs"
+                    }
+                  ],
+                  "status": "bound"
+                }
+              },
+              {
+                "claim": {
+                  "args": [
+                    {
+                      "type": "subject",
+                      "value": "b"
+                    },
+                    {
+                      "type": "decimal",
+                      "value": "2"
+                    }
+                  ],
+                  "predicate": "Seen"
+                },
+                "kind": "assert"
+              }
+            ]
+          },
+          {
+            "item": {
+              "type": "subject",
+              "value": "c"
+            },
+            "trace": [
+              {
+                "expression": "Node(x, v)",
+                "kind": "bind_one",
+                "outcome": {
+                  "bindings": [
+                    {
+                      "value": {
+                        "type": "decimal",
+                        "value": "3"
+                      },
+                      "var": "v"
+                    },
+                    {
+                      "value": {
+                        "type": "subject",
+                        "value": "c"
+                      },
+                      "var": "x"
+                    },
+                    {
+                      "value": {
+                        "type": "collection",
+                        "value": [
+                          {
+                            "type": "subject",
+                            "value": "a"
+                          },
+                          {
+                            "type": "subject",
+                            "value": "b"
+                          },
+                          {
+                            "type": "subject",
+                            "value": "c"
+                          }
+                        ]
+                      },
+                      "var": "xs"
+                    }
+                  ],
+                  "status": "bound"
+                }
+              },
+              {
+                "claim": {
+                  "args": [
+                    {
+                      "type": "subject",
+                      "value": "c"
+                    },
+                    {
+                      "type": "decimal",
+                      "value": "3"
+                    }
+                  ],
+                  "predicate": "Seen"
+                },
+                "kind": "assert"
+              }
+            ]
+          }
+        ],
+        "kind": "for"
+      }
+    ]
+  },
+  "an error partway": {
+    "outcome": "error: division by zero",
+    "trace": [
+      {
+        "binding": "x",
+        "iterations": [
+          {
+            "item": {
+              "type": "subject",
+              "value": "a"
+            },
+            "trace": [
+              {
+                "expression": "Node(x, v)",
+                "kind": "bind_one",
+                "outcome": {
+                  "bindings": [
+                    {
+                      "value": {
+                        "type": "decimal",
+                        "value": "1"
+                      },
+                      "var": "v"
+                    },
+                    {
+                      "value": {
+                        "type": "subject",
+                        "value": "a"
+                      },
+                      "var": "x"
+                    },
+                    {
+                      "value": {
+                        "type": "collection",
+                        "value": [
+                          {
+                            "type": "subject",
+                            "value": "a"
+                          },
+                          {
+                            "type": "subject",
+                            "value": "d"
+                          },
+                          {
+                            "type": "subject",
+                            "value": "b"
+                          }
+                        ]
+                      },
+                      "var": "xs"
+                    }
+                  ],
+                  "status": "bound"
+                }
+              },
+              {
+                "kind": "let",
+                "name": "r",
+                "value": {
+                  "type": "decimal",
+                  "value": "100"
+                }
+              },
+              {
+                "claim": {
+                  "args": [
+                    {
+                      "type": "subject",
+                      "value": "a"
+                    },
+                    {
+                      "type": "decimal",
+                      "value": "100"
+                    }
+                  ],
+                  "predicate": "Ratio"
+                },
+                "kind": "assert"
+              }
+            ]
+          },
+          {
+            "item": {
+              "type": "subject",
+              "value": "d"
+            },
+            "trace": [
+              {
+                "expression": "Node(x, v)",
+                "kind": "bind_one",
+                "outcome": {
+                  "bindings": [
+                    {
+                      "value": {
+                        "type": "decimal",
+                        "value": "0"
+                      },
+                      "var": "v"
+                    },
+                    {
+                      "value": {
+                        "type": "subject",
+                        "value": "d"
+                      },
+                      "var": "x"
+                    },
+                    {
+                      "value": {
+                        "type": "collection",
+                        "value": [
+                          {
+                            "type": "subject",
+                            "value": "a"
+                          },
+                          {
+                            "type": "subject",
+                            "value": "d"
+                          },
+                          {
+                            "type": "subject",
+                            "value": "b"
+                          }
+                        ]
+                      },
+                      "var": "xs"
+                    }
+                  ],
+                  "status": "bound"
+                }
+              }
+            ]
+          }
+        ],
+        "kind": "for"
+      }
+    ]
+  },
+  "nested": {
+    "outcome": "accepted [ClaimInstance { predicate: PredicateName(\"Pair\"), args: [Subject(Subject(\"a\")), Subject(Subject(\"p\"))] }, ClaimInstance { predicate: PredicateName(\"Pair\"), args: [Subject(Subject(\"a\")), Subject(Subject(\"q\"))] }, ClaimInstance { predicate: PredicateName(\"Pair\"), args: [Subject(Subject(\"a\")), Subject(Subject(\"r\"))] }, ClaimInstance { predicate: PredicateName(\"Pair\"), args: [Subject(Subject(\"b\")), Subject(Subject(\"p\"))] }, ClaimInstance { predicate: PredicateName(\"Pair\"), args: [Subject(Subject(\"b\")), Subject(Subject(\"q\"))] }, ClaimInstance { predicate: PredicateName(\"Pair\"), args: [Subject(Subject(\"b\")), Subject(Subject(\"r\"))] }]",
+    "trace": [
+      {
+        "binding": "x",
+        "iterations": [
+          {
+            "item": {
+              "type": "subject",
+              "value": "a"
+            },
+            "trace": [
+              {
+                "binding": "y",
+                "iterations": [
+                  {
+                    "item": {
+                      "type": "subject",
+                      "value": "p"
+                    },
+                    "trace": [
+                      {
+                        "claim": {
+                          "args": [
+                            {
+                              "type": "subject",
+                              "value": "a"
+                            },
+                            {
+                              "type": "subject",
+                              "value": "p"
+                            }
+                          ],
+                          "predicate": "Pair"
+                        },
+                        "kind": "assert"
+                      }
+                    ]
+                  },
+                  {
+                    "item": {
+                      "type": "subject",
+                      "value": "q"
+                    },
+                    "trace": [
+                      {
+                        "claim": {
+                          "args": [
+                            {
+                              "type": "subject",
+                              "value": "a"
+                            },
+                            {
+                              "type": "subject",
+                              "value": "q"
+                            }
+                          ],
+                          "predicate": "Pair"
+                        },
+                        "kind": "assert"
+                      }
+                    ]
+                  },
+                  {
+                    "item": {
+                      "type": "subject",
+                      "value": "r"
+                    },
+                    "trace": [
+                      {
+                        "claim": {
+                          "args": [
+                            {
+                              "type": "subject",
+                              "value": "a"
+                            },
+                            {
+                              "type": "subject",
+                              "value": "r"
+                            }
+                          ],
+                          "predicate": "Pair"
+                        },
+                        "kind": "assert"
+                      }
+                    ]
+                  }
+                ],
+                "kind": "for"
+              }
+            ]
+          },
+          {
+            "item": {
+              "type": "subject",
+              "value": "b"
+            },
+            "trace": [
+              {
+                "binding": "y",
+                "iterations": [
+                  {
+                    "item": {
+                      "type": "subject",
+                      "value": "p"
+                    },
+                    "trace": [
+                      {
+                        "claim": {
+                          "args": [
+                            {
+                              "type": "subject",
+                              "value": "b"
+                            },
+                            {
+                              "type": "subject",
+                              "value": "p"
+                            }
+                          ],
+                          "predicate": "Pair"
+                        },
+                        "kind": "assert"
+                      }
+                    ]
+                  },
+                  {
+                    "item": {
+                      "type": "subject",
+                      "value": "q"
+                    },
+                    "trace": [
+                      {
+                        "claim": {
+                          "args": [
+                            {
+                              "type": "subject",
+                              "value": "b"
+                            },
+                            {
+                              "type": "subject",
+                              "value": "q"
+                            }
+                          ],
+                          "predicate": "Pair"
+                        },
+                        "kind": "assert"
+                      }
+                    ]
+                  },
+                  {
+                    "item": {
+                      "type": "subject",
+                      "value": "r"
+                    },
+                    "trace": [
+                      {
+                        "claim": {
+                          "args": [
+                            {
+                              "type": "subject",
+                              "value": "b"
+                            },
+                            {
+                              "type": "subject",
+                              "value": "r"
+                            }
+                          ],
+                          "predicate": "Pair"
+                        },
+                        "kind": "assert"
+                      }
+                    ]
+                  }
+                ],
+                "kind": "for"
+              }
+            ]
+          }
+        ],
+        "kind": "for"
+      }
+    ]
+  },
+  "no claim to bind partway": {
+    "outcome": "rejected: bind_one failed: Node(x, v) matched no candidates",
+    "trace": [
+      {
+        "binding": "x",
+        "iterations": [
+          {
+            "item": {
+              "type": "subject",
+              "value": "a"
+            },
+            "trace": [
+              {
+                "expression": "Node(x, v)",
+                "kind": "bind_one",
+                "outcome": {
+                  "bindings": [
+                    {
+                      "value": {
+                        "type": "decimal",
+                        "value": "1"
+                      },
+                      "var": "v"
+                    },
+                    {
+                      "value": {
+                        "type": "subject",
+                        "value": "a"
+                      },
+                      "var": "x"
+                    },
+                    {
+                      "value": {
+                        "type": "collection",
+                        "value": [
+                          {
+                            "type": "subject",
+                            "value": "a"
+                          },
+                          {
+                            "type": "subject",
+                            "value": "z"
+                          },
+                          {
+                            "type": "subject",
+                            "value": "b"
+                          }
+                        ]
+                      },
+                      "var": "xs"
+                    }
+                  ],
+                  "status": "bound"
+                }
+              },
+              {
+                "claim": {
+                  "args": [
+                    {
+                      "type": "subject",
+                      "value": "a"
+                    },
+                    {
+                      "type": "decimal",
+                      "value": "1"
+                    }
+                  ],
+                  "predicate": "Seen"
+                },
+                "kind": "assert"
+              }
+            ]
+          },
+          {
+            "item": {
+              "type": "subject",
+              "value": "z"
+            },
+            "trace": [
+              {
+                "expression": "Node(x, v)",
+                "kind": "bind_one",
+                "outcome": {
+                  "directly_missing_claims": [
+                    {
+                      "predicate": "Node",
+                      "rendered": "Node(z, v)"
+                    }
+                  ],
+                  "status": "no_match"
+                }
+              }
+            ]
+          }
+        ],
+        "kind": "for"
+      }
+    ]
+  },
+  "own collection inside": {
+    "outcome": "accepted [ClaimInstance { predicate: PredicateName(\"Count\"), args: [Subject(Subject(\"a\")), Decimal(3)] }, ClaimInstance { predicate: PredicateName(\"Count\"), args: [Subject(Subject(\"b\")), Decimal(3)] }, ClaimInstance { predicate: PredicateName(\"Count\"), args: [Subject(Subject(\"c\")), Decimal(3)] }]",
+    "trace": [
+      {
+        "binding": "x",
+        "iterations": [
+          {
+            "item": {
+              "type": "subject",
+              "value": "a"
+            },
+            "trace": [
+              {
+                "expression": "x in xs",
+                "kind": "require",
+                "outcome": {
+                  "match_count": 1,
+                  "status": "held"
+                }
+              },
+              {
+                "kind": "let",
+                "name": "n",
+                "value": {
+                  "type": "decimal",
+                  "value": "3"
+                }
+              },
+              {
+                "claim": {
+                  "args": [
+                    {
+                      "type": "subject",
+                      "value": "a"
+                    },
+                    {
+                      "type": "decimal",
+                      "value": "3"
+                    }
+                  ],
+                  "predicate": "Count"
+                },
+                "kind": "assert"
+              }
+            ]
+          },
+          {
+            "item": {
+              "type": "subject",
+              "value": "b"
+            },
+            "trace": [
+              {
+                "expression": "x in xs",
+                "kind": "require",
+                "outcome": {
+                  "match_count": 1,
+                  "status": "held"
+                }
+              },
+              {
+                "kind": "let",
+                "name": "n",
+                "value": {
+                  "type": "decimal",
+                  "value": "3"
+                }
+              },
+              {
+                "claim": {
+                  "args": [
+                    {
+                      "type": "subject",
+                      "value": "b"
+                    },
+                    {
+                      "type": "decimal",
+                      "value": "3"
+                    }
+                  ],
+                  "predicate": "Count"
+                },
+                "kind": "assert"
+              }
+            ]
+          },
+          {
+            "item": {
+              "type": "subject",
+              "value": "c"
+            },
+            "trace": [
+              {
+                "expression": "x in xs",
+                "kind": "require",
+                "outcome": {
+                  "match_count": 1,
+                  "status": "held"
+                }
+              },
+              {
+                "kind": "let",
+                "name": "n",
+                "value": {
+                  "type": "decimal",
+                  "value": "3"
+                }
+              },
+              {
+                "claim": {
+                  "args": [
+                    {
+                      "type": "subject",
+                      "value": "c"
+                    },
+                    {
+                      "type": "decimal",
+                      "value": "3"
+                    }
+                  ],
+                  "predicate": "Count"
+                },
+                "kind": "assert"
+              }
+            ]
+          }
+        ],
+        "kind": "for"
+      }
+    ]
+  },
+  "refused partway": {
+    "outcome": "rejected: require failed: v < limit did not hold over pre-state",
+    "trace": [
+      {
+        "binding": "x",
+        "iterations": [
+          {
+            "item": {
+              "type": "subject",
+              "value": "a"
+            },
+            "trace": [
+              {
+                "expression": "Node(x, v)",
+                "kind": "bind_one",
+                "outcome": {
+                  "bindings": [
+                    {
+                      "value": {
+                        "type": "decimal",
+                        "value": "3"
+                      },
+                      "var": "limit"
+                    },
+                    {
+                      "value": {
+                        "type": "decimal",
+                        "value": "1"
+                      },
+                      "var": "v"
+                    },
+                    {
+                      "value": {
+                        "type": "subject",
+                        "value": "a"
+                      },
+                      "var": "x"
+                    },
+                    {
+                      "value": {
+                        "type": "collection",
+                        "value": [
+                          {
+                            "type": "subject",
+                            "value": "a"
+                          },
+                          {
+                            "type": "subject",
+                            "value": "b"
+                          },
+                          {
+                            "type": "subject",
+                            "value": "c"
+                          }
+                        ]
+                      },
+                      "var": "xs"
+                    }
+                  ],
+                  "status": "bound"
+                }
+              },
+              {
+                "expression": "v < limit",
+                "kind": "require",
+                "outcome": {
+                  "match_count": 1,
+                  "status": "held"
+                }
+              },
+              {
+                "claim": {
+                  "args": [
+                    {
+                      "type": "subject",
+                      "value": "a"
+                    },
+                    {
+                      "type": "decimal",
+                      "value": "1"
+                    }
+                  ],
+                  "predicate": "Seen"
+                },
+                "kind": "assert"
+              }
+            ]
+          },
+          {
+            "item": {
+              "type": "subject",
+              "value": "b"
+            },
+            "trace": [
+              {
+                "expression": "Node(x, v)",
+                "kind": "bind_one",
+                "outcome": {
+                  "bindings": [
+                    {
+                      "value": {
+                        "type": "decimal",
+                        "value": "3"
+                      },
+                      "var": "limit"
+                    },
+                    {
+                      "value": {
+                        "type": "decimal",
+                        "value": "2"
+                      },
+                      "var": "v"
+                    },
+                    {
+                      "value": {
+                        "type": "subject",
+                        "value": "b"
+                      },
+                      "var": "x"
+                    },
+                    {
+                      "value": {
+                        "type": "collection",
+                        "value": [
+                          {
+                            "type": "subject",
+                            "value": "a"
+                          },
+                          {
+                            "type": "subject",
+                            "value": "b"
+                          },
+                          {
+                            "type": "subject",
+                            "value": "c"
+                          }
+                        ]
+                      },
+                      "var": "xs"
+                    }
+                  ],
+                  "status": "bound"
+                }
+              },
+              {
+                "expression": "v < limit",
+                "kind": "require",
+                "outcome": {
+                  "match_count": 1,
+                  "status": "held"
+                }
+              },
+              {
+                "claim": {
+                  "args": [
+                    {
+                      "type": "subject",
+                      "value": "b"
+                    },
+                    {
+                      "type": "decimal",
+                      "value": "2"
+                    }
+                  ],
+                  "predicate": "Seen"
+                },
+                "kind": "assert"
+              }
+            ]
+          },
+          {
+            "item": {
+              "type": "subject",
+              "value": "c"
+            },
+            "trace": [
+              {
+                "expression": "Node(x, v)",
+                "kind": "bind_one",
+                "outcome": {
+                  "bindings": [
+                    {
+                      "value": {
+                        "type": "decimal",
+                        "value": "3"
+                      },
+                      "var": "limit"
+                    },
+                    {
+                      "value": {
+                        "type": "decimal",
+                        "value": "3"
+                      },
+                      "var": "v"
+                    },
+                    {
+                      "value": {
+                        "type": "subject",
+                        "value": "c"
+                      },
+                      "var": "x"
+                    },
+                    {
+                      "value": {
+                        "type": "collection",
+                        "value": [
+                          {
+                            "type": "subject",
+                            "value": "a"
+                          },
+                          {
+                            "type": "subject",
+                            "value": "b"
+                          },
+                          {
+                            "type": "subject",
+                            "value": "c"
+                          }
+                        ]
+                      },
+                      "var": "xs"
+                    }
+                  ],
+                  "status": "bound"
+                }
+              },
+              {
+                "expression": "v < limit",
+                "kind": "require",
+                "outcome": {
+                  "reason": "require failed: v < limit did not hold over pre-state",
+                  "status": "rejected"
+                }
+              }
+            ]
+          }
+        ],
+        "kind": "for"
+      }
+    ]
+  }
+}
