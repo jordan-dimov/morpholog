@@ -409,6 +409,22 @@ What the split policy retains. After each operation it holds at most live + max(
 
 What it costs. The owned candidate copies the overlay, so it is three to four times dearer under the relaxed threshold and six to seven times under the split policy, because the overlay is let grow. The database proposal path loads its state afresh for every proposal, a base with no overlay, so its candidate copies nothing whatever the policy. The copy is paid by a caller that keeps a state in memory and proposes against it across many changes, an embedder of the kernel or an atomic batch advancing between acts. The cheapest fold and the cheapest owned candidate come from different policies; which a state should use depends on what it is used for, and this ruler does not decide that.
 
+### A replay's upkeep in production (2026-11-04, paired against the parent commit)
+
+The split policy became a replay's upkeep, `State::apply_replayed`, for the folds that never copy their state: rehearsal, scoring, receipts and as-of replay. Proposals, atomic batches and the live verifier keep the ordinary upkeep. Two binaries, built from the parent commit and this one, were run interleaved, baseline, candidate, candidate, baseline, from copies that no rebuild could swap.
+
+| production rehearsal fold, 100k rows | parent | this |
+|---|---|---|
+| append, 200k live | 3,360 and 2,791 ms | 1,933 and 2,010 ms |
+| revise 1,000, 2k live | 4,411 and 4,112 ms | 3,393 and 3,285 ms |
+| revise behind 2M unrelated claims | 27.7 and 27.2 s | 10.7 and 10.8 s |
+| same, peak RSS | 5.5 GB | 4.3 GB |
+| same, rebuilds and claims re-indexed | 61, 18.9 M | 9, 2.1 M |
+
+The last baseline run of the large case came a day after the other three, the session having ended between them; it agrees with the first within 2 percent. Before each large-case run the order table was compacted outside every timer, the stopgap for the fixture's slow insert (#682).
+
+The bench suite, four runs a side interleaved by `scripts/bench_ab.sh`, completed clean with both sides throttled alike. Every proposal metric, `propose_one` on every scenario and the kernel's sequential acts, is within noise or lower. As-of reconstruction of a thousand admissions is 21 percent faster. One read is slower: a derived read at a thousand revisions, 4 percent or about 1 ms. Its history leaves 30 claims live beside 990 dead, under the replay's dead floor of 1,024, so the read skips slots the ordinary upkeep would have cleared. Three reads this change does not reach read 4 to 6 percent higher (`build_state` twice, one `list_scoped`).
+
 ### Deferred
 
 - **As-of reads that cost what the answer costs.** Replay is linear in the transitions before the target, under retraction and revision alike. The TEC register made that unacceptable for an interactive read, and `asof/revise` is its ruler: a small live set over a long history, where the cost is all history.
