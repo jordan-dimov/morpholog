@@ -69,6 +69,24 @@ intent PieceCaptured(src_file: Decimal, src_rank: Decimal, dst_file: Decimal, ds
 -- looking at one snapshot; none needs to know what the board looked
 -- like a move ago.
 
+-- Every piece stands on a real square: file and rank are whole numbers
+-- from 1 to 8. The bishop rule below depends on this. On file 3.5 its
+-- colour formula gives 0.5, neither dark nor light, so a bishop there
+-- would never match its partner's colour and would always pass.
+-- `1 <= file <= 8` reads as spoken, both comparisons at once, and
+-- `file % 1 = 0` says the number leaves no remainder when divided by
+-- one: it is whole.
+invariant pieces_stand_on_the_board:
+  PieceAt(file: file, rank: rank, ..)
+  implies (1 <= file <= 8 and 1 <= rank <= 8 and file % 1 = 0 and rank % 1 = 0)
+
+-- It is always white's turn or black's. A move names whose turn comes
+-- next, and the move's own gate only checks that it differs from the
+-- current one. Without this rule a move could hand the turn to a
+-- colour with no pieces, and the game would stop for good.
+invariant turn_belongs_to_a_player:
+  CurrentTurn(t) implies (t = #white or t = #black)
+
 
 -- Exactly one king of each colour - always. `sum(1 | PieceAt(_, _,
 -- #king, #white))` counts how many white-king claims are on the board
@@ -87,9 +105,10 @@ invariant exactly_one_black_king:
 -- whenever two *different* squares each hold a bishop of the same colour
 -- `c`, their colours must differ. This is the well-known chessboard
 -- property: a light-squared bishop and a dark-squared bishop. One
--- snapshot settles it. Because a real bishop never changes its square
--- colour, the pair stays opposite for the whole game, and a move that
--- would land both bishops of a colour on one colour is turned away.
+-- snapshot settles it, and a move that would land both bishops of a
+-- colour on one colour is turned away. But the rule needs two bishops
+-- to compare. Once one is captured, it has nothing to compare, and the
+-- survivor could change colour without this rule noticing.
 -- (Note `c` is bound by the first bishop and reused in the second, so
 -- the two are the same colour; the `not (...)` excludes comparing a
 -- bishop with itself.)

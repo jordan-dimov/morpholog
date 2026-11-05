@@ -27,7 +27,9 @@ Subjects are `#white` / `#black` and the six piece types. File and rank are deci
 
 | Invariant | What it says |
 | --- | --- |
-| `at_most_one_piece_per_square` | A square holds at most one piece. |
+| `piece_at_unique_by_file_rank` | A square holds at most one piece - generated from `unique by (file, rank)` on `PieceAt`. |
+| `pieces_stand_on_the_board` | File and rank are whole numbers from 1 to 8. |
+| `turn_belongs_to_a_player` | The turn is always white's or black's. |
 | `exactly_one_white_king` / `exactly_one_black_king` | Each colour has *exactly* one king - so a king can never be captured. |
 | `piece_count_matches_board` | A `PieceCount` counter must equal the actual pieces on the board. |
 | `board_with_pieces_has_a_counter` | A board with pieces must carry a `PieceCount` - the presence half that makes the count check bite. |
@@ -47,7 +49,7 @@ On the very first move there is no prior `MoveCount` to compare against, so a `p
 
 | Invariant | What it says |
 | --- | --- |
-| `bishops_on_opposite_square_colors` | The two bishops of a colour stand on opposite-coloured squares - `(file + rank) % 2` differs between them. Since a bishop never changes its square colour, this also turns away a move that would slide one onto the wrong colour. |
+| `bishops_on_opposite_square_colors` | The two bishops of a colour stand on opposite-coloured squares - `(file + rank) % 2` differs between them. It turns away a move that would put both on one colour. With one bishop left there is nothing to compare, so the survivor may change colour. |
 
 ### Transformations
 
@@ -61,4 +63,4 @@ Each move gates its own preconditions with `require` (the mover owns the turn; t
 
 ## What it deliberately does not cover
 
-Not a chess engine: no legal-move enforcement (a bishop may move sideways), no check / checkmate / stalemate, no castling / en passant / promotion, no multiple games at once. It does not even enforce board bounds - file and rank are decimals, and nothing stops a piece landing on file 99 or 3.5. Keeping a piece on a real square would be one more ordinary invariant (`PieceAt(f, r, _, _) implies (1 <= f and f <= 8 and 1 <= r and r <= 8)`), left out because this example is about transition invariants and computed colour, not board legality.
+Not a chess engine: no legal-move enforcement (a bishop may move sideways), no check / checkmate / stalemate, no castling / en passant / promotion, no multiple games at once. It keeps every piece on a real square, but says nothing about how a piece got there.
