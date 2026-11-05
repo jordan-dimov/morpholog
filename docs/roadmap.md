@@ -1,5 +1,22 @@
 # Morpholog: Roadmap
 
+## Product-development priority (5 November 2026): demonstrate lower total development effort
+
+The project's emerging product hypothesis is broader than a legitimacy runtime: make it **faster and cheaper for developers to build and evolve correct business applications**, while retaining the small deterministic governed-truth kernel. This is an experiment, not an assertion of achieved productivity. See [#697](https://github.com/jordan-dimov/morpholog/issues/697) (north star) and [#696](https://github.com/jordan-dimov/morpholog/issues/696) (public django-helpdesk comparison). Read the proposed boundary clarification in [scope-and-ambition.md](scope-and-ambition.md): what runs **inside** the kernel and what optional tooling may **help build** are different questions.
+
+**Sequence work by observed developer friction, not by another kernel arc:**
+
+1. **Baseline:** pin and run a real upstream Django application; inventory business operations and all ingress paths; freeze a coherent end-to-end ticket-lifecycle slice with behavioural tests and later rule changes.
+2. **Morpholog today:** reproduce the same slice without independently mutable duplicate state; keep the existing UI, Django, authentication, documents and messaging wherever useful. Measure development and operational overhead, code and policy eliminated versus introduced, user-action latency and privacy/security requirements.
+3. **One application-product affordance:** only after that baseline, test the largest observed friction: perhaps typed reads/projections, generated application commands/API adaptation, or vendored rule patterns (#405). Reuse existing generated Python clients, derived views and schema introspection first; do not launch a general ORM, workflow language, HTTP framework or pattern catalogue on speculation.
+4. **Change the application:** repeat pre-registered requirement changes through all variants, including compatibility, migration and historical behaviour; expose failures and new integration work.
+5. **Decision and public evidence:** publish reproducible runnable source, full measurement method, honest A/B/C comparison and a recommendation on broader-product vs separate product vs narrow runtime.
+
+**Prioritisation:** correctness, security, reliable state ownership, privacy and critical production faults remain non-negotiable. Continue existing release commitments that are already in flight. New speculative primitives, non-blocking micro-optimisations and broad gallery/tutorial rollouts do not outrank #696. #232 (model compatibility), #475/#477 (fixed policy boundary), #405 (reuse) and #676 (privacy) become application-forced work where their real obligations arise. #652 measures runtime scale, **not** human development productivity. Retain dormant issues as evidence and revisit them by clear forcing events; do not close them en masse.
+
+**Success metric:** less total *human* engineering effort to build, validate, operate and change an equivalent workflow than a strong conventional AI-assisted baseline, without concealment of extra code, dependencies, latency or loss of functionality. If not achieved, report the negative result and reconsider the hypothesis.
+
+
 Status: operational. This document is what the project is *doing next*. It is forward-looking and lower-stakes than [`scope-and-ambition.md`](scope-and-ambition.md) (which fixes what Morpholog is *for*) and [`runtime-semantics.md`](runtime-semantics.md) (which fixes what the runtime *means*). When this file and design-history disagree, design-history is the historical record; this file is intent.
 
 The "forced by a worked example" discipline binds **kernel and IR primitives**: a new `Prop` / `ValueExpr` / `Stmt` / `Value` variant earns its place only when an example needs it, never speculatively. That is where unconstrained growth is dangerous, and the bar stays high. It is *not* a brake on everything else - tooling, new worked examples, performance work, legibility surfaces, and product completeness move as soon as the direction is clear, not only when an example forces them. The bar for *adding to the language* is deliberately higher than the bar for *building around it*. This is intent, not a wish list.
