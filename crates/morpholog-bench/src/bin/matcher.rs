@@ -329,6 +329,20 @@ fn measure(point: &Point, repeat: usize) -> Result<Measured> {
     })
 }
 
+/// One act admitting a claim per witness, each a case of its own of the
+/// rule over them.
+fn wide_delta(witnesses: usize) -> Result<Point> {
+    let source = "program wide_delta\n\
+         predicate Node(x: Subject, v: Decimal)\n\
+         predicate Seen(x: Subject, v: Decimal)\n\
+         transformation mark(xs):\n    for x in xs:\n        bind Node(x, v)\n        admit Seen(x, v)\n\
+         invariant seen_is_a_node:\n    Seen(x, v) implies Node(x, v)\n";
+    let mut point = for_bind(witnesses)?;
+    point.shape = "wide delta";
+    point.prepared = prepare(source)?;
+    Ok(point)
+}
+
 fn points(quick: bool) -> Result<Vec<Point>> {
     let witnesses: &[usize] = if quick { &[10] } else { &[100, 1_000, 10_000] };
     let live_vars: &[usize] = if quick { &[2] } else { &[2, 4, 8] };
@@ -345,6 +359,7 @@ fn points(quick: bool) -> Result<Vec<Point>> {
         points.push(fan_out(w)?);
         points.push(sum(w)?);
         points.push(for_bind(w)?);
+        points.push(wide_delta(w)?);
     }
     Ok(points)
 }
