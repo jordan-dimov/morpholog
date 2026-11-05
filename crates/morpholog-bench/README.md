@@ -464,6 +464,19 @@ The act's `for` is now linear in its collection, ten thousand items in 21 ms rat
 
 The production paths do not move. The 100k rehearsal ruler, interleaved the same way, reads 1.57 and 1.55 s against 1.52 and 1.53 s appending, 2.65 and 2.64 s against 2.66 and 2.66 s revising: within noise either way. Its rules bind two or three variables to subjects drawn from a few claims, so a binding copy was never its cost. The bench suite, four runs a side by `scripts/bench_ab.sh`, completed clean with no metric outside noise.
 
+### One defined call, many projections (2026-11-05, paired against the parent commit)
+
+The defined-call shape projects three paths per root, so no single call yields many matches. The fan-out shape is one call over a group whose members each carry a tag the call hides: its distinct projections grow with the group. Each was checked against every projection kept so far, so the call was quadratic in them. Past 32 a set of the projected values now checks membership, and a smaller result keeps the scan. Baseline, candidate, candidate, baseline:
+
+| shape | parent | this | allocations, parent and this |
+|---|---|---|---|
+| defined fan-out, 100 | 173, 230 us | 109, 109 us | 1,725, 1,827 |
+| defined fan-out, 1,000 | 9.6, 16.8 ms | 0.95, 0.95 ms | 17,031, 18,037 |
+| defined fan-out, 10,000 | 1.66, 0.83 s | 9.8, 9.8 ms | 170,039, 180,048 |
+| defined call, 10,000 | 28.9, 28.8 ms | 28.8, 29.6 ms | 660,014, 660,014 |
+
+The call is now linear in its projections, about 1 us each. The quadratic's spread across the parent's two runs is its own. The three-path call allocates exactly what it did and reads within noise, as does every other shape. A first version used the set for every call: it cost the three-path call four allocations and 8 to 10 percent until small results kept the scan.
+
 ### Deferred
 
 - **As-of reads that cost what the answer costs.** Replay is linear in the transitions before the target, under retraction and revision alike. The TEC register made that unacceptable for an interactive read, and `asof/revise` is its ruler: a small live set over a long history, where the cost is all history.

@@ -1313,3 +1313,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** #686, found by the matcher harness of #352. An act's `for` over its own collection argument was quadratic in it: the collection sat in the binding map, and both the loop's frame restore and the `bind`'s match copied the map whole, collection included, for every item. Ten thousand items took 7.6 s in the kernel. Behind it a second quadratic: the effective delta checked each staged claim against those before it by a scan.
 
 **Landed:** a bound value that owns heap memory, a subject, a collection or a quantity, is shared, and the rest are held inline, so copying a binding map costs its entries and never what they hold. The public value type and the public value evaluator are unchanged. The effective delta checks membership through a set once a delta passes a few dozen claims. The loop's record, outcomes and traces across nested loops, refusals and errors partway, is pinned by a golden generated before the change, and the delta by a property against the scanning algorithm. The act is now linear, ten thousand items in 21 ms; the rehearsal ruler and the bench suite do not move.
+
+### A defined call's projections stay linear
+
+**Forced by:** the review of #688, measured on #352's matcher harness. A defined call kept each distinct projection once by checking it against every one kept so far, so one call with ten thousand distinct projections took up to 1.7 s.
+
+**Landed:** all of a call's matches extend the same bindings with the same argument variables, so the values those variables hold are the whole difference between two of them. Past 32 matches a set of those values checks membership; a smaller result keeps the scan. Order and deduplication are unchanged, held by a property against the scan on both sides of the switch. The call is linear, ten thousand projections in 10 ms, and the three-path call is unchanged.
