@@ -275,6 +275,7 @@ fn every_construct_the_index_names_is_in_the_canonical_table() {
         "Decimal[t]",
         "Decimal[USD]",
         "explain",
+        "rehearse",
         "intent",
         "ActorAssertionRestricted",
         "ActorAssertionAuthority",

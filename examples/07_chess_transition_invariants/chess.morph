@@ -7,8 +7,8 @@
 -- *change* from one move to the next. "At most one king per colour" is
 -- the first kind - you can check it by looking at a single snapshot of
 -- the board. But "every move advances the move counter by exactly one",
--- "the turn always flips to the other player", and "a move captures at
--- most one piece" are the second kind. You cannot check them by looking
+-- "the turn always passes to the other player", and "a move never
+-- adds a piece and removes at most one" are the second kind. You cannot check them by looking
 -- at one position alone; you have to compare the board before the move
 -- with the board after it. That is what makes them interesting.
 --
@@ -47,23 +47,23 @@ program chess_transition_invariants
 
 -- The vocabulary. The board is just a pile of "this piece is on this
 -- square" claims, where a square is its file and rank (each 1 to 8),
--- plus three counters that track the game as a whole: how many moves
--- have been played, how many pieces remain on the board, and whose turn
--- it is.
+-- plus two claims about the game as a whole: how many moves have been
+-- played, and whose turn it is. Nothing else is stored. How many pieces
+-- are left, for one, is never written down: the rules count it from
+-- the board whenever they need it, so it can never disagree with the
+-- board.
 -- One piece per square, declared on the predicate: the coordinates
 -- determine the occupant.
 predicate PieceAt(file: Decimal, rank: Decimal, piece_type: Subject, color: Subject)
     unique by (file, rank)
 predicate MoveCount(n: Decimal)
-predicate PieceCount(n: Decimal)
 predicate CurrentTurn(color: Subject)
 
 -- Intents are messages announced to the outside world after a move
--- commits: the game started, a piece moved, a piece was captured. A move
--- is announced by the squares it ran between.
+-- commits: the game started, a piece moved. A move is announced by the
+-- squares it ran between; whether it took a piece is on the board.
 intent GameStarted()
 intent PieceMoved(src_file: Decimal, src_rank: Decimal, dst_file: Decimal, dst_rank: Decimal)
-intent PieceCaptured(src_file: Decimal, src_rank: Decimal, dst_file: Decimal, dst_rank: Decimal, captured_type: Subject)
 
 -- Rules about a single board position. Each one can be judged by
 -- looking at one snapshot; none needs to know what the board looked
@@ -79,14 +79,6 @@ intent PieceCaptured(src_file: Decimal, src_rank: Decimal, dst_file: Decimal, ds
 invariant pieces_stand_on_the_board:
   PieceAt(file: file, rank: rank, ..)
   implies (1 <= file <= 8 and 1 <= rank <= 8 and file % 1 = 0 and rank % 1 = 0)
-
--- It is always white's turn or black's. A move names whose turn comes
--- next, and the move's own gate only checks that it differs from the
--- current one. Without this rule a move could hand the turn to a
--- colour with no pieces, and the game would stop for good.
-invariant turn_belongs_to_a_player:
-  CurrentTurn(t) implies (t = #white or t = #black)
-
 
 -- Exactly one king of each colour - always. `sum(1 | PieceAt(_, _,
 -- #king, #white))` counts how many white-king claims are on the board
@@ -124,22 +116,6 @@ invariant bishops_on_opposite_square_colors:
   (PieceAt(f_a, r_a, #bishop, c) and PieceAt(f_b, r_b, #bishop, c) and not (f_a = f_b and r_a = r_b))
   implies (colour_a != colour_b)
 
--- The piece counter must agree with the board it summarises: the number
--- stored in PieceCount must equal the actual number of pieces, counted
--- straight from the PieceAt claims. This stops the hand-kept counter
--- ever drifting from reality - admit a stray piece without bumping the
--- counter and this rule turns the whole move away.
-invariant piece_count_matches_board:
-  PieceCount(n) implies (n = sum(1 | PieceAt(..)))
-
--- The rule above only bites when a PieceCount claim exists - on its own
--- it would be silently happy if a buggy move dropped the counter
--- altogether. So we also insist that any board with pieces on it has a
--- counter. The two together say "the counter exists and is correct";
--- neither says that alone.
-invariant board_with_pieces_has_a_counter:
-  PieceAt(..) implies (exists n: PieceCount(n))
-
 -- At most eight pawns per colour. Here `c` is bound by the left side to
 -- whichever colour has a pawn, and the count on the right is scoped to
 -- that same colour. (Pawns only ever leave the board in this model, so
@@ -159,15 +135,28 @@ invariant move_count_strictly_increases:
   (MoveCount(n) and pre(MoveCount(m))) implies (n = (m + 1))
 
 -- The turn always flips: whoever is to move now must be the opposite
--- colour to whoever was to move before.
+-- colour to whoever was to move before. The move below works the next
+-- turn out itself; this rule checks the result from the outside, so a
+-- future move that forgets cannot slip through.
 invariant turn_alternates:
   (CurrentTurn(t_now) and pre(CurrentTurn(t_prev))) implies (t_now != t_prev)
 
--- A single move captures at most one piece. The piece count after a
--- move is either unchanged (a quiet move) or exactly one less than
--- before (a capture). It can never drop by two.
-invariant single_capture_per_move:
-  (PieceCount(after) and pre(PieceCount(before))) implies ((after = before) or (after = (before - 1)))
+-- A move never adds a piece, and the board loses at most one. Count
+-- the pieces after the move, and count them again on the board as it
+-- was before: the first count is the same as the second (a quiet move)
+-- or one less (a capture). `pre(...)` works inside a count too:
+-- `sum(1 | pre(PieceAt(..)))` counts the pieces before the move. The
+-- rule starts once a game is under way, so setting up the 32 pieces is
+-- not a "move".
+--
+-- It counts pieces; it does not follow them. So it does not say by
+-- itself that only one piece was taken. That comes from `move_piece`
+-- below, which removes only two squares' pieces: its own, and whatever
+-- stood on the destination.
+invariant piece_count_drops_by_at_most_one:
+  let after = (sum(1 | PieceAt(..)))
+  let before = (sum(1 | pre(PieceAt(..))))
+  pre(MoveCount(_)) implies (before - 1 <= after <= before)
 
 -- The ways the board may change. A move proposes a set of changes; the
 -- runtime applies them only if everything they touch still obeys every
@@ -175,7 +164,7 @@ invariant single_capture_per_move:
 -- gates the move.
 
 -- Set up the opening position: all 32 pieces on their starting squares,
--- the move counter at zero, the piece count at 32, white to play. Files
+-- the move counter at zero, white to play. Files
 -- a to h are 1 to 8; the white army sits on ranks 1 and 2, the black
 -- army on ranks 7 and 8. The gate refuses a game already under way:
 -- starting it again would announce a second start of the same game.
@@ -214,54 +203,37 @@ transformation start_game():
   admit PieceAt(7, 8, #knight, #black)
   admit PieceAt(8, 8, #rook, #black)
   admit MoveCount(0)
-  admit PieceCount(32)
   admit CurrentTurn(#white)
   emit GameStarted()
 
--- A move that does not capture. The piece leaves its source square and
--- lands on an empty destination. The gates check the basics of turn
--- order before anything moves: the piece being moved must belong to the
--- player whose turn it is, the next turn must be the other player, and
--- the destination must be empty. The move counter steps up by one; the
--- turn flips; the piece count is untouched.
-transformation quiet_move(src_f, src_r, dst_f, dst_r, new_turn):
+-- A move. The player says only which piece moves, by its square, and
+-- where it goes. The referee works out the rest: whose turn comes next,
+-- and whether the move takes a piece.
+--
+-- The gates come first. The piece must belong to the player whose turn
+-- it is, and the destination must not hold one of that player's own
+-- pieces.
+--
+-- Then the move says what the next position is. Whatever stood on the
+-- destination is gone: `retract PieceAt(file: dst_f, rank: dst_r, ..)`
+-- removes any piece on that square, and does nothing if the square is
+-- empty. So one move covers both a quiet move and a capture, and the
+-- player never has to say which it is. The piece leaves its own square
+-- and lands on the destination, the move count goes up by one, and the
+-- turn passes to the other player.
+transformation move_piece(src_f, src_r, dst_f, dst_r):
   bind PieceAt(src_f, src_r, piece_type, piece_color)
   bind CurrentTurn(current_turn)
   bind MoveCount(m)
-  require piece_color = current_turn
-  require new_turn != current_turn
-  require not (exists occupant: PieceAt(dst_f, dst_r, occ_type, occ_color))
+  require your_own_piece: piece_color = current_turn
+  require not_onto_your_own_piece: not PieceAt(file: dst_f, rank: dst_r, color: current_turn, ..)
+  let next_turn = if(current_turn = #white, #black, #white)
   let next_m = m + 1
+  retract PieceAt(file: dst_f, rank: dst_r, ..)
   retract PieceAt(src_f, src_r, piece_type, piece_color)
   retract CurrentTurn(current_turn)
   retract MoveCount(m)
   admit PieceAt(dst_f, dst_r, piece_type, piece_color)
-  admit CurrentTurn(new_turn)
+  admit CurrentTurn(next_turn)
   admit MoveCount(next_m)
   emit PieceMoved(src_f, src_r, dst_f, dst_r)
-
--- A move that captures. Like a quiet move, but the destination holds an
--- enemy piece, which is removed from the board. The gates additionally
--- check that the captured piece really belongs to the opponent. The
--- piece count drops by exactly one.
-transformation capturing_move(src_f, src_r, dst_f, dst_r, new_turn):
-  bind PieceAt(src_f, src_r, piece_type, piece_color)
-  bind PieceAt(dst_f, dst_r, captured_type, captured_color)
-  bind CurrentTurn(current_turn)
-  bind MoveCount(m)
-  bind PieceCount(p)
-  require piece_color = current_turn
-  require new_turn != current_turn
-  require captured_color != current_turn
-  let next_m = m + 1
-  let next_p = p - 1
-  retract PieceAt(src_f, src_r, piece_type, piece_color)
-  retract PieceAt(dst_f, dst_r, captured_type, captured_color)
-  retract CurrentTurn(current_turn)
-  retract MoveCount(m)
-  retract PieceCount(p)
-  admit PieceAt(dst_f, dst_r, piece_type, piece_color)
-  admit CurrentTurn(new_turn)
-  admit MoveCount(next_m)
-  admit PieceCount(next_p)
-  emit PieceCaptured(src_f, src_r, dst_f, dst_r, captured_type)
