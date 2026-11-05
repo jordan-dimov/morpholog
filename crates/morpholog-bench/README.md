@@ -446,6 +446,24 @@ What it measures. Every rule shape costs about the same per witness at 100, 1,00
 
 The act's `for` is quadratic in its collection: per item 10 us at a hundred items, 808 us at ten thousand. Its binding copies stay at two per item, but its allocations per item are twice the collection's size plus a constant at every size. The collection is an argument of the act, so it sits in the binding map, and each of the two copies per item, the loop's frame restore and the `bind`'s match, copies the whole collection. That is a defect on the ordinary proposal path, apart from this measurement (#686).
 
+### Bound values shared, the effective delta linear (2026-11-04, paired against the parent commit)
+
+Two changes for #686. A binding map's values that own heap memory, subjects, collections and quantities, are shared rather than copied, so copying the map costs its entries and not what they hold; the rest stay inline, where a shared box would cost an allocation a copy never did. And the effective delta checks membership through a set once a delta passes a few dozen claims, where a scan per claim made an act that stages n claims cost n squared. The matcher harness, the parent's binary and this one run interleaved, baseline, candidate, candidate, baseline:
+
+| shape | parent, per item or witness | this | allocations, parent and this |
+|---|---|---|---|
+| for, bind, 100 items | 9.0 us | 1.4 us | 229, 26 |
+| for, bind, 1,000 items | 80 us | 2.1 us | 2,042, 39 |
+| for, bind, 10,000 items | 764 us | 2.2 us | 20,042, 39 |
+| and chain, 10,000, 8 live vars | 6.4 us | 6.1 us | 123, 95 |
+| and chain, 100, 8 live vars | 5.5 us | 4.6 us | 124, 96 |
+| defined call, 10,000 | 3.0 us | 2.9 us | 73, 66 |
+| sum, 10,000 | 3.57 us | 3.65 us | 70, 70 |
+
+The act's `for` is now linear in its collection, ten thousand items in 21 ms rather than 7.6 s, its allocations a constant per item. The rule shapes are up to 17 percent faster and allocate less wherever a subject is copied; the sum over decimal lines, which copies none, is unchanged within 2 percent. A first version shared every value and boxed the decimals too: that sum read 7 to 10 percent slower until heap-free values were held inline.
+
+The production paths do not move. The 100k rehearsal ruler, interleaved the same way, reads 1.57 and 1.55 s against 1.52 and 1.53 s appending, 2.65 and 2.64 s against 2.66 and 2.66 s revising: within noise either way. Its rules bind two or three variables to subjects drawn from a few claims, so a binding copy was never its cost. The bench suite, four runs a side by `scripts/bench_ab.sh`, completed clean with no metric outside noise.
+
 ### Deferred
 
 - **As-of reads that cost what the answer costs.** Replay is linear in the transitions before the target, under retraction and revision alike. The TEC register made that unacceptable for an interactive read, and `asof/revise` is its ruler: a small live set over a long history, where the cost is all history.

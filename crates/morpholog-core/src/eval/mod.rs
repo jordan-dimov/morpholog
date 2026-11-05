@@ -20,7 +20,7 @@ use crate::ir::{
     Subject, Term, Value, ValueExpr, Var,
 };
 use crate::propose::Compared;
-use crate::state::{Bindings, CandidateBucket, ClaimInstance, EvalValue, State, StateRef};
+use crate::state::{Bindings, Bound, CandidateBucket, ClaimInstance, EvalValue, State, StateRef};
 
 /// Errors raised by the evaluator and the transformation runner: an
 /// expression or transformation was structurally ill-formed and cannot
@@ -248,7 +248,7 @@ impl<'a> EvalContext<'a> {
 /// result per sum.
 pub fn eval_value_over(
     expr: &ValueExpr,
-    bindings: &Bindings,
+    bindings: &std::collections::HashMap<Var, EvalValue>,
     sums: &[Result<EvalValue, EvalError>],
 ) -> Option<Result<EvalValue, EvalError>> {
     fn sums_in_order(expr: &ValueExpr, out: &mut Vec<*const ValueExpr>) -> bool {
@@ -273,9 +273,13 @@ pub fn eval_value_over(
     }
     let table: SumResults<'_> = nodes.into_iter().zip(sums).collect();
     let empty = State::default();
+    let bindings: Bindings = bindings
+        .iter()
+        .map(|(var, value)| (var.clone(), Bound::from(value.clone())))
+        .collect();
     let ctx = EvalContext {
         sums: Some(&table),
-        ..EvalContext::new(&empty, None, bindings, None, DefinitionTable::new(&[]))
+        ..EvalContext::new(&empty, None, &bindings, None, DefinitionTable::new(&[]))
     };
     Some(eval_value(expr, &ctx))
 }
@@ -411,7 +415,10 @@ pub(crate) fn definition_call_frame(
             // Literals and `actor` resolve at the call site; the body sees
             // the actor only as an ordinary subject value.
             other => {
-                frame.insert(param.clone(), resolve_term(other, ctx.bindings, ctx.actor)?);
+                frame.insert(
+                    param.clone(),
+                    Bound::from(resolve_term(other, ctx.bindings, ctx.actor)?),
+                );
             }
         }
     }
@@ -782,7 +789,7 @@ fn select_candidates<'a>(
     for (pos, term) in args.iter().enumerate() {
         let ground = match term {
             Term::Wildcard => None,
-            Term::Var(name) => base.get(name).cloned(),
+            Term::Var(name) => base.get(name).map(|v| EvalValue::clone(v)),
             // No admitted claim can carry a calendar span, so as a
             // ground argument it matches nothing.
             Term::Literal(Value::CalendarSpan(_)) => None,
@@ -902,7 +909,7 @@ fn match_args<'a>(
             Term::Wildcard => {}
             Term::Var(name) => {
                 if let Some(existing) = base.get(name) {
-                    if existing != v {
+                    if **existing != *v {
                         return None;
                     }
                 } else if let Some((_, existing)) = new.iter().find(|(k, _)| *k == name) {
@@ -945,7 +952,7 @@ pub(crate) fn unify_args(
     let new = match_args(patterns, values, base, actor)?;
     let mut b = copy_bindings(base);
     for (name, v) in new {
-        b.insert(name.clone(), v.clone());
+        b.insert(name.clone(), Bound::from(v.clone()));
     }
     Some(b)
 }
@@ -1001,8 +1008,8 @@ pub(crate) fn find_in_matches(
 ) -> Result<Vec<Bindings>, EvalError> {
     let base = ctx.bindings;
     let actor = ctx.actor;
-    let coll_val = resolve_term(coll, base, actor)?;
-    let EvalValue::Collection(items) = coll_val else {
+    let coll_val = resolve_term_shared(coll, base, actor)?;
+    let EvalValue::Collection(items) = &*coll_val else {
         return Err(EvalError::TypeMismatch("In expects a collection".into()));
     };
     match elem {
@@ -1016,10 +1023,10 @@ pub(crate) fn find_in_matches(
                 Ok(verdict(base, items.contains(existing)))
             } else {
                 Ok(items
-                    .into_iter()
+                    .iter()
                     .map(|v| {
                         let mut b = copy_bindings(base);
-                        b.insert(name.clone(), v);
+                        b.insert(name.clone(), Bound::from(v.clone()));
                         b
                     })
                     .collect())
@@ -1805,7 +1812,7 @@ pub(crate) fn resolve_term(
     match t {
         Term::Var(name) => bindings
             .get(name)
-            .cloned()
+            .map(|v| EvalValue::clone(v))
             .ok_or_else(|| EvalError::UnboundVariable(name.to_string())),
         Term::Wildcard => Err(EvalError::TypeMismatch(
             "wildcard cannot be resolved as a value".into(),
@@ -1814,6 +1821,22 @@ pub(crate) fn resolve_term(
         Term::Actor => actor
             .map(|a| EvalValue::Subject(a.clone()))
             .ok_or(EvalError::UnboundActor),
+    }
+}
+
+/// [`resolve_term`] without copying a bound value, for a reader that
+/// only looks into it, as a membership test does into its collection.
+pub(crate) fn resolve_term_shared(
+    t: &Term,
+    bindings: &Bindings,
+    actor: Option<&Subject>,
+) -> Result<Bound, EvalError> {
+    match t {
+        Term::Var(name) => bindings
+            .get(name)
+            .cloned()
+            .ok_or_else(|| EvalError::UnboundVariable(name.to_string())),
+        other => resolve_term(other, bindings, actor).map(Bound::from),
     }
 }
 

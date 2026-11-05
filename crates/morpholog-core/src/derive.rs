@@ -11,7 +11,7 @@ use crate::definitions::DefinitionTable;
 use crate::eval::{EvalContext, EvalError, Failure, eval_value, find_failure, find_matches};
 use crate::ir::{Definition, DerivedClaim, Invariant, Prop, Var};
 use crate::propose::WitnessBinding;
-use crate::state::{Bindings, ClaimInstance, EvalValue, State, StateRef};
+use crate::state::{Bindings, Bound, ClaimInstance, EvalValue, State, StateRef};
 
 /// Evaluate an invariant against a state. Returns true if the invariant
 /// holds, false if it fails.
@@ -60,13 +60,16 @@ fn for_each_case_match(
     cases: &[BTreeMap<Var, EvalValue>],
     mut visit: impl FnMut(&Bindings) -> Result<bool, EvalError>,
 ) -> Result<(), EvalError> {
-    let mut visited: HashSet<Vec<(Var, EvalValue)>> = HashSet::new();
+    let mut visited: HashSet<Vec<(Var, Bound)>> = HashSet::new();
     for case in cases {
-        let seed: Bindings = case.iter().map(|(v, ev)| (v.clone(), ev.clone())).collect();
+        let seed: Bindings = case
+            .iter()
+            .map(|(v, ev)| (v.clone(), Bound::from(ev.clone())))
+            .collect();
         let seeded = ctx.with_bindings(&seed);
         for m in find_matches(antecedent, &seeded)? {
             if cases.len() > 1 {
-                let mut key: Vec<(Var, EvalValue)> =
+                let mut key: Vec<(Var, Bound)> =
                     m.iter().map(|(v, ev)| (v.clone(), ev.clone())).collect();
                 key.sort_by(|a, b| a.0.cmp(&b.0));
                 if !visited.insert(key) {
@@ -205,7 +208,10 @@ impl Diagnosis {
 pub(crate) fn sorted_witness(bindings: Bindings) -> Vec<WitnessBinding> {
     let mut witness: Vec<WitnessBinding> = bindings
         .into_iter()
-        .map(|(var, value)| WitnessBinding { var, value })
+        .map(|(var, value)| WitnessBinding {
+            var,
+            value: value.into_value(),
+        })
         .collect();
     witness.sort_by(|a, b| a.var.cmp(&b.var));
     witness
@@ -304,7 +310,7 @@ pub(crate) fn enumerate_derived(
                     derived.predicate, key
                 ))
             })?;
-            tuple.push(EvalValueOrd(v.clone()));
+            tuple.push(EvalValueOrd((**v).clone()));
         }
         key_tuples.insert(tuple);
     }
@@ -313,7 +319,7 @@ pub(crate) fn enumerate_derived(
     for tuple in key_tuples {
         let mut per_key = Bindings::new();
         for (key, v) in derived.keys.iter().zip(tuple.iter()) {
-            per_key.insert(key.clone(), v.0.clone());
+            per_key.insert(key.clone(), Bound::from(v.0.clone()));
         }
         let mut args: Vec<EvalValue> = tuple.iter().map(|w| w.0.clone()).collect();
         let value_ctx = EvalContext::new(state, None, &per_key, None, index);

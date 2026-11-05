@@ -882,8 +882,66 @@ impl<'a> CandidateBucket<'a> {
 
 /// Variable bindings used during expression evaluation and
 /// transformation execution. Maps variable name to resolved
-/// [`EvalValue`].
-pub type Bindings = HashMap<Var, EvalValue>;
+/// [`EvalValue`]. The evaluator copies these maps to extend a match or
+/// restore a loop's frame, so each value is a [`Bound`]: a copy costs
+/// the map's entries, not the size of what they hold (an act's
+/// collection argument, say).
+pub type Bindings = HashMap<Var, Bound>;
+
+/// A bound value: shared when it owns heap memory, so copying a binding
+/// map never copies it; inline otherwise, where a copy costs nothing and
+/// a shared box would cost an allocation.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub enum Bound {
+    Inline(EvalValue),
+    Shared(Arc<EvalValue>),
+}
+
+impl From<EvalValue> for Bound {
+    fn from(value: EvalValue) -> Self {
+        match value {
+            EvalValue::Subject(_) | EvalValue::Collection(_) | EvalValue::Quantity { .. } => {
+                Bound::Shared(Arc::new(value))
+            }
+            inline => Bound::Inline(inline),
+        }
+    }
+}
+
+impl std::ops::Deref for Bound {
+    type Target = EvalValue;
+    fn deref(&self) -> &EvalValue {
+        match self {
+            Bound::Inline(value) => value,
+            Bound::Shared(value) => value,
+        }
+    }
+}
+
+impl PartialEq for Bound {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+
+impl Eq for Bound {}
+
+impl std::hash::Hash for Bound {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (**self).hash(state);
+    }
+}
+
+impl Bound {
+    /// The value, copied only if something else still shares it.
+    pub(crate) fn into_value(self) -> EvalValue {
+        match self {
+            Bound::Inline(value) => value,
+            Bound::Shared(value) => Arc::unwrap_or_clone(value),
+        }
+    }
+}
 /// A resolved intent: all args are values, ready to be enqueued in an outbox.
 ///
 /// JSON encoding shape: `{ "name": "...", "args": [ ... ] }`.

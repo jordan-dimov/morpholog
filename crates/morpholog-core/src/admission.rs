@@ -13,6 +13,7 @@
 //! a retract then re-admit change nothing.
 
 use std::borrow::Cow;
+use std::collections::HashSet;
 
 use crate::impact::ImpactPlan;
 use crate::ir::{Definition, Invariant};
@@ -106,17 +107,67 @@ impl EffectiveDelta {
         present: impl Fn(&ClaimInstance) -> bool,
     ) -> Self {
         let mut out = EffectiveDelta::default();
+        let mut admitted = Seen::new(asserted.len());
         for claim in asserted {
-            if !present(claim) && !out.asserted.contains(claim) {
+            if !present(claim) && admitted.first(claim, &out.asserted) {
                 out.asserted.push(claim.clone());
             }
         }
+        let staged = Seen::of(asserted);
+        let mut gone = Seen::new(retracted.len());
         for claim in retracted {
-            if present(claim) && !asserted.contains(claim) && !out.retracted.contains(claim) {
+            if present(claim) && !staged.holds(claim, asserted) && gone.first(claim, &out.retracted)
+            {
                 out.retracted.push(claim.clone());
             }
         }
         out
+    }
+}
+
+/// Membership in a list being built or already built: a scan for the
+/// few claims an ordinary act stages, a set for an act that stages many,
+/// where a scan per claim would make the delta quadratic.
+enum Seen<'c> {
+    Scan,
+    Set(HashSet<&'c ClaimInstance>),
+}
+
+impl<'c> Seen<'c> {
+    /// Past this many claims a scan per claim costs more than a set.
+    const SCAN_UP_TO: usize = 32;
+
+    fn new(len: usize) -> Self {
+        if len > Self::SCAN_UP_TO {
+            Seen::Set(HashSet::with_capacity(len))
+        } else {
+            Seen::Scan
+        }
+    }
+
+    fn of(claims: &'c [ClaimInstance]) -> Self {
+        if claims.len() > Self::SCAN_UP_TO {
+            Seen::Set(claims.iter().collect())
+        } else {
+            Seen::Scan
+        }
+    }
+
+    /// Whether `claim` is not yet in `list`, recording it if so; `list`
+    /// is the output so far, the one a scan reads.
+    fn first(&mut self, claim: &'c ClaimInstance, list: &[ClaimInstance]) -> bool {
+        match self {
+            Seen::Scan => !list.contains(claim),
+            Seen::Set(set) => set.insert(claim),
+        }
+    }
+
+    /// Whether `claim` is in `list`, the list this was made of.
+    fn holds(&self, claim: &ClaimInstance, list: &[ClaimInstance]) -> bool {
+        match self {
+            Seen::Scan => list.contains(claim),
+            Seen::Set(set) => set.contains(claim),
+        }
     }
 }
 
