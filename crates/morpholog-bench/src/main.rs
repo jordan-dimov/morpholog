@@ -1881,7 +1881,10 @@ async fn measure_rehearse(pool: &PgPool, case: &str, args: &RehearseArgs) -> Res
         for (into, span) in end_to_end_spans.iter_mut().zip(spans) {
             into.push(span);
         }
-        end_to_end_spans[4].push(whole.saturating_sub(spans.iter().sum()));
+        let other = whole.checked_sub(spans.iter().sum()).ok_or_else(|| {
+            anyhow!("the timed spans {spans:?} exceed the end-to-end time {whole:?}")
+        })?;
+        end_to_end_spans[4].push(other);
         // The process's high-water mark so far: the largest footprint any
         // phase reached, the decoded rows during the decision included.
         peak.push(peak_rss_mb().unwrap_or(f64::NAN));
