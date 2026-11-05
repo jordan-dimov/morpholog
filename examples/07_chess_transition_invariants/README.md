@@ -181,7 +181,7 @@ One limit: `rehearse` judges each move on the board the record shows. It can't p
 | `at_most_eight_pawns_per_color` | A side has at most eight pawns. |
 | `move_count_strictly_increases` | Each move adds exactly one to the move count: `MoveCount(n) and pre(MoveCount(m)) implies n = m + 1`. |
 | `turn_alternates` | The turn changes hands on every move: `CurrentTurn(now) and pre(CurrentTurn(prev)) implies now != prev`. |
-| `single_capture_per_move` | A move takes at most one piece. It counts the pieces before and after: `sum(1 \| pre(PieceAt(..)))` and `sum(1 \| PieceAt(..))`. |
+| `piece_count_drops_by_at_most_one` | A move never adds a piece, and the board loses at most one. It counts the pieces before and after, with `sum(1 \| pre(PieceAt(..)))` and `sum(1 \| PieceAt(..))`. It counts; it does not follow which pieces left. |
 
 There are two actions. `start_game()` sets up the board, once. `move_piece(src_f, src_r, dst_f, dst_r)` moves a piece and takes whatever stood on the destination. It checks two gates first: `your_own_piece` (the piece belongs to the player whose turn it is) and `not_onto_your_own_piece`. To take a piece, it uses `retract PieceAt(file: dst_f, rank: dst_r, ..)`, which removes any piece on that square and does nothing if it is empty.
 

@@ -47,7 +47,7 @@ fn program_has_expected_invariant_set() {
             "at_most_eight_pawns_per_color",
             "move_count_strictly_increases",
             "turn_alternates",
-            "single_capture_per_move",
+            "piece_count_drops_by_at_most_one",
         ],
     );
 }
@@ -80,7 +80,7 @@ fn capturing_a_king_is_rejected() {
     );
 }
 
-/// `single_capture_per_move` rejects a move that leaves a stray piece on
+/// `piece_count_drops_by_at_most_one` rejects a move that leaves a stray piece on
 /// the board: the board after holds one more piece than the board before.
 #[test]
 fn a_move_that_adds_a_piece_is_rejected() {
@@ -146,11 +146,11 @@ fn a_move_that_adds_a_piece_is_rejected() {
             vec![dec(2), dec(1), dec(3), dec(3), subj("black")],
             &state,
         ),
-        "single_capture_per_move",
+        "piece_count_drops_by_at_most_one",
     );
 }
 
-/// `single_capture_per_move` also rejects a move that takes two pieces at
+/// `piece_count_drops_by_at_most_one` also rejects a move that takes two pieces at
 /// once: the board after holds two fewer.
 #[test]
 fn a_move_that_takes_two_pieces_is_rejected() {
@@ -198,7 +198,7 @@ fn a_move_that_takes_two_pieces_is_rejected() {
     // The a7 and b7 pawns, gone in one move.
     refused_by(
         &ex().must_reject(double_take, squares([1, 7, 2, 7]), &state),
-        "single_capture_per_move",
+        "piece_count_drops_by_at_most_one",
     );
 }
 

@@ -7,8 +7,8 @@
 -- *change* from one move to the next. "At most one king per colour" is
 -- the first kind - you can check it by looking at a single snapshot of
 -- the board. But "every move advances the move counter by exactly one",
--- "the turn always passes to the other player", and "a move takes at
--- most one piece" are the second kind. You cannot check them by looking
+-- "the turn always passes to the other player", and "a move never
+-- adds a piece and removes at most one" are the second kind. You cannot check them by looking
 -- at one position alone; you have to compare the board before the move
 -- with the board after it. That is what makes them interesting.
 --
@@ -141,14 +141,19 @@ invariant move_count_strictly_increases:
 invariant turn_alternates:
   (CurrentTurn(t_now) and pre(CurrentTurn(t_prev))) implies (t_now != t_prev)
 
--- A single move takes at most one piece. Count the pieces after the
--- move, and count them again on the board as it was before: the first
--- count is the same as the second (a quiet move) or one less (a
--- capture). It can never drop by two, and a move can never add a piece.
--- `pre(...)` works inside a count too: `sum(1 | pre(PieceAt(..)))`
--- counts the pieces before the move. The rule starts once a game is
--- under way, so setting up the 32 pieces is not a "move".
-invariant single_capture_per_move:
+-- A move never adds a piece, and the board loses at most one. Count
+-- the pieces after the move, and count them again on the board as it
+-- was before: the first count is the same as the second (a quiet move)
+-- or one less (a capture). `pre(...)` works inside a count too:
+-- `sum(1 | pre(PieceAt(..)))` counts the pieces before the move. The
+-- rule starts once a game is under way, so setting up the 32 pieces is
+-- not a "move".
+--
+-- It counts pieces; it does not follow them. So it does not say by
+-- itself that only one piece was taken. That comes from `move_piece`
+-- below, which removes only two squares' pieces: its own, and whatever
+-- stood on the destination.
+invariant piece_count_drops_by_at_most_one:
   let after = (sum(1 | PieceAt(..)))
   let before = (sum(1 | pre(PieceAt(..))))
   pre(MoveCount(_)) implies (before - 1 <= after <= before)
