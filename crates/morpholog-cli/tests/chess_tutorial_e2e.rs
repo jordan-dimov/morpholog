@@ -18,13 +18,8 @@ use std::process::Command;
 const README: &str = "examples/07_chess_transition_invariants/README.md";
 const MORPH: &str = "examples/07_chess_transition_invariants/chess.morph";
 
-const DEFINE: &str = "\
-define keeps_square_colour(piece_type, src_f, src_r, dst_f, dst_r):
-  piece_type != #bishop or (src_f + src_r) % 2 = (dst_f + dst_r) % 2
-";
-const GATE: &str = "  require bishop_keeps_its_colour: keeps_square_colour(piece_type, src_f, src_r, dst_f, dst_r)\n";
-const GATE_ANCHOR: &str = "  require piece_color = current_turn\n";
-const DEFINE_ANCHOR: &str = "transformation start_game():";
+const GATE: &str = "  require bishop_keeps_its_colour: piece_type != #bishop or (src_f + src_r) % 2 = (dst_f + dst_r) % 2\n";
+const GATE_ANCHOR: &str = "  require your_own_piece: piece_color = current_turn\n";
 const FIXED: &str = "/tmp/chess_fixed.morph";
 
 fn readme() -> String {
@@ -69,10 +64,8 @@ fn propose(transformation: &str, args: &str) -> Value {
     .1
 }
 
-fn quiet(src_f: &str, src_r: &str, dst_f: &str, dst_r: &str, next: &str) -> String {
-    format!(
-        r#"{{"src_f": "{src_f}", "src_r": "{src_r}", "dst_f": "{dst_f}", "dst_r": "{dst_r}", "new_turn": "{next}"}}"#
-    )
+fn squares(src_f: &str, src_r: &str, dst_f: &str, dst_r: &str) -> String {
+    format!(r#"{{"src_f": "{src_f}", "src_r": "{src_r}", "dst_f": "{dst_f}", "dst_r": "{dst_r}"}}"#)
 }
 
 /// The squares of white's bishops, by the README's `inspect` line.
@@ -119,27 +112,20 @@ fn witness(v: &Value, var: &str) -> Value {
         .map_or(Value::Null, |w| w["value"]["value"].clone())
 }
 
-/// The reader's fix: the README's `define` and gate, placed where it says.
+/// The reader's fix: the README's gate, placed where it says.
 fn write_fixed(dir: &Path) -> std::path::PathBuf {
     let text = readme();
-    assert!(
-        text.contains(DEFINE),
-        "the README's define is not the one the test applies"
-    );
     assert!(
         text.contains(GATE),
         "the README's gate is not the one the test applies"
     );
     let source = std::fs::read_to_string(repo_root().join(MORPH)).unwrap();
-    assert_eq!(source.matches(DEFINE_ANCHOR).count(), 1);
     assert_eq!(
         source.matches(GATE_ANCHOR).count(),
-        2,
-        "the README says the gate goes below this line in both moves"
+        1,
+        "the README says the gate goes below this line in move_piece"
     );
-    let fixed = source
-        .replace(DEFINE_ANCHOR, &format!("{DEFINE}\n{DEFINE_ANCHOR}"))
-        .replace(GATE_ANCHOR, &format!("{GATE_ANCHOR}{GATE}"));
+    let fixed = source.replace(GATE_ANCHOR, &format!("{GATE_ANCHOR}{GATE}"));
     let path = dir.join("chess_fixed.morph");
     std::fs::write(&path, fixed).unwrap();
     path
@@ -152,10 +138,10 @@ async fn the_chess_tutorial_matches_the_binary() {
     // 2. Start a game.
     let started = propose("start_game", "{}");
     assert_eq!(started["status"], "committed", "{started}");
-    assert_eq!(started["asserted_claims"].as_array().unwrap().len(), 35);
+    assert_eq!(started["asserted_claims"].as_array().unwrap().len(), 34);
 
     // 3. The bishop rule refuses c1 to d3 while f1 stands, and nothing moves.
-    let refused = propose("quiet_move", &quiet("3", "1", "4", "3", "black"));
+    let refused = propose("move_piece", &squares("3", "1", "4", "3"));
     assert_eq!(refused["status"], "rejected", "{refused}");
     assert_eq!(refused["rule"], "bishops_on_opposite_square_colors");
     let mut files = [witness(&refused, "f_a"), witness(&refused, "f_b")];
@@ -164,12 +150,12 @@ async fn the_chess_tutorial_matches_the_binary() {
     assert_eq!(white_bishops(), [square("3", "1"), square("6", "1")]);
 
     // 4. The hole: with one bishop left, it changes colour.
-    for (transformation, args) in [
-        ("quiet_move", quiet("3", "1", "5", "3", "black")),
-        ("capturing_move", quiet("6", "7", "6", "1", "white")),
-        ("quiet_move", quiet("5", "3", "4", "3", "black")),
+    for args in [
+        squares("3", "1", "5", "3"),
+        squares("6", "7", "6", "1"),
+        squares("5", "3", "4", "3"),
     ] {
-        let moved = propose(transformation, &args);
+        let moved = propose("move_piece", &args);
         assert_eq!(moved["status"], "committed", "{args}: {moved}");
     }
     assert_eq!(white_bishops(), [square("4", "3")]);

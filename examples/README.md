@@ -42,6 +42,8 @@ one act is a margin-call run.
 | bound a figure from both sides | [05_insurance_claim_settlement](05_insurance_claim_settlement/) | `min(a, b)` and `max(a, b)` |
 | write a rule about the state before a change and after it | [07_chess_transition_invariants](07_chess_transition_invariants/) | `pre(...)` |
 | find out which past decisions a changed rule would have refused | [07_chess_transition_invariants](07_chess_transition_invariants/) | `rehearse` |
+| remove whatever a key holds, if anything, without naming it | [07_chess_transition_invariants](07_chess_transition_invariants/) | `retract Pred(key: k, ..)` |
+| count claims before a change and after it, in one rule | [07_chess_transition_invariants](07_chess_transition_invariants/) | `pre(...)` inside `sum(...)` |
 | insist a document was valid *on* a particular date | [06_clinical_trial_enrolment](06_clinical_trial_enrolment/) | `on_or_before` / `before` over `Date` |
 | reuse one condition in several rules | [06_clinical_trial_enrolment](06_clinical_trial_enrolment/) | `define name(params): body` |
 | work with exact instants and exact spans of time | [12_laytime_demurrage](12_laytime_demurrage/) | `Timestamp`, `Duration`, `at_or_before`, `no_longer_than` |

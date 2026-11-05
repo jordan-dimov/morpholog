@@ -15,9 +15,9 @@ Chess works well here because everyone knows what the rules should be. The same 
 
 The referee doesn't store a board. It stores *claims*: statements it has agreed to accept. There is one claim per piece, `PieceAt(file, rank, piece_type, color)`. A square is two numbers from 1 to 8: the file (the column) and the rank (the row). So the square chess players call c1 is file 3, rank 1.
 
-Three more claims track the game: the number of moves so far, the number of pieces left, and whose turn it is.
+Two more claims track the game: the number of moves so far, and whose turn it is. Nothing else is stored. The number of pieces left, for example, is never written down. The rules count it from the board when they need it, so it can't disagree with the board.
 
-A move is a proposal to change these claims. The referee checks the result against every rule. If they all still hold, it commits the move. If one fails, it refuses the move and changes nothing.
+A move is a proposal to change these claims. You say which piece moves, by its square, and where it goes. The referee works out the rest: whose turn comes next, and whether the move takes a piece. Then it checks the result against every rule. If they all still hold, it commits the move. If one fails, it refuses the move and changes nothing.
 
 Some rules look at one position, like "each side has exactly one king". Others compare the board before and after a move, like "the move count goes up by exactly one". Those use `pre(...)`, which means "as it was before this move". The idea comes from Murat Demirbas's [Chess invariants](https://muratbuffalo.blogspot.com/2026/05/chess-invariants.html) post, which models chess in TLA+.
 
@@ -50,7 +50,7 @@ M=examples/07_chess_transition_invariants/chess.morph
 morpholog propose "$M" start_game --actor you --args-named '{}'
 ```
 
-The answer says `"status": "committed"`. It lists the 35 claims the referee accepted: 32 pieces, a move count of 0, a piece count of 32, and white to move.
+The answer says `"status": "committed"`. It lists the 34 claims the referee accepted: 32 pieces, a move count of 0, and white to move.
 
 `--actor you` says who made the proposal. Here it is just a name you typed. Nobody checked it.
 
@@ -60,10 +60,10 @@ Each side has two bishops. One moves on light squares, the other on dark squares
 
 The referee doesn't store square colours. It works them out: `(file + rank) % 2` is 0 on a dark square and 1 on a light one. The rule `bishops_on_opposite_square_colors` says a side's two bishops always stand on different colours.
 
-Try to move white's dark-squared bishop from c1 to d3, a light square. White's other bishop is still on f1, also a light square.
+Try to move white's dark-squared bishop from c1 to d3, a light square. White's other bishop is still on f1, also a light square. The move gives the piece's square and the square it goes to, as file and rank: c1 is `3, 1` and d3 is `4, 3`.
 
 ```sh
-morpholog propose "$M" quiet_move --actor you --args-named '{"src_f": "3", "src_r": "1", "dst_f": "4", "dst_r": "3", "new_turn": "black"}'
+morpholog propose "$M" move_piece --actor you --args-named '{"src_f": "3", "src_r": "1", "dst_f": "4", "dst_r": "3"}'
 ```
 
 The answer says `"status": "rejected"` and names the rule `bishops_on_opposite_square_colors`. Its `witness` shows the two bishops the rule compared, on files 4 and 6. Nothing changed. Check where the white bishops are:
@@ -79,9 +79,9 @@ They are still on c1 and f1.
 Now play three moves. None of them is legal chess. The bishop can't pass its own pawn on d2. A pawn on f7 can't take a piece on f1. A bishop can't step sideways. Our referee allows all three, because it doesn't know how pieces move. That isn't the hole we're after. Watch what the third move does to a rule the referee *does* check.
 
 ```sh
-morpholog propose "$M" quiet_move --actor you --args-named '{"src_f": "3", "src_r": "1", "dst_f": "5", "dst_r": "3", "new_turn": "black"}'
-morpholog propose "$M" capturing_move --actor you --args-named '{"src_f": "6", "src_r": "7", "dst_f": "6", "dst_r": "1", "new_turn": "white"}'
-morpholog propose "$M" quiet_move --actor you --args-named '{"src_f": "5", "src_r": "3", "dst_f": "4", "dst_r": "3", "new_turn": "black"}'
+morpholog propose "$M" move_piece --actor you --args-named '{"src_f": "3", "src_r": "1", "dst_f": "5", "dst_r": "3"}'
+morpholog propose "$M" move_piece --actor you --args-named '{"src_f": "6", "src_r": "7", "dst_f": "6", "dst_r": "1"}'
+morpholog propose "$M" move_piece --actor you --args-named '{"src_f": "5", "src_r": "3", "dst_f": "4", "dst_r": "3"}'
 ```
 
 Here is what happens:
@@ -112,20 +112,15 @@ First, copy the programme, so the original stays as it is:
 cp "$M" /tmp/chess_fixed.morph
 ```
 
-In the copy, add this condition at the top level. Just above `transformation start_game():` is a good place.
+In the copy, find `transformation move_piece` and add this gate just below the line `require your_own_piece: piece_color = current_turn`:
 
 ```
-define keeps_square_colour(piece_type, src_f, src_r, dst_f, dst_r):
-  piece_type != #bishop or (src_f + src_r) % 2 = (dst_f + dst_r) % 2
+  require bishop_keeps_its_colour: piece_type != #bishop or (src_f + src_r) % 2 = (dst_f + dst_r) % 2
 ```
 
-Then add this gate to both `quiet_move` and `capturing_move`, just below the line `require piece_color = current_turn`:
+It reads: the piece is not a bishop, or its old square and its new square have the same colour.
 
-```
-  require bishop_keeps_its_colour: keeps_square_colour(piece_type, src_f, src_r, dst_f, dst_r)
-```
-
-Why add it twice? A rule written as an `invariant` checks every change, whatever made it. A gate checks only the move it sits in. So every move that can carry a bishop needs the gate. The `define` writes the condition once, so the two moves can't drift apart.
+A gate checks only the action it sits in. A rule written as an `invariant` checks every change, whatever made it. Here `move_piece` is the only action that moves pieces, so one gate is enough. If the programme ever gains another way to move a bishop, that action needs the gate too.
 
 Now check the copy:
 
@@ -181,16 +176,14 @@ One limit: `rehearse` judges each move on the board the record shows. It can't p
 | --- | --- |
 | `piece_at_unique_by_file_rank` | A square holds at most one piece. It comes from `unique by (file, rank)` on `PieceAt`. |
 | `pieces_stand_on_the_board` | File and rank are whole numbers from 1 to 8. |
-| `turn_belongs_to_a_player` | It is always white's turn or black's. |
 | `exactly_one_white_king` / `exactly_one_black_king` | Each side has exactly one king, so a king can never be taken. |
 | `bishops_on_opposite_square_colors` | A side's two bishops stand on different colours. With one left, there is nothing to compare. |
-| `piece_count_matches_board` / `board_with_pieces_has_a_counter` | The piece count exists, and it matches the pieces on the board. |
 | `at_most_eight_pawns_per_color` | A side has at most eight pawns. |
 | `move_count_strictly_increases` | Each move adds exactly one to the move count: `MoveCount(n) and pre(MoveCount(m)) implies n = m + 1`. |
 | `turn_alternates` | The turn changes hands on every move: `CurrentTurn(now) and pre(CurrentTurn(prev)) implies now != prev`. |
-| `single_capture_per_move` | A move takes at most one piece: the piece count stays the same or drops by one. |
+| `single_capture_per_move` | A move takes at most one piece. It counts the pieces before and after: `sum(1 \| pre(PieceAt(..)))` and `sum(1 \| PieceAt(..))`. |
 
-There are three actions: `start_game()`, `quiet_move(src_f, src_r, dst_f, dst_r, new_turn)`, and `capturing_move(...)` with the same arguments. Each move checks its own conditions with `require`. The piece must belong to the player whose turn it is. The next turn must be the other player's. A quiet move must land on an empty square.
+There are two actions. `start_game()` sets up the board, once. `move_piece(src_f, src_r, dst_f, dst_r)` moves a piece and takes whatever stood on the destination. It checks two gates first: `your_own_piece` (the piece belongs to the player whose turn it is) and `not_onto_your_own_piece`. To take a piece, it uses `retract PieceAt(file: dst_f, rank: dst_r, ..)`, which removes any piece on that square and does nothing if it is empty.
 
 ## How this page is checked
 
