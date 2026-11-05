@@ -10,6 +10,7 @@
 //! variable, wrong `ValueOf` cardinality). It is not a business
 //! rejection; that is `Outcome::Rejected`.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 use jiff::civil::Date;
@@ -816,15 +817,16 @@ fn select_candidates<'a>(
 
     let mut best: Option<CandidateBucket<'a>> = None;
     for (pos, term) in args.iter().enumerate() {
+        // A bound value is only a lookup key here, so it is borrowed.
         let ground = match term {
             Term::Wildcard => None,
-            Term::Var(name) => base.get(name).map(|v| EvalValue::clone(v)),
+            Term::Var(name) => base.get(name).map(|v| Cow::Borrowed(&**v)),
             // No admitted claim can carry a calendar span, so as a
             // ground argument it matches nothing.
             Term::Literal(Value::CalendarSpan(_)) => None,
-            Term::Literal(lit) => Some(EvalValue::from(lit)),
+            Term::Literal(lit) => Some(Cow::Owned(EvalValue::from(lit))),
             Term::Actor => match actor {
-                Some(a) => Some(EvalValue::Subject(a.clone())),
+                Some(a) => Some(Cow::Owned(EvalValue::Subject(a.clone()))),
                 None => return Err(EvalError::UnboundActor),
             },
         };

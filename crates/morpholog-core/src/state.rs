@@ -10,6 +10,7 @@ use jiff::civil::Date;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasher;
 use std::sync::Arc;
 
 use crate::ir::{IntentName, PredicateName, Subject, Unit, Var};
@@ -288,7 +289,38 @@ struct PredicateIndex {
     all: Vec<usize>,
     /// `by_arg[position][value]` -> indices into `Layer.claims` for
     /// claims with this predicate where `args[position] == value`.
-    by_arg: Vec<HashMap<EvalValue, Vec<usize>>>,
+    by_arg: Vec<ArgIndex>,
+}
+
+/// A rule's every lookup by argument value hashes the value, so this
+/// index uses a faster keyed hash than the rest of the kernel.
+type ArgIndex = HashMap<EvalValue, Vec<usize>, ArgHasher>;
+
+/// aHash keyed per map from the standard library's random keys, the ones
+/// its own maps use, so no two maps share keys and no randomness crate
+/// is needed.
+#[derive(Clone)]
+struct ArgHasher(ahash::RandomState);
+
+impl Default for ArgHasher {
+    fn default() -> Self {
+        let keys = std::collections::hash_map::RandomState::new();
+        let key = |i: u64| keys.hash_one(i);
+        Self(ahash::RandomState::with_seeds(
+            key(0),
+            key(1),
+            key(2),
+            key(3),
+        ))
+    }
+}
+
+impl BuildHasher for ArgHasher {
+    type Hasher = ahash::AHasher;
+
+    fn build_hasher(&self) -> Self::Hasher {
+        self.0.build_hasher()
+    }
 }
 
 impl Layer {
@@ -308,7 +340,9 @@ impl Layer {
             .or_default();
         entry.all.push(i);
         if entry.by_arg.len() < claim.args.len() {
-            entry.by_arg.resize_with(claim.args.len(), HashMap::new);
+            entry
+                .by_arg
+                .resize_with(claim.args.len(), ArgIndex::default);
         }
         for (pos, value) in claim.args.iter().enumerate() {
             entry.by_arg[pos].entry(value.clone()).or_default().push(i);
@@ -955,4 +989,20 @@ impl Bound {
 pub struct IntentInstance {
     pub name: IntentName,
     pub args: Vec<EvalValue>,
+}
+
+#[cfg(test)]
+mod arg_hasher_tests {
+    use super::*;
+
+    /// No two argument indexes share hash keys: each map is keyed afresh,
+    /// so a collision found against one does not carry to another.
+    #[test]
+    fn each_argument_index_is_keyed_afresh() {
+        let value = EvalValue::Subject("row_1".into());
+        let hashes: HashSet<u64> = (0..16)
+            .map(|_| ArgHasher::default().hash_one(&value))
+            .collect();
+        assert_eq!(hashes.len(), 16, "two indexes hashed a value alike");
+    }
 }
