@@ -778,3 +778,108 @@ fn a_failing_expression_target_fails_the_whole_sum() {
     let err = propose_with_test_actor(&probe, vec![], &candidate_state, &[], &[]).unwrap_err();
     assert!(matches!(err, EvalError::DivisionByZero), "{err:?}");
 }
+
+/// A defined call's matches as first written: the body's matches, each
+/// projected onto the caller's bindings and kept unless an equal one is
+/// already in the list.
+fn defined_by_scan(
+    def: &Definition,
+    args: &[Term],
+    ctx: &crate::eval::EvalContext<'_>,
+    state: &State,
+) -> Vec<crate::state::Bindings> {
+    let frame = crate::eval::definition_call_frame(def, args, ctx).unwrap();
+    let body_ctx = crate::eval::EvalContext::new(
+        state,
+        None,
+        &frame,
+        None,
+        crate::definitions::DefinitionTable::new(&[]),
+    );
+    let mut out: Vec<crate::state::Bindings> = Vec::new();
+    for m in crate::eval::find_matches(&def.body, &body_ctx).unwrap() {
+        let mut extended = ctx.bindings.clone();
+        let mut admit = true;
+        for (param, arg) in def.parameters.iter().zip(args) {
+            let value = &m[param];
+            if let Term::Var(v) = arg {
+                match extended.get(v) {
+                    Some(prev) if prev != value => {
+                        admit = false;
+                        break;
+                    }
+                    Some(_) => {}
+                    None => {
+                        extended.insert(v.clone(), value.clone());
+                    }
+                }
+            }
+        }
+        if admit && !out.contains(&extended) {
+            out.push(extended);
+        }
+    }
+    out
+}
+
+proptest::proptest! {
+    /// A defined call yields the same matches, in the same order, as the
+    /// scan it replaced, for every way a call can pass its arguments:
+    /// fresh variables, a wildcard, a repeated variable, a variable the
+    /// caller already bound, a literal, and a caller binding the call
+    /// never mentions. The claims come from a small universe, so many
+    /// body matches project to the same arguments, and the distinct
+    /// projections cross the point where a set takes over.
+    #[test]
+    fn a_defined_call_projects_as_the_scan_did(
+        rows in proptest::collection::vec((0..6u8, 0..12u8, 0..3u8), 0..240),
+        shape in 0..6usize,
+        bound in 0..6u8,
+    ) {
+        use crate::kernel_tests::support::subj;
+        use crate::state::{Bindings, Bound};
+        let name = |prefix: &str, i: u8| subj(&format!("{prefix}{i}"));
+        let def = Definition {
+            origin: crate::DefinitionOrigin::Authored,
+            name: "f".into(),
+            parameters: vec![Var::from("p"), Var::from("q")],
+            body: claim("R", vec![var("p"), var("q"), var("t")]),
+        };
+        let state = State::from_claims(
+            rows.iter()
+                .map(|&(p, q, t)| crate::ClaimInstance {
+                    predicate: "R".into(),
+                    args: vec![name("p", p), name("q", q), name("t", t)],
+                })
+                .collect(),
+        );
+        let mut bindings = Bindings::new();
+        let args = match shape {
+            0 => vec![var("x"), var("y")],
+            1 => vec![var("x"), Term::Wildcard],
+            2 => vec![var("z"), var("z")],
+            3 => {
+                bindings.insert(Var::from("x"), Bound::from(name("p", bound)));
+                vec![var("x"), var("y")]
+            }
+            4 => vec![var("x"), Term::Literal(crate::Value::Subject("q1".into()))],
+            _ => {
+                bindings.insert(Var::from("w"), Bound::from(name("p", bound)));
+                vec![Term::Wildcard, var("y")]
+            }
+        };
+        let defs = vec![def];
+        let ctx = crate::eval::EvalContext::new(
+            &state,
+            None,
+            &bindings,
+            None,
+            crate::definitions::DefinitionTable::new(&defs),
+        );
+        let call = Prop::Defined { name: "f".into(), args: args.clone() };
+        proptest::prop_assert_eq!(
+            crate::eval::find_matches(&call, &ctx).unwrap(),
+            defined_by_scan(&defs[0], &args, &ctx, &state)
+        );
+    }
+}

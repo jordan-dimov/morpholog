@@ -10,6 +10,8 @@
 //! variable, wrong `ValueOf` cardinality). It is not a business
 //! rejection; that is `Outcome::Rejected`.
 
+use std::collections::HashSet;
+
 use jiff::civil::Date;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -425,6 +427,10 @@ pub(crate) fn definition_call_frame(
     Ok(frame)
 }
 
+/// Past this many distinct matches a defined call checks membership in
+/// a set rather than by scanning.
+const SCAN_UP_TO: usize = 32;
+
 /// Evaluate a call to a named definition. The body runs under the call
 /// frame (see [`definition_call_frame`]); each body match projects its
 /// parameter values back onto the call's arguments, extending the
@@ -443,7 +449,20 @@ fn find_defined_matches(
     let frame = definition_call_frame(def, args, ctx)?;
     let body_matches = find_matches(&def.body, &ctx.enter_definition(&frame))?;
 
+    // Every match extends the same bindings with the same argument
+    // variables, so two matches are equal exactly when those variables
+    // hold equal values. A large result checks that key in a set; a
+    // small one scans, which allocates nothing.
+    let key = |b: &Bindings| -> Vec<Bound> {
+        args.iter()
+            .filter_map(|arg| match arg {
+                Term::Var(v) => b.get(v).cloned(),
+                _ => None,
+            })
+            .collect()
+    };
     let mut out: Vec<Bindings> = Vec::new();
+    let mut seen: Option<HashSet<Vec<Bound>>> = None;
     for m in body_matches {
         let mut extended = copy_bindings(ctx.bindings);
         let mut admit = true;
@@ -469,8 +488,18 @@ fn find_defined_matches(
                 }
             }
         }
-        if admit && !out.contains(&extended) {
+        if !admit {
+            continue;
+        }
+        let fresh = match &mut seen {
+            Some(set) => set.insert(key(&extended)),
+            None => !out.contains(&extended),
+        };
+        if fresh {
             out.push(extended);
+            if seen.is_none() && out.len() > SCAN_UP_TO {
+                seen = Some(out.iter().map(key).collect());
+            }
         }
     }
     Ok(out)
