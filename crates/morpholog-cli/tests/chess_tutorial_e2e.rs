@@ -1,4 +1,4 @@
-//! The chess README's tutorial, run as written.
+//! The chess README's tutorial, checked against the binary.
 //!
 //! Every command the test runs is formatted the way the README prints it,
 //! and the README must contain that exact line; so is the fix the reader
@@ -181,7 +181,7 @@ async fn the_chess_tutorial_runs_as_written() {
     let (ok, _) = run(&["check", fixed]);
     assert!(ok, "the fixed programme must check clean");
 
-    // 6. Rehearsal: four moves, one refused by the new gate, e3 to d3.
+    // 6. Rehearsal: four actions, one refused by the new gate, e3 to d3.
     printed(&format!("morpholog rehearse {FIXED}"));
     for line in [
         "\"transitions_replayed\": 4,",

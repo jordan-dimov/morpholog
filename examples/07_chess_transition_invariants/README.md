@@ -57,7 +57,7 @@ Still on c1 and f1.
 
 ### 4. A hole in the rule
 
-The referee doesn't know how pieces move, so we can use that freedom to build a position quickly. A real referee would refuse two of these moves: the bishop cannot pass its own pawn on d2, and a pawn on f7 cannot take on f1. Ours accepts them, and that is not the hole we are after. Watch the third move:
+None of these three moves is legal chess: the bishop cannot pass its own pawn on d2, a pawn on f7 cannot take on f1, and a bishop never moves sideways. Our referee accepts all three because it does not know how pieces move, and that is not the hole we are after. Watch what the third move does to a rule the referee *does* enforce:
 
 ```sh
 morpholog propose "$M" quiet_move --actor you --args-named '{"src_f": "3", "src_r": "1", "dst_f": "5", "dst_r": "3", "new_turn": "black"}'
@@ -71,7 +71,7 @@ The bishop goes c1 to e3 (dark to dark), black takes white's light-squared bisho
 morpholog inspect claims --named "$M" --predicate PieceAt --where piece_type=bishop --where color=white
 ```
 
-One white bishop, on d3: a dark-squared bishop on a light square. In step 3 the same move was refused.
+One white bishop, on d3: a dark-squared bishop on a light square. In step 3 the referee refused to put that bishop on d3.
 
 The rule did exactly what it says. It compares a side's two bishops, and white now has one. A rule about a single position cannot see where that bishop was before the move.
 
@@ -106,19 +106,19 @@ Why twice? An invariant guards every change, however it is made. A gate guards o
 morpholog check /tmp/chess_fixed.morph
 ```
 
-No output means the rules are sound.
+No output means the programme passed Morpholog's checks: it is well formed, with names, arities, kinds and bindings that agree. That does not mean they are the rules you meant. The programme in step 4 passed them too.
 
 ### 6. What about the moves already made?
 
-We found a mistake in our rules. Before running anything, predict: of the four moves the referee has committed, which would the fixed rules have refused?
+We found a mistake in our rules. Before running anything, predict: of the four actions the referee has committed, starting the game and three moves, which would the fixed rules have refused?
 
 ```sh
 morpholog rehearse /tmp/chess_fixed.morph
 ```
 
-`rehearse` takes every committed move from the record and decides it again under the new rules, against the board as it stood at the time. It changes nothing. Among its answer:
+`rehearse` takes every committed action from the record and decides it again under the new rules, against the board as it stood at the time. It changes nothing. Among its answer:
 
-```json
+```text
 "transitions_replayed": 4,
 "totals": {
   "same": 3,
@@ -140,7 +140,7 @@ One limit: `rehearse` judges each recorded move on the board the record shows. I
 
 ## What this guarantees, and what it doesn't
 
-**Guarantees.** Every committed move obeyed every rule in the programme it was proposed under. A refused move changed nothing. The record of what was committed stays as it was, and `rehearse` can judge it again under any candidate rules.
+**Guarantees.** Every committed move obeyed every rule in the programme it was proposed under. A refused move changed nothing. The record of what was committed stays as it was, and `rehearse` can decide it again under a candidate programme, reporting which decisions would differ, and which actions the candidate cannot replay at all (one it no longer has, or whose arguments it no longer takes).
 
 **Assumes.** `--actor you` is a name you asserted, not an identity anyone authenticated. The moves are what the players meant to play; the referee checks the rules, not the intent.
 
@@ -163,4 +163,4 @@ One limit: `rehearse` judges each recorded move on the board the record shows. I
 
 The moves are `start_game()`, `quiet_move(src_f, src_r, dst_f, dst_r, new_turn)` and `capturing_move(...)` with the same arguments. Each gates its own preconditions with `require`: the mover owns the turn, the next turn differs, a quiet move's destination is empty.
 
-The steps above are checked: `cargo test -p morpholog-cli --test chess_tutorial_e2e` runs the same commands and fails if this page and the referee disagree. It empties the database in `DATABASE_URL` first, so give it a disposable one.
+The steps above are checked by a test, which empties Morpholog's tables in the database named by `DATABASE_URL` before it starts, so point it at a disposable one: `cargo test -p morpholog-cli --test chess_tutorial_e2e`. It proposes the same moves, applies the same fix and runs the same reads as this page, checks that each command appears here exactly as it runs, and fails if this page and the referee disagree. It does not run the setup or your editor: it uses a prepared test database and writes the fixed copy itself.
