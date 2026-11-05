@@ -1,5 +1,20 @@
 # Morpholog: Scope and Ambition
 
+## Proposed product ambition: cheaper, faster business applications (5 November 2026)
+
+**Decision status: hypothesis being tested; not a change to kernel semantics.** See [#697](https://github.com/jordan-dimov/morpholog/issues/697) and the real-application experiment [#696](https://github.com/jordan-dimov/morpholog/issues/696).
+
+The original ambition was to help teams build **better business software with less human engineering effort**. Enforcing commit legitimacy and keeping a defensible record is a valuable foundation, but not proof that adopting the product reduces application cost. The decisive question is whether a developer can build **and change** an equivalent real application with materially less total work than a conventional, capable AI-assisted implementation.
+
+**Separate kernel scope from product scope.** The constitutional claims / transformations / invariants model, deterministic finite decisions, explicit external compute, transactional enforcement, honest provenance and no-bypass rule remain unchanged. The fact that a runtime does not execute UI, workflows, arbitrary computation or ORM objects does *not* by itself forbid the surrounding product from generating typed interfaces, application commands, read adapters, models, scaffolding or usable domain patterns. Any such tool must produce independently intelligible source or preserve a clear, versioned contract; it must not quietly introduce another authority path or a second source of business truth.
+
+Treat existing non-goals below as **runtime and language defaults**, not permanent prohibitions on distinct, optional application-facing tooling. A language or semantic change still needs a forcing case. A new product tool must demonstrate that it eliminates more maintained work than it adds. If application abstractions need a richer authored specification, make missing business information explicit rather than inventing it.
+
+The [django-helpdesk comparison (#696)](https://github.com/jordan-dimov/morpholog/issues/696) tests three variants: unmodified upstream; a bounded lifecycle implemented with Morpholog today while retaining Django's useful infrastructure; and one measured product improvement. Freeze user-visible parity and later requirement changes before implementation, count maintained policy and integration complexity as well as human time, and publish negative results. **Do not claim a productivity gain from rule correctness, code generation or LOC alone.** This experiment may justify a broader Morpholog product, a separate application-building product around the existing kernel, or a return to the narrower thesis.
+
+Until that experiment provides evidence, the constitution and existing runtime guarantees below remain the operational contract.
+
+
 Companion to [`runtime-semantics.md`](runtime-semantics.md) and to [`design-history.md`](design-history.md), which records (retrospectively) which specific examples forced which design decisions.
 
 This document fixes what Morpholog is *for*, what it should grow into, and - equally important - what it must never become. It is a defence against two opposite mistakes: under-claiming the value, and over-claiming the surface.
