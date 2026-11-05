@@ -995,8 +995,8 @@ pub struct IntentInstance {
 mod arg_hasher_tests {
     use super::*;
 
-    /// No two argument indexes share hash keys: each map is keyed afresh,
-    /// so a collision found against one does not carry to another.
+    /// Each argument index is keyed afresh, never from fixed seeds. This
+    /// catches a fixed seed; it says nothing of how good the keys are.
     #[test]
     fn each_argument_index_is_keyed_afresh() {
         let value = EvalValue::Subject("row_1".into());

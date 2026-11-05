@@ -502,6 +502,20 @@ A profile of the decisions put SipHash at about a quarter of them, most of it th
 
 What it measures. Borrowing takes about 2 percent off the decisions; aHash about 5 percent more, so 6 to 8 percent together. aHash also takes 9 to 11 percent off the advances, which build and extend the same index. End to end is 4 to 6 percent faster. Peak memory does not move beyond a few MB. On the matcher shapes borrowing is 3 to 9 percent faster with a tenth fewer allocations, and aHash 2 to 5 percent more; the sum, which looks nothing up by a subject, does not move. Every fixture's subjects are short; a lookup alone, outside the kernel, takes about half the time under aHash at every subject length from 8 to 128 characters. The bench suite, four runs a side, flagged one cell, `write/base` at 100 entries, with its database-only phases higher too; eight further runs of that scenario alone read the candidate equal or faster in every phase.
 
+aHash takes its AES path only when a build enables that CPU feature, and Morpholog's builds do not, so these are its portable path's numbers: the path every default build takes, on any processor. They are still this machine's.
+
+### Classifying a delta without hashing its cases (2026-11-05, three binaries interleaved A B C C B A)
+
+A profile put about half of impact classification in the set that keeps each touched case once: hashing whole case maps, cloning them in, and dropping them. Three binaries were compared: the parent (A); the set keyed on borrowed values instead of a cloned map (B); and the cases compared directly until there are 32, then the set, as a defined call's projections already are (C). Means of two runs each over 100k rows:
+
+| 100k rows | decisions, A B C | judgement phase, A B C |
+|---|---|---|
+| append | 1,128, 1,092, 1,034 ms | 877, 853, 809 ms |
+| revise 1,000 | 2,059, 1,999, 1,943 ms | 1,739, 1,652, 1,553 ms |
+| 100k rows behind 100k noise claims | 1,310, 1,309, 1,272 ms | 957, 947, 902 ms |
+
+What it measures. An ordinary delta touches a handful of cases, so C hashes no case there, and takes 3 to 8 percent off the decisions to B's 0 to 3. End to end, append is 5 percent faster under C; the revise and noise runs moved with their database-only phases, which this change cannot touch, so they read nothing. The matcher's new wide delta, one act admitting a case per witness, stays linear under all three; at 10,000 cases B is 9 percent faster and C within 4 percent of A. Under the default release build the matcher read C up to 17 percent slower even on shapes that classify nothing, with the same allocations, the extra time in value comparison. Built with one codegen unit, most shapes came within 2 percent and none past 8, and the worst one, an `and` chain at 10,000 witnesses and eight variables, slowed under A to C's time: the default build had split the crate luckily for A, not unluckily for C.
+
 ### Deferred
 
 - **As-of reads that cost what the answer costs.** Replay is linear in the transitions before the target, under retraction and revision alike. The TEC register made that unacceptable for an interactive read, and `asof/revise` is its ruler: a small live set over a long history, where the cost is all history.

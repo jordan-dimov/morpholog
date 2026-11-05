@@ -974,7 +974,8 @@ proptest::proptest! {
     /// repeated variable that can contradict itself, a literal guard, a
     /// pattern binding no case variable, and a body checked whole. The
     /// claims come from a small universe, so cases repeat, and the
-    /// distinct cases of a large delta number past a hundred.
+    /// distinct cases of a large delta cross the point where a set takes
+    /// over.
     #[test]
     fn a_delta_names_the_cases_its_claims_name(
         asserted in proptest::collection::vec((0..3u8, 0..8u8, 0..8u8), 0..160),
