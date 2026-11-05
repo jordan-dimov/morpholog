@@ -10,7 +10,7 @@
 
 mod common;
 
-use common::{Example, dec, refused_by, subj};
+use common::{Example, dec, dec_str, refused_by, subj};
 use morpholog_core::{EvalValue, Outcome, Program, State};
 use morpholog_examples::chess_transition_invariants;
 use std::sync::OnceLock;
@@ -40,6 +40,8 @@ fn program_has_expected_invariant_set() {
         names,
         vec![
             "piece_at_unique_by_file_rank",
+            "pieces_stand_on_the_board",
+            "turn_belongs_to_a_player",
             "exactly_one_white_king",
             "exactly_one_black_king",
             "bishops_on_opposite_square_colors",
@@ -283,6 +285,101 @@ fn quiet_move_after_opening_succeeds() {
         }),
         "pawn must no longer be at e2"
     );
+}
+
+/// The turn passes between white and black, and to no one else. A move
+/// may name any other colour as the next turn and pass its own gate, but
+/// `turn_belongs_to_a_player` refuses the result.
+#[test]
+fn the_turn_passes_between_the_two_players_only() {
+    let program = chess_transition_invariants::program();
+    let state = run_start_game(&program);
+    let state = run_named(
+        &program,
+        "quiet_move",
+        vec![dec(5), dec(2), dec(5), dec(4), subj("black")],
+        state,
+    );
+    let state = run_named(
+        &program,
+        "quiet_move",
+        vec![dec(5), dec(7), dec(5), dec(5), subj("white")],
+        state,
+    );
+
+    let quiet = program.transformation("quiet_move").expect("exists");
+    refused_by(
+        &ex().must_reject(
+            quiet,
+            vec![dec(4), dec(2), dec(4), dec(4), subj("green")],
+            &state,
+        ),
+        "turn_belongs_to_a_player",
+    );
+}
+
+// ============================================================
+// The board: whole squares from 1 to 8.
+// ============================================================
+
+/// A piece may land on the edge files: knight g1 to h3 reaches file 8,
+/// knight b8 to a6 file 1.
+#[test]
+fn a_piece_may_land_on_the_edge_of_the_board() {
+    let program = chess_transition_invariants::program();
+    let state = run_start_game(&program);
+    let state = run_named(
+        &program,
+        "quiet_move",
+        vec![dec(7), dec(1), dec(8), dec(3), subj("black")],
+        state,
+    );
+    let state = run_named(
+        &program,
+        "quiet_move",
+        vec![dec(2), dec(8), dec(1), dec(6), subj("white")],
+        state,
+    );
+    for square in [
+        vec![dec(8), dec(3), subj("knight"), subj("white")],
+        vec![dec(1), dec(6), subj("knight"), subj("black")],
+    ] {
+        assert!(
+            state
+                .claims()
+                .iter()
+                .any(|c| c.predicate.as_str() == "PieceAt" && c.args == square),
+            "expected a knight at {square:?}"
+        );
+    }
+}
+
+/// Off the board, or between squares, is refused. Each destination keeps
+/// the c1 bishop on its own colour or off the colour scale entirely, so
+/// only the board rule can say no. A bishop on file 3.5 would otherwise
+/// slip past the colour rule: its colour would be 0.5.
+#[test]
+fn a_piece_off_the_board_is_rejected() {
+    let program = chess_transition_invariants::program();
+    let state = run_start_game(&program);
+    let quiet = program.transformation("quiet_move").expect("exists");
+    for (file, rank) in [
+        (dec(5), dec(9)),
+        (dec(4), dec(0)),
+        (dec(9), dec(3)),
+        (dec(0), dec(4)),
+        (dec_str("3.5"), dec(3)),
+        (dec(5), dec_str("3.5")),
+    ] {
+        refused_by(
+            &ex().must_reject(
+                quiet,
+                vec![dec(3), dec(1), file, rank, subj("black")],
+                &state,
+            ),
+            "pieces_stand_on_the_board",
+        );
+    }
 }
 
 // ============================================================
