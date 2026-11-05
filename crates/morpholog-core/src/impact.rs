@@ -286,10 +286,12 @@ impl ImpactPlan {
                 Impact::Unbounded
             };
         }
-        // Occurrence order, deduplicated through the set so a large delta
-        // stays linear in its distinct cases.
+        // Occurrence order, each case once. A delta names few cases, so
+        // they are compared directly until a set pays for itself, which
+        // keeps a large delta linear in its distinct cases.
+        const SCAN_UP_TO: usize = 32;
         let mut cases: Vec<BTreeMap<Var, EvalValue>> = Vec::new();
-        let mut seen: HashSet<BTreeMap<Var, EvalValue>> = HashSet::new();
+        let mut seen: Option<HashSet<BTreeMap<Var, EvalValue>>> = None;
         let mut touched = false;
         for claim in asserted.iter().chain(retracted) {
             for occ in &self.occurrences {
@@ -319,8 +321,18 @@ impl ImpactPlan {
                         _ => {}
                     }
                 }
-                if !contradictory && seen.insert(case.clone()) {
+                if contradictory {
+                    continue;
+                }
+                let fresh = match &mut seen {
+                    Some(set) => set.insert(case.clone()),
+                    None => !cases.contains(&case),
+                };
+                if fresh {
                     cases.push(case);
+                    if seen.is_none() && cases.len() > SCAN_UP_TO {
+                        seen = Some(cases.iter().cloned().collect());
+                    }
                 }
             }
         }
