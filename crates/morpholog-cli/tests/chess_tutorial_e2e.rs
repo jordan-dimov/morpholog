@@ -1,8 +1,8 @@
 //! The chess README's tutorial, checked against the binary.
 //!
 //! Every command the test runs is formatted the way the README prints it,
-//! and the README must contain that exact line; so is the fix the reader
-//! types. A move, a flag or a snippet changed on one side alone fails here.
+//! and the README must contain that exact line; so must the fix the reader
+//! types and the output excerpt. A move, a flag or a snippet changed on one side alone fails here.
 //! The README's `createdb` and `init` steps are the test database's own
 //! setup, which `reset_db` stands in for.
 
@@ -34,11 +34,12 @@ fn readme() -> String {
 fn printed(line: &str) {
     assert!(
         readme().lines().any(|l| l == line),
-        "the README no longer shows this command, so the test and the page disagree: {line}"
+        "the README no longer shows this line, so the test and the page disagree: {line}"
     );
 }
 
-/// Run the binary on `args` against the test database: (exit ok, stdout).
+/// Run the binary on `args` against the test database: (exit ok, stdout
+/// as JSON, or stderr as a string when stdout is not JSON).
 fn run(args: &[&str]) -> (bool, Value) {
     let output = Command::new(common::bin())
         .args(args)
@@ -46,7 +47,8 @@ fn run(args: &[&str]) -> (bool, Value) {
         .current_dir(repo_root())
         .output()
         .unwrap();
-    let stdout = serde_json::from_slice(&output.stdout).unwrap_or(Value::Null);
+    let stdout = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&output.stderr).into_owned()));
     (output.status.success(), stdout)
 }
 
@@ -144,7 +146,7 @@ fn write_fixed(dir: &Path) -> std::path::PathBuf {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn the_chess_tutorial_runs_as_written() {
+async fn the_chess_tutorial_matches_the_binary() {
     reset_db().await;
 
     // 2. Start a game.
