@@ -990,3 +990,19 @@ pub struct IntentInstance {
     pub name: IntentName,
     pub args: Vec<EvalValue>,
 }
+
+#[cfg(test)]
+mod arg_hasher_tests {
+    use super::*;
+
+    /// No two argument indexes share hash keys: each map is keyed afresh,
+    /// so a collision found against one does not carry to another.
+    #[test]
+    fn each_argument_index_is_keyed_afresh() {
+        let value = EvalValue::Subject("row_1".into());
+        let hashes: HashSet<u64> = (0..16)
+            .map(|_| ArgHasher::default().hash_one(&value))
+            .collect();
+        assert_eq!(hashes.len(), 16, "two indexes hashed a value alike");
+    }
+}

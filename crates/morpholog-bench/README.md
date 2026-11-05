@@ -490,6 +490,18 @@ The ruler's `fetch_rows` and `decide_rows` time a different path from `end_to_en
 
 What it measures. The decisions are the largest term: 45 percent of the append run and 52 percent of the revise run, 12 and 21 us a row. The production read is 38 and 36 percent, split about 60 to 40 between the queries and the decoding. The read held whole costs more than the paged one, much more for revise, 2.44 s against 1.49 s, so `fetch_rows` overstates what a rehearsal pays to read. The decision timer includes the comparison of each decision with the recorded one. The query timer includes the database's execution, the transfer and the driver's own row decoding, which these timers do not separate. The timers add four clock reads a row; end to end reads within 2 percent of the uninstrumented run before them.
 
+### Cheaper index lookups (2026-11-05, three binaries interleaved A B C C B A)
+
+A profile of the decisions put SipHash at about a quarter of them, most of it the state's argument index, which a rule looks claims up in by value. Three binaries were compared: the parent (A); a lookup that borrows the bound value instead of cloning it (B); and that with aHash for the argument index alone (C). The aHash index is keyed per map from the standard library's random keys. Means of two runs each over 100k rows:
+
+| 100k rows | decisions, A B C | advances, A B C | end to end, A B C |
+|---|---|---|---|
+| append | 1,177, 1,157, 1,096 ms | 296, 292, 265 ms | 2,614, 2,585, 2,509 ms |
+| revise 1,000 | 2,118, 2,067, 1,946 ms | 337, 336, 299 ms | 4,162, 4,088, 3,908 ms |
+| 100k rows behind 100k noise claims | 1,347, 1,318, 1,265 ms | 570, 573, 521 ms | 3,876, 3,856, 3,717 ms |
+
+What it measures. Borrowing takes about 2 percent off the decisions; aHash about 5 percent more, so 6 to 8 percent together. aHash also takes 9 to 11 percent off the advances, which build and extend the same index. End to end is 4 to 6 percent faster. Peak memory does not move beyond a few MB. On the matcher shapes borrowing is 3 to 9 percent faster with a tenth fewer allocations, and aHash 2 to 5 percent more; the sum, which looks nothing up by a subject, does not move. Every fixture's subjects are short; a lookup alone, outside the kernel, takes about half the time under aHash at every subject length from 8 to 128 characters. The bench suite, four runs a side, flagged one cell, `write/base` at 100 entries, with its database-only phases higher too; eight further runs of that scenario alone read the candidate equal or faster in every phase.
+
 ### Deferred
 
 - **As-of reads that cost what the answer costs.** Replay is linear in the transitions before the target, under retraction and revision alike. The TEC register made that unacceptable for an interactive read, and `asof/revise` is its ruler: a small live set over a long history, where the cost is all history.
