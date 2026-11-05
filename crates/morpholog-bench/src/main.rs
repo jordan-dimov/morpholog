@@ -1756,12 +1756,21 @@ async fn measure_rehearse(pool: &PgPool, case: &str, args: &RehearseArgs) -> Res
     let mut serialise = Vec::with_capacity(repeat);
     let mut end_to_end = Vec::with_capacity(repeat);
     let mut peak = Vec::with_capacity(repeat);
+    // The read and the fold's own spans: the page queries and their
+    // decoding inside `fetch_rows`, and inside `end_to_end` those again
+    // with the decisions, the advances and what is left.
+    let mut fetch_spans: [Vec<Duration>; 2] = Default::default();
+    let mut end_to_end_spans: [Vec<Duration>; 5] = Default::default();
     for round in 0..repeat {
+        let clock = morpholog_postgres::clock::snapshot();
         let t = Instant::now();
         let rows = morpholog_postgres::list_audit_rows(pool)
             .await
             .context("list_audit_rows")?;
         fetch.push(t.elapsed());
+        let spans = spans_since(clock);
+        fetch_spans[0].push(spans[0]);
+        fetch_spans[1].push(spans[1]);
         let refs: Vec<&morpholog_postgres::AuditRow> = rows.iter().collect();
 
         // The register's rows timed on their own, from the progress call
@@ -1861,11 +1870,18 @@ async fn measure_rehearse(pool: &PgPool, case: &str, args: &RehearseArgs) -> Res
         drop(refs);
         drop(rows);
 
+        let clock = morpholog_postgres::clock::snapshot();
         let t = Instant::now();
         morpholog_postgres::rehearse_candidate(pool, &prepared, &mut |_| {})
             .await
             .context("rehearse_candidate")?;
-        end_to_end.push(t.elapsed());
+        let whole = t.elapsed();
+        end_to_end.push(whole);
+        let spans = spans_since(clock);
+        for (into, span) in end_to_end_spans.iter_mut().zip(spans) {
+            into.push(span);
+        }
+        end_to_end_spans[4].push(whole.saturating_sub(spans.iter().sum()));
         // The process's high-water mark so far: the largest footprint any
         // phase reached, the decoded rows during the decision included.
         peak.push(peak_rss_mb().unwrap_or(f64::NAN));
@@ -1932,6 +1948,13 @@ async fn measure_rehearse(pool: &PgPool, case: &str, args: &RehearseArgs) -> Res
         },
         Metric::ms("serialise_report", &serialise),
         Metric::ms("end_to_end", &end_to_end),
+        Metric::ms("fetch_rows_query", &fetch_spans[0]),
+        Metric::ms("fetch_rows_decode", &fetch_spans[1]),
+        Metric::ms("end_to_end_query", &end_to_end_spans[0]),
+        Metric::ms("end_to_end_decode", &end_to_end_spans[1]),
+        Metric::ms("end_to_end_decide", &end_to_end_spans[2]),
+        Metric::ms("end_to_end_advance", &end_to_end_spans[3]),
+        Metric::ms("end_to_end_other", &end_to_end_spans[4]),
         Metric {
             name: "peak_rss",
             unit: "MB",
@@ -1969,6 +1992,13 @@ async fn measure_rehearse(pool: &PgPool, case: &str, args: &RehearseArgs) -> Res
         point: n as u64,
         metrics,
     })
+}
+
+/// The read's and the fold's spans since `before`: page queries,
+/// decoding, decisions, advances.
+fn spans_since(before: [Duration; 4]) -> [Duration; 4] {
+    let now = morpholog_postgres::clock::snapshot();
+    std::array::from_fn(|i| now[i] - before[i])
 }
 
 async fn run_rehearse(args: RehearseArgs) -> Result<()> {
@@ -4568,6 +4598,13 @@ mod smoke {
             .await
             .expect("rehearse scenario smoke");
         }
+        // Every span the rehearsal reports moved: a timer left unwired
+        // would read zero in each of those rows.
+        let spans = morpholog_postgres::clock::snapshot();
+        assert!(
+            spans.iter().all(|d| !d.is_zero()),
+            "a read or fold timer never ran: {spans:?}"
+        );
 
         // Back to an unindexed configuration: the indexes the last run
         // provisioned must be gone before its fixture is built.

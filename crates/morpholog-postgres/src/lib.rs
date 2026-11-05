@@ -24,6 +24,8 @@ mod audit_pages;
 mod checkpoints;
 mod claim_key;
 mod claims;
+#[doc(hidden)]
+pub mod clock;
 mod compiled;
 #[cfg(test)]
 mod compiled_differential;

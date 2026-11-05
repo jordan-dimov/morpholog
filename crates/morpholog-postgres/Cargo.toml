@@ -25,6 +25,11 @@ serde_json = { workspace = true }
 jiff = { workspace = true }
 jiff-sqlx = { workspace = true }
 
+[features]
+# Timers on the record's read and a rehearsal's fold, for the bench, with
+# the kernel's own counters. An ordinary build has neither.
+measure = ["morpholog-core/measure"]
+
 [dev-dependencies]
 num-bigint = { workspace = true }
 # The state's copy and rebuild counters, for the locality guard.

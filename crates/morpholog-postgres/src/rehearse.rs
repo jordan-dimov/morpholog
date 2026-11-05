@@ -5,6 +5,7 @@
 use crate::audit::AuditRow;
 use crate::audit_pages::AuditPages;
 use crate::checkpoints::{Checkpoint, TreeVerification};
+use crate::clock::{self, Span};
 use crate::error::{PgError, classify};
 use crate::pack::{EvidencePack, verify_pack};
 use crate::replay::Upkeep;
@@ -31,9 +32,10 @@ fn rehearse_rows<'a>(
 ) {
     for row in rows {
         if row.is_control() {
-            row.effect().apply_to(replay, upkeep);
+            advance(replay, row, upkeep);
             continue;
         }
+        let deciding = clock::start();
         let transition_id = row.transition_id.to_string();
         rehearsal.observe(
             replay,
@@ -50,8 +52,15 @@ fn rehearse_rows<'a>(
                 semantics_version: row.semantics_version,
             },
         );
-        row.effect().apply_to(replay, upkeep);
+        clock::stop(Span::Decide, deciding);
+        advance(replay, row, upkeep);
     }
+}
+
+fn advance(replay: &mut State, row: &AuditRow, upkeep: Upkeep) {
+    let advancing = clock::start();
+    row.effect().apply_to(replay, upkeep);
+    clock::stop(Span::Advance, advancing);
 }
 
 /// The fold's step after each decision: the replay state advanced by the

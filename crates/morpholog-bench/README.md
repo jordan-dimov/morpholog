@@ -18,7 +18,7 @@ A minimal-size compatibility smoke test (`cargo test -p morpholog-bench`, gated 
 | `contend` | optional `--prepopulate N` (ledger entries, or with `--disjoint` items per synthetic predicate), then W workers post concurrently | `--workers` x `--ops-per-worker` concurrent `propose_against_pg` calls, spread across `--periods P`, optionally `--disjoint` | throughput and the SERIALIZABLE 40001 retry rate under concurrency; whether value-level vs predicate-level partitioning relieves it |
 | `kernel` | an in-memory ledger of N entries; no database, no `--reset` | one `propose` with the ledger's invariants, the same with none, and `--acts` sequential proposals each against the candidate the act before it produced | the kernel alone: what invariant evaluation against the book costs (the difference between the two proposals), and the interpreted core of `transact` |
 | `replay` | the `as-of` fixture | `coverage_replay` and `score_candidate` of the ledger against itself | the audit-analysis arc: what a replay that observes every audit row costs as the log grows |
-| `rehearse` | N fabricated audit rows of a register in the TEC shape (direct SQL, replayable row for row: every row decides `same`), `--revise K` keeping the live set at 2K claims, `--noise M` admitting M claims no rule reads before them, `--phases` timing the decision step by step | `list_audit_rows`, then `rehearse_recorded` over the rows in memory, then the report's serialisation, then the end-to-end `rehearse_candidate`, each timed apart | what a rehearsal costs per row as the history grows, split between the read, the kernel's decisions and the report; `--refusing` rehearses a candidate that refuses most rows, so the diagnosis is on the clock too |
+| `rehearse` | N fabricated audit rows of a register in the TEC shape (direct SQL, replayable row for row: every row decides `same`), `--revise K` keeping the live set at 2K claims, `--noise M` admitting M claims no rule reads before them, `--phases` timing the decision step by step | `list_audit_rows`, then `rehearse_recorded` over the rows in memory, then the report's serialisation, then the end-to-end `rehearse_candidate`, each timed apart, and inside the read and the end-to-end call their page queries, decoding, decisions and advances | what a rehearsal costs per row as the history grows, split between the read, the kernel's decisions and the report; `--refusing` rehearses a candidate that refuses most rows, so the diagnosis is on the clock too |
 
 `write` also reports where each proposal's time went - `phase_begin_tx`, `phase_load_state`, `phase_kernel`, `phase_finalise` - read from the production path through its timed facade, `propose_against_pg_timed`; the ordinary facade touches no clock. That split is what tells a rebuild from an invariant scan from a commit before anyone estimates.
 
@@ -476,6 +476,19 @@ The defined-call shape projects three paths per root, so no single call yields m
 | defined call, 10,000 | 28.9, 28.8 ms | 28.8, 29.6 ms | 660,014, 660,014 |
 
 The call is now linear in its projections, about 1 us each. The quadratic's spread across the parent's two runs is its own. The three-path call allocates exactly what it did and reads within noise, as does every other shape. A first version used the set for every call: it cost the three-path call four allocations and 8 to 10 percent until small results kept the scan.
+
+### The production rehearsal, reconciled (2026-11-05, `rehearse`, three repeats)
+
+The ruler's `fetch_rows` and `decide_rows` time a different path from `end_to_end`: the first reads the whole history into memory, the second decides over it, while `rehearse_candidate` reads a page, decides it, and reads the next. Their sum is not the end-to-end time. So timers now run inside the paths themselves, behind the `measure` feature: the page queries through the driver's rows, the decoding of those rows, each row's decision and each advance. Within `end_to_end` what is left over is the transaction, the row count and the report. Steady medians over 100k rows:
+
+| 100k rows | page queries | decoding | decisions | advances | other | end to end |
+|---|---|---|---|---|---|---|
+| append | 605 ms | 402 ms | 1,195 ms | 292 ms | 142 ms | 2,637 ms |
+| revise 1,000 | 856 ms | 631 ms | 2,128 ms | 319 ms | 166 ms | 4,099 ms |
+| `fetch_rows`, append | 684 ms | 499 ms | | | | 1,191 ms |
+| `fetch_rows`, revise | 1,349 ms | 1,087 ms | | | | 2,444 ms |
+
+What it measures. The decisions are the largest term: 45 percent of the append run and 52 percent of the revise run, 12 and 21 us a row. The production read is 38 and 36 percent, split about 60 to 40 between the queries and the decoding. The read held whole costs more than the paged one, much more for revise, 2.44 s against 1.49 s, so `fetch_rows` overstates what a rehearsal pays to read. The decision timer includes the comparison of each decision with the recorded one. The query timer includes the database's execution, the transfer and the driver's own row decoding, which these timers do not separate. The timers add four clock reads a row; end to end reads within 2 percent of the uninstrumented run before them.
 
 ### Deferred
 
