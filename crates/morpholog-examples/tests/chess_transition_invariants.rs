@@ -354,8 +354,10 @@ fn a_piece_may_land_on_the_edge_of_the_board() {
     }
 }
 
-/// Off the board, or between squares, is refused. A bishop on file 3.5
-/// would also slip past the colour rule: its colour would be 0.5.
+/// Off the board, or between squares, is refused. Each destination keeps
+/// the c1 bishop on its own colour or off the colour scale entirely, so
+/// only the board rule can say no. A bishop on file 3.5 would otherwise
+/// slip past the colour rule: its colour would be 0.5.
 #[test]
 fn a_piece_off_the_board_is_rejected() {
     let program = chess_transition_invariants::program();
@@ -363,8 +365,8 @@ fn a_piece_off_the_board_is_rejected() {
     let quiet = program.transformation("quiet_move").expect("exists");
     for (file, rank) in [
         (dec(5), dec(9)),
-        (dec(5), dec(0)),
-        (dec(9), dec(4)),
+        (dec(4), dec(0)),
+        (dec(9), dec(3)),
         (dec(0), dec(4)),
         (dec_str("3.5"), dec(3)),
         (dec(5), dec_str("3.5")),
