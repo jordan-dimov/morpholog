@@ -20,6 +20,9 @@ license = "Apache-2.0"
 repository = "https://github.com/jordan-dimov/morpholog"
 
 [workspace.dependencies]
+# Without its default features: the kernel seeds it, and takes no
+# randomness crate.
+ahash = { version = "0.8", default-features = false }
 rust_decimal = { version = "1", features = ["serde-with-str"] }
 uuid = { version = "1", features = ["v7", "serde"] }
 serde = { version = "1", features = ["derive"] }
