@@ -935,3 +935,90 @@ fn a_scope_reading_a_case_name_before_its_binding_widens() {
     );
     assert!(widened(&rebound));
 }
+
+/// What a large delta is bounded to, built one claim at a time: the
+/// cases of each claim alone, in delta order, each once. A delta is
+/// untouched only when each of its claims is, and checks the rule whole
+/// when any of its claims does.
+fn one_claim_at_a_time(
+    plan: &ImpactPlan,
+    asserted: &[ClaimInstance],
+    retracted: &[ClaimInstance],
+) -> Impact {
+    let mut cases: Vec<BTreeMap<Var, EvalValue>> = Vec::new();
+    let mut touched = false;
+    for claim in asserted.iter().chain(retracted) {
+        match admitted(plan, claim.clone()) {
+            Impact::Untouched => {}
+            Impact::Unbounded => return Impact::Unbounded,
+            Impact::Bounded(found) => {
+                touched = true;
+                for case in found {
+                    if !cases.contains(&case) {
+                        cases.push(case);
+                    }
+                }
+            }
+        }
+    }
+    if touched {
+        Impact::Bounded(cases)
+    } else {
+        Impact::Untouched
+    }
+}
+
+proptest::proptest! {
+    /// A delta of many claims names the cases its claims name one at a
+    /// time, for patterns that bind the case variables in two orders, a
+    /// repeated variable that can contradict itself, a literal guard, a
+    /// pattern binding no case variable, and a body checked whole. The
+    /// claims come from a small universe, so cases repeat, and the
+    /// distinct cases of a large delta number past a hundred.
+    #[test]
+    fn a_delta_names_the_cases_its_claims_name(
+        asserted in proptest::collection::vec((0..3u8, 0..8u8, 0..8u8), 0..160),
+        retracted in proptest::collection::vec((0..3u8, 0..8u8, 0..8u8), 0..40),
+        shape in 0..5usize,
+    ) {
+        let s = |i: u8| subj(&format!("p{i}"));
+        let to_claims = |rows: &[(u8, u8, u8)]| -> Vec<ClaimInstance> {
+            rows.iter()
+                .map(|&(p, a, b)| match p {
+                    0 => claim_instance("R", &[s(a), s(b)]),
+                    1 => claim_instance("S", &[s(a)]),
+                    _ => claim_instance("U", &[s(a)]),
+                })
+                .collect()
+        };
+        let consequent = claim("S", vec![var("x")]);
+        let body = match shape {
+            0 => implies(
+                and(vec![
+                    claim("R", vec![var("x"), var("y")]),
+                    claim("R", vec![var("y"), var("x")]),
+                ]),
+                consequent,
+            ),
+            1 => implies(claim("R", vec![var("x"), var("x")]), consequent),
+            2 => implies(claim("R", vec![var("x"), lit("p1")]), consequent),
+            3 => implies(
+                claim("R", vec![var("x"), var("y")]),
+                claim("S", vec![wildcard()]),
+            ),
+            _ => implies(
+                crate::ir_builder::or(vec![
+                    claim("R", vec![var("x"), var("y")]),
+                    claim("S", vec![var("x")]),
+                ]),
+                claim("S", vec![var("y")]),
+            ),
+        };
+        let plan = ImpactPlan::with_definitions(&invariant("rule", body), &[]);
+        let (asserted, retracted) = (to_claims(&asserted), to_claims(&retracted));
+        proptest::prop_assert_eq!(
+            plan.classify(&asserted, &retracted),
+            one_claim_at_a_time(&plan, &asserted, &retracted)
+        );
+    }
+}
