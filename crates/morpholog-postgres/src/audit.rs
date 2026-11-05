@@ -464,6 +464,7 @@ pub async fn list_audit_rows_page(
     horizon: Option<u64>,
     limit: i64,
 ) -> Result<Vec<AuditRow>, PgError> {
+    let fetching = crate::clock::start();
     let rows = match (&cursor, &horizon) {
         (None, None) => {
             sqlx::query_as!(
@@ -605,7 +606,11 @@ pub async fn list_audit_rows_page(
         }
     }
     .map_err(classify)?;
-    rows.into_iter().map(decode_audit_row).collect()
+    crate::clock::stop(crate::clock::Span::Fetch, fetching);
+    let decoding = crate::clock::start();
+    let decoded = rows.into_iter().map(decode_audit_row).collect();
+    crate::clock::stop(crate::clock::Span::Decode, decoding);
+    decoded
 }
 
 /// One keyset page of the rows from before the canonical order, in their

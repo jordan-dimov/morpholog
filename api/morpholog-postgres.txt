@@ -1,6 +1,8 @@
 pub mod morpholog_postgres
 pub use morpholog_postgres::PgPool
 pub use morpholog_postgres::WitnessAnchors
+pub mod morpholog_postgres::clock
+pub fn morpholog_postgres::clock::snapshot() -> [core::time::Duration; 4]
 pub mod morpholog_postgres::testing
 pub struct morpholog_postgres::testing::AlwaysDelivers
 impl core::clone::Clone for morpholog_postgres::testing::AlwaysDelivers

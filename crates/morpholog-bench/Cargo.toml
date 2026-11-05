@@ -20,7 +20,7 @@ path = "src/bin/matcher.rs"
 [dependencies]
 morpholog-core = { path = "../morpholog-core", features = ["measure"] }
 morpholog-examples = { path = "../morpholog-examples" }
-morpholog-postgres = { path = "../morpholog-postgres" }
+morpholog-postgres = { path = "../morpholog-postgres", features = ["measure"] }
 morpholog-surface = { path = "../morpholog-surface" }
 clap = { workspace = true }
 anyhow = { workspace = true }
