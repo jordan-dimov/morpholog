@@ -176,6 +176,34 @@ fn defined(witnesses: usize) -> Result<Point> {
     })
 }
 
+/// One defined call with many distinct projections: a single group
+/// whose `witnesses` members each carry a tag the call hides.
+fn fan_out(witnesses: usize) -> Result<Point> {
+    let source = "program fan_out\n\
+         predicate Group(g: Subject)\n\
+         predicate Member(g: Subject, m: Subject, t: Subject)\n\
+         predicate Active(m: Subject)\n\
+         define member_of(g, m):\n    Member(g, m, t)\n\
+         invariant every_member_is_active:\n    Group(g) and member_of(g, m) implies Active(m)\n";
+    let mut claims = vec![claim("Group", vec![subject("g")])];
+    for w in 0..witnesses {
+        let (m, t) = (format!("m{w}"), format!("t{w}"));
+        claims.push(claim(
+            "Member",
+            vec![subject("g"), subject(&m), subject(&t)],
+        ));
+        claims.push(claim("Active", vec![subject(&m)]));
+    }
+    Ok(Point {
+        shape: "defined fan-out",
+        witnesses,
+        live_vars: 2,
+        prepared: prepare(source)?,
+        state: State::from_claims(claims),
+        run: Run::Invariant("every_member_is_active"),
+    })
+}
+
 /// A sum over a body with many witnesses: ten entries, `witnesses`
 /// lines each.
 fn sum(witnesses: usize) -> Result<Point> {
@@ -314,6 +342,7 @@ fn points(quick: bool) -> Result<Vec<Point>> {
         points.push(branches(w)?);
         points.push(nested(w)?);
         points.push(defined(w)?);
+        points.push(fan_out(w)?);
         points.push(sum(w)?);
         points.push(for_bind(w)?);
     }
