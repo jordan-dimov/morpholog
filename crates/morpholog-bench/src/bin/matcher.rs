@@ -343,6 +343,49 @@ fn wide_delta(witnesses: usize) -> Result<Point> {
     Ok(point)
 }
 
+/// One act admitting a claim per witness, the claims spread over a few
+/// cases of the rule over them, named with how many.
+const REPEATED: [(usize, &str); 5] = [
+    (1, "repeated delta, 1 case"),
+    (8, "repeated delta, 8 cases"),
+    (16, "repeated delta, 16 cases"),
+    (32, "repeated delta, 32 cases"),
+    (64, "repeated delta, 64 cases"),
+];
+
+fn repeated_delta(witnesses: usize, (cases, shape): (usize, &'static str)) -> Result<Point> {
+    let source = "program repeated_delta\n\
+         predicate Owner(t: Subject, x: Subject)\n\
+         predicate Seen(x: Subject, t: Subject)\n\
+         predicate Live(x: Subject)\n\
+         transformation mark(ts):\n    for t in ts:\n        bind Owner(t, x)\n        admit Seen(x, t)\n\
+         invariant seen_is_live:\n    Seen(x, _) implies Live(x)\n";
+    let mut claims: Vec<ClaimInstance> = (0..cases)
+        .map(|c| claim("Live", vec![subject(&format!("x{c}"))]))
+        .collect();
+    let mut ts = Vec::new();
+    for w in 0..witnesses {
+        let t = format!("t{w}");
+        claims.push(claim(
+            "Owner",
+            vec![subject(&t), subject(&format!("x{}", w % cases))],
+        ));
+        ts.push(subject(&t));
+    }
+    Ok(Point {
+        shape,
+        witnesses,
+        live_vars: 2,
+        prepared: prepare(source)?,
+        state: State::from_claims(claims),
+        run: Run::Propose(Transition {
+            transformation_name: "mark".into(),
+            args: vec![EvalValue::Collection(ts)],
+            actor: "bench".into(),
+        }),
+    })
+}
+
 fn points(quick: bool) -> Result<Vec<Point>> {
     let witnesses: &[usize] = if quick { &[10] } else { &[100, 1_000, 10_000] };
     let live_vars: &[usize] = if quick { &[2] } else { &[2, 4, 8] };
@@ -360,6 +403,10 @@ fn points(quick: bool) -> Result<Vec<Point>> {
         points.push(sum(w)?);
         points.push(for_bind(w)?);
         points.push(wide_delta(w)?);
+    }
+    let repeated_over = if quick { 10 } else { 10_000 };
+    for shape in REPEATED {
+        points.push(repeated_delta(repeated_over, shape)?);
     }
     Ok(points)
 }
