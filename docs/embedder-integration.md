@@ -1189,7 +1189,10 @@ whose answer is lost raises `MorphologOutcomeUnknown`, and nothing is
 sent again. If the service hangs up before its ready line, the error
 names the possible causes (an OS user that is not a presenter, one at
 its connection limit, a service that stopped) and the service's log
-says which. `Session.connect` opens a connection unpinned.
+says which. A `timeout` bounds each send as well as each wait for an
+answer, so a service that stops reading cannot hold a call forever; a
+proposal whose send times out is outcome-unknown, like any failed write.
+`Session.connect` opens a connection unpinned.
 
 **An unknown outcome may need a person.** Reading the record before
 re-submitting is safe, but a caller without a read grant cannot do it,

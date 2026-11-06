@@ -225,6 +225,9 @@ class _Child:
     def ended(self) -> str:
         return f"the session process ended unexpectedly:\n{self.diagnostic()}"
 
+    def write_failed(self, exc: Exception) -> str:
+        return self.ended()
+
     def diagnostic(self) -> str:
         # Snapshot under the lock: joining the deque while the drain
         # thread appends raises, turning the diagnostic into a crash
@@ -309,7 +312,13 @@ class _Child:
 class _Socket:
     """The transport to a ``morpholog serve`` socket. Closing it ends
     this one conversation; the service goes on serving its other
-    callers."""
+    callers.
+
+    The session's timeout stays on the socket, so it bounds the connect
+    and each send as well as the wait for an answer: a service that
+    stops reading cannot hold a send forever. The reader shares that
+    socket, so it splits lines itself and reads again after a read
+    times out, rather than ending the conversation."""
 
     def __init__(self, path: str, timeout: float | None) -> None:
         self.path = path
@@ -320,11 +329,7 @@ class _Socket:
         except OSError as exc:
             sock.close()
             raise MorphologError(f"cannot reach the service at `{path}`: {exc}") from None
-        # Reads block on the reader thread; the session's own timeout
-        # is its wait on the response queue.
-        sock.settimeout(None)
         self._sock = sock
-        self._stream = sock.makefile("r", encoding="utf-8", errors="strict", newline="\n")
         self._answered = False
         self.responses: queue.Queue[str | None] = queue.Queue()
         self._reader = threading.Thread(target=self._drain, name=_READER, daemon=True)
@@ -332,6 +337,9 @@ class _Socket:
 
     def write(self, line: str) -> None:
         self._sock.sendall((line + "\n").encode("utf-8"))
+
+    def write_failed(self, exc: Exception) -> str:
+        return f"the request to the service at `{self.path}` could not be sent: {exc}"
 
     def ended(self) -> str:
         if self._answered:
@@ -353,24 +361,33 @@ class _Socket:
         return f"the service at `{self.path}`; Session.connect opens unpinned"
 
     def shutdown(self) -> None:
-        # Shutting the socket down wakes the reader's blocked read with
-        # an EOF, so the join below returns.
+        # Shutting the socket down wakes the reader's read with an EOF,
+        # so the join below returns.
         try:
             self._sock.shutdown(socket.SHUT_RDWR)
         except OSError:
             pass
         self._reader.join(timeout=_SHUTDOWN_BUDGET)
-        for closable in (self._stream, self._sock):
-            try:
-                closable.close()
-            except OSError:
-                pass
+        self._sock.close()
 
     def _drain(self) -> None:
+        pending = bytearray()
         try:
-            for line in self._stream:
-                self._answered = True
-                self.responses.put(line)
+            while True:
+                try:
+                    chunk = self._sock.recv(65536)
+                except TimeoutError:
+                    continue
+                if not chunk:
+                    break
+                start = len(pending)
+                pending += chunk
+                while (end := pending.find(b"\n", start)) >= 0:
+                    line = pending[: end + 1].decode("utf-8")
+                    del pending[: end + 1]
+                    start = 0
+                    self._answered = True
+                    self.responses.put(line)
         except (OSError, ValueError):
             # As for the child: a stream that cannot be read further
             # ends the conversation.
@@ -394,8 +411,10 @@ class Session:
     ``Session.connect`` to open deliberately unpinned.
 
     ``timeout`` bounds how long each request waits for its RESPONSE in
-    seconds (and the ready handshake); ``None`` waits indefinitely. It
-    does not bound the call as a whole: a request that times out then
+    seconds (and the ready handshake); ``None`` waits indefinitely. Over
+    a socket it also bounds the connect and the sending of each request;
+    writing to a child's stdin is not bounded. It does not bound the
+    call as a whole: a request that times out then
     reaps the child, which is capped separately at ``_SHUTDOWN_BUDGET``
     seconds, so the worst case a caller sees is roughly the two added
     together.
@@ -566,7 +585,7 @@ class Session:
             wire = json.dumps(body, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
             try:
                 self._transport.write(wire)
-            except (OSError, ValueError):
+            except (OSError, ValueError) as exc:
                 # A failed write or flush does NOT prove nothing
                 # crossed the boundary: part of the line, or all of it,
                 # may have arrived, and the proposal may have committed,
@@ -578,7 +597,7 @@ class Session:
                         "write failed; the commit outcome is unknown - read the "
                         f"record before re-submitting.\n{self._transport.diagnostic()}"
                     ) from None
-                raise MorphologError(self._transport.ended()) from None
+                raise MorphologError(self._transport.write_failed(exc)) from None
             self._row += 1
             expected_row = self._row
             try:

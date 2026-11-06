@@ -349,6 +349,57 @@ class LostResponses(ServiceHarness):
         self.assertIsNotNone(s._poisoned)
 
 
+class StalledService(ServiceHarness):
+    """The service keeps the connection open but reads nothing, so a
+    large request fills the socket and the send blocks. The timeout
+    bounds the send as well as the wait for the answer."""
+
+    def stall(self) -> Session:
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def stops_reading(c: Conversation) -> None:
+            c.ready()
+            release.wait(30)
+
+        return self.connect(self.serve(stops_reading), timeout=0.3)
+
+    def test_an_idle_connection_outlives_its_timeout(self):
+        """The timeout bounds a call, not the quiet between calls: the
+        reader shares the socket's timeout and must not take an idle
+        spell for the end of the conversation."""
+
+        def answers_pings(c: Conversation) -> None:
+            c.ready()
+            while c.request() is not None:
+                c.ready()
+
+        s = self.connect(self.serve(answers_pings), timeout=0.2)
+        time.sleep(0.6)
+        self.assertEqual(s.ping(), s.ready)
+        self.assertIsNone(s._poisoned)
+
+    def test_a_proposal_stuck_in_the_send_is_unknown(self):
+        """Part of the proposal may have crossed, so it is unknown."""
+        s = self.stall()
+        started = time.monotonic()
+        with self.assertRaises(MorphologOutcomeUnknown) as err:
+            s.propose("open_account", "teller", {"account": "x" * (16 << 20)})
+        self.assertLess(time.monotonic() - started, 5, "the send was not bounded")
+        self.assertIn("before the write failed", str(err.exception))
+        self.assertIsNotNone(s._poisoned)
+
+    def test_a_read_stuck_in_the_send_is_a_plain_error(self):
+        s = self.stall()
+        started = time.monotonic()
+        with self.assertRaises(MorphologError) as err:
+            s.claims_named("Account", where={"account": "x" * (16 << 20)})
+        self.assertLess(time.monotonic() - started, 5, "the send was not bounded")
+        self.assertNotIsInstance(err.exception, MorphologOutcomeUnknown)
+        self.assertIn("could not be sent", str(err.exception))
+        self.assertIsNotNone(s._poisoned)
+
+
 class NoRetry(ServiceHarness):
     def test_a_known_non_commit_is_reported_once_and_not_resent(self):
         """A serialisation failure is safe to re-submit, but that is the
