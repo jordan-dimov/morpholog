@@ -460,9 +460,10 @@ A limit compared against append-only history is usually the first.
 `check -v` names the rules a change may check whole and the construct
 responsible, so the question can be asked before the first act. It also
 names each read in an act that loads a predicate whole, with the rule it
-sits in and any definition it goes through. Such a read conflicts with
-every concurrent write to that predicate, so concurrent acts retry. Key
-it by something the act knows before it runs, a parameter or `actor`.
+sits in and any definition it goes through. Any concurrent write to
+that predicate can conflict with such a read, so when concurrent acts
+retry it is the first place to look. Key it by something the act knows
+before it runs, a parameter or `actor`.
 
 **Many small claims, never a wider one.** A predicate's shape is part of
 every claim ever admitted under it, so a field added later makes every

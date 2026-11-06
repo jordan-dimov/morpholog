@@ -135,7 +135,9 @@ pub struct WholeRead {
 
 impl ReadPlan {
     pub fn of(transformation: &Transformation, definitions: &[Definition]) -> Self {
-        Self::walk(transformation, definitions).0
+        let mut plan = ReadPlan::default();
+        Self::walk(transformation, definitions, &mut plan, None);
+        plan
     }
 
     /// Every read that makes its predicate whole, in body order, each
@@ -144,10 +146,25 @@ impl ReadPlan {
         transformation: &Transformation,
         definitions: &[Definition],
     ) -> Vec<WholeRead> {
-        Self::walk(transformation, definitions).1
+        let mut trace = Trace::default();
+        Self::walk(
+            transformation,
+            definitions,
+            &mut ReadPlan::default(),
+            Some(&mut trace),
+        );
+        trace.found
     }
 
-    fn walk(transformation: &Transformation, definitions: &[Definition]) -> (Self, Vec<WholeRead>) {
+    /// The one analysis behind both: `trace`, when given, also records
+    /// where each read lost its keys. The proposal path passes none and
+    /// builds no records.
+    fn walk(
+        transformation: &Transformation,
+        definitions: &[Definition],
+        plan: &mut ReadPlan,
+        trace: Option<&mut Trace>,
+    ) {
         let mut rebound = BTreeSet::new();
         for stmt in &transformation.body {
             rebound_names(stmt, &mut rebound);
@@ -158,21 +175,17 @@ impl ReadPlan {
             .filter(|p| !rebound.contains(*p))
             .map(|p| (p.clone(), KnownTerm::Parameter(p.clone())))
             .collect();
-        let mut plan = ReadPlan::default();
         let mut walker = Walker {
             definitions: DefinitionTable::new(definitions),
-            plan: &mut plan,
-            statement: 0,
-            rule: None,
-            through: Vec::new(),
-            whole: Vec::new(),
+            plan,
+            trace,
         };
         for (index, stmt) in transformation.body.iter().enumerate() {
-            walker.statement = index + 1;
+            if let Some(trace) = walker.trace.as_deref_mut() {
+                trace.statement = index + 1;
+            }
             walker.stmt(stmt, &known, &mut BTreeSet::new());
         }
-        let whole = walker.whole;
-        (plan, whole)
     }
 
     /// The (predicate, position) pairs an index must serve: every keyed
@@ -235,23 +248,33 @@ type Env = BTreeMap<Var, KnownTerm>;
 struct Walker<'a> {
     definitions: DefinitionTable<'a>,
     plan: &'a mut ReadPlan,
-    /// Where the walk is, for [`WholeRead`].
+    trace: Option<&'a mut Trace>,
+}
+
+/// Where the walk is, and the whole reads found so far, for
+/// [`ReadPlan::whole_reads`].
+#[derive(Default)]
+struct Trace {
     statement: usize,
     rule: Option<RuleName>,
     through: Vec<DefinitionName>,
-    whole: Vec<WholeRead>,
+    found: Vec<WholeRead>,
 }
 
 impl Walker<'_> {
     fn stmt(&mut self, stmt: &Stmt, known: &Env, seen: &mut BTreeSet<DefinitionName>) {
         match stmt {
             Stmt::Require { prop, name } | Stmt::BindOne { prop, name } => {
-                let outer = self.rule.clone();
-                if name.is_some() {
-                    self.rule.clone_from(name);
-                }
+                let outer = match (self.trace.as_deref_mut(), name) {
+                    (Some(trace), Some(_)) => {
+                        Some(std::mem::replace(&mut trace.rule, name.clone()))
+                    }
+                    _ => None,
+                };
                 self.prop(prop, known, seen);
-                self.rule = outer;
+                if let (Some(trace), Some(outer)) = (self.trace.as_deref_mut(), outer) {
+                    trace.rule = outer;
+                }
             }
             Stmt::Let { value, .. } => self.value(value, known, seen),
             Stmt::LetNewSubject { .. } | Stmt::Emit(_) => {}
@@ -277,15 +300,17 @@ impl Walker<'_> {
 
     fn pattern(&mut self, predicate: &PredicateName, args: &[Term], known: &Env) {
         let coordinates = coordinates(args, known);
-        if coordinates.is_empty() {
+        if let Some(trace) = self.trace.as_deref_mut()
+            && coordinates.is_empty()
+        {
             let read = WholeRead {
                 predicate: predicate.clone(),
-                statement: self.statement,
-                rule: self.rule.clone(),
-                through: self.through.clone(),
+                statement: trace.statement,
+                rule: trace.rule.clone(),
+                through: trace.through.clone(),
             };
-            if !self.whole.contains(&read) {
-                self.whole.push(read);
+            if !trace.found.contains(&read) {
+                trace.found.push(read);
             }
         }
         self.plan
@@ -303,7 +328,9 @@ impl Walker<'_> {
             // that environment, so a nested call inherits the same rule.
             Prop::Defined { name, args } => {
                 let definitions = self.definitions;
-                self.through.push(name.clone());
+                if let Some(trace) = self.trace.as_deref_mut() {
+                    trace.through.push(name.clone());
+                }
                 definitions.enter(name, seen, |def, seen| {
                     let inner: Env = def
                         .parameters
@@ -315,7 +342,9 @@ impl Walker<'_> {
                         .collect();
                     self.prop(&def.body, &inner, seen);
                 });
-                self.through.pop();
+                if let Some(trace) = self.trace.as_deref_mut() {
+                    trace.through.pop();
+                }
             }
             Prop::And(props) | Prop::Or(props) => {
                 for p in props {
