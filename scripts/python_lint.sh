@@ -22,7 +22,8 @@ fi
 "${ruff[@]}" check --isolated --target-version py312 \
     crates/morpholog-cli/templates/python_client \
     examples/etrm_embedder/morpholog_client \
-    examples/22_residue_classes/explore.py
+    examples/22_residue_classes/explore.py \
+    scripts/serve_probe.py
 # The emitted models keep to the formatter's width and shape, so an embedder
 # who formats the package has nothing to change: the committed example
 # package is checked as the formatter would leave it.

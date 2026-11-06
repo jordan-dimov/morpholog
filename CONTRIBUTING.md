@@ -76,6 +76,15 @@ python3 -m unittest discover crates/morpholog-cli/templates/python_client/tests
 
 The PG-backed test suites share one schema and truncate it between tests; they must run serially (`--test-threads=1`). The `morpholog-bench` entry is its N=1 compatibility smoke test, not a scale run.
 
+### The two-user acceptance test for `serve`
+
+`morpholog serve` keeps an untrusted caller from the record only when the caller is a different OS user from the service. The suites run as one user, so they cannot show that. `scripts/serve_acceptance.sh` does: it creates three OS users and a throwaway PostgreSQL 18 cluster on :55433, bootstraps the closed-loop execution example, and has the agent attack the real binary. It needs root, removes everything it made on exit, and is not in CI. Run it after a change to `serve`, its socket handling, or the actor-assertion path:
+
+```bash
+cargo build -p morpholog-cli
+sudo bash scripts/serve_acceptance.sh
+```
+
 ### Public Rust API
 
 The public surface of each library crate an embedder can depend on, `#[doc(hidden)]` items included (they are unsupported, but another crate can still call them), is committed as text under [`api/`](api/), one file per crate, rendered by `cargo public-api`. `./scripts/public_api.sh` regenerates each snapshot and fails on any difference, in precommit and in CI. When you change a public item on purpose (a signature, a field, a variant, a new `pub`), run `./scripts/public_api.sh --update` and commit the snapshot with the change: the diff of `api/` is how the PR says it changed the API, and a reviewer reads it. The crate list in the script is explicit, so an internal crate never joins the contract by accident.

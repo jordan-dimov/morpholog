@@ -38,7 +38,7 @@ mod commands;
         The commands, by what you are doing:\n  \
         authoring a programme    check, hash, schema, generate\n  \
         governing state          propose, explain, inspect, session\n  \
-        running a deployment     init, roles, refresh, outbox\n  \
+        running a deployment     init, roles, refresh, outbox, serve\n  \
         proving the record       audit\n  \
         discovering rules        evaluate, rehearse\n\n\
         Only invariants and transformations are first-class in Morpholog: propose\n\
@@ -136,6 +136,18 @@ enum Command {
     /// non-zero exit. Protocol reference in
     /// docs/embedder-integration.md.
     Session(SessionArgs),
+
+    /// Serve one pinned programme on a Unix socket to callers that must
+    /// not hold the database credential or choose the rules.
+    ///
+    /// Each connection speaks the session protocol. The service holds
+    /// one database login per presenter and picks it by the socket
+    /// peer's uid, so the rules and the audit see that login; a peer
+    /// whose uid is not a presenter is closed unanswered. A presenter
+    /// may propose, transact and ping; reads and explanations need a
+    /// `--grant`. The programme must hash to `--expect-hash`, and only
+    /// a restart changes it. Deployment guide in docs/operating.md.
+    Serve(ServeArgs),
 
     /// Propose several changes as one decision: every act or none.
     ///
@@ -1628,6 +1640,37 @@ pub(crate) struct SessionArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub(crate) struct ServeArgs {
+    /// Path to the `.morph` source file. Read once at startup.
+    pub(crate) file: PathBuf,
+
+    /// The canonical hash (`sha256:...`, as `morpholog hash` reports
+    /// it) the programme must have; any other refuses to start.
+    #[arg(long, value_name = "SHA256")]
+    pub(crate) expect_hash: String,
+
+    /// The socket to listen on. Refuses to start if the path exists.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) socket: PathBuf,
+
+    /// A presenter: the uid its connections come from and the database
+    /// login they are served as. Repeat for each; a uid or a login may
+    /// appear once.
+    #[arg(long = "presenter", value_name = "UID=LOGIN", required = true)]
+    pub(crate) presenters: Vec<String>,
+
+    /// Operations beyond proposing a presenter may ask: any of explain,
+    /// claims, derived, audit, rejections, comma-separated.
+    #[arg(long = "grant", value_name = "UID=OP[,OP...]")]
+    pub(crate) grants: Vec<String>,
+
+    /// The database. Leave the user out: each presenter's connection
+    /// logs in as its own login.
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
+}
+
+#[derive(clap::Args, Debug)]
 pub(crate) struct ProposeArgs {
     /// Path to a `.morph` source file containing the programme.
     pub(crate) file: PathBuf,
@@ -1787,6 +1830,7 @@ async fn run() -> anyhow::Result<()> {
         Command::Propose(args) => commands::propose::run(args).await,
         Command::Transact(args) => commands::transact::run(args).await,
         Command::Session(args) => commands::session::run(args).await,
+        Command::Serve(args) => commands::serve::run(args).await,
         Command::Explain(args) => commands::explain::run(args).await,
         Command::Outbox { what } => match what {
             OutboxCmd::Claim(args) => commands::outbox::claim(args).await,

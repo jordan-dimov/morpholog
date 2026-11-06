@@ -1,6 +1,6 @@
 # Operating a deployment: the checklist
 
-The three sequences an operator runs, each step one line, in the order it
+The sequences an operator runs, each step one line, in the order it
 happens. Nothing is explained here; every step links to the paragraph that
 explains it. `$DATABASE_URL` is the deployment's connection string
 throughout, and `a.morph b.morph` stands for every programme the database
@@ -11,8 +11,8 @@ serves.
 The binary moves, the programmes do not. The full account is
 [upgrading an existing database](install.md#upgrading-an-existing-database).
 
-1. Stop every process on the database: resident sessions, outbox workers,
-   the service. A process that keeps running writes under the old schema
+1. Stop every process on the database: resident sessions, `serve`, outbox
+   workers, the service. A process that keeps running writes under the old schema
    until it restarts.
 2. Back up: `pg_dump "$DATABASE_URL" > before-upgrade.sql`.
 3. Optional, for a large record: try the migration on a copy,
@@ -86,7 +86,7 @@ stays](embedder-integration.md#when-the-programme-changes-and-the-ledger-stays).
    exits zero while the transaction rolled back
    ([reading governed state as SQL](embedder-integration.md#reading-governed-state-as-sql-generate-views)).
 8. Restart every resident session and worker that holds the old
-   programme.
+   programme. `serve` restarts with the new hash in `--expect-hash`.
 
 ## Closing a day
 
@@ -112,6 +112,28 @@ what is not pinned](embedder-integration.md#stability-and-what-is-not-pinned),
    so `passes` alone is not a trusted time. Keep the pack and a binary
    of the release that wrote it: only that release's verifiers read its
    format.
+
+## Serving callers you do not trust
+
+The caller holds a socket; the service holds the logins and the
+programme. The full account is [serving callers you do not
+trust](embedder-integration.md#serving-callers-you-do-not-trust-morpholog-serve).
+
+1. One database login per caller, a member of the writer role:
+   `CREATE ROLE m_agent LOGIN IN ROLE morpholog_writer`.
+2. In `pg_hba.conf`, ahead of every general rule, the writer role's two
+   lines; in `pg_ident.conf`, one line per login from the service's OS
+   user. Set `listen_addresses` explicitly.
+3. Migrate and provision. Then, before the socket opens, make the
+   programme's trust-root acts as the service's OS user with the
+   operator's login (`morpholog propose ... --database-url '...?user=m_operator'`).
+4. The socket's directory, owned by the service's OS user and writable by
+   no one else: `install -d -m 755 -o <service user> /run/morpholog`.
+5. `morpholog hash rules.morph`, then start `morpholog serve` with that
+   hash, one `--presenter` per caller, and a `--grant` only for the reads
+   a caller needs.
+6. A new programme: SIGTERM, then [deploy it](#deploying-a-changed-programme),
+   then start again with the new hash.
 
 ## What has an exit code, and what does not
 

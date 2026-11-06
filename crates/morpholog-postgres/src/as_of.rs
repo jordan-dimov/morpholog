@@ -267,7 +267,7 @@ pub(crate) async fn reconstruct_inner(
     transition_id: Uuid,
     predicates: Option<&[String]>,
     mut asserted_in: Option<&mut HashMap<ClaimInstance, Uuid>>,
-    mut on_page: Option<&mut dyn FnMut(u64)>,
+    mut on_page: Option<&mut (dyn FnMut(u64) + Send)>,
 ) -> Result<State, PgError> {
     let target = settled_target(&mut *conn, transition_id).await?;
     let scope_set: Option<HashSet<&str>> =

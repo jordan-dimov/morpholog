@@ -37,6 +37,7 @@ pub(crate) mod rehearse;
 pub(crate) mod resident;
 pub(crate) mod roles;
 pub(crate) mod schema;
+pub(crate) mod serve;
 pub(crate) mod session;
 pub(crate) mod transact;
 pub(crate) mod verify;

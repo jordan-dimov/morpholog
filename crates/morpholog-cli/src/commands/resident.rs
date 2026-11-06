@@ -1,7 +1,8 @@
 //! The resident runtime: one programme fixed at start, one warm
 //! connection, and one request-to-envelope dispatch with no transport of
-//! its own. `session` wraps it in a stdio loop; a socket front-end would
-//! wrap the same object.
+//! its own. `session` wraps it in a stdio loop and answers every
+//! operation; `serve` wraps it in a socket, one connection per presenter,
+//! and answers only what each presenter is granted.
 //!
 //! The programme is fixed when the runtime starts. With an expected hash,
 //! a programme whose canonical hash is any other is refused before the
@@ -16,6 +17,7 @@
 
 use anyhow::{Context, anyhow};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::commands::filter::FieldFilter;
 use crate::commands::inspect::{
@@ -45,23 +47,83 @@ impl ResidentFailure {
     }
 }
 
-pub(crate) struct Resident {
+/// The operations that need a grant. Proposing (`propose`, `transact`)
+/// and `ping` need none: the rules decide a proposal. A read or an
+/// explanation tells the caller about state it may have no business
+/// seeing, and repeated explanations can map out a path the rules allow.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Gated {
+    Explain,
+    Claims,
+    Derived,
+    Audit,
+    Rejections,
+}
+
+impl Gated {
+    const ALL: [Gated; 5] = [
+        Gated::Explain,
+        Gated::Claims,
+        Gated::Derived,
+        Gated::Audit,
+        Gated::Rejections,
+    ];
+
+    fn name(self) -> &'static str {
+        match self {
+            Gated::Explain => "explain",
+            Gated::Claims => "claims",
+            Gated::Derived => "derived",
+            Gated::Audit => "audit",
+            Gated::Rejections => "rejections",
+        }
+    }
+
+    pub(crate) fn parse(op: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|g| g.name() == op)
+    }
+}
+
+/// What one caller may ask beyond proposing.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Permits(Vec<Gated>);
+
+impl Permits {
+    pub(crate) fn all() -> Self {
+        Self(Gated::ALL.to_vec())
+    }
+
+    pub(crate) fn grant(&mut self, gated: Gated) {
+        if !self.allows(gated) {
+            self.0.push(gated);
+        }
+    }
+
+    fn allows(&self, gated: Gated) -> bool {
+        self.0.contains(&gated)
+    }
+
+    fn refuse(op: &str) -> ResidentFailure {
+        ResidentFailure::request(
+            ErrorCode::UnknownOperation,
+            anyhow!("`{op}` is not granted to this caller; it may propose, transact and ping"),
+        )
+    }
+}
+
+/// The programme a runtime serves, parsed, validated and pinned once,
+/// and shared by every connection that serves it.
+pub(crate) struct Programme {
     file: PathBuf,
     program: PgProgram,
-    pool: PgPool,
     ready: serde_json::Value,
 }
 
-impl Resident {
-    /// Parse, validate and pin the programme, then connect. Before the
-    /// runtime exists, failures behave as in one-shot commands:
-    /// diagnostics, then an error. A hash mismatch is refused before the
-    /// connection is opened.
-    pub(crate) async fn start(
-        file: &Path,
-        database_url: &str,
-        expect_hash: Option<&str>,
-    ) -> anyhow::Result<Self> {
+impl Programme {
+    /// Parse, validate and pin. Failures behave as in one-shot commands:
+    /// diagnostics, then an error. A hash mismatch is refused here, before
+    /// anything connects.
+    pub(crate) fn load(file: &Path, expect_hash: Option<&str>) -> anyhow::Result<Self> {
         let parsed = parse_or_report(file)?;
         let program = PgProgram::new(prepare_or_report(&parsed)?);
         let model_hash = morpholog_core::format::canonical_hash(program.prepared().program());
@@ -74,24 +136,49 @@ impl Resident {
                 file.display()
             );
         }
-        let pool = crate::commands::connect_single(database_url).await?;
         let ready = SessionReady::new(model_hash, program.prepared().program().name.clone());
         let ready = serde_json::to_value(&ready)?;
         Ok(Self {
             file: file.to_path_buf(),
             program,
-            pool,
             ready,
         })
     }
 
-    /// The ready line: the identity this runtime serves.
+    /// The ready line: the identity this programme is served under.
     pub(crate) fn ready(&self) -> &serde_json::Value {
         &self.ready
     }
+}
+
+pub(crate) struct Resident {
+    programme: Arc<Programme>,
+    pool: PgPool,
+}
+
+impl Resident {
+    /// Load the programme, then connect.
+    pub(crate) async fn start(
+        file: &Path,
+        database_url: &str,
+        expect_hash: Option<&str>,
+    ) -> anyhow::Result<Self> {
+        let programme = Arc::new(Programme::load(file, expect_hash)?);
+        let pool = crate::commands::connect_single(database_url).await?;
+        Ok(Self::new(programme, pool))
+    }
+
+    pub(crate) fn new(programme: Arc<Programme>, pool: PgPool) -> Self {
+        Self { programme, pool }
+    }
+
+    /// The ready line: the identity this runtime serves.
+    pub(crate) fn ready(&self) -> &serde_json::Value {
+        &self.programme.ready
+    }
 
     fn prepared(&self) -> &PreparedProgram {
-        self.program.prepared()
+        self.programme.program.prepared()
     }
 
     /// Decode and dispatch one request. `op` is removed by hand, not via
@@ -103,6 +190,7 @@ impl Resident {
         &self,
         line: &str,
         row: u64,
+        permits: &Permits,
     ) -> Result<serde_json::Value, ResidentFailure> {
         let mut value: serde_json::Value = serde_json::from_str(line)
             .map_err(|e| ResidentFailure::request(ErrorCode::InvalidRequest, e.into()))?;
@@ -118,8 +206,13 @@ impl Resident {
                 anyhow!("a request names its operation in a string `op` field"),
             ));
         };
+        if let Some(gated) = Gated::parse(&op)
+            && !permits.allows(gated)
+        {
+            return Err(Permits::refuse(&op));
+        }
         match op.as_str() {
-            "propose" => self.propose(value, row).await,
+            "propose" => self.propose(value, row, permits).await,
             "explain" => self.explain(value, row).await,
             "transact" => self.transact(value, row).await,
             "claims" => self.claims(value).await,
@@ -141,9 +234,16 @@ impl Resident {
         &self,
         body: serde_json::Value,
         row: u64,
+        permits: &Permits,
     ) -> Result<serde_json::Value, ResidentFailure> {
         let body: ProposeBody = serde_json::from_value(body)
             .map_err(|e| ResidentFailure::request(ErrorCode::InvalidRequest, e.into()))?;
+        if body.explain_on_reject && !permits.allows(Gated::Explain) {
+            return Err(ResidentFailure::request(
+                ErrorCode::InvalidRequest,
+                anyhow!("`explain_on_reject` needs the `explain` grant, which this caller lacks"),
+            ));
+        }
         let batch_row = BatchRow {
             transformation: body.transformation,
             actor: body.actor,
@@ -151,9 +251,9 @@ impl Resident {
             args_named: body.args_named,
         };
         let mut envelope = propose_row_outcome(
-            &self.file,
+            &self.programme.file,
             body.explain_on_reject,
-            &self.program,
+            &self.programme.program,
             &self.pool,
             batch_row,
         )
@@ -184,7 +284,8 @@ impl Resident {
             args_named: body.args_named,
         };
         let prepared = self.prepared();
-        let transition = decode_row(&self.file, prepared, batch_row).map_err(row_failure)?;
+        let transition =
+            decode_row(&self.programme.file, prepared, batch_row).map_err(row_failure)?;
         let state = morpholog_postgres::load_scoped_state(
             &self.pool,
             prepared,
@@ -219,11 +320,15 @@ impl Resident {
     ) -> Result<serde_json::Value, ResidentFailure> {
         let body: TransactBody = serde_json::from_value(body)
             .map_err(|e| ResidentFailure::request(ErrorCode::InvalidRequest, e.into()))?;
-        let proposals = decode_acts(&self.file, self.prepared(), body.acts).map_err(row_failure)?;
-        let outcome =
-            morpholog_postgres::propose_all_against_pg(&self.pool, &self.program, &proposals)
-                .await
-                .map_err(|e| row_failure(classify_pg_error(e)))?;
+        let proposals =
+            decode_acts(&self.programme.file, self.prepared(), body.acts).map_err(row_failure)?;
+        let outcome = morpholog_postgres::propose_all_against_pg(
+            &self.pool,
+            &self.programme.program,
+            &proposals,
+        )
+        .await
+        .map_err(|e| row_failure(classify_pg_error(e)))?;
         let mut envelope = serde_json::to_value(&outcome)
             .context("serialising the outcome")
             .map_err(ResidentFailure::Operational)?;
@@ -271,7 +376,7 @@ impl Resident {
         if body.named {
             // A mismatch between programme and stored rows is not the
             // request's fault, so it aborts, as the one-shot read errors.
-            let rows = decode_claim_reads_named(program, &self.file, &claims)
+            let rows = decode_claim_reads_named(program, &self.programme.file, &claims)
                 .map_err(ResidentFailure::Operational)?;
             serde_json::to_value(rows).map_err(|e| ResidentFailure::Operational(e.into()))
         } else {
@@ -310,7 +415,7 @@ impl Resident {
         .await
         .map_err(ResidentFailure::Operational)?;
         if body.named {
-            let rows = decode_claims_named(program, &self.file, &rows)
+            let rows = decode_claims_named(program, &self.programme.file, &rows)
                 .map_err(ResidentFailure::Operational)?;
             serde_json::to_value(rows).map_err(|e| ResidentFailure::Operational(e.into()))
         } else {
@@ -330,7 +435,7 @@ impl Resident {
             .await
             .context("checking the database")
             .map_err(ResidentFailure::Operational)?;
-        Ok(self.ready.clone())
+        Ok(self.programme.ready.clone())
     }
 
     async fn rejections(
@@ -395,7 +500,7 @@ impl Resident {
             .iter()
             .map(|row| {
                 if body.named {
-                    audit_row_named_json(program, &self.file, row)
+                    audit_row_named_json(program, &self.programme.file, row)
                 } else {
                     serde_json::to_value(row).map_err(Into::into)
                 }
