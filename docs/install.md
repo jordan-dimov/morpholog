@@ -285,7 +285,10 @@ The generated client takes the same prefix:
 
 This creates `acme_writer`, `acme_reader` and `acme_executor`, grants them
 privileges in this database only, and records them there. A prefix is at
-most 55 characters, so every name fits PostgreSQL's limit. `migrate` re-applies the
+most 55 characters, so every name fits PostgreSQL's limit. Before the
+executor it could be 57, and a deployment with a 56- or 57-character prefix
+cannot add the executor under it: [move it](#moving-a-deployment-to-its-own-roles)
+to a shorter prefix, which creates all three roles. `migrate` re-applies the
 grants to the recorded roles and to no others. It never creates a role,
 and it refuses if a recorded role is gone.
 

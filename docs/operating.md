@@ -32,6 +32,9 @@ The binary moves, the programmes do not. The full account is
    with the deployment's own prefix. It creates and records only the
    missing role, and prints the grant to make
    ([the executor](embedder-integration.md#running-the-action-outside-the-proposer)).
+   A prefix longer than 55 characters is refused here; move the
+   deployment to a shorter one with `roles move` instead
+   ([install](install.md#moving-a-deployment-to-its-own-roles)).
 8. `morpholog audit verify --database-url "$DATABASE_URL"`. `passes`
    true: the record still agrees with itself. `tree_size` counts every
    audit row, the migration's control rows included.

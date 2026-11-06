@@ -249,6 +249,17 @@ async fn run(pool: &PgPool, sql: &str) {
         .unwrap_or_else(|e| panic!("{sql}: {e}"));
 }
 
+async fn superuser(world: &World) -> bool {
+    let admin = world.admin().await;
+    let superuser: bool =
+        sqlx::query_scalar("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
+            .fetch_one(&admin)
+            .await
+            .unwrap();
+    admin.close().await;
+    superuser
+}
+
 /// Build the world, run `scenario`, and drop the world whatever happens.
 /// `None` when the test role cannot create roles and databases.
 async fn in_world<F, Fut>(tag: &'static str, scenario: F)
@@ -257,14 +268,7 @@ where
     Fut: std::future::Future<Output = ()> + Send + 'static,
 {
     let world = World { tag };
-    let admin = world.admin().await;
-    let superuser: bool =
-        sqlx::query_scalar("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
-            .fetch_one(&admin)
-            .await
-            .unwrap();
-    admin.close().await;
-    if !superuser {
+    if !superuser(&world).await {
         eprintln!("skipping: needs a superuser test role");
         return;
     }
@@ -628,4 +632,96 @@ async fn a_migrate_reading_the_old_pair_cannot_grant_it_after_the_move() {
         );
     })
     .await;
+}
+
+/// Before the executor a prefix could be 57 characters. Such a deployment
+/// cannot add the executor under its prefix, and moving it to a shorter
+/// one carries its login and adds the executor.
+#[tokio::test]
+async fn a_prefix_too_long_for_the_executor_moves_to_a_shorter_one() {
+    let w = World { tag: "long" };
+    if !superuser(&w).await {
+        eprintln!("skipping: needs a superuser test role");
+        return;
+    }
+    let old = format!("{:x<56}_", w.name("old"));
+    assert_eq!(old.len(), 57);
+    let (ow, or) = (format!("{old}writer"), format!("{old}reader"));
+    let clean = async |w: &World| {
+        w.clean().await;
+        let admin = w.admin().await;
+        for role in [&ow, &or] {
+            run(&admin, &format!("DROP ROLE IF EXISTS {role}")).await;
+        }
+        admin.close().await;
+    };
+    clean(&w).await;
+    let scenario = {
+        let (w, old, ow, or) = (w.clone(), old.clone(), ow.clone(), or.clone());
+        tokio::spawn(async move {
+            let admin = w.admin().await;
+            run(&admin, &format!("CREATE DATABASE {}", w.db("a"))).await;
+            let (status, _, stderr) = cli(&["init", "--database-url", &w.url("a")]);
+            assert!(status.success(), "{stderr}");
+            let l1 = w.name("l1");
+            run(
+                &admin,
+                &format!(
+                    "CREATE ROLE {ow} NOLOGIN; CREATE ROLE {or} NOLOGIN; \
+                     CREATE ROLE {l1} LOGIN; GRANT {ow} TO {l1}"
+                ),
+            )
+            .await;
+            admin.close().await;
+            let a = w.pool("a").await;
+            run(
+                &a,
+                &format!(
+                    "INSERT INTO morpholog.deployment_roles (writer_role, reader_role) \
+                     VALUES ('{ow}', '{or}')"
+                ),
+            )
+            .await;
+            a.close().await;
+            let (status, _, stderr) = cli(&["migrate", "--database-url", &w.url("a")]);
+            assert!(status.success(), "{stderr}");
+            assert!(w.writes("a", "l1").await, "the legacy floor is in place");
+
+            let (status, _, stderr) = cli(&[
+                "init",
+                "--skip-if-exists",
+                "--least-privilege",
+                "--role-prefix",
+                &old,
+                "--database-url",
+                &w.url("a"),
+            ]);
+            assert!(!status.success());
+            assert!(stderr.contains("at most 55 characters"), "{stderr}");
+
+            let (status, stdout, stderr) = w.move_roles(&["l1"]);
+            assert!(status.success(), "{stderr}");
+            let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+            assert_eq!(report["from"]["writer"], ow.as_str(), "{report}");
+            assert_eq!(report["to"]["executor"], w.name("new_executor"), "{report}");
+            assert!(w.writes("a", "l1").await, "the moved login keeps writing");
+            let a = w.pool("a").await;
+            let (old_writes, executor): (bool, Option<String>) = sqlx::query_as(
+                "SELECT has_table_privilege($1, 'morpholog.audit', 'INSERT'), \
+                        (SELECT executor_role FROM morpholog.deployment_roles)",
+            )
+            .bind(&ow)
+            .fetch_one(&a)
+            .await
+            .unwrap();
+            a.close().await;
+            assert!(!old_writes, "the old writer still holds the floor here");
+            assert_eq!(executor, Some(w.name("new_executor")));
+        })
+        .await
+    };
+    clean(&w).await;
+    if let Err(failure) = scenario {
+        std::panic::resume_unwind(failure.into_panic());
+    }
 }
