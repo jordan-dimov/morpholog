@@ -1331,3 +1331,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** #475's last open point, that a transport failure keeps the commit-outcome-unknown contract. A caller of `serve` had no client, only the wire.
 
 **Landed:** the generated client's `Session` gained a second transport, a Unix socket, beside the child process it spawns; the lockstep exchange, the poisoning and the outcome-unknown rules are shared, not copied. `connect_service` pins the package's version and model hash at the handshake. The client's side of a lost receipt is pinned against a stand-in service (a commit whose receipt never arrives, a late receipt, a write cut off part-way, nothing re-sent); against the real binary, a caller that hangs up mid-proposal leaves exactly one decision and a service still serving.
+
+### An executor that can only deliver
+
+**Forced by:** #476 with example 21's trading agent: the agent proposes orders, and the venue's key must sit with a process that only carries out what was admitted. The outbox worker ran as the writer, which can propose, write the record, and rewrite an admitted intent's arguments.
+
+**Landed:** a third least-privilege role, `<prefix>executor`, recorded beside the writer and reader (migration 029). It reads the outbox and updates its delivery-state columns, nothing else. The writer lost table-wide `UPDATE` on the outbox too, revoked explicitly since grants add up, so no provisioned role can change an admitted intent. `roles move` carries the executor and now reads column grants. A deployment recorded before it gains one when `init --least-privilege` runs again. No router type and no HTTP deliverer: a worker per intent type, with the adapter owning the target, is the mapping. The acceptance script runs the whole path with an executor OS user that alone holds the venue's key.

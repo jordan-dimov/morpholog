@@ -140,6 +140,14 @@ impl Scratch {
         }
         for role in &self.roles {
             run(&self.admin, &format!("DROP ROLE IF EXISTS {role}")).await;
+            // Each deployment's executor goes with its writer.
+            if let Some(prefix) = role.strip_suffix("_writer") {
+                run(
+                    &self.admin,
+                    &format!("DROP ROLE IF EXISTS {prefix}_executor"),
+                )
+                .await;
+            }
         }
     }
 }

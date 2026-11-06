@@ -25,27 +25,36 @@ The binary moves, the programmes do not. The full account is
    ([the canonical-order migration](install.md#running-the-migration-to-the-canonical-order)).
 5. Optional: `morpholog migrate --prepare --database-url "$DATABASE_URL"`
    ahead of the window, so the window holds only the cutover.
-6. `morpholog migrate --database-url "$DATABASE_URL"`.
-7. `morpholog audit verify --database-url "$DATABASE_URL"`. `passes`
+6. `morpholog migrate --database-url "$DATABASE_URL"`. It re-applies the
+   privilege floor, so a narrowed grant takes effect here.
+7. When the release notes name a new least-privilege role:
+   `morpholog init --skip-if-exists --least-privilege --role-prefix <prefix> --database-url "$DATABASE_URL"`
+   with the deployment's own prefix. It creates and records only the
+   missing role, and prints the grant to make
+   ([the executor](embedder-integration.md#running-the-action-outside-the-proposer)).
+   A prefix longer than 55 characters is refused here; move the
+   deployment to a shorter one with `roles move` instead
+   ([install](install.md#moving-a-deployment-to-its-own-roles)).
+8. `morpholog audit verify --database-url "$DATABASE_URL"`. `passes`
    true: the record still agrees with itself. `tree_size` counts every
    audit row, the migration's control rows included.
-8. When the release notes say the semantics version moved:
+9. When the release notes say the semantics version moved:
    `morpholog rehearse a.morph --database-url "$DATABASE_URL"` with each
    programme you serve, unchanged. Read it as a diagnostic: a
    `would_error` row is a proposal that errors under this binary when
    re-decided against the prefix before it
    ([what each row class means](embedder-integration.md#when-the-programme-changes-and-the-ledger-stays)).
-9. `morpholog provision indexes --check a.morph b.morph --database-url "$DATABASE_URL"`,
+10. `morpholog provision indexes --check a.morph b.morph --database-url "$DATABASE_URL"`,
    then without `--check` if it exits non-zero. A new binary can need
    different indexes with no migration at all
    ([the deploy sequence](embedder-integration.md#the-deploy-sequence)).
-10. Regenerate every generated client package:
+11. Regenerate every generated client package:
     `morpholog generate python-client a.morph --out <package> --check`,
     then without `--check`. On every upgrade, not only one that lists
     contract changes: a client pins the binary version and refuses
     another before its first call
     ([the generated client](embedder-integration.md#the-generated-python-client-generate-python-client)).
-11. Start every process on the new binary.
+12. Start every process on the new binary.
 
 ## Deploying a changed programme
 
@@ -134,6 +143,29 @@ trust](embedder-integration.md#serving-callers-you-do-not-trust-morpholog-serve)
    a caller needs.
 6. A new programme: SIGTERM, then [deploy it](#deploying-a-changed-programme),
    then start again with the new hash.
+
+## Running the executor
+
+The executor holds the external credential and places what the record
+admitted. The full account is [running the action outside the
+proposer](embedder-integration.md#running-the-action-outside-the-proposer).
+
+1. One login for the executor, a member of the executor role and of no
+   other: `CREATE ROLE m_executor LOGIN IN ROLE morpholog_executor`.
+2. In `pg_hba.conf`, ahead of every general rule, the executor role's two
+   lines; in `pg_ident.conf`, one line from the executor's OS user.
+3. The credential readable by the executor's OS user alone, and the
+   adapter's target fixed in its own configuration, never read from an
+   intent.
+4. Check the floor took: `SELECT has_column_privilege('m_executor',
+   'morpholog.outbox', 'arguments', 'UPDATE')` is false, and
+   `has_table_privilege('m_executor', 'morpholog.claims', 'SELECT')` is
+   false.
+5. Start the worker as that login, one per intent type, with no
+   compensation spec. A failed row waits for a writer.
+6. Moving an existing worker off a writer login: stop it, provision the
+   executor (step 7 of [upgrading](#upgrading-to-a-new-release)), check the
+   floor, switch its login, start it.
 
 ## What has an exit code, and what does not
 

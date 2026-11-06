@@ -40,10 +40,12 @@ CREATE TABLE schema_migrations (
 -- written by `init --least-privilege`. Roles belong to the whole cluster,
 -- so a database names its own here, and `migrate` re-applies the floor to
 -- these roles and no others. At most one row; none without the floor.
+-- No executor role in a row recorded before the executor existed.
 CREATE TABLE deployment_roles (
-    singleton    boolean  PRIMARY KEY DEFAULT true CHECK (singleton),
-    writer_role  text     NOT NULL,
-    reader_role  text     NOT NULL
+    singleton      boolean  PRIMARY KEY DEFAULT true CHECK (singleton),
+    writer_role    text     NOT NULL,
+    reader_role    text     NOT NULL,
+    executor_role  text
 );
 
 
@@ -1022,4 +1024,5 @@ INSERT INTO schema_migrations (version, name) VALUES
     (25, 'rejection_compared'),
     (26, 'decimal_arithmetic'),
     (27, 'canonical_order'),
-    (28, 'exact_arithmetic');
+    (28, 'exact_arithmetic'),
+    (29, 'executor_role');

@@ -170,6 +170,9 @@ fn cli_json(url: &str, args: &[&str]) -> serde_json::Value {
 
 const PATIENCE: Duration = Duration::from_secs(60);
 
+/// The staged migration's version, whose cutover these tests interrupt.
+const CUTOVER: i32 = 27;
+
 /// The pid of the one backend of this database blocked on a lock inside a
 /// statement matching `pattern`, once there is one.
 async fn wait_blocked(conn: &mut PgConnection, pattern: &str) -> i32 {
@@ -355,7 +358,8 @@ async fn an_interrupted_cutover_rolls_back_and_the_next_attempt_activates() {
 }
 
 /// The cutover commits, then the client dies before it finishes: the
-/// activation stands, and running `migrate` again does nothing to it.
+/// activation stands, and running `migrate` again applies only what was
+/// left, never the cutover.
 #[tokio::test]
 async fn a_client_lost_after_the_commit_leaves_one_activation_and_a_harmless_rerun() {
     let Some(db) = scratch("committed").await else {
@@ -372,8 +376,9 @@ async fn a_client_lost_after_the_commit_leaves_one_activation_and_a_harmless_rer
     let mut child = migrate(&db.url, false).spawn().unwrap();
     let mut watch = db.connection().await;
     let pid = wait_blocked(&mut watch, "INSERT INTO morpholog.schema_migrations%").await;
-    // After the commit the runner re-applies the privilege floor, which
-    // reads the deployment roles: hold that table, then let the commit go.
+    // After the commit the runner goes on to the role record: a later
+    // migration alters it, and the privilege floor reads it. Hold that
+    // table, then let the commit go.
     let mut after_commit = db.connection().await;
     sqlx::raw_sql("BEGIN; LOCK TABLE morpholog.deployment_roles IN ACCESS EXCLUSIVE MODE")
         .execute(&mut after_commit)
@@ -383,26 +388,35 @@ async fn a_client_lost_after_the_commit_leaves_one_activation_and_a_harmless_rer
         .execute(&mut before_commit)
         .await
         .unwrap();
-    let pid_after = wait_blocked(&mut watch, "%FROM morpholog.deployment_roles%").await;
+    let pid_after = wait_blocked(&mut watch, "%morpholog.deployment_roles%").await;
     assert_eq!(pid_after, pid, "the same backend, past its commit");
     let committed = seen(&db.pool).await;
-    assert_eq!(
-        committed.version,
-        morpholog_postgres::head_version(),
-        "the cutover committed, and the migrations after it"
+    assert!(
+        committed.version >= CUTOVER,
+        "the cutover committed: {}",
+        committed.version
     );
     assert!(one_activation(&committed.first_order));
     kill(&mut child, &mut watch, pid, &mut after_commit).await;
 
     let after = seen(&db.pool).await;
-    assert_eq!(after.version, morpholog_postgres::head_version());
+    assert_eq!(after.version, committed.version, "the kill undid nothing");
     assert!(
         one_activation(&after.first_order),
         "{:?}",
         after.first_order
     );
     let rerun = cli_json(&db.url, &["migrate"]);
-    assert_eq!(rerun["applied"], serde_json::json!([]), "{rerun}");
+    let applied: Vec<i64> = rerun["applied"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["version"].as_i64().unwrap())
+        .collect();
+    assert!(
+        applied.iter().all(|&v| v > i64::from(committed.version)),
+        "the rerun applied only what was left: {rerun}"
+    );
     assert_eq!(
         rerun["recorded_version_after"],
         morpholog_postgres::head_version(),

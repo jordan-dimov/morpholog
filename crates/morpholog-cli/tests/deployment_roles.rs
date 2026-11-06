@@ -36,9 +36,10 @@ const DATABASES: [&str; 3] = [
     "morpholog_ci_cli_roles_b",
     "morpholog_ci_cli_roles_c",
 ];
-const ROLES: [&str; 2] = [
+const ROLES: [&str; 3] = [
     "morpholog_ci_cli_roles_writer",
     "morpholog_ci_cli_roles_reader",
+    "morpholog_ci_cli_roles_executor",
 ];
 const MEMBER: &str = "morpholog_ci_cli_roles_member";
 
@@ -187,6 +188,7 @@ async fn a_reset_binds_again_only_the_roles_the_database_recorded() {
         "morpholog_ci_cli_reset_writer",
         "morpholog_ci_cli_reset_reader",
         "morpholog_ci_cli_loose_writer",
+        "morpholog_ci_cli_reset_executor",
     ];
     let clean = || async {
         for db in [kept, bare] {
@@ -256,6 +258,35 @@ async fn a_reset_binds_again_only_the_roles_the_database_recorded() {
         (Some(roles[0].to_string()), true)
     );
 
+    // A record made before the executor existed: the reset binds the two
+    // roles again and adds the executor.
+    let kept_pool = PgPool::connect(&kept_url).await.unwrap();
+    run(
+        &kept_pool,
+        &format!(
+            "UPDATE morpholog.deployment_roles SET executor_role = NULL; DROP OWNED BY {}",
+            roles[3]
+        ),
+    )
+    .await;
+    kept_pool.close().await;
+    run(&admin, &format!("DROP ROLE {}", roles[3])).await;
+    let (status, stdout, stderr) = reset(&kept_url, "morpholog_ci_cli_reset_");
+    assert!(
+        status.success(),
+        "a record without an executor binds again: {stderr}"
+    );
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(report["least_privilege"]["executor_role"], roles[3]);
+    let kept_pool = PgPool::connect(&kept_url).await.unwrap();
+    let executor: Option<String> =
+        sqlx::query_scalar("SELECT executor_role FROM morpholog.deployment_roles")
+            .fetch_one(&kept_pool)
+            .await
+            .unwrap();
+    kept_pool.close().await;
+    assert_eq!(executor.as_deref(), Some(roles[3]));
+
     let (status, _, stderr) = reset(&kept_url, "morpholog_ci_cli_other_");
     assert!(!status.success());
     assert!(stderr.contains("nothing was dropped"), "{stderr}");
@@ -309,13 +340,18 @@ async fn a_reset_of_a_database_older_than_the_role_record_refuses_first() {
         .unwrap();
     let db = "morpholog_ci_cli_old";
     let (writer, reader) = ("morpholog_ci_cli_old_writer", "morpholog_ci_cli_old_reader");
+    let executor = "morpholog_ci_cli_old_executor";
     let clean = || async {
         run(
             &admin,
             &format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)"),
         )
         .await;
-        run(&admin, &format!("DROP ROLE IF EXISTS {writer}, {reader}")).await;
+        run(
+            &admin,
+            &format!("DROP ROLE IF EXISTS {writer}, {reader}, {executor}"),
+        )
+        .await;
     };
     clean().await;
     run(&admin, &format!("CREATE DATABASE {db}")).await;
@@ -486,13 +522,18 @@ async fn a_reset_never_recreates_a_missing_recorded_role() {
         "morpholog_ci_cli_gone_writer",
         "morpholog_ci_cli_gone_reader",
     );
+    let executor = "morpholog_ci_cli_gone_executor";
     let clean = || async {
         run(
             &admin,
             &format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)"),
         )
         .await;
-        run(&admin, &format!("DROP ROLE IF EXISTS {writer}, {reader}")).await;
+        run(
+            &admin,
+            &format!("DROP ROLE IF EXISTS {writer}, {reader}, {executor}"),
+        )
+        .await;
     };
     clean().await;
     run(&admin, &format!("CREATE DATABASE {db}")).await;

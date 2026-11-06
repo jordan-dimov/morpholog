@@ -1,8 +1,10 @@
 {
   "least_privilege": {
+    "executor_role": "morpholog_executor",
     "next_steps": [
       "GRANT morpholog_writer TO <the runtime's login role>;",
-      "GRANT morpholog_reader TO <each reporting or projection login role>;"
+      "GRANT morpholog_reader TO <each reporting or projection login role>;",
+      "GRANT morpholog_executor TO <the outbox worker's login role>;"
     ],
     "reader_role": "morpholog_reader",
     "writer_role": "morpholog_writer"

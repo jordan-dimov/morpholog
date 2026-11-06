@@ -53,6 +53,11 @@ pub(crate) const MIGRATIONS: &[(i32, &str, &str)] = &[
         "exact_arithmetic",
         include_str!("../sql/migrations/028_exact_arithmetic.sql"),
     ),
+    (
+        29,
+        "executor_role",
+        include_str!("../sql/migrations/029_executor_role.sql"),
+    ),
 ];
 
 /// Whether `migrate` stops before the one transaction that pauses writers.

@@ -2295,9 +2295,10 @@ def predates_versioned_hash(payload: object) -> bool:
 
 @dataclass(frozen=True)
 class LeastPrivilege:
-    """The `--least-privilege` floor as applied: the two group roles,
-    plus the membership grants only the operator can decide."""
+    """The `--least-privilege` floor as applied: the group roles, plus
+    the membership grants only the operator can decide."""
 
+    executor_role: str
     next_steps: tuple[str, ...]
     reader_role: str
     writer_role: str
@@ -2305,9 +2306,12 @@ class LeastPrivilege:
     @classmethod
     def from_json(cls, payload: object) -> LeastPrivilege:
         data = _strict(
-            "least privilege", payload, {"next_steps", "reader_role", "writer_role"}
+            "least privilege",
+            payload,
+            {"executor_role", "next_steps", "reader_role", "writer_role"},
         )
         return cls(
+            executor_role=data.text("executor_role"),
             next_steps=tuple(data.texts("next_steps")),
             reader_role=data.text("reader_role"),
             writer_role=data.text("writer_role"),

@@ -78,12 +78,17 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
         let recorded = dropped
             .as_mut()
             .and_then(|d| d.roles.take())
-            .filter(|r| *r.roles() == roles);
-        match recorded {
-            Some(recorded) => rebind_least_privilege(&pool, recorded).await,
-            None => provision_least_privilege(&pool, &roles).await,
+            .filter(|r| r.roles().same_deployment(&roles));
+        // A rebind restores the roles recorded before the reset; provisioning
+        // then adds the executor to a record made before it existed.
+        if let Some(recorded) = recorded {
+            rebind_least_privilege(&pool, recorded)
+                .await
+                .context("least-privilege provisioning failed")?;
         }
-        .context("least-privilege provisioning failed")?;
+        provision_least_privilege(&pool, &roles)
+            .await
+            .context("least-privilege provisioning failed")?;
         warn_if_roles_shared(&pool, &roles).await?;
         Some(LeastPrivilegeReport::applied(&roles))
     } else {
