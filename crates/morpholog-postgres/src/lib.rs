@@ -57,6 +57,7 @@ mod roles_move;
 mod scope_differential;
 mod score;
 mod signing;
+mod snapshots;
 mod sql_quote;
 mod transact;
 mod txn;
@@ -166,6 +167,7 @@ pub use signing::{
     render_public_key, render_signature, sign_tree_head, signing_key_from_pem, signing_key_to_pem,
     tree_head_signing_bytes, tree_head_witness_bytes, verify_tree_head,
 };
+pub use snapshots::{SnapshotRefresh, refresh_state_snapshots};
 pub use transact::{AtomicAct, PgAtomicOutcome, propose_all_against_pg};
 pub use verify::{
     VerifyOutcome, VerifyPass, VerifyProgress, VerifyReport, ViewsVerification, coverage_replay,

@@ -64,7 +64,8 @@ DECLARE
 BEGIN
     TRUNCATE morpholog.outbox, morpholog.claims, morpholog.audit,
         morpholog.audit_checkpoints, morpholog.rejections, morpholog.index_requirement,
-        morpholog.managed_index, morpholog.audit_order_txn CASCADE;
+        morpholog.managed_index, morpholog.audit_order_txn, morpholog.state_snapshots,
+        morpholog.state_snapshot_claims CASCADE;
     ALTER SEQUENCE morpholog.audit_order_seq RESTART;
     ALTER SEQUENCE morpholog.audit_ordered_at_us RESTART;
     ALTER TABLE morpholog.audit ENABLE TRIGGER audit_order;
@@ -128,4 +129,46 @@ impl Deliverer for AlwaysNonRetryable {
             reason: self.reason.clone(),
         }
     }
+}
+
+/// Keep a snapshot of the state as of `transition_id`, wherever it is,
+/// for a test that places snapshots off any grid. `Ok(false)` when one
+/// was already kept there.
+pub async fn build_state_snapshot(
+    pool: &sqlx::PgPool,
+    transition_id: uuid::Uuid,
+) -> Result<bool, crate::PgError> {
+    crate::snapshots::build_state_snapshot(pool, transition_id)
+        .await
+        .map(|built| !built.already_kept)
+}
+
+/// The claims as of `transition_id`, with their admitting transitions,
+/// replayed from the first row whatever snapshots are kept: the oracle a
+/// snapshot read is held to. `predicates` scopes the replay as the as-of
+/// reads do.
+pub async fn read_claims_at_replayed(
+    pool: &sqlx::PgPool,
+    transition_id: uuid::Uuid,
+    predicates: Option<&[String]>,
+) -> Result<Vec<crate::ClaimRead>, crate::PgError> {
+    let mut asserted_in = std::collections::HashMap::new();
+    let mut conn = pool.acquire().await.map_err(crate::error::classify)?;
+    let state = crate::as_of::reconstruct_from(
+        &mut conn,
+        crate::as_of::Start::Beginning,
+        transition_id,
+        predicates,
+        Some(&mut asserted_in),
+        None,
+    )
+    .await?;
+    Ok(state
+        .claims()
+        .iter()
+        .map(|claim| crate::ClaimRead {
+            claim: claim.clone(),
+            asserted_in: asserted_in[claim],
+        })
+        .collect())
 }

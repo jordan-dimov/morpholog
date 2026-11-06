@@ -832,6 +832,35 @@ CREATE TABLE morpholog.migration_progress (
     PRIMARY KEY (version, step)
 );
 
+-- The admitted state at settled places in the audit log, so an as-of
+-- read replays only the rows after the nearest one. A cache built from
+-- the log on request, never written by a commit and never evidence: a
+-- read that finds none, or one it cannot use, replays the whole log.
+CREATE TABLE state_snapshots (
+    snapshot_id    bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    -- The place in the log the state is as of, in the replay's order.
+    audit_order    bigint      NOT NULL,
+    act_ordinal    int         NOT NULL,
+    committed_at   timestamptz NOT NULL,
+    transition_id  uuid        NOT NULL,
+    -- How the claims below encode the state; a read ignores any other.
+    format         int         NOT NULL,
+    claim_count    bigint      NOT NULL CHECK (claim_count >= 0),
+    built_at       timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (audit_order, act_ordinal, committed_at, transition_id, format)
+);
+
+-- One row per live claim, in the replay's order, with the transition
+-- that admitted it while absent.
+CREATE TABLE state_snapshot_claims (
+    snapshot_id     bigint NOT NULL REFERENCES state_snapshots ON DELETE CASCADE,
+    ordinal         bigint NOT NULL,
+    predicate_name  text   NOT NULL,
+    arguments       jsonb  NOT NULL CHECK (jsonb_typeof(arguments) = 'array'),
+    asserted_in     uuid   NOT NULL,
+    PRIMARY KEY (snapshot_id, ordinal)
+);
+
 -- The canonical audit order (migration 27).
 CREATE SEQUENCE morpholog.audit_order_seq CACHE 1;
 -- Microseconds since the epoch of the last `ordered_at` handed out.
@@ -1025,4 +1054,5 @@ INSERT INTO schema_migrations (version, name) VALUES
     (26, 'decimal_arithmetic'),
     (27, 'canonical_order'),
     (28, 'exact_arithmetic'),
-    (29, 'executor_role');
+    (29, 'executor_role'),
+    (30, 'state_snapshots');

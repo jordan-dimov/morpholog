@@ -892,6 +892,12 @@ fn least_privilege_sql(roles: &DeploymentRoles) -> String {
         out,
         "GRANT SELECT, INSERT, UPDATE ON morpholog.audit_checkpoints TO {w};"
     );
+    // An as-of read by the writer starts from a snapshot; building one is
+    // the owner's.
+    let _ = writeln!(
+        out,
+        "GRANT SELECT ON morpholog.state_snapshots, morpholog.state_snapshot_claims TO {w};"
+    );
     let _ = writeln!(
         out,
         "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA morpholog_read TO {w};"

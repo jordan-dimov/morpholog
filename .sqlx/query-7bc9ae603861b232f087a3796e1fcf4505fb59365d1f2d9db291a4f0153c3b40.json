@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT transition_id FROM morpholog.state_snapshots WHERE format = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "transition_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "morpholog.state_snapshots",
+            "name": "transition_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7bc9ae603861b232f087a3796e1fcf4505fb59365d1f2d9db291a4f0153c3b40"
+}

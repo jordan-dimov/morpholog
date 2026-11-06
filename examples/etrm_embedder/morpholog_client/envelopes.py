@@ -2690,6 +2690,35 @@ class RefreshDerivedReport:
         )
 
 
+@dataclass(frozen=True)
+class RefreshSnapshotsReport:
+    """What `refresh snapshots` kept: one snapshot after every `every`
+    rows of the audit log. A cache for as-of reads, never evidence;
+    `latest` is absent when none is kept."""
+
+    built: int
+    every: int
+    kept: int
+    removed: int
+    latest: str | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> RefreshSnapshotsReport:
+        data = _strict(
+            "refresh snapshots report",
+            payload,
+            {"built", "every", "kept", "removed"},
+            {"latest"},
+        )
+        return cls(
+            built=data.integer("built", minimum=0),
+            every=data.integer("every", minimum=1),
+            kept=data.integer("kept", minimum=0),
+            removed=data.integer("removed", minimum=0),
+            latest=data.optional_text("latest"),
+        )
+
+
 # ------------------------------------------------------------
 # Tamper-evidence: verify / checkpoint / evidence pack.
 # ------------------------------------------------------------

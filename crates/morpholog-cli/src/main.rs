@@ -323,6 +323,22 @@ pub(crate) enum RefreshCmd {
     /// state). Derived SQL views read this projection; it is as fresh as
     /// the last refresh.
     Derived(RefreshDerivedArgs),
+    /// Keep the admitted state after every `--every` rows of the audit
+    /// log, so an as-of read replays only the rows after the nearest one.
+    /// A disposable cache: builds what is missing, deletes what is off
+    /// that grid, and no verifier reads it. Run it on a schedule.
+    Snapshots(RefreshSnapshotsArgs),
+}
+
+/// Arguments for `refresh snapshots`.
+#[derive(clap::Args, Debug)]
+pub(crate) struct RefreshSnapshotsArgs {
+    /// Rows of the audit log between snapshots.
+    #[arg(long, default_value = "10000")]
+    pub(crate) every: std::num::NonZeroU64,
+
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
 }
 
 /// Arguments for `refresh derived`.
@@ -1871,6 +1887,9 @@ async fn run() -> anyhow::Result<()> {
         Command::Refresh {
             what: RefreshCmd::Derived(args),
         } => commands::refresh::run(&args).await,
+        Command::Refresh {
+            what: RefreshCmd::Snapshots(args),
+        } => commands::refresh::snapshots(&args).await,
         Command::Hash(args) => commands::hash::run(args),
         Command::Init(args) => commands::init::run(args).await,
         Command::Roles {
