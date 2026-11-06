@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM pg_attribute\n               WHERE attrelid = 'morpholog.deployment_roles'::regclass\n                 AND attname = 'executor_role' AND NOT attisdropped\n           ) AS \"has!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "has!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "20cfa6940d67e44aac1088d7a4170bea79234235dfa481e72591336b522f84b1"
+}

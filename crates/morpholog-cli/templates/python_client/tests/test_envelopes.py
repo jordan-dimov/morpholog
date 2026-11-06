@@ -642,6 +642,7 @@ class Reports(unittest.TestCase):
             golden("init_report_least_privilege.json")
         )
         self.assertEqual(locked.least_privilege.writer_role, "morpholog_writer")
+        self.assertEqual(locked.least_privilege.executor_role, "morpholog_executor")
         self.assertTrue(locked.least_privilege.next_steps)
         named = envelopes.NamedClaim.from_json(golden("named_claim.json"))
         # Named-read values stay wire-true; the generated read models

@@ -311,6 +311,7 @@ pub struct InitReport {
 /// roles the runtime and its read-only consumers actually use).
 #[derive(Serialize)]
 pub struct LeastPrivilegeReport {
+    pub executor_role: String,
     pub next_steps: Vec<String>,
     pub reader_role: String,
     pub writer_role: String,
@@ -320,10 +321,15 @@ impl LeastPrivilegeReport {
     pub fn applied(roles: &morpholog_postgres::DeploymentRoles) -> Self {
         let writer = roles.writer();
         let reader = roles.reader();
+        // Provisioning always leaves an executor; a record without one is
+        // given one before this report is made.
+        let executor = roles.executor().unwrap_or_default();
         Self {
+            executor_role: executor.to_string(),
             next_steps: vec![
                 format!("GRANT {writer} TO <the runtime's login role>;"),
                 format!("GRANT {reader} TO <each reporting or projection login role>;"),
+                format!("GRANT {executor} TO <the outbox worker's login role>;"),
             ],
             reader_role: reader.to_string(),
             writer_role: writer.to_string(),

@@ -1590,7 +1590,9 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::CompileRefu
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::CompileRefusal
 pub struct morpholog_postgres::DeploymentRoles
 impl morpholog_postgres::DeploymentRoles
+pub fn morpholog_postgres::DeploymentRoles::executor(&self) -> core::option::Option<&str>
 pub fn morpholog_postgres::DeploymentRoles::reader(&self) -> &str
+pub fn morpholog_postgres::DeploymentRoles::same_deployment(&self, &Self) -> bool
 pub fn morpholog_postgres::DeploymentRoles::with_prefix(&str) -> core::result::Result<Self, morpholog_postgres::PgError>
 pub fn morpholog_postgres::DeploymentRoles::writer(&self) -> &str
 impl core::clone::Clone for morpholog_postgres::DeploymentRoles
@@ -1864,6 +1866,7 @@ impl core::marker::UnsafeUnpin for morpholog_postgres::MigrationReport
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::MigrationReport
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::MigrationReport
 pub struct morpholog_postgres::MovedLogin
+pub morpholog_postgres::MovedLogin::executor: bool
 pub morpholog_postgres::MovedLogin::login: alloc::string::String
 pub morpholog_postgres::MovedLogin::reader: bool
 pub morpholog_postgres::MovedLogin::writer: bool
@@ -2435,6 +2438,7 @@ impl core::marker::UnsafeUnpin for morpholog_postgres::RoleMember
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::RoleMember
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::RoleMember
 pub struct morpholog_postgres::RoleMembers
+pub morpholog_postgres::RoleMembers::executor: alloc::vec::Vec<morpholog_postgres::RoleMember>
 pub morpholog_postgres::RoleMembers::reader: alloc::vec::Vec<morpholog_postgres::RoleMember>
 pub morpholog_postgres::RoleMembers::writer: alloc::vec::Vec<morpholog_postgres::RoleMember>
 impl core::clone::Clone for morpholog_postgres::RoleMembers
@@ -2456,6 +2460,7 @@ impl core::marker::UnsafeUnpin for morpholog_postgres::RoleMembers
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::RoleMembers
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::RoleMembers
 pub struct morpholog_postgres::RolePair
+pub morpholog_postgres::RolePair::executor: core::option::Option<alloc::string::String>
 pub morpholog_postgres::RolePair::reader: alloc::string::String
 pub morpholog_postgres::RolePair::writer: alloc::string::String
 impl core::clone::Clone for morpholog_postgres::RolePair
@@ -2957,6 +2962,7 @@ pub async fn morpholog_postgres::list_derived_at(&sqlx_postgres::PgPool, &morpho
 pub async fn morpholog_postgres::list_outbox_rows(&sqlx_postgres::PgPool, core::option::Option<morpholog_postgres::OutboxStatus>, core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::OutboxRow>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_pending_outbox(&sqlx_postgres::PgPool) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::OutboxRow>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::list_rejection_rows(&sqlx_postgres::PgPool, u32, core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::RejectionRow>, morpholog_postgres::PgError>
+pub fn morpholog_postgres::listed_roles(&morpholog_postgres::DeploymentRoles) -> alloc::string::String
 pub async fn morpholog_postgres::load_checkpoint(&sqlx_postgres::PgPool, i64) -> core::result::Result<core::option::Option<morpholog_postgres::Checkpoint>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::load_scoped_state(&sqlx_postgres::PgPool, &morpholog_core::prepared::PreparedProgram, &morpholog_core::ir::TransformationName) -> core::result::Result<core::option::Option<morpholog_core::state::State>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::mark_compensation_failed(&sqlx_postgres::PgPool, uuid::Uuid, &str, &str) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>

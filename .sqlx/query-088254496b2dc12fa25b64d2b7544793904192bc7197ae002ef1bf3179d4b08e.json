@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO morpholog.deployment_roles (writer_role, reader_role, executor_role) VALUES ($1, $2, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "088254496b2dc12fa25b64d2b7544793904192bc7197ae002ef1bf3179d4b08e"
+}

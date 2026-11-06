@@ -1164,23 +1164,27 @@ fn migration_reports_serialize_as_pinned() {
     );
 }
 
-/// `roles move`: the pairs, the logins moved, the members left behind, and
-/// where the old pair still reaches.
+/// `roles move`: the roles, the logins moved, the members left behind, and
+/// where the old roles still reach. The old record here predates the
+/// executor, so only the new roles name one.
 #[test]
 fn roles_move_report_serializes_as_pinned() {
     use morpholog_postgres::{MovedLogin, RolePair, RolesMoveReport};
     let report = RolesMoveReport {
         from: RolePair {
+            executor: None,
             reader: "morpholog_reader".to_string(),
             writer: "morpholog_writer".to_string(),
         },
         logins: vec![MovedLogin {
+            executor: false,
             login: "acme_app".to_string(),
             reader: false,
             writer: true,
         }],
         old_pair_reaches: vec!["other_deployment".to_string()],
         to: RolePair {
+            executor: Some("acme_executor".to_string()),
             reader: "acme_reader".to_string(),
             writer: "acme_writer".to_string(),
         },

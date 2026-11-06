@@ -209,6 +209,7 @@ impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::InitReport
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::InitReport
 impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::InitReport
 pub struct morpholog_cli::envelopes::LeastPrivilegeReport
+pub morpholog_cli::envelopes::LeastPrivilegeReport::executor_role: alloc::string::String
 pub morpholog_cli::envelopes::LeastPrivilegeReport::next_steps: alloc::vec::Vec<alloc::string::String>
 pub morpholog_cli::envelopes::LeastPrivilegeReport::reader_role: alloc::string::String
 pub morpholog_cli::envelopes::LeastPrivilegeReport::writer_role: alloc::string::String

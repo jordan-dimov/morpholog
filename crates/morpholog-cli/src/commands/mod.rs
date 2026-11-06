@@ -283,21 +283,28 @@ pub(crate) async fn warn_if_roles_shared(
     let others = morpholog_postgres::databases_also_reached(pool, roles).await?;
     if !others.is_empty() {
         let members = morpholog_postgres::direct_members(pool, roles).await?;
+        let mut held = vec![
+            members_of(roles.writer(), &members.writer),
+            members_of(roles.reader(), &members.reader),
+        ];
+        held.extend(
+            roles
+                .executor()
+                .map(|executor| members_of(executor, &members.executor)),
+        );
         eprintln!(
-            "warning: this deployment's roles `{}` and `{}` also hold privileges in {}; \
-             a login granted either can act there too. Direct members: {}; {}. Review each \
+            "warning: this deployment's roles {} also hold privileges in {}; a login \
+             granted any of them can act there too. Direct members: {}. Review each \
              member's effective access, and give each deployment its own roles with \
              `morpholog roles move --role-prefix <prefix> --login <login>`: see \
              docs/install.md, \"Moving a deployment to its own roles\"",
-            roles.writer(),
-            roles.reader(),
+            morpholog_postgres::listed_roles(roles),
             others
                 .iter()
                 .map(|d| format!("`{d}`"))
                 .collect::<Vec<_>>()
                 .join(", "),
-            members_of(roles.writer(), &members.writer),
-            members_of(roles.reader(), &members.reader),
+            held.join("; "),
         );
     }
     Ok(())

@@ -82,8 +82,8 @@ enum Command {
     /// the `morpholog` schema already exists (`--skip-if-exists`
     /// reports and exits zero instead, for idempotent entrypoints);
     /// never drops, never migrates. `--least-privilege` additionally
-    /// locks the governed tables down to dedicated writer and reader
-    /// roles, so the governed path is the only way in by default.
+    /// locks the governed tables down to dedicated writer, reader and
+    /// executor roles, so the governed path is the only way in by default.
     Init(InitArgs),
 
     /// Bring an existing database up to the schema this binary expects.
@@ -729,13 +729,14 @@ pub(crate) struct RehearseArgs {
 /// neither.
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum RolesCmd {
-    /// Move this database from its recorded pair of roles to
-    /// `<PREFIX>writer` and `<PREFIX>reader`, created here. Each `--login`
-    /// becomes a member of the new role of every kind it held, with the
-    /// same inherit and `SET ROLE` settings; other members of the old pair
-    /// lose what this deployment granted through it. Refuses, changing
-    /// nothing, when the old pair holds anything here beyond Morpholog's
-    /// floor. Run as the role that owns the tables, with writers stopped.
+    /// Move this database from its recorded roles to `<PREFIX>writer`,
+    /// `<PREFIX>reader` and `<PREFIX>executor`, created here. Each
+    /// `--login` becomes a member of the new role of every kind it held,
+    /// with the same inherit and `SET ROLE` settings; other members of the
+    /// old roles lose what this deployment granted through them. Refuses,
+    /// changing nothing, when the old roles hold anything here beyond
+    /// Morpholog's floor. Run as the role that owns the tables, with
+    /// writers and executors stopped.
     Move(RolesMoveArgs),
 }
 
@@ -1046,17 +1047,19 @@ pub(crate) struct InitArgs {
     #[arg(long)]
     pub(crate) i_know_this_deletes_data: bool,
 
-    /// Also provision the least-privilege floor: dedicated writer and
-    /// reader group roles, PUBLIC revoked from the governed tables, and
-    /// the audit log append-only even for the writer. The report names
-    /// the membership grants the operator still runs. Idempotent;
-    /// combine with --skip-if-exists to retrofit an existing database.
+    /// Also provision the least-privilege floor: dedicated writer, reader
+    /// and executor group roles, PUBLIC revoked from the governed tables,
+    /// the audit log append-only even for the writer, and an admitted
+    /// intent unchangeable by either the writer or the executor. The
+    /// report names the membership grants the operator still runs.
+    /// Idempotent; combine with --skip-if-exists to retrofit an existing
+    /// database, or to add the executor to one provisioned before it.
     #[arg(long)]
     pub(crate) least_privilege: bool,
 
-    /// Name this deployment's roles `<PREFIX>writer` and `<PREFIX>reader`.
-    /// Roles belong to the whole PostgreSQL cluster, so each deployment
-    /// on one cluster needs its own prefix.
+    /// Name this deployment's roles `<PREFIX>writer`, `<PREFIX>reader`
+    /// and `<PREFIX>executor`. Roles belong to the whole PostgreSQL
+    /// cluster, so each deployment on one cluster needs its own prefix.
     #[arg(long, value_name = "PREFIX", requires = "least_privilege",
           default_value = morpholog_postgres::DEFAULT_ROLE_PREFIX)]
     pub(crate) role_prefix: String,

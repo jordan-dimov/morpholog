@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE morpholog.deployment_roles SET executor_role = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7293e6dd70925744d18f67337d1888f9b73aebdec1ebbabaa23131453f454915"
+}

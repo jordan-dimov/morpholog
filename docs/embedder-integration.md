@@ -1245,3 +1245,74 @@ migrate, provision, and make the programme's trust-root acts (appointing
 an operator, its first grants) as the service's OS user with the
 operator's login, the one route to that login, so no caller can race to
 become the trust root.
+
+## Running the action outside the proposer
+
+`serve` keeps the agent from writing the record. The action in the world
+needs the same: the agent may propose `place_order`, but it must never
+hold the venue's key. The executor holds the key. It takes only intents
+the record admitted, from the outbox, and does what each one says.
+
+**The executor's role.** `init --least-privilege` provisions a third role
+beside the writer and the reader, `<prefix>executor` (`morpholog_executor`
+by default). Grant it to the executor's login:
+
+```sql
+GRANT morpholog_executor TO m_executor;
+```
+
+The role can read the outbox and move a row through delivery: claim it,
+mark it delivered, schedule a retry, mark it failed. That is all. It
+cannot change what an admitted intent says (its arguments, type,
+idempotency key or transition), add or remove an intent, read or write
+claims or the audit log, or propose. Run the outbox worker with that
+login, in process or through `morpholog outbox claim` / `complete`. The
+executor does not compensate: a compensation is a proposal, and proposing
+needs a writer. Run it without a compensation spec; a failed row waits for
+a writer to deal with it.
+
+The writer cannot change an admitted intent either. It needs to add
+intents, not rewrite them. That does not make the writer safe to hand an
+agent: it can still write claims, audit rows and new intents, which is why
+`serve` holds it.
+
+**The target is the deployment's, never the intent's.** A worker serves
+one intent type, and its adapter owns where the action goes: the endpoint,
+the credential, the method, and the check of the payload's shape. The
+intent's arguments are business data only. They never choose a URL or a
+host, a credential or its name, a method, headers, TLS trust, a command or
+a path. That is why there is no generic HTTP deliverer that reads its URL
+from the payload. A venue the rules accept is not a target the executor is
+configured for: `examples/21_closed_loop_execution` declares a venue named
+like an address, the record admits an order there, and the executor fails
+it closed.
+
+**What the executor is still trusted with.** It holds the key, so it can
+misuse it, and its role lets it mark a row delivered without acting, or
+fail it. The grants stop it from rewriting what was admitted, not from
+misbehaving. Reconciliation exposes an order the venue never saw, or one it
+saw and the record never admitted (example 21). Delivery is at least once:
+a redelivery carries the same intent id and idempotency key, so a receiver
+that deduplicates on the key acts once. Morpholog cannot promise exactly
+once across two systems.
+
+**What the deployment must hold.** Morpholog checks the grants. It cannot
+check that the key exists nowhere else, or that the agent cannot reach the
+venue by another route. Like the writer logins, the executor's login is
+reachable only from the executor's OS user, before every general rule in
+`pg_hba.conf`:
+
+```
+local  all  +morpholog_executor      peer    map=executor
+host   all  +morpholog_executor  all reject
+```
+
+and in `pg_ident.conf`:
+
+```
+executor  morpholog-executor  m_executor
+```
+
+Otherwise an agent that learns the executor's password could mark admitted
+intents delivered without anything happening. `scripts/serve_acceptance.sh`
+runs this whole path with separate OS users.

@@ -1473,8 +1473,9 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["login", "reader", "writer"],
+            "required": ["executor", "login", "reader", "writer"],
             "properties": {
+              "executor": { "type": "boolean" },
               "login": { "type": "string" },
               "reader": { "type": "boolean" },
               "writer": { "type": "boolean" }
@@ -1487,10 +1488,12 @@
       }
     },
     "role_pair": {
+      "description": "A deployment's roles. No executor in a record made before the executor existed.",
       "type": "object",
       "additionalProperties": false,
       "required": ["reader", "writer"],
       "properties": {
+        "executor": { "type": "string" },
         "reader": { "type": "string" },
         "writer": { "type": "string" }
       }
@@ -1505,8 +1508,9 @@
         "least_privilege": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["next_steps", "reader_role", "writer_role"],
+          "required": ["executor_role", "next_steps", "reader_role", "writer_role"],
           "properties": {
+            "executor_role": { "type": "string" },
             "next_steps": { "type": "array", "items": { "type": "string" } },
             "reader_role": { "type": "string" },
             "writer_role": { "type": "string" }

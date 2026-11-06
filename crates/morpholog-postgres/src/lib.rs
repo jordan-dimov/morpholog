@@ -141,7 +141,7 @@ pub(crate) use provision::reapply_least_privilege;
 pub use provision::{
     DEFAULT_ROLE_PREFIX, DeploymentRoles, DroppedSchema, InitOutcome, RecordedRoles, RoleMember,
     RoleMembers, SessionCount, databases_also_reached, deployment_roles, direct_members,
-    drop_schema, initialise_schema, other_sessions, provision_least_privilege,
+    drop_schema, initialise_schema, listed_roles, other_sessions, provision_least_privilege,
     rebind_least_privilege, redact_database_url, require_can_provision_least_privilege,
     require_deployment_roles, single_connection_pool, with_default_user, with_user,
 };
