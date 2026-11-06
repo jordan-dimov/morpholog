@@ -1159,12 +1159,24 @@ programme or a hash.
 **Bounds.** A request line is at most 1 MiB; a longer one closes its
 connection. A presenter holds at most four connections at once, and a
 fifth is closed. They share the presenter's one database connection, so a
-presenter can slow only itself.
+presenter can slow only itself. Refusals are logged at most once a minute
+per caller, with a count of those held back, so a caller that keeps
+connecting cannot flood the log.
 
 **Failures.** A failure that cannot be a receipt closes that connection,
 not the service. A caller whose connection closes with a request in
 flight cannot know whether it committed: read the record before
 re-submitting, as after a session abort.
+
+**The socket.** Its mode is set to 0666: who is served is the uid map's
+to decide, and a user who cannot write the socket cannot connect at all.
+Its path must not be changeable by anyone but the service's user or root.
+The service refuses to start when any directory above the socket is owned
+by someone else or writable by group or others (a sticky directory such
+as `/tmp` is allowed above it, since others cannot rename or remove an
+entry there they do not own). A caller that could swap the socket could
+answer the other presenters in the service's place. A directory made
+with `install -d -m 755 -o <service user> /run/morpholog` will do.
 
 **Starting and stopping.** `--expect-hash` is required. The socket path
 must not exist; SIGTERM or SIGINT stops the service and removes it. A new
@@ -1172,7 +1184,8 @@ programme is a stop, then a start with the new hash. Never run two
 services on one database under different hashes.
 
 **What the deployment must hold.** Morpholog checks the programme's hash,
-the login of each connection and the uid of each caller. It cannot check
+the login of each connection, the uid of each caller and the socket's
+directory. It cannot check
 that a caller has no other way in. The deployment makes the writer logins
 reachable only through the service. In `pg_hba.conf`, before every
 general rule (the first matching line decides):
@@ -1196,5 +1209,6 @@ Without these lines, Ubuntu's packaged `local all all peer` lets an OS
 user log in as a writer login of the same name, with no password. Set
 `listen_addresses` explicitly. Bootstrap before the socket opens:
 migrate, provision, and make the programme's trust-root acts (appointing
-an operator, its first grants) under the deployer's own login, so no
-caller can race to become the trust root.
+an operator, its first grants) as the service's OS user with the
+operator's login, the one route to that login, so no caller can race to
+become the trust root.

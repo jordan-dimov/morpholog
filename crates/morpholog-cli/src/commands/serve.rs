@@ -19,9 +19,11 @@
 
 use anyhow::{Context, anyhow, bail};
 use std::collections::HashMap;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
@@ -36,6 +38,9 @@ const MAX_REQUEST_LINE: usize = 1024 * 1024;
 /// Open connections per presenter. Past it, a new connection is closed at
 /// once, so one presenter can exhaust only its own share.
 const MAX_CONNECTIONS_PER_PRESENTER: usize = 4;
+
+/// How long a caller's log lines are held back after one is written.
+const QUIET: Duration = Duration::from_secs(60);
 
 struct Presenter {
     resident: Resident,
@@ -76,6 +81,10 @@ pub(crate) async fn run(args: ServeArgs) -> anyhow::Result<()> {
             args.socket.display()
         )
     })?;
+    if let Err(e) = secure_socket(&args.socket) {
+        remove_socket(&args.socket);
+        return Err(e);
+    }
     eprintln!(
         "serving {} on {}, presenters: {}",
         programme
@@ -87,13 +96,18 @@ pub(crate) async fn run(args: ServeArgs) -> anyhow::Result<()> {
         presenters.len()
     );
 
+    let quiet = Arc::new(Quiet::default());
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
     loop {
         tokio::select! {
             accepted = listener.accept() => match accepted {
-                Ok((stream, _)) => admit(stream, &presenters),
-                Err(e) => eprintln!("accepting a connection: {e}"),
+                Ok((stream, _)) => admit(stream, &presenters, &quiet),
+                Err(e) => {
+                    quiet.note(None, || format!("accepting a connection: {e}"));
+                    // Out of descriptors, say: back off rather than spin.
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
             },
             signal = &mut shutdown => {
                 signal?;
@@ -106,32 +120,109 @@ pub(crate) async fn run(args: ServeArgs) -> anyhow::Result<()> {
 }
 
 /// Look the peer up and hand the connection to its presenter, or close it.
-fn admit(stream: UnixStream, presenters: &Arc<HashMap<u32, Presenter>>) {
+fn admit(stream: UnixStream, presenters: &Arc<HashMap<u32, Presenter>>, quiet: &Arc<Quiet>) {
     let uid = match stream.peer_cred() {
         Ok(credentials) => credentials.uid(),
         Err(e) => {
-            eprintln!("refused a connection: its peer could not be read: {e}");
+            quiet.note(None, || {
+                format!("refused a connection: its peer could not be read: {e}")
+            });
             return;
         }
     };
     let Some((&key, presenter)) = presenters.get_key_value(&uid) else {
-        eprintln!("refused uid {uid}: not a presenter");
+        quiet.note(Some(uid), || format!("refused uid {uid}: not a presenter"));
         return;
     };
     if presenter.open.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS_PER_PRESENTER {
         presenter.open.fetch_sub(1, Ordering::SeqCst);
-        eprintln!("refused uid {uid}: {MAX_CONNECTIONS_PER_PRESENTER} connections already open");
+        quiet.note(Some(uid), || {
+            format!("refused uid {uid}: {MAX_CONNECTIONS_PER_PRESENTER} connections already open")
+        });
         return;
     }
     let presenters = Arc::clone(presenters);
+    let quiet = Arc::clone(quiet);
     tokio::spawn(async move {
         let presenter = &presenters[&key];
         let outcome = converse(stream, presenter).await;
         presenter.open.fetch_sub(1, Ordering::SeqCst);
         if let Err(e) = outcome {
-            eprintln!("uid {uid}: connection closed: {e:#}");
+            quiet.note(Some(uid), || format!("uid {uid}: connection closed: {e:#}"));
         }
     });
+}
+
+/// One log line per caller per [`QUIET`], so a caller that keeps
+/// connecting cannot flood the log, nor block the accept loop on a
+/// stderr nobody drains. The next line written says how many were held
+/// back. `None` is the lines no caller can be named for.
+#[derive(Default)]
+struct Quiet(Mutex<HashMap<Option<u32>, (Instant, u64)>>);
+
+impl Quiet {
+    fn note(&self, caller: Option<u32>, line: impl FnOnce() -> String) {
+        let now = Instant::now();
+        let held = {
+            let mut seen = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+            match seen.get_mut(&caller) {
+                Some((since, held)) if now.duration_since(*since) < QUIET => {
+                    *held += 1;
+                    return;
+                }
+                Some((since, held)) => {
+                    *since = now;
+                    std::mem::take(held)
+                }
+                None => {
+                    seen.insert(caller, (now, 0));
+                    0
+                }
+            }
+        };
+        if held == 0 {
+            eprintln!("{}", line());
+        } else {
+            eprintln!("{} ({held} more held back)", line());
+        }
+    }
+}
+
+/// Make the socket reachable by every presenter, and refuse a path that
+/// anyone but this service or root could change. Who is served is the
+/// uid map's to decide, so the socket itself is open to every user; but
+/// a caller able to rename a directory above it, or to unlink the socket,
+/// could put its own listener in the service's place.
+fn secure_socket(socket: &Path) -> anyhow::Result<()> {
+    let own = std::fs::symlink_metadata(socket)
+        .context("reading the socket just bound")?
+        .uid();
+    let parent = match socket.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let parent = std::fs::canonicalize(parent)
+        .with_context(|| format!("resolving `{}`", parent.display()))?;
+    for dir in parent.ancestors() {
+        let meta =
+            std::fs::metadata(dir).with_context(|| format!("reading `{}`", dir.display()))?;
+        let mode = meta.mode();
+        let trusted_owner = meta.uid() == own || meta.uid() == 0;
+        // A sticky directory lets others add entries but not rename or
+        // remove one they do not own.
+        let others_may_change = mode & 0o022 != 0 && mode & 0o1000 == 0;
+        if !trusted_owner || others_may_change {
+            bail!(
+                "`{}` could be changed by a user other than this service or root, so a caller \
+                 could replace the socket; use a directory owned by the service's user and \
+                 writable by no one else",
+                dir.display()
+            );
+        }
+    }
+    std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o666))
+        .context("opening the socket to the presenters")?;
+    Ok(())
 }
 
 /// The session protocol over one connection.

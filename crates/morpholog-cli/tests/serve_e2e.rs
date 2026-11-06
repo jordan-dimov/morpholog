@@ -16,7 +16,7 @@ mod common;
 use common::{database_url, reset_db};
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -53,6 +53,16 @@ fn model_hash(file: &Path) -> String {
     );
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     value["hash"].as_str().unwrap().to_string()
+}
+
+/// A directory for the socket that only this user can change, as the
+/// service requires: `tempfile` alone follows the umask, which may leave
+/// it group-writable.
+fn socket_dir() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap()
 }
 
 /// A running service, killed when dropped.
@@ -127,7 +137,7 @@ fn command(fixture: &Path, hash: &str, socket: &Path, extra: &[String], url: &st
 fn serve(extra: &[String]) -> Served {
     let fixture = common::write_fixture("serve_fixture", FIXTURE);
     let hash = model_hash(&fixture);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = socket_dir();
     let socket = dir.path().join("serve.sock");
     let mut child = command(&fixture, &hash, &socket, extra, &raw_url())
         .spawn()
@@ -344,7 +354,7 @@ async fn a_request_cannot_choose_the_programme() {
 async fn a_wrong_hash_refuses_before_the_socket_exists() {
     let login = login().await;
     let fixture = common::write_fixture("serve_fixture", FIXTURE);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = socket_dir();
     let socket = dir.path().join("serve.sock");
     let stderr = refused_start(
         &fixture,
@@ -362,7 +372,7 @@ async fn an_existing_socket_path_refuses_to_start() {
     let login = login().await;
     let fixture = common::write_fixture("serve_fixture", FIXTURE);
     let hash = model_hash(&fixture);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = socket_dir();
     let socket = dir.path().join("serve.sock");
     std::fs::write(&socket, "").unwrap();
     let stderr = refused_start(
@@ -379,7 +389,7 @@ async fn an_existing_socket_path_refuses_to_start() {
 async fn a_login_the_connection_did_not_get_refuses_to_start() {
     let fixture = common::write_fixture("serve_fixture", FIXTURE);
     let hash = model_hash(&fixture);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = socket_dir();
     let socket = dir.path().join("serve.sock");
     // The URL names the test's own login, so the connection logs in as
     // that and not as the mapped one.
@@ -399,7 +409,7 @@ async fn a_uid_or_a_login_mapped_twice_refuses_to_start() {
     let login = login().await;
     let fixture = common::write_fixture("serve_fixture", FIXTURE);
     let hash = model_hash(&fixture);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = socket_dir();
     let socket = dir.path().join("serve.sock");
     let uid = own_uid();
 
@@ -457,4 +467,47 @@ async fn sigterm_removes_the_socket() {
     let (status, _, socket_left) = served.stop();
     assert!(status.success(), "{status}");
     assert!(!socket_left, "the socket outlived the service");
+}
+
+#[tokio::test]
+async fn the_socket_is_open_to_every_user_and_the_map_decides() {
+    let login = login().await;
+    let served = serve(&presenter(own_uid(), &login));
+    let mode = std::fs::metadata(&served.socket).unwrap().mode() & 0o777;
+    assert_eq!(
+        mode, 0o666,
+        "another user can reach the socket only if it may write it"
+    );
+}
+
+#[tokio::test]
+async fn a_directory_others_could_change_refuses_to_start() {
+    let login = login().await;
+    let fixture = common::write_fixture("serve_fixture", FIXTURE);
+    let hash = model_hash(&fixture);
+    let dir = socket_dir();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+    let socket = dir.path().join("serve.sock");
+    let stderr = refused_start(
+        &fixture,
+        &hash,
+        &socket,
+        &presenter(own_uid(), &login),
+        &raw_url(),
+    );
+    assert!(stderr.contains("could replace the socket"), "{stderr}");
+    assert!(!socket.exists(), "the refused socket was removed");
+}
+
+#[tokio::test]
+async fn a_caller_that_keeps_connecting_cannot_flood_the_log() {
+    let login = login().await;
+    let served = serve(&presenter(own_uid().wrapping_add(1), &login));
+    for _ in 0..50 {
+        let (mut read, _write) = served.connect();
+        assert!(closed_unanswered(&mut read));
+    }
+    let (_, stderr, _) = served.stop();
+    let lines = stderr.matches("not a presenter").count();
+    assert_eq!(lines, 1, "one line for fifty refusals: {stderr}");
 }

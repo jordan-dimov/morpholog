@@ -124,12 +124,15 @@ trust](embedder-integration.md#serving-callers-you-do-not-trust-morpholog-serve)
 2. In `pg_hba.conf`, ahead of every general rule, the writer role's two
    lines; in `pg_ident.conf`, one line per login from the service's OS
    user. Set `listen_addresses` explicitly.
-3. Under the deployer's own login: migrate, provision, and make the
-   programme's trust-root acts.
-4. `morpholog hash rules.morph`, then start `morpholog serve` with that
+3. Migrate and provision. Then, before the socket opens, make the
+   programme's trust-root acts as the service's OS user with the
+   operator's login (`morpholog propose ... --database-url '...?user=m_operator'`).
+4. The socket's directory, owned by the service's OS user and writable by
+   no one else: `install -d -m 755 -o <service user> /run/morpholog`.
+5. `morpholog hash rules.morph`, then start `morpholog serve` with that
    hash, one `--presenter` per caller, and a `--grant` only for the reads
    a caller needs.
-5. A new programme: SIGTERM, then [deploy it](#deploying-a-changed-programme),
+6. A new programme: SIGTERM, then [deploy it](#deploying-a-changed-programme),
    then start again with the new hash.
 
 ## What has an exit code, and what does not
