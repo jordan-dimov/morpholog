@@ -1158,8 +1158,10 @@ programme or a hash.
 
 **Bounds.** A request line is at most 1 MiB; a longer one closes its
 connection. A presenter holds at most four connections at once, and a
-fifth is closed. They share the presenter's one database connection, so a
-presenter can slow only itself. Refusals are logged at most once a minute
+fifth is closed. They share the presenter's one database connection, so
+no presenter can take another's connections. The database itself is
+shared: an expensive proposal, or contention on the same claims, still
+slows the others. Refusals are logged at most once a minute
 per caller, with a count of those held back, so a caller that keeps
 connecting cannot flood the log.
 

@@ -16,7 +16,8 @@
 # :55433) and a built binary:
 #   cargo build -p morpholog-cli
 #   sudo bash scripts/serve_acceptance.sh
-# Removes the cluster, the users and its work directory on exit. Exits
+# Removes the cluster, the users and the work directory it made on exit, and
+# refuses to start if a user, group or cluster of the same name exists. Exits
 # non-zero if any check fails. Touches no other cluster.
 set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo "run with sudo" >&2; exit 2; }
@@ -25,7 +26,6 @@ repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 port=55433
 cluster=serve_acceptance
 conf=/etc/postgresql/18/$cluster
-work=/var/tmp/morpholog-serve-acceptance
 db="postgres:///ledger?port=$port"
 fails=0
 
@@ -36,26 +36,38 @@ for name in "${users[@]}"; do
         exit 2
     fi
 done
+if pg_lsclusters -h | awk '{print $1 "/" $2}' | grep -qx "18/$cluster"; then
+    echo "a cluster named $cluster already exists; refusing to touch it" >&2
+    exit 2
+fi
 
+# Cleanup removes only what this run made, so a refused or failed run
+# never takes something that was already there.
+made_users=()
+made_cluster=
+work=
 cleanup() {
     [[ -n ${serve_pid:-} ]] && kill "$serve_pid" 2>/dev/null || true
-    pg_dropcluster --stop 18 "$cluster" 2>/dev/null || true
-    for name in "${users[@]}"; do
-        if getent passwd "$name" >/dev/null; then userdel "$name"; fi
-    done
-    rm -rf "$work"
+    if [[ -n $made_cluster ]]; then pg_dropcluster --stop 18 "$cluster" || true; fi
+    for name in "${made_users[@]}"; do userdel "$name" || true; done
+    if [[ -n $work ]]; then rm -rf "$work"; fi
 }
 trap cleanup EXIT
 cd /
 
 for name in "${users[@]}"; do
     useradd --system --user-group --no-create-home --shell /usr/sbin/nologin "$name"
+    made_users+=("$name")
 done
 agent_uid=$(id -u mlg_agent)
 operator_uid=$(id -u mlg_operator)
 
-# The repository may sit in a home directory other users cannot read.
-mkdir -m 755 "$work" "$work/bin"
+# A fresh directory of this run's own: /var/tmp is writable by everyone,
+# so a fixed name there could be planted in advance. The repository may
+# sit in a home directory other users cannot read, hence the copies.
+work=$(mktemp -d /var/tmp/morpholog-serve-acceptance.XXXXXX)
+chmod 755 "$work"
+mkdir -m 755 "$work/bin"
 install -m 755 "$repo/target/debug/morpholog" "$work/bin/morpholog"
 install -m 755 "$repo/scripts/serve_probe.py" "$work/bin/serve_probe.py"
 install -m 644 "$repo/examples/21_closed_loop_execution/closed_loop_execution.morph" \
@@ -66,6 +78,7 @@ rules=$work/rules.morph
 socket=$work/run/serve.sock
 
 pg_createcluster -p $port 18 $cluster >/dev/null
+made_cluster=yes
 echo "listen_addresses = '127.0.0.1,::1'" >"$conf/conf.d/listen.conf"
 cat >"$conf/pg_hba.conf" <<'EOF'
 local   all       postgres                          peer
