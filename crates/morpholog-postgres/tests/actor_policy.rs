@@ -141,6 +141,7 @@ fn proposal(t: &Transformation, args: Vec<EvalValue>, actor: &str) -> Proposal {
         transformation_name: t.name.clone(),
         args,
         actor: Subject::from(actor),
+        decided_at: None,
     })
 }
 

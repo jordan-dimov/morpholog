@@ -750,6 +750,7 @@ async fn the_agents_login_cannot_act_as_the_operator_or_the_reporter() {
             transformation_name: t.name.clone(),
             args,
             actor: Subject::from(name),
+            decided_at: None,
         };
         let err = propose_against_pg(&agent, &program(), &attested(&transition))
             .await

@@ -88,6 +88,7 @@ fn recorded_transition(row: &AuditRow) -> Transition {
         transformation_name: row.transformation_name.clone(),
         args: row.arguments.clone(),
         actor: row.actor.clone(),
+        decided_at: None,
     }
 }
 

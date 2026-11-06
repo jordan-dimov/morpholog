@@ -145,7 +145,7 @@ impl ImpactPlan {
                     match term {
                         Term::Literal(v) => guards.push((i, v.clone())),
                         Term::Var(v) if case_vars.contains(v) => var_map.push((i, v.clone())),
-                        Term::Var(_) | Term::Wildcard | Term::Actor => {}
+                        Term::Var(_) | Term::Wildcard | Term::Actor | Term::DecidedAt => {}
                     }
                 }
                 occurrences.push(Occurrence {
@@ -382,7 +382,7 @@ fn follow(
                             Some(Traced::Literal(lit)) => guards.push((i, lit.clone())),
                             None => {}
                         },
-                        Term::Wildcard | Term::Actor => {}
+                        Term::Wildcard | Term::Actor | Term::DecidedAt => {}
                     }
                 }
                 out.occurrences.push(Occurrence {
@@ -411,7 +411,7 @@ fn follow(
                     let traced = match arg {
                         Term::Literal(v) => Traced::Literal(v.clone()),
                         Term::Var(v) => frame.get(v)?.clone(),
-                        Term::Wildcard | Term::Actor => return None,
+                        Term::Wildcard | Term::Actor | Term::DecidedAt => return None,
                     };
                     Some((param.clone(), traced))
                 })
@@ -583,7 +583,7 @@ fn scope_read(
                                 callee_bound.insert(param.clone());
                             }
                         }
-                        Term::Literal(_) | Term::Actor => {
+                        Term::Literal(_) | Term::Actor | Term::DecidedAt => {
                             callee_bound.insert(param.clone());
                         }
                         Term::Wildcard => {}

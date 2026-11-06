@@ -447,16 +447,16 @@ fn a_decision_id_with_a_second_outcome_is_refused() {
     let state = bio_state_with_decision();
     let outcome = morpholog_test_support::propose(
         &p,
-        &morpholog_core::Transition {
-            transformation_name: "decide_on_identification".into(),
-            args: vec![
+        &morpholog_test_support::transition_at(
+            p.transformation("decide_on_identification").unwrap(),
+            vec![
                 subj("decision_1"),
                 subj("match_1"),
                 subj("rejected_identification"),
-                ts("2026-10-12T12:00:00Z"),
             ],
-            actor: morpholog_core::Subject::from("anna"),
-        },
+            "anna",
+            "2026-10-12T12:00:00Z",
+        ),
         &state,
         &mut morpholog_test_support::fresh(),
     )
@@ -533,15 +533,24 @@ fn bio_state_with_decision() -> State {
             ],
             "sys",
         ),
+    ] {
+        state = must_accept_as(p.transformation(t).unwrap(), args, actor, state, &p);
+    }
+    // The verifications and the decision read their instant from the
+    // decision time, not from an argument.
+    let example = morpholog_test_support::Example::new(&p);
+    for (t, args, actor, at) in [
         (
             "verify_match",
-            vec![subj("match_1"), ts("2026-10-12T10:00:00Z")],
+            vec![subj("match_1")],
             "anna",
+            "2026-10-12T10:00:00Z",
         ),
         (
             "verify_match",
-            vec![subj("match_1"), ts("2026-10-12T10:30:00Z")],
+            vec![subj("match_1")],
             "boris",
+            "2026-10-12T10:30:00Z",
         ),
         (
             "decide_on_identification",
@@ -549,12 +558,12 @@ fn bio_state_with_decision() -> State {
                 subj("decision_1"),
                 subj("match_1"),
                 subj("confirmed_identification"),
-                ts("2026-10-12T11:00:00Z"),
             ],
             "anna",
+            "2026-10-12T11:00:00Z",
         ),
     ] {
-        state = must_accept_as(p.transformation(t).unwrap(), args, actor, state, &p);
+        state = example.must_accept_at(p.transformation(t).unwrap(), args, actor, at, state);
     }
     state
 }

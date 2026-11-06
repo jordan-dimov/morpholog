@@ -91,6 +91,9 @@ impl SourceMap {
             | ValidationError::EqualityKindMismatch { context, .. }
             | ValidationError::VariableKindConflict { context, .. }
             | ValidationError::ActorNotAvailable { context }
+            | ValidationError::DecisionTimeNotAvailable { context }
+            | ValidationError::DecisionTimeAsName { context, .. }
+            | ValidationError::DecisionTimeMatched { context, .. }
             | ValidationError::NestingTooDeep { context }
             | ValidationError::UnboundVariable { context, .. }
             | ValidationError::UnresolvedDefinitionCall { context, .. }

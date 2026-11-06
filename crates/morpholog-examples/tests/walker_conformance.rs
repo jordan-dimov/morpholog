@@ -365,6 +365,32 @@ transformation set_tariff(period_end, meter, rate):
     admit Tariff(period_end, meter, rate)
 ";
 
+/// The decision time in every position a body offers: a defined-call
+/// argument, a `let` with arithmetic, a quantifier body, an admitted
+/// field, an intent payload, and inside a `for`.
+const DECIDED_AT_ACROSS_BODY_POSITIONS: &str = "\
+program decided_at_across_body_positions
+predicate Lot(lot: Subject, closes: Timestamp)
+predicate Bid(lot: Subject, at: Timestamp)
+predicate Late(lot: Subject, at: Timestamp)
+intent BidPlaced(lot: Subject, at: Timestamp)
+define open_at(lot, moment):
+    Lot(lot, closes) and moment strictly_before closes
+transformation list(lot, closes):
+    admit Lot(lot, closes)
+transformation bid(lot):
+    require open_at(lot, decided_at)
+    let grace = (decided_at + duration(PT1H))
+    require not (exists l: (Lot(l, c) and grace strictly_before c))
+    admit Bid(lot, decided_at)
+    emit BidPlaced(lot, decided_at)
+transformation sweep(lots):
+    for lot in lots:
+        bind Lot(lot, closes)
+        require closes at_or_before decided_at
+        admit Late(lot, decided_at)
+";
+
 fn corpus() -> Vec<(&'static str, &'static str)> {
     vec![
         ("sum_through_defined_chain", SUM_THROUGH_DEFINED_CHAIN),
@@ -390,6 +416,10 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ),
         ("expression_target_sum", EXPRESSION_TARGET_SUM),
         ("projected_derived_named_hole", PROJECTED_DERIVED_NAMED_HOLE),
+        (
+            "decided_at_across_body_positions",
+            DECIDED_AT_ACROSS_BODY_POSITIONS,
+        ),
     ]
 }
 

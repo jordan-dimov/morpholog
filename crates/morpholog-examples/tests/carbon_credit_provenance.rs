@@ -26,6 +26,7 @@ fn transition(name: &str, args: Vec<EvalValue>, actor: &str) -> Transition {
         transformation_name: name.into(),
         args,
         actor: Subject::from(actor),
+        decided_at: None,
     }
 }
 

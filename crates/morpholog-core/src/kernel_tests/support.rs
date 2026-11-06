@@ -59,6 +59,7 @@ pub(crate) fn test_transition(t: &Transformation, args: Vec<EvalValue>) -> Trans
         transformation_name: t.name.clone(),
         args,
         actor: test_actor(),
+        decided_at: None,
     }
 }
 

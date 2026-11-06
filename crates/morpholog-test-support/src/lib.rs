@@ -140,6 +140,7 @@ pub fn test_transition(t: &Transformation, args: Vec<EvalValue>) -> Transition {
         transformation_name: t.name.clone(),
         args,
         actor: test_actor(),
+        decided_at: None,
     }
 }
 
@@ -163,6 +164,25 @@ fn transition_as(
         transformation_name: t.name.clone(),
         args,
         actor: actor.into(),
+        decided_at: None,
+    }
+}
+
+/// A transition with `actor`, decided at `decided_at` (RFC 3339), as the runtime
+/// gives a body that reads `decided_at`.
+pub fn transition_at(
+    t: &Transformation,
+    args: Vec<EvalValue>,
+    actor: impl Into<Subject>,
+    decided_at: &str,
+) -> Transition {
+    Transition {
+        decided_at: Some(
+            decided_at
+                .parse()
+                .expect("test decision time must be an RFC 3339 instant"),
+        ),
+        ..transition_as(t, args, actor)
     }
 }
 
@@ -464,6 +484,36 @@ impl Example {
         pre: &State,
     ) -> RejectionReason {
         rejected(self.propose_as(t, args, actor, pre), t)
+    }
+
+    /// [`Self::must_accept_as`], decided at `decided_at` (RFC 3339).
+    pub fn must_accept_at(
+        &self,
+        t: &Transformation,
+        args: Vec<EvalValue>,
+        actor: impl Into<Subject>,
+        decided_at: &str,
+        pre: State,
+    ) -> State {
+        accepted(
+            self.run(t, &transition_at(t, args, actor, decided_at), &pre),
+            t,
+        )
+    }
+
+    /// [`Self::must_reject_as`], decided at `decided_at` (RFC 3339).
+    pub fn must_reject_at(
+        &self,
+        t: &Transformation,
+        args: Vec<EvalValue>,
+        actor: impl Into<Subject>,
+        decided_at: &str,
+        pre: &State,
+    ) -> RejectionReason {
+        rejected(
+            self.run(t, &transition_at(t, args, actor, decided_at), pre),
+            t,
+        )
     }
 }
 

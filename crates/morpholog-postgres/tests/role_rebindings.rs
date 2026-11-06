@@ -218,6 +218,7 @@ async fn a_session_whose_role_was_recreated_fails_closed() {
         transformation_name: "post_simple_entry".into(),
         args: common::ledger_args("live_2"),
         actor: morpholog_core::Subject::from("alex"),
+        decided_at: None,
     });
     let outcome = morpholog_postgres::propose_against_pg(&old_session, &pg, &proposal).await;
     assert!(
@@ -245,6 +246,7 @@ async fn every_act_of_a_transact_carries_the_same_role_oid() {
                 transformation_name: "post_simple_entry".into(),
                 args: common::ledger_args(entry),
                 actor: morpholog_core::Subject::from(*actor),
+                decided_at: None,
             })
         })
         .collect();

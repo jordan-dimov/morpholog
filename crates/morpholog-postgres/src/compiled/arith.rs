@@ -134,6 +134,9 @@ fn render(
             construct: "wildcard value",
         }),
         ValueExpr::Term(Term::Actor) => Err(CompileReason::Construct { construct: "actor" }),
+        ValueExpr::Term(Term::DecidedAt) => Err(CompileReason::Construct {
+            construct: "decided_at",
+        }),
         ValueExpr::Sum { .. } => {
             let operand = value_sql(expr, env, ctx)?;
             let Some(Pending::Sum(RenderedSum {

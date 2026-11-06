@@ -263,6 +263,7 @@ fn for_bind(witnesses: usize) -> Result<Point> {
             transformation_name: "mark".into(),
             args: vec![EvalValue::Collection(xs)],
             actor: "bench".into(),
+            decided_at: None,
         }),
     })
 }
@@ -382,6 +383,7 @@ fn repeated_delta(witnesses: usize, (cases, shape): (usize, &'static str)) -> Re
             transformation_name: "mark".into(),
             args: vec![EvalValue::Collection(ts)],
             actor: "bench".into(),
+            decided_at: None,
         }),
     })
 }

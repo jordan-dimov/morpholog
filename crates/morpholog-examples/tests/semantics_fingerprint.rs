@@ -30,7 +30,7 @@ use std::path::PathBuf;
 
 use morpholog_core::{
     EvalError, EvalValue, Outcome, Program, RejectionReason, SEMANTICS_VERSION, State, Subject,
-    Transformation,
+    Term, Transformation, Transition, ValueExpr, fold,
 };
 use morpholog_test_support::differential::{sample_args, sample_state};
 use morpholog_test_support::{propose, test_transition, validated};
@@ -73,6 +73,7 @@ fn error(e: &EvalError) -> Value {
             json!({"error": "value_of_multiple_matches", "predicate": predicate})
         }
         EvalError::UnboundActor => json!({"error": "unbound_actor"}),
+        EvalError::UnboundDecisionTime => json!({"error": "unbound_decision_time"}),
         EvalError::PreStateUnavailable => json!({"error": "pre_state_unavailable"}),
         EvalError::SubjectSourceExhausted => json!({"error": "subject_source_exhausted"}),
         EvalError::DivisionByZero => json!({"error": "division_by_zero"}),
@@ -146,6 +147,23 @@ fn record(out: &mut BTreeMap<String, Fingerprints>, case: String, input: &Value,
     );
 }
 
+/// The decision time every proposal in the corpus is given.
+const DECIDED_AT: &str = "2026-11-06T12:00:00Z";
+
+fn reads_decision_time(t: &Transformation) -> bool {
+    let mut reads = false;
+    for stmt in &t.body {
+        fold::walk_stmt(stmt, &mut |n| {
+            reads |= matches!(
+                n,
+                fold::Node::Slot(Term::DecidedAt)
+                    | fold::Node::Value(ValueExpr::Term(Term::DecidedAt))
+            );
+        });
+    }
+    reads
+}
+
 /// A proposal's question: every input its decision reads.
 fn proposal_case(
     program: &Program,
@@ -153,9 +171,12 @@ fn proposal_case(
     args: Vec<EvalValue>,
     state: &State,
 ) -> (Value, Value) {
-    let transition = test_transition(t, args);
+    let transition = Transition {
+        decided_at: Some(DECIDED_AT.parse().unwrap()),
+        ..test_transition(t, args)
+    };
     let subjects = subject_input();
-    let input = json!({
+    let mut input = json!({
         "propose": morpholog_core::format::canonical_hash(program),
         "transformation": t.name,
         "args": values(&transition.args),
@@ -163,6 +184,11 @@ fn proposal_case(
         "state": claims(state),
         "subjects": subjects,
     });
+    // In the question only where a body reads it, so the cases that
+    // cannot see it ask what they always asked.
+    if reads_decision_time(t) {
+        input["decided_at"] = json!(DECIDED_AT);
+    }
     let result = propose(program, &transition, state, &mut subjects.into_iter());
     (input, decision(&result))
 }

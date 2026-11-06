@@ -1626,6 +1626,7 @@ async fn audit_row_records_actor() {
             dec(100),
         ],
         actor: actor.clone(),
+        decided_at: None,
     };
 
     let outcome = propose_against_pg(
@@ -2390,6 +2391,7 @@ async fn a_refusal_is_explained_by_the_draws_that_refused() {
         outcome,
         rejection_state,
         drawn_subjects,
+        decided_at,
     } = morpholog_postgres::propose_against_pg_with_rejection_state(
         &pool,
         &pg,
@@ -2403,6 +2405,7 @@ async fn a_refusal_is_explained_by_the_draws_that_refused() {
         outcome,
         rejection_state,
         drawn_subjects: drawn_subjects.clone(),
+        decided_at,
     };
     let replayed = refused
         .explanation(pg.prepared(), &transition)

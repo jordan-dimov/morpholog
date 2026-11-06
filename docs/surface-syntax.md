@@ -301,6 +301,30 @@ transformation bounds the window first, `require until - from
 no_longer_than duration(PT744H)`, then ranges over the grid with `let
 hours = periods(...)` and `forall h in hours`, or directly with `for`.
 
+```morph
+program decided
+
+predicate Lot(lot: Subject, closes: Timestamp)
+    unique by (lot)
+predicate Bid(lot: Subject, bidder: Subject, at: Timestamp)
+    unique by (lot, bidder)
+
+transformation list_lot(lot, closes):
+    admit Lot(lot, closes)
+
+transformation bid(lot):
+    bind Lot(lot, closes)
+    require decided_at strictly_before closes
+    admit Bid(lot, actor, decided_at)
+```
+
+`decided_at` is the instant an act is decided at. The runtime gives it,
+like `actor`: the start of the transaction deciding the act, which the
+act's audit row records and a replay gives back. No proposal can name
+it. Only a transformation body reads it; for a rule to read a time,
+admit the time. A retry is a new decision at a new instant, and a gate
+on time is not a seal against a race: runtime-semantics.md says what is.
+
 ## Declarations that promise something
 
 ```morph

@@ -63,6 +63,7 @@ one act is a margin-call run.
 | refuse a combination that is fine one at a time | [01_settlement_netting](01_settlement_netting/) | `forall x in source: body` over the proposed set |
 | show that a rule comes from a named statute | [13_biometric_identification_oversight](13_biometric_identification_oversight/) | the article-to-rule table in its README |
 | let only an authorised login act under a name | [13_biometric_identification_oversight](13_biometric_identification_oversight/) | `ActorAssertionRestricted` + `ActorAssertionAuthority` |
+| date a record by when it was decided, not by what the proposer says | [13_biometric_identification_oversight](13_biometric_identification_oversight/) | `decided_at` in an `admit` and a `require` |
 | watch a limit on a net position, long minus short | [10_trade_lifecycle](10_trade_lifecycle/) | `abs(...)` |
 | make a skipped process step uncommittable, not just reviewable | [16_release_governance](16_release_governance/) | `require name: ...` gates, one per checklist step |
 | list the records one source has that another lacks | [21_closed_loop_execution](21_closed_loop_execution/) | `not` over a claim pattern in a `derived` domain |

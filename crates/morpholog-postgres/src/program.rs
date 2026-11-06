@@ -244,6 +244,7 @@ mod tests {
                 morpholog_test_support::dec(1),
             ],
             actor: morpholog_test_support::test_actor(),
+            decided_at: None,
         };
         let compiled = program
             .load_scope(&post, &transition, program.route())

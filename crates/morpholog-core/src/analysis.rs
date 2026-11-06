@@ -384,7 +384,7 @@ fn claim_vars(args: &[Term]) -> BTreeSet<&Var> {
     args.iter()
         .filter_map(|t| match t {
             Term::Var(v) => Some(v),
-            Term::Wildcard | Term::Literal(_) | Term::Actor => None,
+            Term::Wildcard | Term::Literal(_) | Term::Actor | Term::DecidedAt => None,
         })
         .collect()
 }

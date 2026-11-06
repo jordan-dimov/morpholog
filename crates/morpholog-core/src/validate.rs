@@ -473,6 +473,35 @@ pub enum ValidationError {
         "`actor` is not available in {context}; it resolves only inside transformation bodies, so authority checks belong in a `require`"
     )]
     ActorNotAvailable { context: ValidationContext },
+    /// `decided_at` appears outside a transformation body. An invariant,
+    /// a derived claim or a definition judges the state; one that read
+    /// the clock would change its truth with no change of state. Admit
+    /// the instant in a body, and read the claim.
+    #[error(
+        "`decided_at` is not available in {context}; it resolves only inside transformation bodies, so admit the instant there and read the claim"
+    )]
+    DecisionTimeNotAvailable { context: ValidationContext },
+    /// A name the programme binds is `decided_at`: a parameter, a `let`,
+    /// a `for` or a quantifier binder. Every use of the name means the
+    /// decision time, so the binding could never be read.
+    #[error(
+        "`decided_at` cannot name {what} in {context}; it always denotes the decision time the runtime gives the transformation, so rename it"
+    )]
+    DecisionTimeAsName {
+        context: ValidationContext,
+        what: String,
+    },
+    /// `decided_at` in a pattern matched against stored claims. It would
+    /// match only a claim recorded at exactly this instant, and a pattern
+    /// variable of that name in an older programme would silently become
+    /// that filter.
+    #[error(
+        "`decided_at` cannot be matched against stored `{predicate}` claims in {context}; bind the field to a name and compare it with `decided_at`"
+    )]
+    DecisionTimeMatched {
+        context: ValidationContext,
+        predicate: String,
+    },
     /// A body nests deeper than the fixed maximum depth. Evaluation
     /// recurses once per level, so a very deep body would overflow the
     /// stack during `propose`. This is why untrusted IR must be validated

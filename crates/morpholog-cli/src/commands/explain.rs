@@ -50,6 +50,7 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
         transformation_name: transformation.name.clone(),
         args: eval_args,
         actor: Subject::from(args.actor.clone()),
+        decided_at: None,
     };
 
     let explanation = prepared.explain(

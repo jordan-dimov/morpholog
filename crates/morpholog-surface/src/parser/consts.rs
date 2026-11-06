@@ -50,6 +50,14 @@ pub(crate) fn apply(consts: Vec<LetBinding>, targets: ConstTargets<'_>) -> Vec<(
                     .to_string(),
             ));
         }
+        if c.name == "decided_at" {
+            errors.push((
+                c.span.clone(),
+                "`decided_at` cannot name a const - `decided_at` always denotes the \
+                 decision time the runtime gives a transformation"
+                    .to_string(),
+            ));
+        }
         if !seen.insert(c.name.as_str()) {
             errors.push((
                 c.span.clone(),
@@ -448,6 +456,14 @@ fn refuse_open_initialiser(
                 format!(
                     "const `{}` references `actor`, which varies with every \
                      proposal - not a constant",
+                    c.name
+                ),
+            )),
+            ValueExpr::Term(Term::DecidedAt) => errors.push((
+                c.span.clone(),
+                format!(
+                    "const `{}` references `decided_at`, which varies with every \
+                     decision - not a constant",
                     c.name
                 ),
             )),

@@ -74,6 +74,7 @@ fn act(
         transformation_name: name.into(),
         args,
         actor: "sheet".into(),
+        decided_at: None,
     };
     propose(program, &t, state, &mut subjects(["s1", "s2"])).expect("no kernel error")
 }

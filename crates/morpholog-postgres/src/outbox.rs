@@ -819,6 +819,7 @@ where
                 transformation_name: transformation.name.clone(),
                 args,
                 actor: system_actor(),
+                decided_at: None,
             };
             let outcome = propose_against_pg_inner(
                 pool,

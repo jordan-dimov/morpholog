@@ -37,6 +37,9 @@ pub struct RecordedProposal<'a> {
     pub transformation: &'a str,
     pub args: &'a [EvalValue],
     pub actor: &'a Subject,
+    /// The row's transaction start, which a body reading `decided_at`
+    /// was decided at, and is replayed at.
+    pub committed_at: jiff::Timestamp,
     pub asserted: &'a [ClaimInstance],
     pub retracted: &'a [ClaimInstance],
     pub emitted: &'a [IntentInstance],
@@ -256,6 +259,7 @@ impl<'p> Rehearsal<'p> {
             transformation_name: name,
             args: row.args.to_vec(),
             actor: row.actor.clone(),
+            decided_at: Some(row.committed_at),
         };
         let mut draws = row.drawn.unwrap_or(&[]).iter().cloned();
         let decided = match self.program.decide(&transition, pre, &mut draws) {
@@ -448,6 +452,7 @@ mod tests {
                 drawn: Some(&[]),
                 model_hash: None,
                 semantics_version: None,
+                committed_at: jiff::Timestamp::UNIX_EPOCH,
             },
         );
         pre.apply(&raised, &[]);
@@ -465,6 +470,7 @@ mod tests {
                 drawn: Some(&[]),
                 model_hash: None,
                 semantics_version: None,
+                committed_at: jiff::Timestamp::UNIX_EPOCH,
             },
         );
         let report = rehearsal.into_report();
@@ -522,6 +528,7 @@ mod tests {
                 drawn: Some(&[]),
                 model_hash: None,
                 semantics_version: None,
+                committed_at: jiff::Timestamp::UNIX_EPOCH,
             },
         );
         let report = rehearsal.into_report();
@@ -570,6 +577,7 @@ mod tests {
                     drawn: Some(&[]),
                     model_hash: Some("sha256:abc"),
                     semantics_version: None,
+                    committed_at: jiff::Timestamp::UNIX_EPOCH,
                 },
             );
         }
@@ -630,6 +638,7 @@ mod tests {
                 drawn: None,
                 model_hash: None,
                 semantics_version: None,
+                committed_at: jiff::Timestamp::UNIX_EPOCH,
             },
         );
         let x = [EvalValue::Subject(Subject::from("x"))];
@@ -647,6 +656,7 @@ mod tests {
                 drawn: None,
                 model_hash: None,
                 semantics_version: None,
+                committed_at: jiff::Timestamp::UNIX_EPOCH,
             },
         );
         let report = rehearsal.into_report();

@@ -20,9 +20,9 @@ use serde::{Deserialize, Serialize};
 use crate::definitions::DefinitionTable;
 use crate::ir::{
     ArithOp, Builtin, CompareOp, Definition, DefinitionName, OrderedDomain, PredicateName, Prop,
-    Subject, Term, Value, ValueExpr, Var,
+    Term, Value, ValueExpr, Var,
 };
-use crate::propose::Compared;
+use crate::propose::{Compared, Transition};
 use crate::state::{Bindings, Bound, CandidateBucket, ClaimInstance, EvalValue, State, StateRef};
 
 /// Errors raised by the evaluator and the transformation runner: an
@@ -54,6 +54,13 @@ pub enum EvalError {
         "Term::Actor referenced with no transition in scope (likely used outside a transformation body - e.g., inside an invariant or derived-claim body; authority checks belong in `require`)"
     )]
     UnboundActor,
+    /// `Term::DecidedAt` was used with no decision time in scope: outside
+    /// a transformation body, or in a body run by a tool that has no
+    /// recorded instant to give it.
+    #[error(
+        "decided_at referenced with no decision time in scope (it is given by the runtime to a transformation body that is being decided, or replayed from its record)"
+    )]
+    UnboundDecisionTime,
     /// `Prop::Pre` was reached with no pre-state in scope: a derived-claim
     /// body, a transformation `require`, the inner of a nested `pre`, or
     /// an `EvalContext` built with `pre_state: None`.
@@ -163,7 +170,7 @@ pub(crate) struct EvalContext<'a> {
     pub(crate) bindings: &'a Bindings,
     /// The proposing transition's actor; `None` in one-state contexts.
     /// `Term::Actor` reached with `actor: None` surfaces `UnboundActor`.
-    pub(crate) actor: Option<&'a Subject>,
+    pub(crate) transition: Option<&'a Transition>,
     /// The programme's definitions, for resolving `Prop::Defined` calls.
     pub(crate) definitions: DefinitionTable<'a>,
     /// Results computed elsewhere for particular `Sum` nodes, keyed by
@@ -178,14 +185,14 @@ impl<'a> EvalContext<'a> {
         state: &'a State,
         pre_state: Option<&'a State>,
         bindings: &'a Bindings,
-        actor: Option<&'a Subject>,
+        transition: Option<&'a Transition>,
         definitions: DefinitionTable<'a>,
     ) -> Self {
         Self::over(
             StateRef::Owned(state),
             pre_state,
             bindings,
-            actor,
+            transition,
             definitions,
         )
     }
@@ -196,14 +203,14 @@ impl<'a> EvalContext<'a> {
         state: StateRef<'a>,
         pre_state: Option<&'a State>,
         bindings: &'a Bindings,
-        actor: Option<&'a Subject>,
+        transition: Option<&'a Transition>,
         definitions: DefinitionTable<'a>,
     ) -> Self {
         Self {
             state,
             pre_state,
             bindings,
-            actor,
+            transition,
             definitions,
             sums: None,
         }
@@ -235,7 +242,7 @@ impl<'a> EvalContext<'a> {
             state: self.state,
             pre_state: None,
             bindings: frame,
-            actor: None,
+            transition: None,
             definitions: self.definitions,
             sums: None,
         }
@@ -420,7 +427,7 @@ pub(crate) fn definition_call_frame(
             other => {
                 frame.insert(
                     param.clone(),
-                    Bound::from(resolve_term(other, ctx.bindings, ctx.actor)?),
+                    Bound::from(resolve_term(other, ctx.bindings, ctx.transition)?),
                 );
             }
         }
@@ -796,9 +803,9 @@ enum Candidates<'a> {
 /// gives [`Candidates::None`]; no ground argument gives
 /// [`Candidates::All`].
 ///
-/// Any `Term::Actor` with no actor in scope raises `UnboundActor` up
-/// front. Otherwise an earlier empty bucket could return no matches
-/// before the loop ever reached the actor.
+/// A term the transition gives (`actor`, `decided_at`) with no
+/// transition to give it raises its error up front. Otherwise an earlier
+/// empty bucket could return no matches before the loop reached it.
 fn select_candidates<'a>(
     predicate: &PredicateName,
     args: &[Term],
@@ -807,12 +814,14 @@ fn select_candidates<'a>(
     let EvalContext {
         state,
         bindings: base,
-        actor,
+        transition,
         ..
     } = *ctx;
 
-    if actor.is_none() && args.iter().any(|t| matches!(t, Term::Actor)) {
-        return Err(EvalError::UnboundActor);
+    for term in args {
+        if let Some(Err(e)) = given(term, transition) {
+            return Err(e);
+        }
     }
 
     let mut best: Option<CandidateBucket<'a>> = None;
@@ -825,9 +834,9 @@ fn select_candidates<'a>(
             // ground argument it matches nothing.
             Term::Literal(Value::CalendarSpan(_)) => None,
             Term::Literal(lit) => Some(Cow::Owned(EvalValue::from(lit))),
-            Term::Actor => match actor {
-                Some(a) => Some(Cow::Owned(EvalValue::Subject(a.clone()))),
-                None => return Err(EvalError::UnboundActor),
+            Term::Actor | Term::DecidedAt => match given(term, transition) {
+                Some(value) => Some(Cow::Owned(value?)),
+                None => None,
             },
         };
         let Some(value) = ground else {
@@ -853,7 +862,7 @@ pub(crate) fn find_claim_matches(
     let EvalContext {
         state,
         bindings: base,
-        actor,
+        transition,
         ..
     } = *ctx;
     let mut out = vec![];
@@ -864,7 +873,7 @@ pub(crate) fn find_claim_matches(
                 if claim.args.len() != args.len() {
                     continue;
                 }
-                if let Some(b) = unify_args(args, &claim.args, base, actor) {
+                if let Some(b) = unify_args(args, &claim.args, base, transition) {
                     out.push(b);
                 }
             }
@@ -874,7 +883,7 @@ pub(crate) fn find_claim_matches(
                 if claim.args.len() != args.len() {
                     continue;
                 }
-                if let Some(b) = unify_args(args, &claim.args, base, actor) {
+                if let Some(b) = unify_args(args, &claim.args, base, transition) {
                     out.push(b);
                 }
             }
@@ -894,7 +903,7 @@ pub(crate) fn matching_claims(
     let EvalContext {
         state,
         bindings: base,
-        actor,
+        transition,
         ..
     } = *ctx;
     let mut out = vec![];
@@ -902,14 +911,18 @@ pub(crate) fn matching_claims(
         Candidates::None => {}
         Candidates::Indexed(bucket) => {
             for claim in bucket.iter() {
-                if claim.args.len() == args.len() && claim_matches(args, &claim.args, base, actor) {
+                if claim.args.len() == args.len()
+                    && claim_matches(args, &claim.args, base, transition)
+                {
                     out.push(claim.clone());
                 }
             }
         }
         Candidates::All => {
             for claim in state.claims_for_name(predicate) {
-                if claim.args.len() == args.len() && claim_matches(args, &claim.args, base, actor) {
+                if claim.args.len() == args.len()
+                    && claim_matches(args, &claim.args, base, transition)
+                {
                     out.push(claim.clone());
                 }
             }
@@ -929,7 +942,7 @@ fn match_args<'a>(
     patterns: &'a [Term],
     values: &'a [EvalValue],
     base: &Bindings,
-    actor: Option<&Subject>,
+    transition: Option<&Transition>,
 ) -> Option<Vec<(&'a Var, &'a EvalValue)>> {
     if patterns.len() != values.len() {
         return None;
@@ -963,8 +976,8 @@ fn match_args<'a>(
                     return None;
                 }
             }
-            Term::Actor => match actor {
-                Some(a) if matches!(v, EvalValue::Subject(s) if s == a) => {}
+            Term::Actor | Term::DecidedAt => match given(p, transition) {
+                Some(Ok(g)) if g == *v => {}
                 _ => return None,
             },
         }
@@ -978,9 +991,9 @@ pub(crate) fn unify_args(
     patterns: &[Term],
     values: &[EvalValue],
     base: &Bindings,
-    actor: Option<&Subject>,
+    transition: Option<&Transition>,
 ) -> Option<Bindings> {
-    let new = match_args(patterns, values, base, actor)?;
+    let new = match_args(patterns, values, base, transition)?;
     let mut b = copy_bindings(base);
     for (name, v) in new {
         b.insert(name.clone(), Bound::from(v.clone()));
@@ -995,9 +1008,9 @@ pub(crate) fn claim_matches(
     patterns: &[Term],
     values: &[EvalValue],
     base: &Bindings,
-    actor: Option<&Subject>,
+    transition: Option<&Transition>,
 ) -> bool {
-    match_args(patterns, values, base, actor).is_some()
+    match_args(patterns, values, base, transition).is_some()
 }
 
 pub(crate) fn find_conjunction(
@@ -1038,15 +1051,15 @@ pub(crate) fn find_in_matches(
     ctx: &EvalContext<'_>,
 ) -> Result<Vec<Bindings>, EvalError> {
     let base = ctx.bindings;
-    let actor = ctx.actor;
-    let coll_val = resolve_term_shared(coll, base, actor)?;
+    let transition = ctx.transition;
+    let coll_val = resolve_term_shared(coll, base, transition)?;
     let EvalValue::Collection(items) = &*coll_val else {
         return Err(EvalError::TypeMismatch("In expects a collection".into()));
     };
     match elem {
         Term::Wildcard => Err(EvalError::TypeMismatch("wildcard not valid in In".into())),
-        Term::Literal(_) | Term::Actor => {
-            let e = resolve_term(elem, base, actor)?;
+        Term::Literal(_) | Term::Actor | Term::DecidedAt => {
+            let e = resolve_term(elem, base, transition)?;
             Ok(verdict(base, items.contains(&e)))
         }
         Term::Var(name) => {
@@ -1068,7 +1081,7 @@ pub(crate) fn find_in_matches(
 
 pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalValue, EvalError> {
     match e {
-        ValueExpr::Term(t) => resolve_term(t, ctx.bindings, ctx.actor),
+        ValueExpr::Term(t) => resolve_term(t, ctx.bindings, ctx.transition),
         // Every builtin is strict: arguments evaluate left to right,
         // once each, and the first failure is the error reported.
         // `eval_builtin` sees finished values only, never state,
@@ -1249,7 +1262,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
             let matches = find_matches(body, ctx)?;
             let mut best: Option<EvalValue> = None;
             for m in matches {
-                let next = resolve_term(value, &m, ctx.actor)?;
+                let next = resolve_term(value, &m, ctx.transition)?;
                 best = Some(match best {
                     None => {
                         // Check the first one too, or a single unordered
@@ -1377,7 +1390,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                 Candidates::Indexed(bucket) => {
                     for claim in bucket.iter() {
                         if claim.args.len() == args.len()
-                            && claim_matches(args, &claim.args, ctx.bindings, ctx.actor)
+                            && claim_matches(args, &claim.args, ctx.bindings, ctx.transition)
                         {
                             multiple |= matched.is_some();
                             matched = Some(&claim.args[pos]);
@@ -1387,7 +1400,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                 Candidates::All => {
                     for claim in ctx.state.claims_for_name(predicate) {
                         if claim.args.len() == args.len()
-                            && claim_matches(args, &claim.args, ctx.bindings, ctx.actor)
+                            && claim_matches(args, &claim.args, ctx.bindings, ctx.transition)
                         {
                             multiple |= matched.is_some();
                             matched = Some(&claim.args[pos]);
@@ -1838,7 +1851,7 @@ fn round_decimal(v: Decimal, q: Decimal) -> Result<Decimal, EvalError> {
 pub(crate) fn resolve_term(
     t: &Term,
     bindings: &Bindings,
-    actor: Option<&Subject>,
+    transition: Option<&Transition>,
 ) -> Result<EvalValue, EvalError> {
     match t {
         Term::Var(name) => bindings
@@ -1849,10 +1862,28 @@ pub(crate) fn resolve_term(
             "wildcard cannot be resolved as a value".into(),
         )),
         Term::Literal(lit) => Ok(EvalValue::from(lit)),
-        Term::Actor => actor
-            .map(|a| EvalValue::Subject(a.clone()))
-            .ok_or(EvalError::UnboundActor),
+        Term::Actor | Term::DecidedAt => given(t, transition)
+            .unwrap_or_else(|| unreachable!("given resolves every term the transition gives")),
     }
+}
+
+/// The value the proposing transition gives `t`: its actor for `actor`,
+/// its decision time for `decided_at`, or the error for a context with
+/// neither. `None` for any other term.
+pub(crate) fn given(
+    t: &Term,
+    transition: Option<&Transition>,
+) -> Option<Result<EvalValue, EvalError>> {
+    Some(match t {
+        Term::Actor => transition
+            .map(|t| EvalValue::Subject(t.actor.clone()))
+            .ok_or(EvalError::UnboundActor),
+        Term::DecidedAt => transition
+            .and_then(|t| t.decided_at)
+            .map(EvalValue::Timestamp)
+            .ok_or(EvalError::UnboundDecisionTime),
+        Term::Var(_) | Term::Wildcard | Term::Literal(_) => return None,
+    })
 }
 
 /// [`resolve_term`] without copying a bound value, for a reader that
@@ -1860,14 +1891,14 @@ pub(crate) fn resolve_term(
 pub(crate) fn resolve_term_shared(
     t: &Term,
     bindings: &Bindings,
-    actor: Option<&Subject>,
+    transition: Option<&Transition>,
 ) -> Result<Bound, EvalError> {
     match t {
         Term::Var(name) => bindings
             .get(name)
             .cloned()
             .ok_or_else(|| EvalError::UnboundVariable(name.to_string())),
-        other => resolve_term(other, bindings, actor).map(Bound::from),
+        other => resolve_term(other, bindings, transition).map(Bound::from),
     }
 }
 
@@ -2141,12 +2172,13 @@ fn render_claim(prop: &Prop, ctx: &EvalContext<'_>) -> RenderedClaim {
 /// Resolve a term to its value under `ctx` and render it; fall back to
 /// the term's symbolic form when it cannot be resolved.
 fn render_term(t: &Term, ctx: &EvalContext<'_>) -> String {
-    match resolve_term(t, ctx.bindings, ctx.actor) {
+    match resolve_term(t, ctx.bindings, ctx.transition) {
         Ok(v) => render_eval_value(&v),
         Err(_) => match t {
             Term::Var(name) => name.to_string(),
             Term::Wildcard => "_".to_string(),
             Term::Actor => "actor".to_string(),
+            Term::DecidedAt => "decided_at".to_string(),
             // A malformed literal fails to parse; render it rather than
             // panic.
             Term::Literal(_) => "?".to_string(),

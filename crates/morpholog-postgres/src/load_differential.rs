@@ -70,6 +70,7 @@ async fn the_loader_fetches_exactly_the_rows_the_plan_admits() {
                     transformation_name: t.name.clone(),
                     args,
                     actor: test_actor(),
+                    decided_at: None,
                 };
                 // A generated state can repeat a claim; the table holds one
                 // row per claim, so the expectation must too.
@@ -145,6 +146,7 @@ transformation probe(k, n):
                 transformation_name: t.name.clone(),
                 args,
                 actor: test_actor(),
+                decided_at: None,
             }),
             &program.invariants,
             &program.definitions,
@@ -204,6 +206,7 @@ fn posting_scope(id: &str, reads: Reads) -> LoadScope {
         transformation_name: t.name.clone(),
         args: vec![subj(id), dec(1)],
         actor: test_actor(),
+        decided_at: None,
     };
     compute_load_scope(
         t,
