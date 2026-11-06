@@ -368,7 +368,7 @@ Refusal surfaces as the `actor_assertion_unauthorised` code everywhere: in `prop
 
 An admitted policy claim whose shape the runtime cannot read stops every durable proposal with an error, rather than being ignored. That is deliberate and it is where the fail-closed guarantee actually lives: `check` and the library facades refuse a misshapen DECLARATION early, but compensation reaches the kernel with a decomposed transformation and no programme, so only a check keyed off the claims themselves covers every path.
 
-**The boundary, stated plainly.** This binds callers reaching the record through Morpholog. The runtime's writer role holds `INSERT`/`DELETE` on `morpholog.claims` and `INSERT` on `morpholog.audit`, so anything holding those credentials can write claims and attestation-shaped audit rows directly without passing this check. Two identities are genuinely distinct only when the two applications and their credentials are genuinely separate. This is adapter-enforced assertion policy, not proof of authorship. `session_user` is also immune to `SET ROLE` but not to a superuser's `SET SESSION AUTHORIZATION` - the same accepted residue as a superuser writing audit rows.
+**The boundary, stated plainly.** This binds callers reaching the record through Morpholog. The runtime's writer role holds `INSERT`/`DELETE` on `morpholog.claims` and `INSERT` on `morpholog.audit`, so anything holding those credentials can write claims and attestation-shaped audit rows directly without passing this check. Two identities are genuinely distinct only when the two applications and their credentials are genuinely separate. `morpholog serve` (below) is how a caller proposes without holding those credentials at all. This is adapter-enforced assertion policy, not proof of authorship. `session_user` is also immune to `SET ROLE` but not to a superuser's `SET SESSION AUTHORIZATION` - the same accepted residue as a superuser writing audit rows.
 
 **For direct SQL readers** (a projector that prefers the table): the `(audit_order, act_ordinal, committed_at, transition_id)` total order is stable - it is load-bearing in `verify`, coverage replay, and the as-of reconstructions, so it cannot drift; the claim JSONB inside `asserted_claims`/`retracted_claims` is the pinned `claim_instance` shape; the column set may grow additively. Name columns, in reads and writes alike: their order depends on the database's history, since a migration adds a column at the end where a fresh `init` may place it elsewhere, so `SELECT *` positions and positional `INSERT`s differ between databases. An upgraded database also keeps the audit log's required-field checks unvalidated, so its old rows stay lawful. Apart from those two, a test holds a database provisioned by the baseline release, v0.0.14, migrated to the current version, to the same schema as a fresh one, grants and policies included. A direct tail wanting lossless resume must follow the same recipe as `--after` above: read `morpholog.audit_watermark()`, take the snapshot, then page strictly below it. A direct read as of a timestamp selects rows whose `coalesce(ordered_at, committed_at)` is at or before it, and is final only as `morpholog.audit_horizon()` says, read first: with an order still held, for instants up to the last row below that order; with none, for instants up to the `quiet_at` it returns, which it has fenced the ordering clock at. The reader and writer roles `provision` creates may call both functions.
 
@@ -1111,3 +1111,90 @@ The whole conversation is pinned: the session's envelopes are in
 generated client emits and the response lines it parses - the Rust
 end-to-end test records it against a real database, the Python
 session tests replay it.
+
+## Serving callers you do not trust (`morpholog serve`)
+
+A caller that holds a writer login can write claims and audit rows
+without Morpholog. A caller that starts its own session chooses the file
+it serves. `serve` is for a caller you want governed without trusting it:
+an agent, a script, a service you do not control. The service holds the
+database logins and the programme. The caller holds a socket.
+
+```bash
+morpholog serve rules.morph \
+  --expect-hash sha256:... \
+  --socket /run/morpholog/serve.sock \
+  --presenter 1001=m_operator \
+  --presenter 1002=m_agent \
+  --grant 1001=claims,derived,audit \
+  --database-url postgres:///ledger
+```
+
+**Each caller is a presenter.** `--presenter UID=LOGIN` maps the OS user
+a connection comes from to the database login it is served as. The
+service opens one connection per presenter, as that login, and checks
+that PostgreSQL logged it in as exactly that login before it listens.
+Leave the user out of the database URL. A connection from any other uid
+is closed before anything is read or written, and the service logs the
+uid. One uid on two logins, or two uids on one login, refuses to start:
+the rules could not tell such callers apart.
+
+**What the audit row means here.** The row's `authenticated_by` is the
+presenter's login, so `ActorAssertionAuthority` grants (see "Restricting
+who may assert an actor") work as they do for a direct connection. But
+PostgreSQL authenticated the service, not the caller. The service read
+the caller's uid from the socket and chose the login. So the service is
+part of what the row's evidence trusts.
+
+**The wire is the session's.** Each connection gets the ready line, then
+the lockstep requests and receipts above. A presenter may `propose`,
+`transact` and `ping`. Reads (`claims`, `derived`, `audit`, `rejections`)
+and explanations (`explain`, and `explain_on_reject` on a proposal) need
+`--grant UID=OP,...`. A read can show state a caller has no business
+seeing, and repeated explanations can map out a path the rules allow. An
+ungranted operation answers `unknown_operation`; `explain_on_reject`
+without the grant answers `invalid_request`. No request can name a
+programme or a hash.
+
+**Bounds.** A request line is at most 1 MiB; a longer one closes its
+connection. A presenter holds at most four connections at once, and a
+fifth is closed. They share the presenter's one database connection, so a
+presenter can slow only itself.
+
+**Failures.** A failure that cannot be a receipt closes that connection,
+not the service. A caller whose connection closes with a request in
+flight cannot know whether it committed: read the record before
+re-submitting, as after a session abort.
+
+**Starting and stopping.** `--expect-hash` is required. The socket path
+must not exist; SIGTERM or SIGINT stops the service and removes it. A new
+programme is a stop, then a start with the new hash. Never run two
+services on one database under different hashes.
+
+**What the deployment must hold.** Morpholog checks the programme's hash,
+the login of each connection and the uid of each caller. It cannot check
+that a caller has no other way in. The deployment makes the writer logins
+reachable only through the service. In `pg_hba.conf`, before every
+general rule (the first matching line decides):
+
+```
+local  all  +morpholog_writer      peer    map=serve
+host   all  +morpholog_writer  all reject
+```
+
+and in `pg_ident.conf`, one line per presenter login, from the service's
+OS user:
+
+```
+serve  morpholog  m_operator
+serve  morpholog  m_agent
+```
+
+`+morpholog_writer` matches every member of the writer role, so a writer
+login added later is covered; with a role prefix, name that writer role.
+Without these lines, Ubuntu's packaged `local all all peer` lets an OS
+user log in as a writer login of the same name, with no password. Set
+`listen_addresses` explicitly. Bootstrap before the socket opens:
+migrate, provision, and make the programme's trust-root acts (appointing
+an operator, its first grants) under the deployer's own login, so no
+caller can race to become the trust root.

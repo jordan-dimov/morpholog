@@ -60,6 +60,7 @@ mod signing;
 mod sql_quote;
 mod transact;
 mod txn;
+pub use txn::session_login;
 mod verify;
 pub mod wire_time;
 mod witnesses;

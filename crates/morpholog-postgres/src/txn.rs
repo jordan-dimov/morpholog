@@ -85,6 +85,17 @@ pub(crate) async fn begin_authorised_proposal_tx<'a>(
     Ok((tx, login))
 }
 
+/// The role PostgreSQL authenticated the pool's connection as: the name
+/// every proposal through it is attested by. A caller that chose a login
+/// for the connection checks it here rather than trusting the URL.
+pub async fn session_login(pool: &PgPool) -> Result<String, PgError> {
+    let row = sqlx::query!(r#"SELECT session_user AS "name!""#)
+        .fetch_one(pool)
+        .await
+        .map_err(classify_checked_query)?;
+    Ok(row.name)
+}
+
 /// The role that asserted a proposal's actor: its name, which the actor
 /// policy grants by, and its OID, which tells one incarnation of the name
 /// from another.
