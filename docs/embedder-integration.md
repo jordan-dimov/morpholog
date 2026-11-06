@@ -470,7 +470,7 @@ emits a complete, self-contained `morpholog_client/` package:
 - **Envelope models**, strict on keys and values: a field this client does not know, or a value of the wrong type, constant, enum or range, raises `EnvelopeError` instead of dropping data or passing it through. String formats such as a UUID are not checked.
 - **The subprocess adapter** over the whole surface this guide pins: `propose`, `propose_batch`, `transact`, `explain`, `check`; the reads `claims`, `derived` and their `_named` forms, with `as_of` as a transition id or an RFC 3339 timestamp; the audit tail as `audit()` / `audit_named()` with the `--after` cursor, and `rejections`, `coverage`, `guarantees`; `refresh_derived()`; the deploy steps `init`, `migrate()` with `check=True` or `prepare=True`, and `provision_indexes()`; `hash()`; the candidate questions `evaluate()` and `rehearse()`; the tamper-evidence surface (`audit_verify`, `audit_checkpoint`, `audit_witness`, the three exports and their offline `audit_verify_pack` forms, `audit_receipt` and `audit_verify_receipt`); and the outbox lease (`outbox_claim`, `outbox_complete`, `outbox_release`).
 - **A model per declaration**: a frozen request dataclass per transformation with fields in declaration order and `to_args_named()`; a read model per predicate parsing the named read's values by declared kind; a payload per intent with the positional order baked in. Each refuses a value of another kind with `CodecError`; none calls `schema --intent` at runtime.
-- **The stamps** in `__init__.py` (`PROGRAM`, `MODEL_HASH`, `MORPHOLOG_VERSION`), the Python floor (3.12) enforced at first import, and `open_client()` / `open_session()`, which check the binary against the stamps at first use.
+- **The stamps** in `__init__.py` (`PROGRAM`, `MODEL_HASH`, `MORPHOLOG_VERSION`), the Python floor (3.12) enforced at first import, and `open_client()` / `open_session()` / `connect_service()`, which check the binary or the service against the stamps at first use.
 
 Decoded values keep their types, so `json.dumps` cannot print an envelope as it stands; `envelopes.to_json(envelope)` prints any of them, decimals as exact text. That output is not the wire shape, and nothing reads it back.
 
@@ -1169,6 +1169,37 @@ connecting cannot flood the log.
 not the service. A caller whose connection closes with a request in
 flight cannot know whether it committed: read the record before
 re-submitting, as after a session abort.
+
+**From Python.** The generated package's `connect_service` opens one
+connection, pinned to the version and model hash the package was
+generated for:
+
+```python
+from morpholog_client import connect_service
+
+with connect_service("/run/morpholog/serve.sock") as session:
+    receipt = session.propose("place_order", "agent", args)
+```
+
+It is the session client above, over a socket, with the same methods and
+the same rules. A connection that falls out of lockstep (a timeout, a
+hang-up, an answer out of step) refuses every later call, so a late
+answer is never read as the next one: open a new connection. A proposal
+whose answer is lost raises `MorphologOutcomeUnknown`, and nothing is
+sent again. If the service hangs up before its ready line, the error
+names the possible causes (an OS user that is not a presenter, one at
+its connection limit, a service that stopped) and the service's log
+says which. A `timeout` bounds each send as well as each wait for an
+answer, so a service that stops reading cannot hold a call forever; a
+proposal whose send times out is outcome-unknown, like any failed write.
+`Session.connect` opens a connection unpinned.
+
+**An unknown outcome may need a person.** Reading the record before
+re-submitting is safe, but a caller without a read grant cannot do it,
+and a caller with one may not be able to tell its proposal from another:
+`examples/21_closed_loop_execution` makes each order's identifier inside
+Morpholog. Such a caller stops and asks its operator instead of
+proposing again.
 
 **The socket.** Its mode is set to 0666: who is served is the uid map's
 to decide, and a user who cannot write the socket cannot connect at all.
