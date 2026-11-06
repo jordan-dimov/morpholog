@@ -70,7 +70,7 @@ struct Served {
     child: Child,
     socket: PathBuf,
     _dir: tempfile::TempDir,
-    _fixture: common::Fixture,
+    fixture: common::Fixture,
 }
 
 impl Drop for Served {
@@ -161,7 +161,7 @@ fn serve(extra: &[String]) -> Served {
         child,
         socket,
         _dir: dir,
-        _fixture: fixture,
+        fixture,
     }
 }
 
@@ -510,4 +510,87 @@ async fn a_caller_that_keeps_connecting_cannot_flood_the_log() {
     let (_, stderr, _) = served.stop();
     let lines = stderr.matches("not a presenter").count();
     assert_eq!(lines, 1, "one line for fifty refusals: {stderr}");
+}
+
+/// The generated package's `connect_service` against a real service: it
+/// pins the stamps the package was generated with, proposes, and closing
+/// its connection ends that conversation only, so the next one connects.
+#[tokio::test]
+async fn the_generated_client_proposes_over_the_socket() {
+    let login = login().await;
+    reset_db().await;
+    let served = serve(&presenter(own_uid(), &login));
+    let package = tempfile::tempdir().unwrap();
+    let generated = Command::new(common::bin())
+        .args(["generate", "python-client"])
+        .arg(&served.fixture.path)
+        .arg("--out")
+        .arg(package.path())
+        .output()
+        .unwrap();
+    assert!(
+        generated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    let probe = r#"
+import sys
+sys.path.insert(0, sys.argv[1])
+import morpholog_client as mc
+with mc.connect_service(sys.argv[2], timeout=10) as s:
+    receipt = s.propose("open_account", "teller", {"account": "acct_1", "opened_on": "2026-01-15"})
+    print(type(receipt).__name__)
+with mc.connect_service(sys.argv[2], timeout=10) as s:
+    print(s.ping() == s.ready)
+"#;
+    let out = Command::new("python3")
+        .args(["-I", "-c", probe])
+        .arg(package.path())
+        .arg(&served.socket)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "Committed\nTrue\n",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A caller that sends a proposal and hangs up at once. The service still
+/// decides the proposal: it commits exactly once, not half and not twice,
+/// which is why the caller may only call it unknown. The service goes on
+/// serving its other callers. When exactly the hang-up lands against the
+/// commit is not controlled here; the client's side of that is pinned
+/// against a stand-in service in the client's own tests.
+#[tokio::test]
+async fn a_caller_that_hangs_up_mid_proposal_leaves_one_decision() {
+    let login = login().await;
+    reset_db().await;
+    let uid = own_uid();
+    let mut args = presenter(uid, &login);
+    args.extend(["--grant".into(), format!("{uid}=claims")]);
+    let served = serve(&args);
+    {
+        let (_read, mut write) = served.open();
+        writeln!(write, "{OPEN}").unwrap();
+    }
+    let mut conn = served.open();
+    let read = r#"{"op":"claims","predicates":["Account"]}"#;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let rows = loop {
+        let rows = ask(&mut conn, read);
+        let rows = rows.as_array().expect("claim rows").clone();
+        if !rows.is_empty() || Instant::now() >= deadline {
+            break rows;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(
+        rows.len(),
+        1,
+        "the abandoned proposal committed once: {rows:?}"
+    );
+    let pong = ask(&mut conn, r#"{"op":"ping"}"#);
+    assert_eq!(pong["status"], "ready", "the service still serves: {pong}");
 }

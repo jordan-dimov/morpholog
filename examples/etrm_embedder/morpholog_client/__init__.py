@@ -80,6 +80,24 @@ def open_session(
     )
 
 
+def connect_service(
+    socket_path: str,
+    *,
+    timeout: float | None = None,
+) -> Session:
+    """Connect to a ``morpholog serve`` socket pinned to this package's
+    stamps: a service of another version than it was generated for,
+    or one running other rules, is refused at the handshake, before a
+    single proposal is written. ``Session.connect`` connects
+    deliberately unpinned."""
+    return Session.connect(
+        socket_path,
+        timeout=timeout,
+        expected_model_hash=MODEL_HASH,
+        expected_version=MORPHOLOG_VERSION,
+    )
+
+
 __all__ = [
     "PROGRAM",
     "MODEL_HASH",
@@ -96,6 +114,7 @@ __all__ = [
     "Session",
     "open_client",
     "open_session",
+    "connect_service",
     "envelopes",
     "models",
     "values",

@@ -647,6 +647,22 @@ fn render_init(program: &Program) -> String {
                  expected_model_hash=MODEL_HASH,\n        \
                  expected_version=MORPHOLOG_VERSION,\n    \
              )\n\n\n\
+         def connect_service(\n    \
+             socket_path: str,\n    \
+             *,\n    \
+             timeout: float | None = None,\n\
+         ) -> Session:\n    \
+             \"\"\"Connect to a ``morpholog serve`` socket pinned to this package's\n    \
+             stamps: a service of another version than it was generated for,\n    \
+             or one running other rules, is refused at the handshake, before a\n    \
+             single proposal is written. ``Session.connect`` connects\n    \
+             deliberately unpinned.\"\"\"\n    \
+             return Session.connect(\n        \
+                 socket_path,\n        \
+                 timeout=timeout,\n        \
+                 expected_model_hash=MODEL_HASH,\n        \
+                 expected_version=MORPHOLOG_VERSION,\n    \
+             )\n\n\n\
          __all__ = [\n    \
              \"PROGRAM\",\n    \
              \"MODEL_HASH\",\n    \
@@ -663,6 +679,7 @@ fn render_init(program: &Program) -> String {
              \"Session\",\n    \
              \"open_client\",\n    \
              \"open_session\",\n    \
+             \"connect_service\",\n    \
              \"envelopes\",\n    \
              \"models\",\n    \
              \"values\",\n]\n",

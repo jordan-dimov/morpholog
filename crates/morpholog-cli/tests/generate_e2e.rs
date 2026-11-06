@@ -182,7 +182,7 @@ fn the_factories_check_the_version_and_the_model_hash() {
     let out = tempfile::tempdir().unwrap();
     assert!(generate(&trade_lifecycle(), out.path()).status.success());
     let init = std::fs::read_to_string(out.path().join("morpholog_client/__init__.py")).unwrap();
-    for factory in ["open_client(", "open_session("] {
+    for factory in ["open_client(", "open_session(", "connect_service("] {
         let body = init
             .split(&format!("def {factory}"))
             .nth(1)
@@ -234,6 +234,11 @@ seen = {}
 mc.Session = lambda *a, **kw: seen.update(kw) or "session"
 assert mc.open_session("m.morph", "postgres:///x") == "session"
 assert seen["expected_model_hash"] == mc.MODEL_HASH, seen
+connected = {}
+mc.Session = types.SimpleNamespace(connect=lambda *a, **kw: connected.update(kw) or "served")
+assert mc.connect_service("/run/serve.sock") == "served"
+assert connected["expected_model_hash"] == mc.MODEL_HASH, connected
+assert connected["expected_version"] == mc.MORPHOLOG_VERSION, connected
 print("ok")
 "#;
     let out_probe = Command::new("python3")
@@ -242,7 +247,7 @@ print("ok")
         .expect("python3 runs the emitted package");
     assert!(
         String::from_utf8_lossy(&out_probe.stdout).contains("ok"),
-        "open_session must forward MODEL_HASH: {}",
+        "open_session and connect_service must forward their pins: {}",
         String::from_utf8_lossy(&out_probe.stderr)
     );
 }

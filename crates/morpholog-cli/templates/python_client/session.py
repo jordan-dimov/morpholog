@@ -1,6 +1,8 @@
 """A resident ``morpholog session`` process: one child, one warm
 database connection, many operations - the escape from the per-call
-subprocess and connection tax.
+subprocess and connection tax. ``Session.connect`` speaks the same wire
+to one connection on a ``morpholog serve`` socket instead, where the
+service has chosen the programme and holds the database login.
 
 The wire is lockstep NDJSON: one request line in, one response line
 out, in order, with no correlation ids - so this client serialises
@@ -32,6 +34,7 @@ import collections
 import json
 import os
 import queue
+import socket
 import subprocess
 import threading
 import time
@@ -59,6 +62,9 @@ _STDERR_TAIL = 50
 #: joins - shares this many seconds. Staged under one deadline so a
 #: child that ignores every signal cannot stack one wait on the next.
 _SHUTDOWN_BUDGET = 5.0
+
+#: The name of a socket connection's reader thread.
+_READER = "morpholog-serve-reader"
 
 
 class _ResponseContract(Exception):
@@ -169,16 +175,223 @@ def _subject(mentions: str | None) -> str | None:
     return mentions
 
 
-class Session:
-    """A context manager over one resident ``morpholog session`` child.
+class _Child:
+    """The transport to a ``morpholog session`` child: its stdin, its
+    stdout drained into the response queue, and its stderr kept as a
+    bounded tail for error messages."""
 
-    Opening spawns the child, waits for its ready line, and - when
-    ``expected_version`` or ``expected_model_hash`` is given - refuses
-    to open against a binary of another version, or a programme whose
-    canonical hash is not the one this deployment expects. Prefer the
-    generated ``open_session``, which pins both stamps this package was
-    built with; construct ``Session`` directly to open deliberately
-    unpinned.
+    def __init__(self, binary: str, file: str, database_url: str) -> None:
+        self.binary = binary
+        self._database_url = database_url
+        argv = [binary, "session", file]
+        env = dict(os.environ)
+        env["DATABASE_URL"] = database_url
+        try:
+            self.process = subprocess.Popen(
+                argv,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                encoding="utf-8",
+                errors="strict",
+                env=env,
+            )
+        except OSError as exc:
+            raise MorphologError(f"`{_redact_argv(argv)}` failed to start: {exc}") from None
+
+        # Both pipes are drained by threads: stdout into the response
+        # queue the session waits on, stderr into a bounded tail - an
+        # unread stderr pipe could otherwise fill and deadlock the
+        # child. ``None`` in the queue means the child closed stdout.
+        self.responses: queue.Queue[str | None] = queue.Queue()
+        self._stderr_tail: collections.deque[str] = collections.deque(maxlen=_STDERR_TAIL)
+        # The tail is written by the drain thread and read by error
+        # paths that already hold the operation lock, so the ordering
+        # is always operation lock then stderr lock, never the reverse.
+        self._stderr_lock = threading.Lock()
+        self._drains = [
+            threading.Thread(target=self._drain_stdout, daemon=True),
+            threading.Thread(target=self._drain_stderr, daemon=True),
+        ]
+        for thread in self._drains:
+            thread.start()
+
+    def write(self, line: str) -> None:
+        stdin = self.process.stdin
+        assert stdin is not None
+        stdin.write(line + "\n")
+        stdin.flush()
+
+    def ended(self) -> str:
+        return f"the session process ended unexpectedly:\n{self.diagnostic()}"
+
+    def diagnostic(self) -> str:
+        # Snapshot under the lock: joining the deque while the drain
+        # thread appends raises, turning the diagnostic into a crash
+        # that hides the failure it was written to explain.
+        with self._stderr_lock:
+            lines = list(self._stderr_tail)
+        text = "\n".join(lines).strip()
+        if self._database_url:
+            text = text.replace(self._database_url, "<redacted>")
+        return text
+
+    def skew_hint(self) -> str:
+        return (
+            f"binary `{self.binary}`; MORPHOLOG_BIN selects the matching one, "
+            f"and a session constructed directly opens unpinned"
+        )
+
+    def shutdown(self) -> None:
+        """EOF on stdin, then reap the child, escalating terminate ->
+        kill if it does not exit."""
+        deadline = time.monotonic() + _SHUTDOWN_BUDGET
+
+        def budget(share: float) -> float:
+            # A share of what is LEFT, so an unresponsive stage cannot
+            # spend the next one's time: the whole sequence stays
+            # inside one ceiling instead of stacking waits.
+            return max(0.0, (deadline - time.monotonic()) * share)
+
+        if self.process.stdin is not None:
+            try:
+                self.process.stdin.close()
+            except OSError:
+                pass
+        try:
+            self.process.wait(timeout=budget(0.5))
+        except subprocess.TimeoutExpired:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=budget(0.5))
+            except subprocess.TimeoutExpired:
+                # SIGKILL cannot be caught, so this wait returns.
+                self.process.kill()
+                self.process.wait()
+        # The child is gone: let the drain threads hit EOF, then close
+        # the parent-side pipe wrappers they were reading.
+        for thread in self._drains:
+            thread.join(timeout=budget(0.5))
+        for pipe in (self.process.stdout, self.process.stderr):
+            if pipe is not None:
+                try:
+                    pipe.close()
+                except OSError:
+                    pass
+
+    def _drain_stdout(self) -> None:
+        stdout = self.process.stdout
+        assert stdout is not None
+        try:
+            for line in stdout:
+                self.responses.put(line)
+        except (OSError, ValueError):
+            # A stream that cannot be read further - a decode error
+            # under strict UTF-8, a pipe closed under the reader - is
+            # the end of the conversation as far as lockstep is
+            # concerned; the sentinel below routes the waiting caller
+            # onto the process-ended path instead of a silent hang.
+            pass
+        finally:
+            self.responses.put(None)
+
+    def _drain_stderr(self) -> None:
+        stderr = self.process.stderr
+        assert stderr is not None
+        try:
+            for line in stderr:
+                with self._stderr_lock:
+                    self._stderr_tail.append(line.rstrip("\n"))
+        except (OSError, ValueError):
+            pass
+
+
+class _Socket:
+    """The transport to a ``morpholog serve`` socket. Closing it ends
+    this one conversation; the service goes on serving its other
+    callers."""
+
+    def __init__(self, path: str, timeout: float | None) -> None:
+        self.path = path
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        try:
+            sock.connect(path)
+        except OSError as exc:
+            sock.close()
+            raise MorphologError(f"cannot reach the service at `{path}`: {exc}") from None
+        # Reads block on the reader thread; the session's own timeout
+        # is its wait on the response queue.
+        sock.settimeout(None)
+        self._sock = sock
+        self._stream = sock.makefile("r", encoding="utf-8", errors="strict", newline="\n")
+        self._answered = False
+        self.responses: queue.Queue[str | None] = queue.Queue()
+        self._reader = threading.Thread(target=self._drain, name=_READER, daemon=True)
+        self._reader.start()
+
+    def write(self, line: str) -> None:
+        self._sock.sendall((line + "\n").encode("utf-8"))
+
+    def ended(self) -> str:
+        if self._answered:
+            return f"the service at `{self.path}` closed the connection"
+        # The service closes before its ready line on an OS user it does
+        # not map, or on one at its connection limit, but a service that
+        # stopped or failed looks the same from this side.
+        return (
+            f"the service at `{self.path}` closed the connection before it was "
+            f"ready. It does this for an OS user that is not one of its "
+            f"presenters and for one already at its connection limit, and a "
+            f"service that stopped or failed looks the same; its log says which"
+        )
+
+    def diagnostic(self) -> str:
+        return f"(the service at `{self.path}`)"
+
+    def skew_hint(self) -> str:
+        return f"the service at `{self.path}`; Session.connect opens unpinned"
+
+    def shutdown(self) -> None:
+        # Shutting the socket down wakes the reader's blocked read with
+        # an EOF, so the join below returns.
+        try:
+            self._sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        self._reader.join(timeout=_SHUTDOWN_BUDGET)
+        for closable in (self._stream, self._sock):
+            try:
+                closable.close()
+            except OSError:
+                pass
+
+    def _drain(self) -> None:
+        try:
+            for line in self._stream:
+                self._answered = True
+                self.responses.put(line)
+        except (OSError, ValueError):
+            # As for the child: a stream that cannot be read further
+            # ends the conversation.
+            pass
+        finally:
+            self.responses.put(None)
+
+
+class Session:
+    """A context manager over one lockstep conversation: a resident
+    ``morpholog session`` child it spawns, or, through
+    ``Session.connect``, one connection to a ``morpholog serve``
+    socket.
+
+    Opening waits for the ready line, and - when ``expected_version``
+    or ``expected_model_hash`` is given - refuses to open against a
+    binary of another version, or a programme whose canonical hash is
+    not the one this deployment expects. Prefer the generated
+    ``open_session`` and ``connect_service``, which pin both stamps
+    this package was built with; construct ``Session`` or call
+    ``Session.connect`` to open deliberately unpinned.
 
     ``timeout`` bounds how long each request waits for its RESPONSE in
     seconds (and the ready handshake); ``None`` waits indefinitely. It
@@ -204,44 +417,47 @@ class Session:
         self.file = str(file)
         self.database_url = database_url
         self.binary = binary or os.environ.get("MORPHOLOG_BIN", "morpholog")
+        self._open(
+            _Child(self.binary, self.file, database_url),
+            timeout,
+            expected_model_hash,
+            expected_version,
+        )
+
+    @classmethod
+    def connect(
+        cls,
+        socket_path: str,
+        *,
+        timeout: float | None = None,
+        expected_model_hash: str | None = None,
+        expected_version: str | None = None,
+    ) -> Session:
+        """One connection to a ``morpholog serve`` socket. The service
+        chose the programme and holds the database login; this side
+        brings only its OS user, which the service maps to a presenter.
+        ``timeout`` also bounds the connect."""
+        session = cls.__new__(cls)
+        session._open(
+            _Socket(str(socket_path), timeout),
+            timeout,
+            expected_model_hash,
+            expected_version,
+        )
+        return session
+
+    def _open(
+        self,
+        transport: _Child | _Socket,
+        timeout: float | None,
+        expected_model_hash: str | None,
+        expected_version: str | None,
+    ) -> None:
         self.timeout = timeout
         self._lock = threading.Lock()
         self._poisoned: str | None = None
         self._row = 0
-
-        argv = [self.binary, "session", self.file]
-        env = dict(os.environ)
-        env["DATABASE_URL"] = database_url
-        try:
-            self._child = subprocess.Popen(
-                argv,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                encoding="utf-8",
-                errors="strict",
-                env=env,
-            )
-        except OSError as exc:
-            raise MorphologError(f"`{_redact_argv(argv)}` failed to start: {exc}") from None
-
-        # Both pipes are drained by threads: stdout into the response
-        # queue this client waits on, stderr into a bounded tail - an
-        # unread stderr pipe could otherwise fill and deadlock the
-        # child. ``None`` in the queue means the child closed stdout.
-        self._responses: queue.Queue[str | None] = queue.Queue()
-        self._stderr_tail: collections.deque[str] = collections.deque(maxlen=_STDERR_TAIL)
-        # The tail is written by the drain thread and read by error
-        # paths that already hold the operation lock, so the ordering
-        # is always operation lock then stderr lock, never the reverse.
-        self._stderr_lock = threading.Lock()
-        self._drains = [
-            threading.Thread(target=self._drain_stdout, daemon=True),
-            threading.Thread(target=self._drain_stderr, daemon=True),
-        ]
-        for thread in self._drains:
-            thread.start()
-
+        self._transport = transport
         try:
             ready_line = self._next_line(self.timeout)
         except MorphologError:
@@ -262,10 +478,7 @@ class Session:
         )
         if skew is not None:
             self._poison("version mismatch")
-            raise MorphologError(
-                f"{skew} (binary `{self.binary}`; MORPHOLOG_BIN selects the matching "
-                f"one, and a session constructed directly opens unpinned)"
-            )
+            raise MorphologError(f"{skew} ({transport.skew_hint()})")
         try:
             self.ready = envelopes.SessionReady.from_json(payload)
         except envelopes.EnvelopeError as exc:
@@ -298,104 +511,32 @@ class Session:
         self.close()
 
     def close(self) -> None:
-        """End the session: EOF on stdin, then reap the child,
-        escalating terminate -> kill if it does not exit."""
+        """End the session: for a child, EOF on stdin, then reap it,
+        escalating terminate -> kill if it does not exit; for a
+        connection, close it."""
         with self._lock:
             if self._poisoned is None:
                 self._poisoned = "the session is closed"
-            self._shutdown()
-
-    def _shutdown(self) -> None:
-        deadline = time.monotonic() + _SHUTDOWN_BUDGET
-
-        def budget(share: float) -> float:
-            # A share of what is LEFT, so an unresponsive stage cannot
-            # spend the next one's time: the whole sequence stays
-            # inside one ceiling instead of stacking waits.
-            return max(0.0, (deadline - time.monotonic()) * share)
-
-        if self._child.stdin is not None:
-            try:
-                self._child.stdin.close()
-            except OSError:
-                pass
-        try:
-            self._child.wait(timeout=budget(0.5))
-        except subprocess.TimeoutExpired:
-            self._child.terminate()
-            try:
-                self._child.wait(timeout=budget(0.5))
-            except subprocess.TimeoutExpired:
-                # SIGKILL cannot be caught, so this wait returns.
-                self._child.kill()
-                self._child.wait()
-        # The child is gone: let the drain threads hit EOF, then close
-        # the parent-side pipe wrappers they were reading.
-        for thread in self._drains:
-            thread.join(timeout=budget(0.5))
-        for pipe in (self._child.stdout, self._child.stderr):
-            if pipe is not None:
-                try:
-                    pipe.close()
-                except OSError:
-                    pass
+            self._transport.shutdown()
 
     def _poison(self, reason: str) -> None:
-        """Mark the session unusable and reap the child. A poisoned
+        """Mark the session unusable and end its transport. A poisoned
         session refuses every later call: a late response line must
         never be read as the answer to a newer request."""
         if self._poisoned is None:
             self._poisoned = reason
-        self._shutdown()
-
-    def _drain_stdout(self) -> None:
-        stdout = self._child.stdout
-        assert stdout is not None
-        try:
-            for line in stdout:
-                self._responses.put(line)
-        except (OSError, ValueError):
-            # A stream that cannot be read further - a decode error
-            # under strict UTF-8, a pipe closed under the reader - is
-            # the end of the conversation as far as lockstep is
-            # concerned; the sentinel below routes the waiting caller
-            # onto the process-ended path instead of a silent hang.
-            pass
-        finally:
-            self._responses.put(None)
-
-    def _drain_stderr(self) -> None:
-        stderr = self._child.stderr
-        assert stderr is not None
-        try:
-            for line in stderr:
-                with self._stderr_lock:
-                    self._stderr_tail.append(line.rstrip("\n"))
-        except (OSError, ValueError):
-            pass
-
-    def _stderr_text(self) -> str:
-        # Snapshot under the lock: joining the deque while the drain
-        # thread appends raises, turning the diagnostic into a crash
-        # that hides the failure it was written to explain.
-        with self._stderr_lock:
-            lines = list(self._stderr_tail)
-        text = "\n".join(lines).strip()
-        if self.database_url:
-            text = text.replace(self.database_url, "<redacted>")
-        return text
+        self._transport.shutdown()
 
     def _next_line(self, timeout: float | None) -> str:
-        """One line from the child, or an operational failure: EOF
-        (the child died) and a timeout both break the lockstep."""
+        """One line from the other side, or an operational failure: EOF
+        (the child died, the service hung up) and a timeout both break
+        the lockstep."""
         try:
-            line = self._responses.get(timeout=timeout)
+            line = self._transport.responses.get(timeout=timeout)
         except queue.Empty:
             raise MorphologError(f"the session did not answer within {timeout}s") from None
         if line is None:
-            raise MorphologError(
-                f"the session process ended unexpectedly:\n{self._stderr_text()}"
-            )
+            raise MorphologError(self._transport.ended())
         return line.rstrip("\n")
 
     # ------------------------------------------------------------
@@ -423,27 +564,21 @@ class Session:
             if self._poisoned is not None:
                 raise MorphologError(f"this session is unusable: {self._poisoned}")
             wire = json.dumps(body, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-            stdin = self._child.stdin
-            assert stdin is not None
             try:
-                stdin.write(wire + "\n")
-                stdin.flush()
+                self._transport.write(wire)
             except (OSError, ValueError):
                 # A failed write or flush does NOT prove nothing
-                # crossed the process boundary: the line may have
-                # reached the pipe, and the proposal may have
-                # committed, before the failure surfaced here.
+                # crossed the boundary: part of the line, or all of it,
+                # may have arrived, and the proposal may have committed,
+                # before the failure surfaced here.
                 self._poison("the request could not be written reliably")
-                detail = self._stderr_text()
                 if commitful:
                     raise MorphologOutcomeUnknown(
                         "the proposal may have reached the session before the "
                         "write failed; the commit outcome is unknown - read the "
-                        f"record before re-submitting.\n{detail}"
+                        f"record before re-submitting.\n{self._transport.diagnostic()}"
                     ) from None
-                raise MorphologError(
-                    f"the session process ended unexpectedly:\n{detail}"
-                ) from None
+                raise MorphologError(self._transport.ended()) from None
             self._row += 1
             expected_row = self._row
             try:
