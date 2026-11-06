@@ -21,8 +21,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::definitions::DefinitionTable;
 use crate::ir::{
-    Claim, Definition, DefinitionName, PredicateName, Prop, Stmt, Term, Transformation, Value,
-    ValueExpr, Var,
+    Claim, Definition, DefinitionName, PredicateName, Prop, RuleName, Stmt, Term, Transformation,
+    Value, ValueExpr, Var,
 };
 use crate::propose::Transition;
 use crate::state::EvalValue;
@@ -121,8 +121,33 @@ pub struct ReadPlan {
     pub admits: BTreeMap<PredicateName, ReadFilter>,
 }
 
+/// A body read that makes its predicate whole, and where it is: the
+/// top-level statement (counted from 1), the name of the rule it sits in
+/// when that rule has one, and the definitions it was reached through,
+/// outermost first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WholeRead {
+    pub predicate: PredicateName,
+    pub statement: usize,
+    pub rule: Option<RuleName>,
+    pub through: Vec<DefinitionName>,
+}
+
 impl ReadPlan {
     pub fn of(transformation: &Transformation, definitions: &[Definition]) -> Self {
+        Self::walk(transformation, definitions).0
+    }
+
+    /// Every read that makes its predicate whole, in body order, each
+    /// place once: what to key, for a body whose loads contend.
+    pub fn whole_reads(
+        transformation: &Transformation,
+        definitions: &[Definition],
+    ) -> Vec<WholeRead> {
+        Self::walk(transformation, definitions).1
+    }
+
+    fn walk(transformation: &Transformation, definitions: &[Definition]) -> (Self, Vec<WholeRead>) {
         let mut rebound = BTreeSet::new();
         for stmt in &transformation.body {
             rebound_names(stmt, &mut rebound);
@@ -137,11 +162,17 @@ impl ReadPlan {
         let mut walker = Walker {
             definitions: DefinitionTable::new(definitions),
             plan: &mut plan,
+            statement: 0,
+            rule: None,
+            through: Vec::new(),
+            whole: Vec::new(),
         };
-        for stmt in &transformation.body {
+        for (index, stmt) in transformation.body.iter().enumerate() {
+            walker.statement = index + 1;
             walker.stmt(stmt, &known, &mut BTreeSet::new());
         }
-        plan
+        let whole = walker.whole;
+        (plan, whole)
     }
 
     /// The (predicate, position) pairs an index must serve: every keyed
@@ -204,13 +235,23 @@ type Env = BTreeMap<Var, KnownTerm>;
 struct Walker<'a> {
     definitions: DefinitionTable<'a>,
     plan: &'a mut ReadPlan,
+    /// Where the walk is, for [`WholeRead`].
+    statement: usize,
+    rule: Option<RuleName>,
+    through: Vec<DefinitionName>,
+    whole: Vec<WholeRead>,
 }
 
 impl Walker<'_> {
     fn stmt(&mut self, stmt: &Stmt, known: &Env, seen: &mut BTreeSet<DefinitionName>) {
         match stmt {
-            Stmt::Require { prop, .. } | Stmt::BindOne { prop, .. } => {
+            Stmt::Require { prop, name } | Stmt::BindOne { prop, name } => {
+                let outer = self.rule.clone();
+                if name.is_some() {
+                    self.rule.clone_from(name);
+                }
                 self.prop(prop, known, seen);
+                self.rule = outer;
             }
             Stmt::Let { value, .. } => self.value(value, known, seen),
             Stmt::LetNewSubject { .. } | Stmt::Emit(_) => {}
@@ -236,6 +277,17 @@ impl Walker<'_> {
 
     fn pattern(&mut self, predicate: &PredicateName, args: &[Term], known: &Env) {
         let coordinates = coordinates(args, known);
+        if coordinates.is_empty() {
+            let read = WholeRead {
+                predicate: predicate.clone(),
+                statement: self.statement,
+                rule: self.rule.clone(),
+                through: self.through.clone(),
+            };
+            if !self.whole.contains(&read) {
+                self.whole.push(read);
+            }
+        }
         self.plan
             .reads
             .entry(predicate.clone())
@@ -251,6 +303,7 @@ impl Walker<'_> {
             // that environment, so a nested call inherits the same rule.
             Prop::Defined { name, args } => {
                 let definitions = self.definitions;
+                self.through.push(name.clone());
                 definitions.enter(name, seen, |def, seen| {
                     let inner: Env = def
                         .parameters
@@ -262,6 +315,7 @@ impl Walker<'_> {
                         .collect();
                     self.prop(&def.body, &inner, seen);
                 });
+                self.through.pop();
             }
             Prop::And(props) | Prop::Or(props) => {
                 for p in props {

@@ -896,6 +896,8 @@ Those rows are the ledger posting, whose only gate reads an empty predicate. The
 
 A keyed read remembers only the index range it searched, so disjoint items stop conflicting. Without its index a keyed read scans the predicate and computes a key per row, which is slower than the old whole read (about 45 against 60 commits a second here) and locks the same relation, so run `provision indexes` for every programme, interpreted or compiled. On the interpreted route the invariants' predicates are still read whole, so a programme whose invariants mention the predicate a gate writes keeps the first row's retries until that is narrowed.
 
+`check -v` lists each read in a transformation body that loads its predicate whole: the transformation, the predicate, the statement, its rule name when it has one, and the definitions the read goes through. A read is keyed only by values the transformation knows before it runs: a parameter no statement rebinds, `actor`, or a literal. A variable a gate binds as it runs, such as a trade it sums over, does not key anything, and the selector `effective by` generates looks for a later version by its keys alone, so passing it another field does not key that read. A limit gate that sums every trade's terms in force through that selector therefore reads every organisation's terms. A definition that names the organisation in its reads, passed the parameter, keys it. The list is text in `check -v`, not part of `check --json`.
+
 ## The resident session (`morpholog session`)
 
 ```bash

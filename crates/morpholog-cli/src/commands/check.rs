@@ -7,7 +7,9 @@ use morpholog_cli::envelopes::{
     CheckDiagnostic, CheckRefusal, CheckReport, CheckedCases, CheckedInvariant,
 };
 use morpholog_core::Bounding;
-use morpholog_core::{PredicateArgKind, PredicateDecl, PredicateName, PreparedProgram, Program};
+use morpholog_core::{
+    PredicateArgKind, PredicateDecl, PredicateName, PreparedProgram, Program, ReadPlan,
+};
 use morpholog_postgres::{CompileReason, InvariantPlan, PgProgram, StoredShape};
 use morpholog_surface::{DeclKind, Diagnostic, SourceMap, Span, parse_program_with_sources};
 use std::collections::BTreeMap;
@@ -649,7 +651,38 @@ fn summary(p: &Program, routes: &[CheckedInvariant], file: &Path) -> String {
     for (name, because) in whole {
         out.push_str(&format!("    {name}: {because}\n"));
     }
+    out.push_str(&whole_reads(p));
     out
+}
+
+/// The body reads that load a predicate whole, each with the statement
+/// and rule it sits in and the definitions it was reached through. A whole
+/// read conflicts with every write to its predicate under SERIALIZABLE, so
+/// these are where concurrent proposals retry; a read keyed by something
+/// the transformation knows before it runs (a parameter, `actor`, a
+/// literal) is not listed.
+fn whole_reads(p: &Program) -> String {
+    let mut lines = Vec::new();
+    for t in &p.transformations {
+        for read in ReadPlan::whole_reads(t, &p.definitions) {
+            let mut at = format!("statement {}", read.statement);
+            if let Some(rule) = &read.rule {
+                at.push_str(&format!(" `{rule}`"));
+            }
+            if !read.through.is_empty() {
+                let through: Vec<String> = read.through.iter().map(ToString::to_string).collect();
+                at.push_str(&format!(", through {}", through.join(" > ")));
+            }
+            lines.push(format!(
+                "    {} reads {} whole: {at}\n",
+                t.name, read.predicate
+            ));
+        }
+    }
+    if lines.is_empty() {
+        return "  body reads: all keyed\n".to_string();
+    }
+    format!("  body reads: {} whole\n{}", lines.len(), lines.concat())
 }
 
 #[cfg(test)]
@@ -704,7 +737,7 @@ mod tests {
         let s = summary(p.prepared().program(), &routes, Path::new("demo.morph"));
         assert_eq!(
             s,
-            "ok: demo.morph\nprogram: demo\n  predicates: 0\n  definitions: 0\n  invariants: 0\n  transformations: 0\n  intents: 0\n  derived claims: 0\n  invariant checks: compiled\n  invariant cases: all bound\n"
+            "ok: demo.morph\nprogram: demo\n  predicates: 0\n  definitions: 0\n  invariants: 0\n  transformations: 0\n  intents: 0\n  derived claims: 0\n  invariant checks: compiled\n  invariant cases: all bound\n  body reads: all keyed\n"
         );
     }
 }
