@@ -143,7 +143,7 @@ fn render(
                 lateral,
                 range_error,
                 kind_error,
-                kind_report,
+                ..
             })) = ctx.pending.last()
             else {
                 return Err(CompileReason::UnvalidatedShape {
@@ -160,7 +160,6 @@ fn render(
                 total: total.clone(),
                 kind: kind_error.clone(),
                 range: range_error.clone(),
-                scope: kind_report.clone(),
             });
             Ok(Dd {
                 amount: format!(
@@ -410,9 +409,16 @@ fn bound_vars(
 type Bindings = std::collections::HashMap<Var, EvalValue>;
 type SumResult = Result<EvalValue, morpholog_core::EvalError>;
 
-/// The bindings a reported value is evaluated over, from the probe's
-/// payload, and each sum's result in walk order.
-pub(super) fn decode(payload: &serde_json::Value) -> Option<(Bindings, Vec<SumResult>)> {
+/// What a reported value's payload gives the kernel to evaluate it over.
+pub(super) enum Decoded {
+    /// The bindings, and each sum's result in walk order.
+    Values(Bindings, Vec<SumResult>),
+    /// A sum met a value other than a decimal: what the kernel makes of
+    /// it is the kernel's to say.
+    KernelDecides,
+}
+
+pub(super) fn decode(payload: &serde_json::Value) -> Option<Decoded> {
     let vars = payload.get("vars")?.as_object()?;
     let mut bindings = std::collections::HashMap::new();
     for (name, value) in vars {
@@ -424,12 +430,7 @@ pub(super) fn decode(payload: &serde_json::Value) -> Option<(Bindings, Vec<SumRe
     let mut sums = Vec::new();
     for sum in payload.get("sums")?.as_array()? {
         let result = if sum.get("kind")?.as_bool()? {
-            let first: EvalValue = serde_json::from_value(sum.get("first")?.clone()).ok()?;
-            let other: Option<EvalValue> = match sum.get("other")? {
-                serde_json::Value::Null => None,
-                value => Some(serde_json::from_value(value.clone()).ok()?),
-            };
-            Err(super::sum_kind_error(&first, other.as_ref()))
+            return Some(Decoded::KernelDecides);
         } else if sum.get("range")?.as_bool()? {
             Err(morpholog_core::EvalError::sum_out_of_decimal_range())
         } else {
@@ -439,5 +440,5 @@ pub(super) fn decode(payload: &serde_json::Value) -> Option<(Bindings, Vec<SumRe
         };
         sums.push(result);
     }
-    Some((bindings, sums))
+    Some(Decoded::Values(bindings, sums))
 }

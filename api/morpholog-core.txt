@@ -739,7 +739,6 @@ impl morpholog_core::EvalError
 pub const morpholog_core::EvalError::KINDS: &'static [&'static str]
 pub fn morpholog_core::EvalError::kind(&self) -> &'static str
 pub fn morpholog_core::EvalError::sum_cannot_take(bool, &morpholog_core::EvalValue) -> Self
-pub fn morpholog_core::EvalError::sum_kind_error(&morpholog_core::EvalValue, core::option::Option<&morpholog_core::EvalValue>) -> core::option::Option<Self>
 pub fn morpholog_core::EvalError::sum_out_of_decimal_range() -> Self
 impl core::clone::Clone for morpholog_core::EvalError
 pub fn morpholog_core::EvalError::clone(&self) -> morpholog_core::EvalError

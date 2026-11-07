@@ -557,6 +557,10 @@ pub(crate) async fn check_in_order(
                         &effective.asserted,
                         &effective.retracted,
                         steps,
+                        &crate::compiled::KernelFallback {
+                            admission,
+                            effective,
+                        },
                     )
                     .await?;
                 if let Some(v) = violation {

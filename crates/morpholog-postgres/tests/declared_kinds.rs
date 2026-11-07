@@ -13,8 +13,8 @@
 
 mod common;
 
-use common::routes::count;
-use common::{reset_db, test_pool};
+use common::routes::{CLAIM_ROWS, RouteObservation, count, observe, persisted};
+use common::{reset_db, seed_claims, test_pool};
 use morpholog_core::{
     EvalError, EvalValue, PredicateArgKind, PreparedProgram, Subject, Transition,
 };
@@ -22,6 +22,7 @@ use morpholog_postgres::{
     InvariantPlan, PgError, PgPool, PgProgram, PgProposalOutcome, Proposal, propose_against_pg,
     propose_all_against_pg, stored_claim_shapes,
 };
+use morpholog_test_support::differential::normalize_uuids;
 use morpholog_test_support::{bool_, coll, date, dec, dur, qty, subj, ts};
 
 const PROGRAMME: &str = "program declared_kinds
@@ -63,13 +64,17 @@ fn routes() -> Vec<(&'static str, PgProgram)> {
     routes
 }
 
-fn act(name: &str, args: Vec<EvalValue>) -> Proposal {
-    Proposal::gateway(&Transition {
+fn transition(name: &str, args: Vec<EvalValue>) -> Transition {
+    Transition {
         transformation_name: name.into(),
         args,
         actor: Subject::from("w"),
         decided_at: None,
-    })
+    }
+}
+
+fn act(name: &str, args: Vec<EvalValue>) -> Proposal {
+    Proposal::gateway(&transition(name, args))
 }
 
 async fn written(pool: &PgPool) -> [i64; 4] {
@@ -215,6 +220,82 @@ async fn the_kinds_read_back_from_storage_are_the_kinds_admitted() {
     for d in &declared {
         for (s, a) in stored.iter().zip(&admitted) {
             assert_eq!(d.holds(s), d.holds(a), "{d} over {s} and {a}");
+        }
+    }
+}
+
+const POTS: &str = "program pots
+predicate Cap(c: Subject, cap: Decimal)
+predicate Pot(c: Subject, p: Subject, amount: Decimal)
+invariant pots_within_cap:
+    Cap(c, cap) implies sum(a | Pot(c, _, a)) <= cap
+transformation open(c, cap):
+    admit Cap(c, cap)
+transformation drop_pot(c, p):
+    retract Pot(c, p, _)
+";
+
+/// History that holds quantities where decimals are declared, as an
+/// older programme could admit: a sum over them succeeds in the kernel,
+/// and the invariant then holds, fails or errors as written. Every route
+/// decides each as the kernel does, alone and after another act in one
+/// decision.
+#[tokio::test]
+async fn a_sum_over_drifted_values_of_one_kind_decides_as_the_kernel_does() {
+    let pool = test_pool().await;
+    let prepared =
+        || PreparedProgram::new(morpholog_surface::parse_program(POTS).unwrap()).unwrap();
+    let routes = [
+        ("interpreted", PgProgram::interpreted(prepared())),
+        ("compiled", PgProgram::new(prepared())),
+    ];
+    assert!(matches!(routes[1].1.plan(), InvariantPlan::Compiled));
+    let claim = |predicate: &str, args: Vec<EvalValue>| morpholog_core::ClaimInstance {
+        predicate: predicate.into(),
+        args,
+    };
+    let history = |cap: EvalValue| {
+        vec![
+            claim("Cap", vec![subj("k"), cap]),
+            claim("Pot", vec![subj("k"), subj("a"), qty("2", "MW")]),
+            claim("Pot", vec![subj("k"), subj("b"), qty("3", "MW")]),
+        ]
+    };
+    let drop = transition("drop_pot", vec![subj("k"), subj("b")]);
+    let open = act("open", vec![subj("k2"), dec(5)]);
+    for (case, cap, expected) in [
+        ("holds", qty("100", "MW"), "committed"),
+        ("fails", qty("1", "MW"), "rejected"),
+        ("errors", dec(100), "kernel error"),
+    ] {
+        let mut seen = Vec::new();
+        for (route, pg) in &routes {
+            let alone = observe(&pool, pg, &history(cap.clone()), &drop).await;
+            let label = match &alone {
+                RouteObservation::Decided(o) if o.outcome.starts_with("committed") => "committed",
+                RouteObservation::Decided(_) => "rejected",
+                RouteObservation::Kernel(_) => "kernel error",
+                RouteObservation::Operational(_) => "operational",
+            };
+            assert_eq!(label, expected, "{route}, {case}: {alone:?}");
+
+            reset_db(&pool).await;
+            seed_claims(&pool, &history(cap.clone())).await;
+            let together =
+                match propose_all_against_pg(&pool, pg, &[open.clone(), Proposal::gateway(&drop)])
+                    .await
+                {
+                    Ok(outcome) => normalize_uuids(&format!("{outcome:?}")),
+                    Err(PgError::Kernel(e)) => format!("kernel error {e:?}"),
+                    Err(e) => panic!("{route}, {case}: operational {e:?}"),
+                };
+            seen.push((route, alone, together, persisted(&pool, CLAIM_ROWS).await));
+        }
+        let (_, alone, together, claims) = &seen[0];
+        for (route, a, t, c) in &seen[1..] {
+            assert_eq!(a, alone, "{route}, {case}: alone");
+            assert_eq!(t, together, "{route}, {case}: after another act");
+            assert_eq!(c, claims, "{route}, {case}: what the decision left");
         }
     }
 }

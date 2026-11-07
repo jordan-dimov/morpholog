@@ -153,8 +153,20 @@ async fn probe_raw(
         transition_id,
         asserted: asserted.clone(),
     }];
+    let admission = prepared.admission();
+    let fallback = crate::compiled::KernelFallback {
+        admission: &admission,
+        effective: &effective,
+    };
     let stage1 = sql_set
-        .first_violation(&mut tx, Stage::Full, &asserted, &retracted, &steps)
+        .first_violation(
+            &mut tx,
+            Stage::Full,
+            &asserted,
+            &retracted,
+            &steps,
+            &fallback,
+        )
         .await;
     let stage2 = sql_set
         .first_violation(
@@ -163,6 +175,7 @@ async fn probe_raw(
             &effective.asserted,
             &effective.retracted,
             &steps,
+            &fallback,
         )
         .await;
 
@@ -1168,6 +1181,8 @@ transformation add_pot(p, amount):
 transformation add_two(p, amount, q, other):
     admit Pot(p, amount)
     admit Pot(q, other)
+transformation set_cap(cap):
+    admit Cap(cap)
 ";
     let program = morpholog_surface::parse_program(source).expect("parses");
     let validated = program.validated().expect("validates");
@@ -1240,6 +1255,14 @@ transformation add_two(p, amount, q, other):
             "add_pot",
             vec![subj("p"), dec(1)],
         ),
+        // Every value one quantity: the kernel's sum succeeds, and the
+        // comparison with the decimal cap is what errors.
+        (
+            "one foreign kind throughout",
+            vec![serde_json::json!([subject("a"), mw("1")])],
+            "set_cap",
+            vec![dec(50)],
+        ),
     ];
     for (label, rows, transformation, args) in cases {
         reset_db(&pool).await;
@@ -1267,6 +1290,48 @@ transformation add_two(p, amount, q, other):
                 "{label}: the kernel errors and both stages agree, got {}",
                 describe(other)
             ),
+        }
+    }
+}
+
+/// A sum whose values all share one quantity's unit: the kernel's sum
+/// succeeds, so the invariant can hold or fail as written, and the
+/// compiled check hands it to the kernel to say which. Every value is
+/// history, as admission refuses a misfit in a proposal.
+#[tokio::test]
+async fn a_sum_over_values_of_one_other_kind_is_the_kernels_verdict() {
+    let source = "program pots
+predicate Cap(cap: Decimal)
+predicate Pot(p: Subject, amount: Decimal)
+invariant pots_within_cap:
+    Cap(cap) implies sum(a | Pot(_, a)) <= cap
+transformation drop_pot(p):
+    retract Pot(p, _)
+";
+    let program = morpholog_surface::parse_program(source).expect("parses");
+    let validated = program.validated().expect("validates");
+    let sql_set = compile_invariants(&validated).expect("whole-in-fragment");
+    let prepared = PreparedProgram::new(program).expect("valid");
+    let pool = test_pool().await;
+    let mw = |s: &str| serde_json::json!({"type":"quantity","value":{"amount":s,"unit":"MW"}});
+    let pot = |p: &str, a: &str| serde_json::json!([{"type":"subject","value":p}, mw(a)]);
+    for (label, cap, admits) in [("holds", "100", true), ("fails", "1", false)] {
+        reset_db(&pool).await;
+        insert_rows(&pool, "Cap", &[serde_json::json!([mw(cap)])]).await;
+        insert_rows(&pool, "Pot", &[pot("a", "2"), pot("b", "3")]).await;
+        match probe_raw(&pool, &prepared, &sql_set, "drop_pot", vec![subj("b")]).await {
+            Ok(Probe::Observed(obs)) => {
+                assert_eq!(
+                    matches!(obs.kernel, Some(Outcome::Accepted { .. })),
+                    admits,
+                    "{label}: the kernel's verdict, got {:?}",
+                    obs.kernel
+                );
+                if let Err(d) = governed_contract(&obs) {
+                    panic!("{label}: {d}");
+                }
+            }
+            other => panic!("{label}: a verdict on both routes, got {}", describe(other)),
         }
     }
 }

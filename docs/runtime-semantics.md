@@ -375,7 +375,7 @@ Four statement classes serve different binding purposes; conflating them is the 
 
 - **`for binding in collection: body`** is **controlled iteration**. Variables bound inside the body are **scoped to the iteration**: they do not leak across iterations and do not survive the loop. Without this scoping, a residual `bind_one` binding from iteration N would constrain the lookup in iteration N+1; with it, each iteration sees only the outer bindings plus the iteration variable.
 
-  To copy a prior record's claims only when it has some, in one act, pass them as a collection parameter, which is empty when there are none, and gate that it is exactly the prior's set:
+  To copy a prior record's claims only when it has some, in one act, today's language has a workaround: pass them as a collection parameter, which is empty when there are none, and gate that it is exactly the prior's set:
 
   ```
   transformation correct(id, prior, marks):
