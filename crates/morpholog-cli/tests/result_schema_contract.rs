@@ -3527,13 +3527,31 @@ fn every_session_error_code_is_in_the_pinned_enum() {
     // The session receipt uses the whole set, the batch only what a
     // proposal row can produce. The schema admits nothing more.
     assert_eq!(
-        schema["$defs"]["session_error_receipt"]["properties"]["code"]["$ref"],
-        "#/$defs/error_code"
+        schema["$defs"]["session_error_receipt"]["oneOf"][0]["properties"]["code"]["$ref"],
+        "#/$defs/error_code_without_kind"
     );
     assert_eq!(
-        schema["$defs"]["batch_receipt"]["oneOf"][2]["properties"]["code"]["$ref"],
-        "#/$defs/propose_error_code"
+        schema["$defs"]["batch_receipt"]["oneOf"][2]["oneOf"][0]["properties"]["code"]["$ref"],
+        "#/$defs/propose_error_code_without_kind"
     );
+    // The codes without a kind are every code but `kernel_error`, which
+    // has its own branch carrying the kind.
+    let codes = |def: &str| -> Vec<String> {
+        schema["$defs"][def]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect()
+    };
+    for (with_kind, without) in [
+        ("propose_error_code", "propose_error_code_without_kind"),
+        ("error_code", "error_code_without_kind"),
+    ] {
+        let mut expected = codes(with_kind);
+        expected.retain(|c| c != "kernel_error");
+        assert_eq!(codes(without), expected, "{without}");
+    }
     let propose_published: Vec<String> = schema["$defs"]["propose_error_code"]["enum"]
         .as_array()
         .expect("the propose code enum is an array")

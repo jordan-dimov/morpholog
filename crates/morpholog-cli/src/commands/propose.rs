@@ -222,9 +222,15 @@ impl RowError {
     }
 }
 
-/// The name of the kernel error a failure carries, for the `kind` beside
-/// its `kernel_error` code; `None` for every other failure.
-pub(crate) fn kernel_kind(reason: &anyhow::Error) -> Option<&'static str> {
+/// The name of the kernel error a `kernel_error` carries, for the `kind`
+/// beside its code; `None` on every other code, which carries no kind.
+pub(crate) fn kernel_kind(
+    code: envelopes::ErrorCode,
+    reason: &anyhow::Error,
+) -> Option<&'static str> {
+    if code != envelopes::ErrorCode::KernelError {
+        return None;
+    }
     reason
         .chain()
         .find_map(|e| match e.downcast_ref::<morpholog_postgres::PgError>() {
@@ -248,7 +254,7 @@ pub(crate) fn report_request_failure(failure: RowError) -> anyhow::Result<()> {
     print_json(&envelopes::RequestError::new(
         code.into(),
         format!("{reason:#}"),
-        kernel_kind(&reason),
+        kernel_kind(code.into(), &reason),
     ))?;
     if code == envelopes::ProposeCode::CommitOutcomeUnknown {
         return Err(CommitOutcomeUnknown(format!("{reason:#}")).into());
@@ -272,7 +278,7 @@ fn report_batch_refusal(failure: RowError) -> anyhow::Result<()> {
         serde_json::to_string(&envelopes::RequestError::new(
             code.into(),
             format!("{reason:#}"),
-            kernel_kind(&reason),
+            kernel_kind(code.into(), &reason),
         ))?
     )?;
     out.flush()?;
@@ -439,7 +445,7 @@ async fn run_batch(
                 serde_json::to_value(envelopes::ErrorReceipt::new(
                     code.into(),
                     format!("{reason:#}"),
-                    kernel_kind(&reason),
+                    kernel_kind(code.into(), &reason),
                     row as u64,
                 ))?
             }

@@ -1,5 +1,5 @@
 {
-  "rehearsal_format_version": 1,
+  "rehearsal_format_version": 2,
   "contract": "canonical_audit_prefix_v1",
   "program": "candidate",
   "program_hash": "sha256:e27802aee5ee725a44571267e237fc7c7d120980f32538cca546ba994490d852",

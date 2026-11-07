@@ -171,7 +171,7 @@ The proposal-row codes, which `propose`, `propose --batch`, `transact` and the s
 | `unknown_transformation` | The programme declares no transformation of that name. | After fixing it. |
 | `invalid_arguments` | The arguments do not decode against the transformation's parameters. | After fixing them. |
 | `actor_assertion_unauthorised` | The actor is restricted and this login holds no authority to assert it. | Once the authority is granted. |
-| `kernel_error` | The proposal could not be decided on its data, for example arithmetic out of range. `kind` names which (`arith_out_of_range`, `claim_kind_mismatch`, `division_by_zero` and the rest of `kernel_error_kind` in `schema --result`); match on it, never on the message. | After fixing the data. |
+| `kernel_error` | The proposal could not be decided on its data, for example arithmetic out of range. `kind` names which (`arith_out_of_range`, `claim_kind_mismatch`, `division_by_zero` and the rest of `kernel_error_kind` in `schema --result`), and no other code carries a `kind`; match on it, never on the message. | After fixing the data. |
 | `duplicate_intent` | An outbox intent with the same idempotency key already exists. | Not as is. |
 | `serialization_failure` | A concurrent transaction conflicted (SQLSTATE 40001). | As is. If it recurs, look at contention, transaction length and read footprints. |
 | `deadlock_detected` | PostgreSQL broke a lock cycle by aborting this transaction (SQLSTATE 40P01). | As is. If it recurs, look at the order in which transactions take their locks. |

@@ -69,7 +69,7 @@ pub(crate) async fn run(args: SessionArgs) -> anyhow::Result<()> {
                 let receipt = ErrorReceipt::new(
                     code,
                     format!("{reason:#}"),
-                    crate::commands::propose::kernel_kind(&reason),
+                    crate::commands::propose::kernel_kind(code, &reason),
                     row,
                 );
                 write_line(&mut out, &serde_json::to_value(&receipt)?)?;

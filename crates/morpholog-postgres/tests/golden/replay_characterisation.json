@@ -781,7 +781,7 @@
         "would_refuse": 2
       }
     ],
-    "rehearsal_format_version": 1,
+    "rehearsal_format_version": 2,
     "semantics_version": 6,
     "totals": {
       "different_delta": 0,
@@ -912,7 +912,7 @@
         "would_refuse": 2
       }
     ],
-    "rehearsal_format_version": 1,
+    "rehearsal_format_version": 2,
     "semantics_version": 6,
     "totals": {
       "different_delta": 0,

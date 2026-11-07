@@ -1060,9 +1060,14 @@ KERNEL_ERROR_KINDS = frozenset(
 )
 
 
-def _kernel_kind(data: _Fields) -> str | None:
-    """The ``kind`` beside a ``kernel_error``, absent on every other code."""
-    return data.member("kind", KERNEL_ERROR_KINDS) if "kind" in data else None
+def _kernel_kind(data: _Fields, code: str) -> str | None:
+    """The ``kind`` a ``kernel_error`` must carry; every other code
+    carries none."""
+    if code == "kernel_error":
+        return data.member("kind", KERNEL_ERROR_KINDS)
+    if "kind" in data:
+        raise EnvelopeError(f"a `{code}` error carries no kind, got {data.raw('kind')!r}")
+    return None
 
 
 @dataclass(frozen=True)
@@ -1081,11 +1086,8 @@ class RequestError:
     def from_json(cls, payload: object) -> RequestError:
         data = _strict("request error", payload, {"code", "error", "status"}, {"kind"})
         data.constant("status", "error")
-        return cls(
-            code=data.member("code", PROPOSE_ERROR_CODES),
-            error=data.text("error"),
-            kind=_kernel_kind(data),
-        )
+        code = data.member("code", PROPOSE_ERROR_CODES)
+        return cls(code=code, error=data.text("error"), kind=_kernel_kind(data, code))
 
 
 @dataclass(frozen=True)
@@ -1107,11 +1109,12 @@ class SessionErrorReceipt:
             "session error receipt", payload, {"code", "error", "row", "status"}, {"kind"}
         )
         data.constant("status", "error")
+        code = data.member("code", SESSION_ERROR_CODES)
         return cls(
-            code=data.member("code", SESSION_ERROR_CODES),
+            code=code,
             error=data.text("error"),
             row=data.integer("row", minimum=1),
-            kind=_kernel_kind(data),
+            kind=_kernel_kind(data, code),
         )
 
 
@@ -1139,10 +1142,11 @@ class BatchReceipt:
         body = {k: v for k, v in payload.items() if k != "row"}
         if body.get("status") == "error":
             data = _strict("batch error receipt", body, {"status", "code", "error"}, {"kind"})
+            code = data.member("code", PROPOSE_ERROR_CODES)
             error = BatchError(
-                code=data.member("code", PROPOSE_ERROR_CODES),
+                code=code,
                 error=data.text("error"),
-                kind=_kernel_kind(data),
+                kind=_kernel_kind(data, code),
             )
             return cls(row=row, outcome=error)
         return cls(row=row, outcome=parse_run_outcome(body))

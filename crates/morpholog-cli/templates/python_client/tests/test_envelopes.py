@@ -168,6 +168,24 @@ class RunOutcomes(unittest.TestCase):
                 dict(golden("propose_error_kernel_error.json"), kind="no_such_kind")
             )
 
+    def test_a_kernel_error_without_a_kind_is_refused(self):
+        payload = dict(golden("propose_error_kernel_error.json"))
+        del payload["kind"]
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.RequestError.from_json(payload)
+        receipt = dict(golden("batch_error_receipt_kernel_error.json"))
+        del receipt["kind"]
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.BatchReceipt.from_json(receipt)
+
+    def test_another_code_carrying_a_kind_is_refused(self):
+        payload = dict(golden("propose_error_not_committed.json"), kind="arith_out_of_range")
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.RequestError.from_json(payload)
+        receipt = dict(golden("session_error_receipt.json"), kind="arith_out_of_range")
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.SessionErrorReceipt.from_json(receipt)
+
     def test_the_developer_intro_recipe_lists_the_same_codes(self):
         # The hand-written recipe in the developer introduction carries its
         # own copy of the list; it must not drift from the client's.

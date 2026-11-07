@@ -24,7 +24,7 @@ use crate::{EvalValue, SEMANTICS_VERSION};
 
 /// Bumped when the report shape changes incompatibly. New optional
 /// fields do not bump it.
-pub const REHEARSAL_FORMAT_VERSION: u32 = 1;
+pub const REHEARSAL_FORMAT_VERSION: u32 = 2;
 /// What each row was decided against: the recorded deltas applied in
 /// canonical audit order, which for a serial history is the state the
 /// proposal saw.

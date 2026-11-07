@@ -251,7 +251,7 @@ async fn converse(stream: UnixStream, presenter: &Presenter) -> anyhow::Result<(
                 let receipt = ErrorReceipt::new(
                     code,
                     format!("{reason:#}"),
-                    crate::commands::propose::kernel_kind(&reason),
+                    crate::commands::propose::kernel_kind(code, &reason),
                     row,
                 );
                 write_line(&mut write, &serde_json::to_value(&receipt)?).await?;
