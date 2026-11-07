@@ -731,8 +731,8 @@ All predicates live in one `claims` table. PostgreSQL remembers reads row by row
 
 - Two proposals that touch disjoint cases of the same predicates - two desks, two tenants, two periods - no longer conflict on what their bodies read, when those reads are keyed and the indexes are provisioned: a keyed read remembers only the index range it searched, which is also how the absence of a row is protected. They still conflict wherever either reads a predicate whole: an unkeyed pattern, a key the body binds as it runs, or, on the interpreted route, a predicate an invariant mentions.
 - Proposals whose reads and writes fall in different predicates conflict less often still.
-- On a new, nearly empty ledger most proposals conflict, because a tiny table is read whole however it is asked.
-- A predicate that holds no claims yet has a cold index: empty, or a single page. PostgreSQL remembers a lookup on it as the whole index, so every write to that predicate conflicts with every read of it until the index spans several pages. This falls on a new deployment and on a predicate a programme change adds. In the classroom burst on #396, predicates that started empty caused about 70 percent of the retries.
+- On a new, nearly empty ledger proposals conflict more often, because a tiny table tends to be read whole however it is asked.
+- On an empty or sparsely populated predicate, an index lookup can leave a broad lock footprint, so a read and an otherwise independent write may form a dependency and cost a retry. How often depends on the plan and on the index's physical layout. It falls on a new deployment and on a predicate a programme change adds. The classroom burst on #396 attributed about 70 percent of its retry rate to predicates that started empty.
 
 Reading an invariant's predicates only for the cases the change touches on the interpreted route, and cold predicate indexes, are tracked in #706; each waits for a workload that forces it. The measured numbers are in the bench's README.
 
