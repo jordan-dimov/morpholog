@@ -61,6 +61,7 @@ fn proposal(name: &str, args: Vec<EvalValue>) -> Proposal {
         transformation_name: name.into(),
         args,
         actor: "w".into(),
+        decided_at: None,
     })
 }
 
