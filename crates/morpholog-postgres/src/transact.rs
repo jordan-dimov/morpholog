@@ -11,8 +11,8 @@
 //! on.
 
 use morpholog_core::{
-    ClaimInstance, Compared, IntentInstance, Outcome, RejectionReason, StagedDelta, Subject,
-    Transformation, Transition, WitnessBinding,
+    ClaimInstance, Compared, IntentInstance, RejectionReason, Subject, Transformation, Transition,
+    WitnessBinding,
 };
 use serde::Serialize;
 use sqlx::{Postgres, Transaction};
@@ -23,10 +23,7 @@ use crate::attestation::Proposal;
 use crate::compiled::{DeltaStep, disable_jit};
 use crate::error::{PgError, classify_commit};
 use crate::program::{PgProgram, Route};
-use crate::propose::{
-    Drawn, Refusal, load_state, record_refusal, resolve, write_acceptance_record, write_accepted,
-    write_claim_delta,
-};
+use crate::propose::{Drawn, Refusal, decide_act, load_state, record_act, record_refusal, resolve};
 use crate::txn::begin_authorised_proposal_tx;
 
 /// One act's receipt inside a committed atomic batch: the single-run
@@ -89,7 +86,6 @@ pub async fn propose_all_against_pg(
         .iter()
         .map(|p| resolve(prepared, &p.transformation_name).map(|(t, _, _)| (t, p.transition())))
         .collect::<Result<_, _>>()?;
-    let admission = prepared.admission();
     let route = program.route();
 
     let (mut tx, login_role, decided_at) =
@@ -121,96 +117,31 @@ pub async fn propose_all_against_pg(
             // Against the policy as the acts before this one left it.
             crate::actor_policy::authorise(&mut tx, &transition.actor, &login_role.name).await?;
         }
-        let transition_id = Uuid::now_v7();
         // Each act draws on its own, so its row records its own draws.
-        let (asserted_claims, retracted_claims, emitted_intents) = match route {
-            Route::Interpreted => {
-                let Drawn { decided, draws } =
-                    crate::propose::propose_drawing(prepared, transition, &state)?;
-                match decided {
-                    Outcome::Accepted {
-                        asserted_claims,
-                        retracted_claims,
-                        emitted_intents,
-                        candidate_state,
-                    } => {
-                        write_accepted(
-                            &mut tx,
-                            transition_id,
-                            transformation,
-                            transition,
-                            prepared,
-                            &asserted_claims,
-                            &retracted_claims,
-                            &emitted_intents,
-                            &draws,
-                            &login_role,
-                        )
-                        .await?;
-                        state = candidate_state;
-                        (asserted_claims, retracted_claims, emitted_intents)
-                    }
-                    Outcome::Rejected { reason } => {
-                        return refuse(pool, tx, transformation, transition, reason, row).await;
-                    }
-                }
-            }
-            Route::Compiled(_) | Route::Mixed(_) => {
-                let Drawn { decided, draws } =
-                    crate::propose::stage_drawing(prepared, transition, &state)?;
-                match decided {
-                    StagedDelta::Rejected { reason } => {
-                        return refuse(pool, tx, transformation, transition, reason, row).await;
-                    }
-                    StagedDelta::Staged {
-                        asserted,
-                        retracted,
-                        emitted,
-                    } => {
-                        let (effective, operations) =
-                            write_claim_delta(&mut tx, transition_id, &asserted, &retracted)
-                                .await?;
-                        steps.push(DeltaStep {
-                            transition_id,
-                            asserted: asserted.clone(),
-                        });
-                        if let Some(reason) = crate::propose::check_in_order(
-                            &mut tx, route, &admission, &state, &asserted, &retracted, &effective,
-                            &steps,
-                        )
-                        .await?
-                        {
-                            return refuse(pool, tx, transformation, transition, reason, row).await;
-                        }
-                        write_acceptance_record(
-                            &mut tx,
-                            transition_id,
-                            transformation,
-                            transition,
-                            prepared,
-                            &asserted,
-                            &retracted,
-                            &operations,
-                            &emitted,
-                            &draws,
-                            &login_role,
-                        )
-                        .await?;
-                        // The next act reads the state these acts left,
-                        // matching the claims table.
-                        state.apply(&asserted, &retracted);
-                        (asserted, retracted, emitted)
-                    }
-                }
-            }
+        let Drawn { decided, draws } =
+            decide_act(&mut tx, route, prepared, transition, &state, &mut steps).await?;
+        let recorded = record_act(
+            &mut tx,
+            transformation,
+            transition,
+            prepared,
+            decided,
+            &draws,
+            &login_role,
+        )
+        .await?;
+        let mut admitted = match recorded {
+            Ok(admitted) => admitted,
+            Err(reason) => return refuse(pool, tx, transformation, transition, reason, row).await,
         };
+        admitted.advance(&mut state);
         receipts.push(AtomicAct {
             actor: transition.actor.clone(),
-            asserted_claims,
-            emitted_intents,
-            retracted_claims,
+            asserted_claims: admitted.asserted,
+            emitted_intents: admitted.emitted,
+            retracted_claims: admitted.retracted,
             row,
-            transition_id,
+            transition_id: admitted.transition_id,
         });
     }
     tx.commit().await.map_err(classify_commit)?;
