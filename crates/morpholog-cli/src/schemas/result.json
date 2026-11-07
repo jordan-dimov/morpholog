@@ -1633,6 +1633,18 @@
         "source_snapshot_transition_id": { "type": "string", "format": "uuid" }
       }
     },
+    "refresh_snapshots_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["built", "every", "kept", "removed"],
+      "properties": {
+        "built": { "type": "integer", "minimum": 0 },
+        "every": { "type": "integer", "minimum": 1 },
+        "kept": { "type": "integer", "minimum": 0 },
+        "latest": { "type": "string", "format": "uuid" },
+        "removed": { "type": "integer", "minimum": 0 }
+      }
+    },
     "tree_head_signature": {
       "type": "object",
       "additionalProperties": false,

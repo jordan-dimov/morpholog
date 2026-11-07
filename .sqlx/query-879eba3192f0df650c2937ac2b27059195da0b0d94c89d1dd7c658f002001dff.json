@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO morpholog.state_snapshots\n             (audit_order, act_ordinal, committed_at, transition_id, format, claim_count)\n         VALUES ($1, $2, $3, $4, $5, $6)\n         ON CONFLICT DO NOTHING\n         RETURNING snapshot_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "snapshot_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "morpholog.state_snapshots",
+            "name": "snapshot_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4",
+        "Timestamptz",
+        "Uuid",
+        "Int4",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "879eba3192f0df650c2937ac2b27059195da0b0d94c89d1dd7c658f002001dff"
+}

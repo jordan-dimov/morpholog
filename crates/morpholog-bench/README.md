@@ -251,6 +251,8 @@ The detailed tables below were taken on 2026-05-29 against PostgreSQL 17. A 2026
 
 **Replay is linear in N, and stays linear under a retraction-heavy log.** 10x N costs ~10x reconstruct in both regimes; the 50%-retract log is no worse (slightly cheaper, because its final live set is smaller, so `list_derived_at` enumerates fewer claims). The `ReplaySet`'s amortised-`O(1)` retract holds empirically. This is the curve the roadmap wanted before sizing any snapshot/lattice work: even maximal churn replays linearly, so that work remains unforced.
 
+`as-of --snapshot-every K` runs `refresh snapshots` with that interval before timing, records its build time, storage, snapshot count and the rows replayed after the nearest snapshot, and fails if the read from the snapshots differs from a full replay. With `--snapshot-every 0` (the default, and the suite's) nothing is kept and the scenario measures full replay as before.
+
 ### Contention (`contend`, 20 ops/worker, 2 000 prepopulated)
 
 | workers | committed | retries (40001) | retry_rate | throughput |

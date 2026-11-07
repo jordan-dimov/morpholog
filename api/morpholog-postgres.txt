@@ -57,6 +57,9 @@ impl core::marker::UnsafeUnpin for morpholog_postgres::testing::AlwaysTransient
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::testing::AlwaysTransient
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::testing::AlwaysTransient
 pub async fn morpholog_postgres::testing::activate(&sqlx_postgres::PgPool) -> core::result::Result<(), morpholog_postgres::PgError>
+pub async fn morpholog_postgres::testing::build_state_snapshot(&sqlx_postgres::PgPool, uuid::Uuid) -> core::result::Result<bool, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::testing::nearest_snapshot_pausing(&sqlx_postgres::PgPool, uuid::Uuid, &[&str], impl core::ops::async_function::AsyncFnOnce()) -> core::result::Result<core::option::Option<(uuid::Uuid, alloc::vec::Vec<morpholog_postgres::ClaimRead>)>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::testing::read_claims_at_replayed(&sqlx_postgres::PgPool, uuid::Uuid, core::option::Option<&[alloc::string::String]>) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::ClaimRead>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::testing::reset_before_activation(&sqlx_postgres::PgPool) -> core::result::Result<(), morpholog_postgres::PgError>
 pub async fn morpholog_postgres::testing::reset_database(&sqlx_postgres::PgPool) -> core::result::Result<(), morpholog_postgres::PgError>
 pub mod morpholog_postgres::wire_time
@@ -2648,6 +2651,30 @@ impl core::marker::Unpin for morpholog_postgres::SignaturePolicy
 impl core::marker::UnsafeUnpin for morpholog_postgres::SignaturePolicy
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::SignaturePolicy
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::SignaturePolicy
+pub struct morpholog_postgres::SnapshotRefresh
+pub morpholog_postgres::SnapshotRefresh::built: u64
+pub morpholog_postgres::SnapshotRefresh::every: u64
+pub morpholog_postgres::SnapshotRefresh::kept: u64
+pub morpholog_postgres::SnapshotRefresh::latest: core::option::Option<uuid::Uuid>
+pub morpholog_postgres::SnapshotRefresh::removed: u64
+impl core::clone::Clone for morpholog_postgres::SnapshotRefresh
+pub fn morpholog_postgres::SnapshotRefresh::clone(&self) -> morpholog_postgres::SnapshotRefresh
+impl core::cmp::Eq for morpholog_postgres::SnapshotRefresh
+pub fn morpholog_postgres::SnapshotRefresh::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::SnapshotRefresh
+pub fn morpholog_postgres::SnapshotRefresh::eq(&self, &morpholog_postgres::SnapshotRefresh) -> bool
+impl core::fmt::Debug for morpholog_postgres::SnapshotRefresh
+pub fn morpholog_postgres::SnapshotRefresh::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::SnapshotRefresh
+impl serde_core::ser::Serialize for morpholog_postgres::SnapshotRefresh
+pub fn morpholog_postgres::SnapshotRefresh::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::SnapshotRefresh
+impl core::marker::Send for morpholog_postgres::SnapshotRefresh
+impl core::marker::Sync for morpholog_postgres::SnapshotRefresh
+impl core::marker::Unpin for morpholog_postgres::SnapshotRefresh
+impl core::marker::UnsafeUnpin for morpholog_postgres::SnapshotRefresh
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::SnapshotRefresh
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::SnapshotRefresh
 pub struct morpholog_postgres::StatisticsPlanEntry
 pub morpholog_postgres::StatisticsPlanEntry::action: morpholog_postgres::StatisticsAction
 pub morpholog_postgres::StatisticsPlanEntry::detail: alloc::string::String
@@ -2997,6 +3024,7 @@ pub async fn morpholog_postgres::reconstruct_state_at(&sqlx_postgres::PgPool, uu
 pub async fn morpholog_postgres::record_compensation(&sqlx_postgres::PgPool, uuid::Uuid, uuid::Uuid) -> core::result::Result<(), morpholog_postgres::PgError>
 pub fn morpholog_postgres::redact_database_url(&str) -> alloc::string::String
 pub async fn morpholog_postgres::refresh_derived(&sqlx_postgres::PgPool, &morpholog_core::validate::ValidatedProgram<'_>, &str) -> core::result::Result<morpholog_postgres::RefreshSummary, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::refresh_state_snapshots(&sqlx_postgres::PgPool, core::num::nonzero::NonZeroU64) -> core::result::Result<morpholog_postgres::SnapshotRefresh, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::rehearse_candidate(&sqlx_postgres::PgPool, &morpholog_core::prepared::PreparedProgram, &mut dyn core::ops::function::FnMut(morpholog_postgres::RehearsalProgress)) -> core::result::Result<morpholog_core::rehearse::RehearsalReport, morpholog_postgres::PgError>
 pub fn morpholog_postgres::rehearse_candidate_against_pack(&morpholog_core::prepared::PreparedProgram, &morpholog_postgres::EvidencePack, core::option::Option<&morpholog_postgres::Checkpoint>, &mut dyn core::ops::function::FnMut(morpholog_postgres::RehearsalProgress)) -> core::result::Result<morpholog_core::rehearse::RehearsalReport, morpholog_postgres::PgError>
 pub fn morpholog_postgres::rehearse_recorded(&morpholog_core::prepared::PreparedProgram, &[&morpholog_postgres::AuditRow], &mut dyn core::ops::function::FnMut(morpholog_postgres::RehearsalProgress)) -> morpholog_core::rehearse::RehearsalReport

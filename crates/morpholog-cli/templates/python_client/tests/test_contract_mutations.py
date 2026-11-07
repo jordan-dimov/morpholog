@@ -135,6 +135,11 @@ CASES = {
         "refresh_derived_report",
         E.RefreshDerivedReport.from_json,
     ),
+    "refresh_snapshots_report.json": ("refresh_snapshots_report", E.RefreshSnapshotsReport.from_json),
+    "refresh_snapshots_report_none_kept.json": (
+        "refresh_snapshots_report",
+        E.RefreshSnapshotsReport.from_json,
+    ),
     "verify_report_consistent.json": ("verify_report", E.VerifyReport.from_json),
     "verify_report_divergent.json": ("verify_report", E.VerifyReport.from_json),
     "verify_report_indeterminate.json": ("verify_report", E.VerifyReport.from_json),

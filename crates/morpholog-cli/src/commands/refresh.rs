@@ -7,13 +7,13 @@
 //! `enumerate_derived` produced; SQL never recomputes them. Stdout carries
 //! the typed report, stderr a human summary with timings.
 
-use morpholog_cli::envelopes::RefreshDerivedReport;
-use morpholog_postgres::refresh_derived;
+use morpholog_cli::envelopes::{RefreshDerivedReport, RefreshSnapshotsReport};
+use morpholog_postgres::{refresh_derived, refresh_state_snapshots};
 
-use crate::RefreshDerivedArgs;
 use crate::commands::{
     connect, hash::canonical_hash, parse_or_report, print_json, validate_or_report,
 };
+use crate::{RefreshDerivedArgs, RefreshSnapshotsArgs};
 
 pub(crate) async fn run(args: &RefreshDerivedArgs) -> anyhow::Result<()> {
     let parsed = parse_or_report(&args.file)?;
@@ -46,6 +46,24 @@ pub(crate) async fn run(args: &RefreshDerivedArgs) -> anyhow::Result<()> {
         summary.read,
         summary.compute,
         summary.write,
+    );
+    Ok(())
+}
+
+/// `refresh snapshots`: keep the as-of snapshot grid. Stdout carries the
+/// typed report, stderr a summary with the time it took.
+pub(crate) async fn snapshots(args: &RefreshSnapshotsArgs) -> anyhow::Result<()> {
+    let pool = connect(&args.db.database_url).await?;
+    let started = std::time::Instant::now();
+    let refresh = refresh_state_snapshots(&pool, args.every).await?;
+    print_json(&RefreshSnapshotsReport::from(&refresh))?;
+    eprintln!(
+        "snapshots every {} rows: {} built, {} kept, {} removed in {:?}",
+        refresh.every,
+        refresh.built,
+        refresh.kept,
+        refresh.removed,
+        started.elapsed(),
     );
     Ok(())
 }

@@ -790,6 +790,19 @@ class AdapterDiscrimination(unittest.TestCase):
         )
         self.assertIsNotNone(report.source_snapshot_committed_at)
 
+    def test_refresh_snapshots_passes_the_interval_only_when_given(self):
+        self._mode("record_argv_stdout")
+        os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "refresh_snapshots_report.json").read_text()
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        with recording_argv() as argv_after:
+            reports = []
+            argv = argv_after(lambda: reports.append(self.client.refresh_snapshots()))
+            self.assertEqual(argv[:2], ["refresh", "snapshots"])
+            self.assertNotIn("--every", argv)
+            argv = argv_after(lambda: reports.append(self.client.refresh_snapshots(every=500)))
+            self.assertEqual(argv[argv.index("--every") + 1], "500")
+        self.assertEqual(reports[0].kept, 12)
+
     def test_audit_flags_land_on_argv_exactly_when_supplied(self):
         # The four-case matrix for the audit tail: --after and --named
         # each appear exactly when asked for.

@@ -1869,6 +1869,33 @@ fn refresh_derived_reports_serialize_as_pinned() {
     );
 }
 
+// `refresh snapshots`: `latest` is absent when nothing is kept.
+#[test]
+fn refresh_snapshots_reports_serialize_as_pinned() {
+    use morpholog_cli::envelopes::RefreshSnapshotsReport;
+
+    assert_golden(
+        "refresh_snapshots_report.json",
+        &to_value(&RefreshSnapshotsReport {
+            built: 2,
+            every: 10_000,
+            kept: 12,
+            latest: Some(sample_uuid()),
+            removed: 1,
+        }),
+    );
+    assert_golden(
+        "refresh_snapshots_report_none_kept.json",
+        &to_value(&RefreshSnapshotsReport {
+            built: 0,
+            every: 10_000,
+            kept: 0,
+            latest: None,
+            removed: 0,
+        }),
+    );
+}
+
 // The schema refuses a one-sided snapshot pair via dependentRequired, and
 // the validator enforces it.
 #[test]
@@ -3237,6 +3264,11 @@ fn every_golden_validates_against_its_defs_entry() {
         (
             "refresh_derived_report_no_transitions.json",
             "refresh_derived_report",
+        ),
+        ("refresh_snapshots_report.json", "refresh_snapshots_report"),
+        (
+            "refresh_snapshots_report_none_kept.json",
+            "refresh_snapshots_report",
         ),
         ("verify_report_consistent.json", "verify_report"),
         ("verify_report_divergent.json", "verify_report"),

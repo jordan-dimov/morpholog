@@ -2157,6 +2157,54 @@ async fn refresh_derived_report_without_transitions_omits_snapshot_pair() {
 }
 
 // ============================================================
+// `refresh snapshots`
+// ============================================================
+
+/// The report is the typed one, and an as-of read after the refresh
+/// answers what it answered before.
+#[tokio::test(flavor = "current_thread")]
+async fn refresh_snapshots_keeps_the_grid_and_reads_stay_the_same() {
+    reset_db().await;
+    post_balanced_entry("entry_001", 100);
+    post_balanced_entry("entry_002", 50);
+    let (_, audit, _) = run_cli(&["inspect", "audit"]);
+    let first = audit
+        .lines()
+        .next()
+        .and_then(|l| serde_json::from_str::<Value>(l).ok())
+        .expect("one audit row")["transition_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (status, before, _) = run_cli(&["inspect", "claims", "--as-of", &first]);
+    assert!(status.success());
+
+    let (status, stdout, stderr) = run_cli(&["refresh", "snapshots", "--every", "1"]);
+    assert!(
+        status.success(),
+        "refresh snapshots should succeed; {stderr}"
+    );
+    let report: Value = serde_json::from_str(&stdout).expect("stdout is the typed report");
+    assert_eq!(report["every"], 1, "{report}");
+    assert_eq!(report["built"], 2, "{report}");
+    assert!(report["latest"].is_string(), "{report}");
+    assert!(stderr.contains("snapshots every 1 rows"), "{stderr}");
+
+    let (_, after, _) = run_cli(&["inspect", "claims", "--as-of", &first]);
+    assert_eq!(after, before, "a snapshot read is the replay's");
+
+    let (status, stdout, _) = run_cli(&["refresh", "snapshots"]);
+    assert!(status.success());
+    let report: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        (&report["every"], &report["kept"], &report["removed"]),
+        (&Value::from(10_000), &Value::from(0), &Value::from(2)),
+        "the default interval keeps none of so short a log: {report}"
+    );
+    assert!(report.get("latest").is_none(), "{report}");
+}
+
+// ============================================================
 // `morpholog propose` with a temp `.morph` file
 // ============================================================
 

@@ -122,6 +122,33 @@ what is not pinned](embedder-integration.md#stability-and-what-is-not-pinned),
    of the release that wrote it: only that release's verifiers read its
    format.
 
+## Keeping as-of reads fast
+
+An as-of read replays the audit log up to its target, so it slows as the
+log grows. `morpholog refresh snapshots --database-url "$DATABASE_URL"`
+keeps the admitted state after every 10,000 rows of the log (`--every`
+to change it), and a read then replays only the rows after the nearest
+one. On a log of 146,000 rows with a few thousand live claims, a read at
+the end fell from about 4.8 seconds to at most 0.34.
+
+- Run it on a schedule, as often as the log grows by an interval. Each
+  run builds only what is missing, each snapshot from the one before, and
+  stops at the first row a writer may still be placing before. It still
+  numbers every row of the log to find where the snapshots go, reading
+  only each row's place, so a run is not free on a long log even when
+  nothing is new.
+- A read running beside a refresh is not changed by it: it loads the
+  snapshot it chose as it was, even if the refresh deletes it meanwhile.
+- It keeps exactly one snapshot per interval and deletes the rest,
+  including any from an earlier `--every`. Storage is the live claims
+  times the number kept: about 9 MB for the log above.
+- The snapshots are a cache. A read with none, or with one it cannot use,
+  replays the whole log and answers the same. `audit verify`, packs,
+  `rehearse`, `evaluate` and receipts never read them, so they are not
+  evidence; deleting them is always safe.
+- It reads at READ COMMITTED and writes only its own tables, so it adds no
+  serialization conflicts to proposals running beside it.
+
 ## Serving callers you do not trust
 
 The caller holds a socket; the service holds the logins and the

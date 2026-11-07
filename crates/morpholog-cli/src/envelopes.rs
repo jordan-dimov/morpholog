@@ -479,6 +479,30 @@ pub struct RefreshDerivedReport {
     pub source_snapshot_transition_id: Option<uuid::Uuid>,
 }
 
+/// `refresh snapshots`: what the refresh kept. `latest` is absent when no
+/// snapshot is kept, as on a log shorter than the interval.
+#[derive(Serialize)]
+pub struct RefreshSnapshotsReport {
+    pub built: u64,
+    pub every: u64,
+    pub kept: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest: Option<uuid::Uuid>,
+    pub removed: u64,
+}
+
+impl From<&morpholog_postgres::SnapshotRefresh> for RefreshSnapshotsReport {
+    fn from(r: &morpholog_postgres::SnapshotRefresh) -> Self {
+        Self {
+            built: r.built,
+            every: r.every,
+            kept: r.kept,
+            latest: r.latest,
+            removed: r.removed,
+        }
+    }
+}
+
 impl From<&morpholog_postgres::RefreshSummary> for RefreshDerivedReport {
     fn from(s: &morpholog_postgres::RefreshSummary) -> Self {
         // Both come from one audit row. A one-sided pair is an upstream

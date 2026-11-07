@@ -99,6 +99,12 @@ impl ReplayPages {
         ReplayPages(Keyset::new(through, chunk))
     }
 
+    /// Start strictly after this coordinate rather than at the beginning.
+    pub(crate) fn after(mut self, cursor: AuditPosition) -> Self {
+        self.0.cursor = Some(cursor);
+        self
+    }
+
     /// The next chunk, in replay order; empty once the walk is done, and
     /// from then on without asking the database again.
     pub(crate) async fn next(

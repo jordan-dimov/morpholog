@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT transition_id AS \"transition_id!\" FROM (\n               SELECT transition_id, row_number() OVER (\n                   ORDER BY audit_order, act_ordinal, committed_at, transition_id) AS i\n               FROM morpholog.audit) a\n           WHERE i % $1 = 0\n           ORDER BY i",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "transition_id!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "morpholog.audit",
+            "name": "transition_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8c1dbec0fa6a70b48bf54351cf5e3b2458a9be1377861b3cb6d5b8feace18766"
+}

@@ -1042,6 +1042,20 @@ class Morpholog:
             )
         )
 
+    def refresh_snapshots(self, every: int | None = None) -> envelopes.RefreshSnapshotsReport:
+        """Keep the admitted state after every ``every`` rows of the
+        audit log (the binary's default when omitted), so an as-of read
+        replays only the rows after the nearest one. A disposable cache:
+        builds what is missing, deletes what is off that grid, and no
+        verifier reads it. Run it on a schedule."""
+        return envelopes.RefreshSnapshotsReport.from_json(
+            self._json(
+                "refresh", "snapshots",
+                "--database-url", self.database_url,
+                *self._opt("--every", None if every is None else str(every)),
+            )
+        )
+
     # ------------------------------------------------------------
     # Tamper-evidence: replay, checkpoints, evidence packs.
     # ------------------------------------------------------------
