@@ -38,8 +38,8 @@ pub struct SnapshotRefresh {
 
 /// Keep one snapshot after every `every` rows of the log, in canonical
 /// order, and no others. Missing ones are built in order, each from the
-/// one before it, so a refresh costs one replay of the rows since the
-/// last; it stops at the first place not yet settled, and skips a place
+/// one before it, so a refresh replays only the rows since the last, after
+/// one pass numbering the log's rows to find the places; it stops at the first place not yet settled, and skips a place
 /// inside a baseline. Snapshots off that grid, from an earlier interval,
 /// or in another format are deleted first. A read never needs any of
 /// them: with none it replays the log.
@@ -211,6 +211,25 @@ pub(crate) async fn nearest(
     target: AuditPosition,
     scope: Option<&HashSet<&str>>,
 ) -> Result<Option<Snapshot>, PgError> {
+    nearest_pausing(conn, target, scope, async || {}).await
+}
+
+/// [`nearest`] with a pause between choosing the snapshot and reading its
+/// claims, so a test can delete it there. Both reads share one snapshot
+/// of the database, so a refresh that deletes it meanwhile is not seen.
+pub(crate) async fn nearest_pausing(
+    conn: &mut sqlx::PgConnection,
+    target: AuditPosition,
+    scope: Option<&HashSet<&str>>,
+    after_head: impl AsyncFnOnce(),
+) -> Result<Option<Snapshot>, PgError> {
+    let mut tx = sqlx::Connection::begin(&mut *conn)
+        .await
+        .map_err(classify)?;
+    sqlx::raw_sql("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *tx)
+        .await
+        .map_err(classify)?;
     let Some(head) = sqlx::query!(
         r#"SELECT snapshot_id, audit_order, act_ordinal, committed_at, transition_id, claim_count
            FROM morpholog.state_snapshots
@@ -224,12 +243,13 @@ pub(crate) async fn nearest(
         target.transition_id,
         FORMAT,
     )
-    .fetch_optional(&mut *conn)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(classify_checked_query)?
     else {
         return Ok(None);
     };
+    after_head().await;
     let scoped: Option<Vec<String>> = scope.map(|s| s.iter().map(|p| (*p).to_string()).collect());
     let rows = sqlx::query!(
         r#"SELECT predicate_name, arguments, asserted_in
@@ -239,9 +259,10 @@ pub(crate) async fn nearest(
         head.snapshot_id,
         scoped.as_deref(),
     )
-    .fetch_all(&mut *conn)
+    .fetch_all(&mut *tx)
     .await
     .map_err(classify_checked_query)?;
+    tx.commit().await.map_err(classify)?;
     if scope.is_none() && i64::try_from(rows.len()).ok() != Some(head.claim_count) {
         return Ok(None);
     }

@@ -133,7 +133,12 @@ the end fell from about 4.8 seconds to at most 0.34.
 
 - Run it on a schedule, as often as the log grows by an interval. Each
   run builds only what is missing, each snapshot from the one before, and
-  stops at the first row a writer may still be placing before.
+  stops at the first row a writer may still be placing before. It still
+  numbers every row of the log to find where the snapshots go, reading
+  only each row's place, so a run is not free on a long log even when
+  nothing is new.
+- A read running beside a refresh is not changed by it: it loads the
+  snapshot it chose as it was, even if the refresh deletes it meanwhile.
 - It keeps exactly one snapshot per interval and deletes the rest,
   including any from an earlier `--every`. Storage is the live claims
   times the number kept: about 9 MB for the log above.

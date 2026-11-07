@@ -392,3 +392,42 @@ async fn a_refresh_keeps_the_grid_and_only_the_grid() {
     let settled = refresh_state_snapshots(&pool, every(1)).await.unwrap();
     assert_eq!(settled.latest, Some(late), "{settled:?}");
 }
+
+/// A refresh that moves the grid deletes the snapshot a scoped read has
+/// just chosen, before the read loads its claims. The read still loads
+/// that snapshot whole, as it was when chosen, never an emptied one.
+#[tokio::test]
+async fn a_scoped_read_is_not_emptied_by_a_refresh_beside_it() {
+    let pool = test_pool().await;
+    common::drain_open_transactions(&pool).await;
+    reset_db(&pool).await;
+    let pg = Arc::new(pg_program(program()));
+    let mut rows = Vec::new();
+    for k in ["a", "b", "c", "d", "e", "f"] {
+        rows.push(act(&pool, &pg, "admit_x", vec![subj(k)]).await);
+    }
+    let every = |n: u64| std::num::NonZeroU64::new(n).unwrap();
+    refresh_state_snapshots(&pool, every(2)).await.unwrap();
+    assert_eq!(kept(&pool).await, vec![rows[1], rows[3], rows[5]]);
+
+    let found = testing::nearest_snapshot_pausing(&pool, rows[2], &["X"], async || {
+        refresh_state_snapshots(&pool, every(3)).await.unwrap();
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        kept(&pool).await,
+        vec![rows[2], rows[5]],
+        "the refresh did not delete the chosen snapshot"
+    );
+    let scope = ["X".to_string()];
+    assert_eq!(
+        found,
+        Some((
+            rows[1],
+            read_claims_at_replayed(&pool, rows[1], Some(&scope))
+                .await
+                .unwrap()
+        )),
+    );
+}

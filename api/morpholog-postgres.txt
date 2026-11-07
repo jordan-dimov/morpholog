@@ -58,6 +58,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::testing::Al
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::testing::AlwaysTransient
 pub async fn morpholog_postgres::testing::activate(&sqlx_postgres::PgPool) -> core::result::Result<(), morpholog_postgres::PgError>
 pub async fn morpholog_postgres::testing::build_state_snapshot(&sqlx_postgres::PgPool, uuid::Uuid) -> core::result::Result<bool, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::testing::nearest_snapshot_pausing(&sqlx_postgres::PgPool, uuid::Uuid, &[&str], impl core::ops::async_function::AsyncFnOnce()) -> core::result::Result<core::option::Option<(uuid::Uuid, alloc::vec::Vec<morpholog_postgres::ClaimRead>)>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::testing::read_claims_at_replayed(&sqlx_postgres::PgPool, uuid::Uuid, core::option::Option<&[alloc::string::String]>) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::ClaimRead>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::testing::reset_before_activation(&sqlx_postgres::PgPool) -> core::result::Result<(), morpholog_postgres::PgError>
 pub async fn morpholog_postgres::testing::reset_database(&sqlx_postgres::PgPool) -> core::result::Result<(), morpholog_postgres::PgError>

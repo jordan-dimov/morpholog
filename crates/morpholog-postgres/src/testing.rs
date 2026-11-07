@@ -172,3 +172,31 @@ pub async fn read_claims_at_replayed(
         })
         .collect())
 }
+
+/// The nearest snapshot at or before `transition_id`, as an as-of read
+/// scoped to `predicates` loads it: the transition it is as of and its
+/// claims. `between` runs after the snapshot is chosen and before its
+/// claims are read, so a test can delete it there.
+pub async fn nearest_snapshot_pausing(
+    pool: &sqlx::PgPool,
+    transition_id: uuid::Uuid,
+    predicates: &[&str],
+    between: impl AsyncFnOnce(),
+) -> Result<Option<(uuid::Uuid, Vec<crate::ClaimRead>)>, crate::PgError> {
+    let mut conn = pool.acquire().await.map_err(crate::error::classify)?;
+    let target = crate::as_of::settled_target(&mut conn, transition_id).await?;
+    let scope: std::collections::HashSet<&str> = predicates.iter().copied().collect();
+    let found = crate::snapshots::nearest_pausing(&mut conn, target, Some(&scope), between).await?;
+    Ok(found.map(|snapshot| {
+        let claims = snapshot
+            .state
+            .claims()
+            .iter()
+            .map(|claim| crate::ClaimRead {
+                claim: claim.clone(),
+                asserted_in: snapshot.asserted_in[claim],
+            })
+            .collect();
+        (snapshot.position.transition_id, claims)
+    }))
+}
