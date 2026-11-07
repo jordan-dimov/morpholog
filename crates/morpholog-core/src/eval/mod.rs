@@ -127,9 +127,78 @@ pub enum EvalError {
         "call to definition `{0}` but the evaluation context carries no such definition; validate the programme before proposing"
     )]
     UnknownDefinition(String),
+    /// A value admitted into a claim field it does not fit: its kind is
+    /// not the kind the predicate declares there.
+    #[error(
+        "`{predicate}` declares field `{field}` {declared}, but the value admitted there is {found}"
+    )]
+    ClaimKindMismatch {
+        predicate: String,
+        field: String,
+        declared: crate::ir::PredicateArgKind,
+        found: crate::ir::PredicateArgKind,
+    },
+    /// A value emitted into an intent field it does not fit.
+    #[error(
+        "intent `{intent}` declares field `{field}` {declared}, but the value emitted there is {found}"
+    )]
+    IntentKindMismatch {
+        intent: String,
+        field: String,
+        declared: crate::ir::PredicateArgKind,
+        found: crate::ir::PredicateArgKind,
+    },
 }
 
 impl EvalError {
+    /// Every name [`Self::kind`] can return, for a contract that lists
+    /// them.
+    pub const KINDS: &'static [&'static str] = &[
+        "unbound_variable",
+        "type_mismatch",
+        "value_of_zero_matches",
+        "value_of_multiple_matches",
+        "unbound_actor",
+        "unbound_decision_time",
+        "pre_state_unavailable",
+        "subject_source_exhausted",
+        "division_by_zero",
+        "round_quantum_not_positive",
+        "period_span_not_positive",
+        "period_index_not_whole",
+        "round_out_of_range",
+        "arith_out_of_range",
+        "empty_extremum",
+        "unknown_definition",
+        "claim_kind_mismatch",
+        "intent_kind_mismatch",
+    ];
+
+    /// The error's stable name, so a caller can tell one kernel error from
+    /// another without reading the message.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            EvalError::UnboundVariable(_) => "unbound_variable",
+            EvalError::TypeMismatch(_) => "type_mismatch",
+            EvalError::ValueOfZeroMatches(_) => "value_of_zero_matches",
+            EvalError::ValueOfMultipleMatches(_) => "value_of_multiple_matches",
+            EvalError::UnboundActor => "unbound_actor",
+            EvalError::UnboundDecisionTime => "unbound_decision_time",
+            EvalError::PreStateUnavailable => "pre_state_unavailable",
+            EvalError::SubjectSourceExhausted => "subject_source_exhausted",
+            EvalError::DivisionByZero => "division_by_zero",
+            EvalError::RoundQuantumNotPositive(_) => "round_quantum_not_positive",
+            EvalError::PeriodSpanNotPositive { .. } => "period_span_not_positive",
+            EvalError::PeriodIndexNotWhole(_) => "period_index_not_whole",
+            EvalError::RoundOutOfRange { .. } => "round_out_of_range",
+            EvalError::ArithOutOfRange(_) => "arith_out_of_range",
+            EvalError::EmptyExtremum { .. } => "empty_extremum",
+            EvalError::UnknownDefinition(_) => "unknown_definition",
+            EvalError::ClaimKindMismatch { .. } => "claim_kind_mismatch",
+            EvalError::IntentKindMismatch { .. } => "intent_kind_mismatch",
+        }
+    }
+
     /// A sum of decimals whose exact total is not a representable
     /// decimal. Shared so the interpreter and the compiled checks report
     /// the same error.
@@ -1130,18 +1199,18 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                         ArithOp::Sub => t.checked_sub(d),
                         _ => {
                             return Err(EvalError::TypeMismatch(format!(
-                                "{op:?} is not defined for timestamp and duration"
+                                "{op} is not defined for timestamp and duration"
                             )));
                         }
                     };
                     shifted.map(EvalValue::Timestamp).map_err(|e| {
-                        EvalError::ArithOutOfRange(format!("timestamp {op:?} duration: {e}"))
+                        EvalError::ArithOutOfRange(format!("timestamp {op} duration: {e}"))
                     })
                 }
                 (EvalValue::Timestamp(a), EvalValue::Timestamp(b)) => match op {
                     ArithOp::Sub => Ok(EvalValue::Duration(a.duration_since(b))),
                     _ => Err(EvalError::TypeMismatch(format!(
-                        "{op:?} is not defined for two timestamps (only Sub: the gap between them)"
+                        "{op} is not defined for two timestamps (only `-`: the gap between them)"
                     ))),
                 },
                 // A calendar span shifts a date: months first, clamping
@@ -1156,12 +1225,12 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                         ArithOp::Sub => shift_date(d, -months, -days),
                         _ => {
                             return Err(EvalError::TypeMismatch(format!(
-                                "{op:?} is not defined for date and calendar span"
+                                "{op} is not defined for date and calendar span"
                             )));
                         }
                     };
                     shifted.map(EvalValue::Date).ok_or_else(|| {
-                        EvalError::ArithOutOfRange(format!("date {op:?} {s} leaves the calendar"))
+                        EvalError::ArithOutOfRange(format!("date {op} {s} leaves the calendar"))
                     })
                 }
                 // Two dates subtract to the signed count of actual days,
@@ -1169,7 +1238,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                 (EvalValue::Date(a), EvalValue::Date(b)) => match op {
                     ArithOp::Sub => Ok(EvalValue::Decimal(Decimal::from(days_between(b, a)))),
                     _ => Err(EvalError::TypeMismatch(format!(
-                        "{op:?} is not defined for two dates (only Sub: the days between them)"
+                        "{op} is not defined for two dates (only `-`: the days between them)"
                     ))),
                 },
                 (EvalValue::Duration(a), EvalValue::Duration(b)) => match op {
@@ -1180,7 +1249,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                             _ => unreachable!("outer match restricts the op"),
                         };
                         result.map(EvalValue::Duration).ok_or_else(|| {
-                            EvalError::ArithOutOfRange(format!("duration {op:?} duration"))
+                            EvalError::ArithOutOfRange(format!("duration {op} duration"))
                         })
                     }
                     // The ratio of two spans is a plain decimal (132h/24h
@@ -1199,7 +1268,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                         )?))
                     }
                     _ => Err(EvalError::TypeMismatch(format!(
-                        "{op:?} is not defined for durations"
+                        "{op} is not defined for durations"
                     ))),
                 },
                 // Units: amounts combine only under the same unit; a bare
@@ -1212,7 +1281,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                 ) => {
                     if u != v {
                         return Err(EvalError::TypeMismatch(format!(
-                            "no arithmetic rule for Decimal[{u}] {op:?} Decimal[{v}]: \
+                            "no arithmetic rule for Decimal[{u}] {op} Decimal[{v}]: \
                              quantity arithmetic requires the same unit"
                         )));
                     }
@@ -1223,7 +1292,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                         }),
                         ArithOp::Div => Ok(EvalValue::Decimal(checked_decimal_op(*op, a, b)?)),
                         ArithOp::Mul | ArithOp::Mod => Err(EvalError::TypeMismatch(format!(
-                            "{op:?} is not defined for Decimal[{u}] and Decimal[{u}]: \
+                            "{op} is not defined for Decimal[{u}] and Decimal[{u}]: \
                              two amounts of one unit multiply into no meaningful unit"
                         ))),
                     }
@@ -1234,7 +1303,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                         unit,
                     }),
                     _ => Err(EvalError::TypeMismatch(format!(
-                        "{op:?} is not defined for Decimal[{unit}] and a bare decimal \
+                        "{op} is not defined for Decimal[{unit}] and a bare decimal \
                          (only Mul/Div: a bare decimal scales a quantity)"
                     ))),
                 },
@@ -1244,12 +1313,12 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                         unit,
                     }),
                     _ => Err(EvalError::TypeMismatch(format!(
-                        "{op:?} is not defined for a bare decimal and Decimal[{unit}] \
+                        "{op} is not defined for a bare decimal and Decimal[{unit}] \
                          (only Mul: a bare decimal scales a quantity)"
                     ))),
                 },
                 (l, r) => Err(EvalError::TypeMismatch(format!(
-                    "no arithmetic rule for {} {op:?} {}",
+                    "no arithmetic rule for {} {op} {}",
                     runtime_kind_label(&l),
                     runtime_kind_label(&r),
                 ))),
@@ -1652,7 +1721,7 @@ fn extremum_of(builtin: Builtin, a: &EvalValue, b: &EvalValue) -> Result<EvalVal
 /// checked; a zero divisor gets its own error.
 fn checked_decimal_op(op: ArithOp, a: Decimal, b: Decimal) -> Result<Decimal, EvalError> {
     let out_of_range =
-        || EvalError::ArithOutOfRange(format!("{a} {op:?} {b} exceeds the exact decimal range"));
+        || EvalError::ArithOutOfRange(format!("{a} {op} {b} exceeds the exact decimal range"));
     let result = match op {
         ArithOp::Add | ArithOp::Sub | ArithOp::Mul => {
             if let Some(r) = exact_fast(op, a, b) {

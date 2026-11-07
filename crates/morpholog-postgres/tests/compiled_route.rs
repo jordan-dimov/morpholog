@@ -543,12 +543,13 @@ async fn a_retract_and_readmit_touches_nothing_in_a_batch_on_both_routes() {
     }
 }
 
-/// Two foreign units already in history and a third admitted by the
-/// batch's first act; the second act's admission makes the rule check
-/// every row. Both routes raise, and both must name the pair the kernel
-/// meets first: history in its loaded order, then the batch's acts in
-/// order. Attacker capability modelled: none; the fixture rows stand in
-/// for history admitted under an older declaration.
+/// Two foreign units already in history, and a batch whose first act
+/// admits a row of the declared unit; the second act's admission makes
+/// the rule check every row. Both routes raise, and both must name the
+/// pair the kernel meets first, in history's loaded order. A batch can no
+/// longer bring a foreign unit of its own: admission refuses it before
+/// any rule runs. Attacker capability modelled: none; the fixture rows
+/// stand in for history admitted under an older declaration.
 #[tokio::test]
 async fn a_compiled_batch_names_the_kernels_first_pair_across_acts() {
     let program = morpholog_surface::parse_program(
@@ -580,7 +581,7 @@ transformation hold(x, q):
     let acts = [
         Proposal::gateway(&Transition {
             transformation_name: "hold".into(),
-            args: vec![subj("c"), morpholog_test_support::qty("9", "USD")],
+            args: vec![subj("c"), morpholog_test_support::qty("9", "MW")],
             actor: Subject::from("route_test"),
             decided_at: None,
         }),
@@ -604,8 +605,8 @@ transformation hold(x, q):
     assert_eq!(errors[0], errors[1], "interpreted vs compiled");
     let named = errors[0].to_string();
     assert!(
-        !named.contains("USD"),
-        "the batch's own row is met last, never named first: {named}"
+        named.contains("EUR") != named.contains("GBP"),
+        "one of history's foreign units is named: {named}"
     );
 }
 

@@ -45,6 +45,7 @@ fn failure_walk_and_points_at_first_failing_conjunct() {
     );
     let transition = trace_transition(&t, vec![]);
     let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,
@@ -93,6 +94,7 @@ fn failure_walk_and_recurses_through_nested_and() {
     );
     let transition = trace_transition(&t, vec![]);
     let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,
@@ -135,6 +137,7 @@ fn failure_walk_implies_points_at_right_when_left_holds() {
     );
     let transition = trace_transition(&t, vec![]);
     let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,
@@ -181,6 +184,7 @@ fn failure_walk_forall_drills_into_body() {
         ])],
     );
     let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,
@@ -222,6 +226,7 @@ fn failure_walk_not_returns_none() {
     );
     let transition = trace_transition(&t, vec![]);
     let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,
@@ -265,6 +270,7 @@ fn failure_walk_leaf_claim_returns_none() {
     );
     let transition = trace_transition(&t, vec![]);
     let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,
@@ -305,6 +311,7 @@ fn failure_walk_bind_one_no_match_carries_field() {
     );
     let transition = trace_transition(&t, vec![]);
     let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,
@@ -361,6 +368,7 @@ fn failure_walk_and_threads_bindings_through_conjuncts() {
     );
     let transition = trace_transition(&t, vec![]);
     let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,
@@ -413,6 +421,7 @@ fn failure_walk_implies_with_failing_left_returns_none() {
     );
     let transition = trace_transition(&t, vec![]);
     let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,
@@ -460,6 +469,7 @@ fn failure_walk_implies_recurses_into_compound_right() {
     );
     let transition = trace_transition(&t, vec![]);
     let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,
@@ -520,6 +530,7 @@ fn failure_walk_forall_recurses_into_compound_body() {
         ])],
     );
     let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,
@@ -553,6 +564,7 @@ fn failure_walk_exists_returns_none() {
     );
     let transition = trace_transition(&t, vec![]);
     let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,
@@ -602,6 +614,7 @@ fn failure_walk_bind_one_drills_into_compound_expression() {
     );
     let transition = trace_transition(&t, vec![]);
     let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,

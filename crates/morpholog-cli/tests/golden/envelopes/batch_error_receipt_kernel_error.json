@@ -1,0 +1,7 @@
+{
+  "code": "kernel_error",
+  "error": "the proposal could not be decided: arithmetic out of range: 7922816251426433759354395033 * 1.23456 exceeds the exact decimal range",
+  "kind": "arith_out_of_range",
+  "row": 4,
+  "status": "error"
+}

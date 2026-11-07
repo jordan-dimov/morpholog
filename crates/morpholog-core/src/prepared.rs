@@ -138,6 +138,7 @@ impl PreparedProgram {
             return Ok(None);
         };
         crate::propose::propose_with(
+            crate::propose::Vocabulary::of(self),
             transformation,
             transition,
             pre_state,
@@ -162,6 +163,7 @@ impl PreparedProgram {
         };
         let mut trace = crate::propose::TraceSink::Off;
         let staged = crate::propose::stage_delta_inner(
+            crate::propose::Vocabulary::of(self),
             transformation,
             transition,
             pre_state,
@@ -183,6 +185,7 @@ impl PreparedProgram {
     ) -> Option<TracedProposal> {
         let transformation = self.transformation(&transition.transformation_name)?;
         Some(crate::propose::propose_with_trace(
+            crate::propose::Vocabulary::of(self),
             transformation,
             transition,
             pre_state,
@@ -205,6 +208,7 @@ impl PreparedProgram {
             return Ok(None);
         };
         crate::propose::propose_stage_delta(
+            crate::propose::Vocabulary::of(self),
             transformation,
             transition,
             pre_state,
@@ -223,7 +227,13 @@ impl PreparedProgram {
         pre_state: &State,
         subjects: &mut dyn SubjectSource,
     ) -> Explanation {
-        crate::explain::explain(&self.program, transition, pre_state, subjects)
+        crate::explain::explain(
+            crate::propose::Vocabulary::of(self),
+            &self.program,
+            transition,
+            pre_state,
+            subjects,
+        )
     }
 
     /// The transformation with this name, or `None`. O(1).

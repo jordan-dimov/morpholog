@@ -92,6 +92,30 @@ fn error(e: &EvalError) -> Value {
         EvalError::ArithOutOfRange(_) => json!({"error": "arith_out_of_range"}),
         EvalError::EmptyExtremum { op, body: _ } => json!({"error": "empty_extremum", "op": op}),
         EvalError::UnknownDefinition(name) => json!({"error": "unknown_definition", "name": name}),
+        EvalError::ClaimKindMismatch {
+            predicate,
+            field,
+            declared,
+            found,
+        } => json!({
+            "error": "claim_kind_mismatch",
+            "predicate": predicate,
+            "field": field,
+            "declared": declared.to_string(),
+            "found": found.to_string(),
+        }),
+        EvalError::IntentKindMismatch {
+            intent,
+            field,
+            declared,
+            found,
+        } => json!({
+            "error": "intent_kind_mismatch",
+            "intent": intent,
+            "field": field,
+            "declared": declared.to_string(),
+            "found": found.to_string(),
+        }),
     }
 }
 

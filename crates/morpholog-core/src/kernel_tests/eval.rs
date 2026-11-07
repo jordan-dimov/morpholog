@@ -346,7 +346,7 @@ fn add_with_non_decimal_operand_is_type_mismatch() {
     let err = eval_value(&expr, &ctx(&State::from_claims(vec![]), &Bindings::new()))
         .expect_err("expected TypeMismatch");
     match err {
-        EvalError::TypeMismatch(msg) => assert!(msg.contains("Add")),
+        EvalError::TypeMismatch(msg) => assert!(msg.contains("decimal + subject"), "{msg}"),
         other => panic!("expected TypeMismatch, got {other:?}"),
     }
 }
@@ -846,7 +846,7 @@ fn expr_sub_subtracts_decimals_and_rejects_other_types() {
     let err = crate::derive::enumerate_derived(&derived_type_error, &state, &[]).unwrap_err();
     let msg = format!("{err}");
     assert!(
-        msg.contains("no arithmetic rule for decimal Sub subject"),
+        msg.contains("no arithmetic rule for decimal - subject"),
         "the no-rule error names both operand kinds; got: {msg}"
     );
 }

@@ -87,6 +87,24 @@ impl EvalValue {
             _ => false,
         }
     }
+
+    /// The declarable kind this value is, as a declaration names it: a
+    /// quantity with its unit. What a claim field or intent field is
+    /// checked against when the value is admitted or emitted.
+    pub fn kind(&self) -> crate::ir::PredicateArgKind {
+        use crate::ir::PredicateArgKind as K;
+        match self {
+            EvalValue::Decimal(_) => K::Decimal,
+            EvalValue::Subject(_) => K::Subject,
+            EvalValue::Bool(_) => K::Bool,
+            EvalValue::Collection(_) => K::Collection,
+            EvalValue::Date(_) => K::Date,
+            EvalValue::Timestamp(_) => K::Timestamp,
+            EvalValue::Duration(_) => K::Duration,
+            EvalValue::CalendarSpan(_) => K::CalendarSpan,
+            EvalValue::Quantity { unit, .. } => K::Quantity(unit.clone()),
+        }
+    }
 }
 
 /// A grounded claim: all args are values, no variables or wildcards.

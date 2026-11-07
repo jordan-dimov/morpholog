@@ -802,3 +802,51 @@ mod exact_arithmetic {
         ));
     }
 }
+
+/// `KINDS` is exactly the names `kind` returns: one of each error, every
+/// name once, nothing listed that no error has.
+#[test]
+fn every_kernel_error_has_one_published_kind() {
+    use crate::ir::PredicateArgKind;
+    let every = [
+        EvalError::UnboundVariable(String::new()),
+        EvalError::TypeMismatch(String::new()),
+        EvalError::ValueOfZeroMatches(String::new()),
+        EvalError::ValueOfMultipleMatches(String::new()),
+        EvalError::UnboundActor,
+        EvalError::UnboundDecisionTime,
+        EvalError::PreStateUnavailable,
+        EvalError::SubjectSourceExhausted,
+        EvalError::DivisionByZero,
+        EvalError::RoundQuantumNotPositive(String::new()),
+        EvalError::PeriodSpanNotPositive {
+            builtin: "periods",
+            span: String::new(),
+        },
+        EvalError::PeriodIndexNotWhole(String::new()),
+        EvalError::RoundOutOfRange {
+            value: String::new(),
+            quantum: String::new(),
+        },
+        EvalError::ArithOutOfRange(String::new()),
+        EvalError::EmptyExtremum {
+            op: "max",
+            body: String::new(),
+        },
+        EvalError::UnknownDefinition(String::new()),
+        EvalError::ClaimKindMismatch {
+            predicate: String::new(),
+            field: String::new(),
+            declared: PredicateArgKind::Date,
+            found: PredicateArgKind::Subject,
+        },
+        EvalError::IntentKindMismatch {
+            intent: String::new(),
+            field: String::new(),
+            declared: PredicateArgKind::Date,
+            found: PredicateArgKind::Subject,
+        },
+    ];
+    let named: Vec<&str> = every.iter().map(EvalError::kind).collect();
+    assert_eq!(named, EvalError::KINDS);
+}

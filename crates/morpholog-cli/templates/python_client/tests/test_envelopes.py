@@ -152,6 +152,21 @@ class RunOutcomes(unittest.TestCase):
         self.assertEqual(
             envelopes.SESSION_ERROR_CODES, set(schema["$defs"]["error_code"]["enum"])
         )
+        self.assertEqual(
+            envelopes.KERNEL_ERROR_KINDS, set(schema["$defs"]["kernel_error_kind"]["enum"])
+        )
+
+    def test_a_kernel_error_names_its_kind_and_no_other_code_does(self):
+        error = envelopes.RequestError.from_json(golden("propose_error_kernel_error.json"))
+        self.assertEqual((error.code, error.kind), ("kernel_error", "claim_kind_mismatch"))
+        receipt = envelopes.BatchReceipt.from_json(golden("batch_error_receipt_kernel_error.json"))
+        self.assertEqual(receipt.outcome.kind, "arith_out_of_range")
+        plain = envelopes.RequestError.from_json(golden("propose_error_not_committed.json"))
+        self.assertIsNone(plain.kind)
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.RequestError.from_json(
+                dict(golden("propose_error_kernel_error.json"), kind="no_such_kind")
+            )
 
     def test_the_developer_intro_recipe_lists_the_same_codes(self):
         # The hand-written recipe in the developer introduction carries its

@@ -185,6 +185,13 @@ async fn every_route_reaches_the_interpreters_decision_on_repeated_statements() 
         );
         assert!(left.is_empty());
     }
+    // A retract naming every field of a claim that is not there commits
+    // and changes nothing: it is a pattern with no match, not a refusal.
+    let (label, seed, proposal) = &cases[5];
+    assert_eq!(*label, "retracted twice, absent");
+    let (decided, left) = single(&pool, interpreter, seed, proposal).await;
+    assert_eq!(decided, "committed", "{label}");
+    assert!(left.is_empty(), "{label}: {left:?}");
 
     // A repeat inside one act of a batch is that act's own; a repeat
     // across acts is not, since the later act's state holds the earlier

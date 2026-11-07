@@ -128,6 +128,8 @@ pub enum RowClass {
     },
     WouldError {
         error: String,
+        /// Which kernel error, by [`crate::EvalError::kind`].
+        kind: &'static str,
     },
     Unreplayable {
         because: Unreplayable,
@@ -278,6 +280,7 @@ impl<'p> Rehearsal<'p> {
             Err(e) => {
                 return RowClass::WouldError {
                     error: e.to_string(),
+                    kind: e.kind(),
                 };
             }
         };

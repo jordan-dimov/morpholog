@@ -355,7 +355,6 @@ fn explanation_json_is_stable_and_round_trips() {
 fn an_explained_invariant_carries_the_refusals_witness_and_comparison() {
     use morpholog_core::{Outcome, RejectionReason};
     use morpholog_examples::double_entry_ledger;
-    use morpholog_test_support::date;
     use morpholog_test_support::propose;
 
     let program = double_entry_ledger::program();
@@ -364,7 +363,7 @@ fn an_explained_invariant_carries_the_refusals_witness_and_comparison() {
         "post_split_entry",
         vec![
             subj("entry_002"),
-            date("2026-04-16"),
+            subj("2026-04-16"),
             subj("q1_2026"),
             subj("account_cash"),
             dec(100),

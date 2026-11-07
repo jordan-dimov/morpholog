@@ -3,7 +3,7 @@
   "contract": "canonical_audit_prefix_v1",
   "program": "candidate",
   "program_hash": "sha256:e27802aee5ee725a44571267e237fc7c7d120980f32538cca546ba994490d852",
-  "semantics_version": 5,
+  "semantics_version": 6,
   "transitions_replayed": 5,
   "totals": {
     "same": 1,
@@ -131,7 +131,8 @@
       "model_hash": "sha256:8a1d8c1f0b7e4e2c9d6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e",
       "semantics_version": 3,
       "class": "would_error",
-      "error": "division by zero"
+      "error": "division by zero",
+      "kind": "division_by_zero"
     },
     {
       "transition_id": "01900000-0000-7000-8000-000000000005",

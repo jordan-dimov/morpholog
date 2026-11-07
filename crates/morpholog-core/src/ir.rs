@@ -527,6 +527,13 @@ pub enum ArithOp {
     Mod,
 }
 
+/// The operator as the source writes it, so a message reads `a * b`.
+impl std::fmt::Display for ArithOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(crate::format::arith_token(*self))
+    }
+}
+
 /// The ordered domain a [`Prop::Compare`] compares over. Never inferred
 /// from operand kinds: the surface picks it by token (`<` decimal,
 /// `before` date, `strictly_before` timestamp, `shorter_than` duration),
@@ -1122,6 +1129,17 @@ pub enum PredicateArgKind {
     /// inference inside date arithmetic.
     CalendarSpan,
     Any,
+}
+
+impl PredicateArgKind {
+    /// Whether a field declared this kind holds a value of kind `found`.
+    /// The one rule for both admission and the stored-claims check: the
+    /// same kind (a quantity in the same unit), or anything under `Any`.
+    /// A collection's elements are not looked at, since no declaration
+    /// names an element kind.
+    pub fn holds(&self, found: &PredicateArgKind) -> bool {
+        *self == PredicateArgKind::Any || self == found
+    }
 }
 
 /// Renders the declaration syntax (`Decimal[USD]`, never "Quantity"), so

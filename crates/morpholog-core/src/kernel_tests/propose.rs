@@ -461,6 +461,7 @@ fn propose_with_trace_records_every_statement_on_accept() {
     );
     let transition = trace_transition(&t, vec![EvalValue::Subject("p1".into())]);
     let TracedProposal::Completed { outcome, trace } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,
@@ -502,6 +503,7 @@ fn propose_with_trace_records_failing_require_with_rendered_expression() {
     );
     let transition = trace_transition(&t, vec![]);
     let TracedProposal::Completed { outcome, trace } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,
@@ -537,6 +539,7 @@ fn propose_with_trace_records_bind_one_no_match() {
     );
     let transition = trace_transition(&t, vec![]);
     let TracedProposal::Completed { outcome, trace } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,
@@ -576,6 +579,7 @@ fn propose_with_trace_records_bind_one_bound_with_sorted_bindings() {
     );
     let transition = trace_transition(&t, vec![]);
     let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,
@@ -627,6 +631,7 @@ fn propose_with_trace_preserves_trace_on_bind_one_multi_match_error() {
     );
     let transition = trace_transition(&t, vec![]);
     let TracedProposal::Errored { error, trace } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,
@@ -669,6 +674,7 @@ fn propose_with_trace_records_retract_with_actual_claims() {
     );
     let transition = trace_transition(&t, vec![]);
     let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,
@@ -723,6 +729,7 @@ fn propose_with_trace_records_for_with_per_iteration_items() {
         ])],
     );
     let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,
@@ -768,6 +775,7 @@ fn propose_with_trace_records_invariant_check_and_failure() {
     );
     let transition = trace_transition(&t, vec![]);
     let TracedProposal::Completed { outcome, trace } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,
@@ -826,6 +834,7 @@ fn propose_and_propose_with_trace_produce_identical_outcomes() {
     let TracedProposal::Completed {
         outcome: outcome_b, ..
     } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         &t,
         &transition,
         &state,

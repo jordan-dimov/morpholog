@@ -222,21 +222,21 @@ fn the_deliberately_missing_rules_stay_type_errors() {
         ),
         &["no arithmetic rule"],
     );
-    // On a date pair only Sub has a meaning; the rest refuse naming
+    // On a date pair only `-` has a meaning; the rest refuse naming
     // the one rule that exists.
     refuses(
         eq(
             add(term(date("2026-01-01")), term(date("2026-01-01"))),
             term(dec("0")),
         ),
-        &["not defined for two dates", "only Sub"],
+        &["not defined for two dates", "only `-`"],
     );
     refuses(
         eq(
             div(term(date("2026-02-01")), term(date("2026-01-01"))),
             term(dec("1")),
         ),
-        &["not defined for two dates", "only Sub"],
+        &["not defined for two dates", "only `-`"],
     );
     // On date-and-span only Add and Sub shift; Mul refuses.
     refuses(

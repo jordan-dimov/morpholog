@@ -21,7 +21,7 @@ use crate::eval::{RenderedClaim, render_eval_value};
 use crate::ir::Program;
 use crate::propose::{
     BindOneOutcome, Compared, Outcome, RejectionReason, RequireOutcome, SubjectSource, TraceEntry,
-    TracedProposal, Transition, WitnessBinding, propose_with_trace,
+    TracedProposal, Transition, Vocabulary, WitnessBinding, propose_with_trace,
 };
 use crate::state::State;
 
@@ -140,6 +140,7 @@ pub struct MissingClaim {
 /// so for the same state, transition and sequence of `subjects` it gives
 /// one explanation.
 pub(crate) fn explain(
+    vocabulary: Vocabulary<'_>,
     program: &Program,
     transition: &Transition,
     pre_state: &State,
@@ -165,6 +166,7 @@ pub(crate) fn explain(
     };
 
     let traced = propose_with_trace(
+        vocabulary,
         transformation,
         transition,
         pre_state,

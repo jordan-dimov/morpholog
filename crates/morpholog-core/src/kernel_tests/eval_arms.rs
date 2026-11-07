@@ -409,6 +409,7 @@ fn the_missing_claim_diagnosis_descends_a_defined_gate() {
     .unwrap();
     assert!(matches!(outcome, Outcome::Rejected { .. }));
     let explanation = crate::explain::explain(
+        crate::propose::Vocabulary::undeclared(),
         &p,
         &transition,
         &State::default(),

@@ -1,0 +1,6 @@
+{
+  "code": "kernel_error",
+  "error": "the proposal could not be decided: `Manifest` declares field `source_name` Date, but the value admitted there is Subject",
+  "kind": "claim_kind_mismatch",
+  "status": "error"
+}

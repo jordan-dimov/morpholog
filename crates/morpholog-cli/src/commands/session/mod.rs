@@ -66,7 +66,12 @@ pub(crate) async fn run(args: SessionArgs) -> anyhow::Result<()> {
         match resident.handle(line.trim(), row, &permits).await {
             Ok(response) => write_line(&mut out, &response)?,
             Err(ResidentFailure::Request { code, reason }) => {
-                let receipt = ErrorReceipt::new(code, format!("{reason:#}"), row);
+                let receipt = ErrorReceipt::new(
+                    code,
+                    format!("{reason:#}"),
+                    crate::commands::propose::kernel_kind(&reason),
+                    row,
+                );
                 write_line(&mut out, &serde_json::to_value(&receipt)?)?;
             }
             Err(ResidentFailure::Operational(reason)) => {

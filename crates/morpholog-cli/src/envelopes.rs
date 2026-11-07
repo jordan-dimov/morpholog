@@ -136,15 +136,19 @@ impl SessionReady {
 pub struct ErrorReceipt {
     pub code: ErrorCode,
     pub error: String,
+    /// Which kernel error it was, on a `kernel_error` only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<&'static str>,
     pub row: u64,
     pub status: &'static str,
 }
 
 impl ErrorReceipt {
-    pub fn new(code: ErrorCode, error: String, row: u64) -> Self {
+    pub fn new(code: ErrorCode, error: String, kind: Option<&'static str>, row: u64) -> Self {
         Self {
             code,
             error,
+            kind,
             row,
             status: "error",
         }
@@ -159,14 +163,18 @@ impl ErrorReceipt {
 pub struct RequestError {
     pub code: ErrorCode,
     pub error: String,
+    /// Which kernel error it was, on a `kernel_error` only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<&'static str>,
     pub status: &'static str,
 }
 
 impl RequestError {
-    pub fn new(code: ErrorCode, error: String) -> Self {
+    pub fn new(code: ErrorCode, error: String, kind: Option<&'static str>) -> Self {
         Self {
             code,
             error,
+            kind,
             status: "error",
         }
     }
@@ -542,14 +550,16 @@ pub struct Traced<R, T> {
 pub struct TracedError {
     code: ErrorCode,
     error: String,
+    kind: &'static str,
     status: &'static str,
 }
 
 impl TracedError {
-    pub fn new(error: String) -> Self {
+    pub fn new(error: &morpholog_core::EvalError) -> Self {
         Self {
             code: ErrorCode::KernelError,
-            error,
+            error: error.to_string(),
+            kind: error.kind(),
             status: "errored",
         }
     }

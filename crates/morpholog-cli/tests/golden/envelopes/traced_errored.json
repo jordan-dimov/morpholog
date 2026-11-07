@@ -2,6 +2,7 @@
   "result": {
     "code": "kernel_error",
     "error": "type mismatch: bind_one matched 2 candidates; expected exactly one: Note(note)",
+    "kind": "type_mismatch",
     "status": "errored"
   },
   "trace": [
