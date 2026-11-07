@@ -517,6 +517,16 @@ async fn fetch(
         .map_err(classify)
 }
 
+/// The kernel's kind error for a sum, from its first value and the first
+/// of another kind. When every value shares one summable kind other than
+/// decimal, the kernel's sum succeeds and anything it raises comes later,
+/// in what reads the total; this check adds only decimals, so it names
+/// the first value as one the sum could not take.
+pub(super) fn sum_kind_error(first: &EvalValue, other: Option<&EvalValue>) -> EvalError {
+    EvalError::sum_kind_error(first, other)
+        .unwrap_or_else(|| EvalError::sum_cannot_take(true, first))
+}
+
 /// The kernel's error for the first erroring binding: a sum's range, or
 /// the kernel's own verdict on the two operands it could not order.
 fn decode_error(row: &sqlx::postgres::PgRow, values: &[ValueExpr]) -> Result<EvalError, PgError> {
@@ -528,14 +538,18 @@ fn decode_error(row: &sqlx::postgres::PgRow, values: &[ValueExpr]) -> Result<Eva
     match column("kind")?.as_str() {
         "range" => Ok(EvalError::sum_out_of_decimal_range()),
         "sum_kind" => {
-            let first: bool = row
-                .try_get::<Option<bool>, _>("first")
-                .map_err(|e| PgError::InvalidState(format!("error column first missing: {e}")))?
-                .ok_or_else(|| PgError::InvalidState("error column first is null".to_string()))?;
-            let value: EvalValue = serde_json::from_str(&column("left")?).map_err(|e| {
+            let first: EvalValue = serde_json::from_str(&column("left")?).map_err(|e| {
                 PgError::InvalidState(format!("error operand left undecodable: {e}"))
             })?;
-            Ok(EvalError::sum_cannot_take(first, &value))
+            let other: Option<EvalValue> = row
+                .try_get::<Option<String>, _>("right")
+                .map_err(|e| PgError::InvalidState(format!("error column right missing: {e}")))?
+                .map(|text| serde_json::from_str(&text))
+                .transpose()
+                .map_err(|e| {
+                    PgError::InvalidState(format!("error operand right undecodable: {e}"))
+                })?;
+            Ok(sum_kind_error(&first, other.as_ref()))
         }
         "compare" => {
             let domain = match column("domain")?.as_str() {
@@ -1416,14 +1430,8 @@ fn error_report(probes: &[Probe], order: &OrderRenderer<'_>) -> Result<String, P
     let domain = case_over(probes, Column::Domain, order)?;
     let left = case_over(probes, Column::Left, order)?;
     let right = case_over(probes, Column::Right, order)?;
-    let first = case_over(probes, Column::First, order)?;
-    let first = if first == "NULL::text" {
-        "NULL::boolean".to_string()
-    } else {
-        first
-    };
     Ok(format!(
-        "{kind} AS \"kind\",\n       {domain} AS \"domain\",\n       {left} AS \"left\",\n       {right} AS \"right\",\n       {first} AS \"first\""
+        "{kind} AS \"kind\",\n       {domain} AS \"domain\",\n       {left} AS \"left\",\n       {right} AS \"right\""
     ))
 }
 
@@ -1433,9 +1441,6 @@ enum Column {
     Domain,
     Left,
     Right,
-    /// Whether the value a sum could not take was its first: the kernel
-    /// words that differently.
-    First,
 }
 
 /// One report column across a scope's probes: the first probe that
@@ -1478,29 +1483,18 @@ fn report_column(
                 .collect();
             let mut parts = Vec::with_capacity(sums.len());
             for sum in sums {
-                let (value, first) = match &sum.scope {
-                    Some(scope) => (
-                        format!(
-                            "(SELECT {}.arguments -> {} FROM {} WHERE {} AND {} ORDER BY {} LIMIT 1)",
-                            scope.alias,
-                            scope.position,
-                            scope.from,
-                            scope.where_,
-                            scope.foreign(),
-                            order(&scope.aliases)?
-                        ),
-                        format!(
-                            "(SELECT ({}) FROM {} WHERE {} ORDER BY {} LIMIT 1)",
-                            scope.foreign(),
-                            scope.from,
-                            scope.where_,
-                            order(&scope.aliases)?
-                        ),
-                    ),
-                    None => ("NULL::jsonb".to_string(), "NULL::boolean".to_string()),
+                let (first, other) = match &sum.scope {
+                    Some(scope) => {
+                        let order = order(&scope.aliases)?;
+                        (
+                            scope.first_value(&order),
+                            scope.first_of_another_kind(&order),
+                        )
+                    }
+                    None => ("NULL::jsonb".to_string(), "NULL::jsonb".to_string()),
                 };
                 parts.push(format!(
-                    "jsonb_build_object('total', trim_scale({})::text, 'kind', ({}), 'range', ({}), 'value', {value}, 'first', {first})",
+                    "jsonb_build_object('total', trim_scale({})::text, 'kind', ({}), 'range', ({}), 'first', {first}, 'other', {other})",
                     sum.total, sum.kind, sum.range
                 ));
             }
@@ -1519,20 +1513,12 @@ fn report_column(
         (ErrorReport::Compare { left, .. }, Column::Left) => Some(format!("({left})::text")),
         (ErrorReport::Compare { right, .. }, Column::Right) => Some(format!("({right})::text")),
         (ErrorReport::SumKind(sum), Column::Left) => Some(format!(
-            "(SELECT ({}.arguments -> {})::text FROM {} WHERE {} AND {} ORDER BY {} LIMIT 1)",
-            sum.alias,
-            sum.position,
-            sum.from,
-            sum.where_,
-            sum.foreign(),
-            order(&sum.aliases)?
+            "({})::text",
+            sum.first_value(&order(&sum.aliases)?)
         )),
-        (ErrorReport::SumKind(sum), Column::First) => Some(format!(
-            "(SELECT ({}) FROM {} WHERE {} ORDER BY {} LIMIT 1)",
-            sum.foreign(),
-            sum.from,
-            sum.where_,
-            order(&sum.aliases)?
+        (ErrorReport::SumKind(sum), Column::Right) => Some(format!(
+            "({})::text",
+            sum.first_of_another_kind(&order(&sum.aliases)?)
         )),
         // A lifted scope's column is read on the first inner row where
         // any of its probes fires, from the first that does there.
@@ -1562,10 +1548,9 @@ fn report_column(
                 ))
             }
         }
-        (ErrorReport::SumRange, Column::Domain | Column::Left | Column::Right | Column::First)
-        | (ErrorReport::SumKind(_), Column::Domain | Column::Right)
-        | (ErrorReport::Compare { .. }, Column::First)
-        | (ErrorReport::Value { .. }, Column::Right | Column::First) => None,
+        (ErrorReport::SumRange, Column::Domain | Column::Left | Column::Right)
+        | (ErrorReport::SumKind(_), Column::Domain)
+        | (ErrorReport::Value { .. }, Column::Right) => None,
     })
 }
 
@@ -1739,8 +1724,8 @@ struct RenderedSum {
     kind_report: Option<SumScope>,
 }
 
-/// Where a sum's values come from, so the error query can find the first
-/// one the kernel could not take.
+/// Where a sum's values come from, so the error query can find the two
+/// that decide the kernel's kind error.
 #[derive(Debug, Clone)]
 struct SumScope {
     from: String,
@@ -1759,6 +1744,33 @@ impl SumScope {
             self.alias, self.position
         )
     }
+
+    /// The sum's first value in the kernel's order.
+    fn first_value(&self, order: &str) -> String {
+        format!(
+            "(SELECT {}.arguments -> {} FROM {} WHERE {} ORDER BY {order} LIMIT 1)",
+            self.alias, self.position, self.from, self.where_
+        )
+    }
+
+    /// The first value, in the kernel's order, of another kind than the
+    /// sum's first: another type, or a quantity of another unit.
+    fn first_of_another_kind(&self, order: &str) -> String {
+        let target = format!("{}.arguments -> {}", self.alias, self.position);
+        format!(
+            "(SELECT {target} FROM {} WHERE {} AND {} IS DISTINCT FROM {} ORDER BY {order} LIMIT 1)",
+            self.from,
+            self.where_,
+            kind_key(&target),
+            kind_key(&self.first_value(order))
+        )
+    }
+}
+
+/// A tagged value's kind as the kernel's sum tells kinds apart: its type,
+/// and a quantity's unit.
+fn kind_key(tagged: &str) -> String {
+    format!("((({tagged}) ->> 'type') || coalesce('/' || (({tagged}) -> 'value' ->> 'unit'), ''))")
 }
 
 /// One way a scope can raise: the condition that holds on the row the

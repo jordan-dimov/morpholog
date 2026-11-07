@@ -26,7 +26,10 @@ The binary moves, the programmes do not. The full account is
 5. Optional: `morpholog migrate --prepare --database-url "$DATABASE_URL"`
    ahead of the window, so the window holds only the cutover.
 6. `morpholog migrate --database-url "$DATABASE_URL"`. It re-applies the
-   privilege floor, so a narrowed grant takes effect here.
+   privilege floor, so a narrowed grant takes effect here. It always ends
+   with a hint to run `provision indexes --check`: it cannot see the
+   programmes, and a new binary can change what indexes they need with no
+   migration at all. Step 10's exit code is the verdict.
 7. When the release notes name a new least-privilege role:
    `morpholog init --skip-if-exists --least-privilege --role-prefix <prefix> --database-url "$DATABASE_URL"`
    with the deployment's own prefix. It creates and records only the
@@ -35,6 +38,11 @@ The binary moves, the programmes do not. The full account is
    A prefix longer than 55 characters is refused here; move the
    deployment to a shorter one with `roles move` instead
    ([install](install.md#moving-a-deployment-to-its-own-roles)).
+   Leaving the executor role out is a valid end state: a programme that
+   declares no intents has nothing for it to deliver, and a worker on a
+   writer login still delivers, since the writer keeps `UPDATE` on the
+   delivery columns. The executor is for when no process that can
+   propose should hold the external credential.
 8. `morpholog audit verify --database-url "$DATABASE_URL"`. `passes`
    true: the record still agrees with itself. `tree_size` counts every
    audit row, the migration's control rows included.
@@ -176,6 +184,9 @@ trust](embedder-integration.md#serving-callers-you-do-not-trust-morpholog-serve)
 The executor holds the external credential and places what the record
 admitted. The full account is [running the action outside the
 proposer](embedder-integration.md#running-the-action-outside-the-proposer).
+A deployment recorded before v0.0.18 has none until step 7 of
+[upgrading](#upgrading-to-a-new-release) adds it, and one with no
+executor is a valid choice, as that step says.
 
 1. One login for the executor, a member of the executor role and of no
    other: `CREATE ROLE m_executor LOGIN IN ROLE morpholog_executor`.

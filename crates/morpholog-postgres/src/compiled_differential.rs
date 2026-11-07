@@ -1176,6 +1176,7 @@ transformation add_two(p, amount, q, other):
     let pool = test_pool().await;
     let subject = |s: &str| serde_json::json!({"type":"subject","value":s});
     let decimal = |s: &str| serde_json::json!({"type":"decimal","value":s});
+    let mw = |s: &str| serde_json::json!({"type":"quantity","value":{"amount":s,"unit":"MW"}});
     // Every foreign value is history, since admission refuses one in the
     // proposal; the proposal's row is a decimal the sum can take.
     let cases: Vec<(&str, Vec<serde_json::Value>, &str, Vec<EvalValue>)> = vec![
@@ -1206,6 +1207,38 @@ transformation add_two(p, amount, q, other):
             ],
             "add_two",
             vec![subj("p"), dec(1), subj("q"), dec(2)],
+        ),
+        // A quantity first fixes the sum's kind, so the decimal after it
+        // is the value the sum cannot mix.
+        (
+            "quantity first",
+            vec![serde_json::json!([subject("c"), mw("1")])],
+            "add_pot",
+            vec![subj("p"), dec(1)],
+        ),
+        (
+            "duration first",
+            vec![serde_json::json!([subject("c"), {"type":"duration","value":"PT1H"}])],
+            "add_pot",
+            vec![subj("p"), dec(1)],
+        ),
+        (
+            "quantity later",
+            vec![
+                serde_json::json!([subject("a"), decimal("1")]),
+                serde_json::json!([subject("b"), mw("1")]),
+            ],
+            "add_pot",
+            vec![subj("p"), dec(1)],
+        ),
+        (
+            "two units",
+            vec![
+                serde_json::json!([subject("a"), mw("1")]),
+                serde_json::json!([subject("b"), {"type":"quantity","value":{"amount":"1","unit":"GBP"}}]),
+            ],
+            "add_pot",
+            vec![subj("p"), dec(1)],
         ),
     ];
     for (label, rows, transformation, args) in cases {

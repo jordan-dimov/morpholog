@@ -424,9 +424,12 @@ pub(super) fn decode(payload: &serde_json::Value) -> Option<(Bindings, Vec<SumRe
     let mut sums = Vec::new();
     for sum in payload.get("sums")?.as_array()? {
         let result = if sum.get("kind")?.as_bool()? {
-            let value: EvalValue = serde_json::from_value(sum.get("value")?.clone()).ok()?;
-            let first = sum.get("first")?.as_bool()?;
-            Err(morpholog_core::EvalError::sum_cannot_take(first, &value))
+            let first: EvalValue = serde_json::from_value(sum.get("first")?.clone()).ok()?;
+            let other: Option<EvalValue> = match sum.get("other")? {
+                serde_json::Value::Null => None,
+                value => Some(serde_json::from_value(value.clone()).ok()?),
+            };
+            Err(super::sum_kind_error(&first, other.as_ref()))
         } else if sum.get("range")?.as_bool()? {
             Err(morpholog_core::EvalError::sum_out_of_decimal_range())
         } else {

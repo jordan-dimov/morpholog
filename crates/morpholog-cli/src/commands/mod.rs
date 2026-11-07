@@ -294,7 +294,9 @@ pub(crate) async fn warn_if_roles_shared(
         );
         eprintln!(
             "warning: this deployment's roles {} also hold privileges in {}; a login \
-             granted any of them can act there too. Direct members: {}. Review each \
+             granted any of them can act there too. Direct members: {}. A copy made with \
+             `createdb -T` holds its source's grants, so this is expected on a rehearsal \
+             copy; drop the copy before migrating the live database. Otherwise, review each \
              member's effective access, and give each deployment its own roles with \
              `morpholog roles move --role-prefix <prefix> --login <login>`: see \
              docs/install.md, \"Moving a deployment to its own roles\"",

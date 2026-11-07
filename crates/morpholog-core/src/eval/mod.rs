@@ -206,9 +206,20 @@ impl EvalError {
         EvalError::ArithOutOfRange("sum of decimals exceeds the exact decimal range".to_string())
     }
 
+    /// The kind error a sum raises, from its first value in the kernel's
+    /// order and the first after it of another kind: every value between
+    /// them is of the first's kind, which the sum takes. None when the
+    /// pair raises nothing, as when every value shares one summable kind.
+    /// Shared so the compiled checks word it as the interpreter does.
+    pub fn sum_kind_error(first: &EvalValue, other: Option<&EvalValue>) -> Option<Self> {
+        match SumTotal::Empty.add(first.clone()) {
+            Err(e) => Some(e),
+            Ok(total) => other.and_then(|o| total.add(o.clone()).err()),
+        }
+    }
+
     /// A sum met a value it cannot add: `first` when it was the sum's
-    /// first value, so nothing had fixed the kind yet. Shared for the same
-    /// reason.
+    /// first value, so nothing had fixed the kind yet.
     pub fn sum_cannot_take(first: bool, value: &EvalValue) -> Self {
         if first {
             EvalError::TypeMismatch(format!(
@@ -1363,49 +1374,10 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
             // The accumulators are wider than the values, so only the
             // final total can overflow. Otherwise [MAX, 1, -MAX] could
             // pass in one match order and fail in another.
-            enum SumTotal {
-                Empty,
-                Decimal(BigSum),
-                Duration(i128),
-                Quantity(BigSum, crate::ir::Unit),
-            }
             let matches = find_matches(body, ctx)?;
             let mut total = SumTotal::Empty;
             for m in matches {
-                let next = eval_value(value, &ctx.with_bindings(&m))?;
-                total = match (total, next) {
-                    (SumTotal::Empty, EvalValue::Decimal(d)) => SumTotal::Decimal(BigSum::new(d)),
-                    (SumTotal::Empty, EvalValue::Duration(d)) => SumTotal::Duration(d.as_nanos()),
-                    (SumTotal::Empty, EvalValue::Quantity { amount, unit }) => {
-                        SumTotal::Quantity(BigSum::new(amount), unit)
-                    }
-                    (SumTotal::Decimal(mut t), EvalValue::Decimal(d)) => {
-                        t.add(d);
-                        SumTotal::Decimal(t)
-                    }
-                    (SumTotal::Duration(t), EvalValue::Duration(d)) => {
-                        // Cannot overflow: each value is within
-                        // +-9.3e27ns, so passing i128 needs more claims
-                        // than memory can hold.
-                        SumTotal::Duration(t + d.as_nanos())
-                    }
-                    (SumTotal::Quantity(mut t, u), EvalValue::Quantity { amount, unit }) => {
-                        if u != unit {
-                            return Err(EvalError::TypeMismatch(format!(
-                                "Sum cannot mix Decimal[{u}] and Decimal[{unit}] values"
-                            )));
-                        }
-                        t.add(amount);
-                        SumTotal::Quantity(t, u)
-                    }
-                    (
-                        SumTotal::Decimal(_) | SumTotal::Duration(_) | SumTotal::Quantity(..),
-                        other,
-                    ) => return Err(EvalError::sum_cannot_take(false, &other)),
-                    (SumTotal::Empty, other) => {
-                        return Err(EvalError::sum_cannot_take(true, &other));
-                    }
-                };
+                total = total.add(eval_value(value, &ctx.with_bindings(&m))?)?;
             }
             Ok(match total {
                 SumTotal::Empty => match seed {
@@ -1599,6 +1571,49 @@ pub(crate) fn eval_builtin(builtin: Builtin, args: &[EvalValue]) -> Result<EvalV
             period_starts(*from, *until, *step).map(EvalValue::Collection)
         }
         Builtin::Min | Builtin::Max => extremum_of(builtin, &args[0], &args[1]),
+    }
+}
+
+/// A sum's running total, empty until its first value fixes the kind.
+enum SumTotal {
+    Empty,
+    Decimal(BigSum),
+    Duration(i128),
+    Quantity(BigSum, crate::ir::Unit),
+}
+
+impl SumTotal {
+    /// The total with `next` added, or why the sum cannot take it.
+    fn add(self, next: EvalValue) -> Result<Self, EvalError> {
+        Ok(match (self, next) {
+            (SumTotal::Empty, EvalValue::Decimal(d)) => SumTotal::Decimal(BigSum::new(d)),
+            (SumTotal::Empty, EvalValue::Duration(d)) => SumTotal::Duration(d.as_nanos()),
+            (SumTotal::Empty, EvalValue::Quantity { amount, unit }) => {
+                SumTotal::Quantity(BigSum::new(amount), unit)
+            }
+            (SumTotal::Decimal(mut t), EvalValue::Decimal(d)) => {
+                t.add(d);
+                SumTotal::Decimal(t)
+            }
+            (SumTotal::Duration(t), EvalValue::Duration(d)) => {
+                // Cannot overflow: each value is within +-9.3e27ns, so
+                // passing i128 needs more claims than memory can hold.
+                SumTotal::Duration(t + d.as_nanos())
+            }
+            (SumTotal::Quantity(mut t, u), EvalValue::Quantity { amount, unit }) => {
+                if u != unit {
+                    return Err(EvalError::TypeMismatch(format!(
+                        "Sum cannot mix Decimal[{u}] and Decimal[{unit}] values"
+                    )));
+                }
+                t.add(amount);
+                SumTotal::Quantity(t, u)
+            }
+            (SumTotal::Decimal(_) | SumTotal::Duration(_) | SumTotal::Quantity(..), other) => {
+                return Err(EvalError::sum_cannot_take(false, &other));
+            }
+            (SumTotal::Empty, other) => return Err(EvalError::sum_cannot_take(true, &other)),
+        })
     }
 }
 
