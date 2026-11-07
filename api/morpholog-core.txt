@@ -230,6 +230,7 @@ pub morpholog_core::rehearse::RowClass::Unreplayable::because: morpholog_core::r
 pub morpholog_core::rehearse::RowClass::Unreplayable::reason: alloc::string::String
 pub morpholog_core::rehearse::RowClass::WouldError
 pub morpholog_core::rehearse::RowClass::WouldError::error: alloc::string::String
+pub morpholog_core::rehearse::RowClass::WouldError::kind: &'static str
 pub morpholog_core::rehearse::RowClass::WouldReject
 pub morpholog_core::rehearse::RowClass::WouldReject::compared: core::option::Option<morpholog_core::Compared>
 pub morpholog_core::rehearse::RowClass::WouldReject::kind: morpholog_core::RefusalKind
@@ -470,6 +471,8 @@ impl core::cmp::PartialEq for morpholog_core::ArithOp
 pub fn morpholog_core::ArithOp::eq(&self, &morpholog_core::ArithOp) -> bool
 impl core::fmt::Debug for morpholog_core::ArithOp
 pub fn morpholog_core::ArithOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for morpholog_core::ArithOp
+pub fn morpholog_core::ArithOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for morpholog_core::ArithOp
 impl core::marker::StructuralPartialEq for morpholog_core::ArithOp
 impl core::marker::Freeze for morpholog_core::ArithOp
@@ -701,10 +704,20 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Discipline
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Discipline
 pub enum morpholog_core::EvalError
 pub morpholog_core::EvalError::ArithOutOfRange(alloc::string::String)
+pub morpholog_core::EvalError::ClaimKindMismatch
+pub morpholog_core::EvalError::ClaimKindMismatch::declared: morpholog_core::PredicateArgKind
+pub morpholog_core::EvalError::ClaimKindMismatch::field: alloc::string::String
+pub morpholog_core::EvalError::ClaimKindMismatch::found: morpholog_core::PredicateArgKind
+pub morpholog_core::EvalError::ClaimKindMismatch::predicate: alloc::string::String
 pub morpholog_core::EvalError::DivisionByZero
 pub morpholog_core::EvalError::EmptyExtremum
 pub morpholog_core::EvalError::EmptyExtremum::body: alloc::string::String
 pub morpholog_core::EvalError::EmptyExtremum::op: &'static str
+pub morpholog_core::EvalError::IntentKindMismatch
+pub morpholog_core::EvalError::IntentKindMismatch::declared: morpholog_core::PredicateArgKind
+pub morpholog_core::EvalError::IntentKindMismatch::field: alloc::string::String
+pub morpholog_core::EvalError::IntentKindMismatch::found: morpholog_core::PredicateArgKind
+pub morpholog_core::EvalError::IntentKindMismatch::intent: alloc::string::String
 pub morpholog_core::EvalError::PeriodIndexNotWhole(alloc::string::String)
 pub morpholog_core::EvalError::PeriodSpanNotPositive
 pub morpholog_core::EvalError::PeriodSpanNotPositive::builtin: &'static str
@@ -723,6 +736,8 @@ pub morpholog_core::EvalError::UnknownDefinition(alloc::string::String)
 pub morpholog_core::EvalError::ValueOfMultipleMatches(alloc::string::String)
 pub morpholog_core::EvalError::ValueOfZeroMatches(alloc::string::String)
 impl morpholog_core::EvalError
+pub const morpholog_core::EvalError::KINDS: &'static [&'static str]
+pub fn morpholog_core::EvalError::kind(&self) -> &'static str
 pub fn morpholog_core::EvalError::sum_cannot_take(bool, &morpholog_core::EvalValue) -> Self
 pub fn morpholog_core::EvalError::sum_out_of_decimal_range() -> Self
 impl core::clone::Clone for morpholog_core::EvalError
@@ -758,6 +773,8 @@ pub morpholog_core::EvalValue::Quantity::amount: rust_decimal::decimal::Decimal
 pub morpholog_core::EvalValue::Quantity::unit: morpholog_core::Unit
 pub morpholog_core::EvalValue::Subject(morpholog_core::Subject)
 pub morpholog_core::EvalValue::Timestamp(jiff::timestamp::Timestamp)
+impl morpholog_core::EvalValue
+pub fn morpholog_core::EvalValue::kind(&self) -> morpholog_core::PredicateArgKind
 impl core::clone::Clone for morpholog_core::EvalValue
 pub fn morpholog_core::EvalValue::clone(&self) -> morpholog_core::EvalValue
 impl core::cmp::Eq for morpholog_core::EvalValue
@@ -1036,6 +1053,8 @@ pub morpholog_core::PredicateArgKind::Duration
 pub morpholog_core::PredicateArgKind::Quantity(morpholog_core::Unit)
 pub morpholog_core::PredicateArgKind::Subject
 pub morpholog_core::PredicateArgKind::Timestamp
+impl morpholog_core::PredicateArgKind
+pub fn morpholog_core::PredicateArgKind::holds(&self, &morpholog_core::PredicateArgKind) -> bool
 impl core::clone::Clone for morpholog_core::PredicateArgKind
 pub fn morpholog_core::PredicateArgKind::clone(&self) -> morpholog_core::PredicateArgKind
 impl core::cmp::Eq for morpholog_core::PredicateArgKind
@@ -1254,6 +1273,7 @@ pub morpholog_core::RowClass::Unreplayable::because: morpholog_core::rehearse::U
 pub morpholog_core::RowClass::Unreplayable::reason: alloc::string::String
 pub morpholog_core::RowClass::WouldError
 pub morpholog_core::RowClass::WouldError::error: alloc::string::String
+pub morpholog_core::RowClass::WouldError::kind: &'static str
 pub morpholog_core::RowClass::WouldReject
 pub morpholog_core::RowClass::WouldReject::compared: core::option::Option<morpholog_core::Compared>
 pub morpholog_core::RowClass::WouldReject::kind: morpholog_core::RefusalKind

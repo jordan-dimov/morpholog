@@ -292,8 +292,8 @@ fn declaration_conflicts(
 
 /// One error per way the stored claims of a declared predicate fail to
 /// fit its declaration: a different number of fields, or a field holding
-/// another kind (a quantity in another unit included). `Any` fits every
-/// kind, and a collection's elements are not looked at.
+/// another kind. The kind rule is the one admission applies,
+/// [`PredicateArgKind::holds`].
 fn misfits(program: &Program, shapes: &[StoredShape], map: &SourceMap) -> Vec<Finding> {
     #[derive(PartialEq, Eq, PartialOrd, Ord)]
     enum Misfit {
@@ -318,7 +318,7 @@ fn misfits(program: &Program, shapes: &[StoredShape], map: &SourceMap) -> Vec<Fi
             continue;
         }
         for (i, (arg, stored)) in decl.args.iter().zip(&shape.kinds).enumerate() {
-            if arg.kind != PredicateArgKind::Any && arg.kind != *stored {
+            if !arg.kind.holds(stored) {
                 *counted
                     .entry((d, Misfit::Kind(i, stored.clone())))
                     .or_default() += shape.claims;

@@ -479,7 +479,7 @@ fn traced_run(
 
 /// The kernel-error path, which carries a trace of its own: the statements
 /// that ran before the error, ending in the ambiguous lookup.
-fn errored_run() -> (String, Vec<morpholog_core::TraceEntry>) {
+fn errored_run() -> (morpholog_core::EvalError, Vec<morpholog_core::TraceEntry>) {
     use morpholog_core::TracedProposal;
     use morpholog_test_support::propose_with_trace;
     let p = traced_program();
@@ -510,7 +510,7 @@ fn errored_run() -> (String, Vec<morpholog_core::TraceEntry>) {
         &pre,
         &mut morpholog_postgres::runtime_subjects(),
     ) {
-        TracedProposal::Errored { error, trace } => (error.to_string(), trace),
+        TracedProposal::Errored { error, trace } => (error, trace),
         TracedProposal::Completed { outcome, .. } => {
             panic!("expected a kernel error, got {outcome:?}")
         }
@@ -1512,7 +1512,7 @@ fn composite_envelopes_serialize_as_pinned() {
     assert_golden(
         "traced_errored.json",
         &to_value(&morpholog_cli::envelopes::Traced {
-            result: morpholog_cli::envelopes::TracedError::new(error),
+            result: morpholog_cli::envelopes::TracedError::new(&error),
             trace,
         }),
     );
@@ -1540,10 +1540,22 @@ fn composite_envelopes_serialize_as_pinned() {
     batch_compared["row"] = serde_json::json!(3);
     assert_golden("batch_rejected_receipt_with_compared.json", &batch_compared);
     assert_golden(
+        "batch_error_receipt_kernel_error.json",
+        &to_value(&morpholog_cli::envelopes::ErrorReceipt::new(
+            morpholog_cli::envelopes::ErrorCode::KernelError,
+            "the proposal could not be decided: arithmetic out of range: \
+             7922816251426433759354395033 * 1.23456 exceeds the exact decimal range"
+                .to_string(),
+            Some("arith_out_of_range"),
+            4,
+        )),
+    );
+    assert_golden(
         "batch_error_receipt.json",
         &to_value(&morpholog_cli::envelopes::ErrorReceipt::new(
             morpholog_cli::envelopes::ErrorCode::InvalidRequest,
             "malformed batch row: expected value at line 1 column 1".to_string(),
+            None,
             3,
         )),
     );
@@ -1556,6 +1568,7 @@ fn composite_envelopes_serialize_as_pinned() {
             "the proposal was not committed: error returned from database: new row for \
              relation \"audit\" violates check constraint \"probe\""
                 .to_string(),
+            None,
             2,
         )),
     );
@@ -1672,6 +1685,7 @@ fn report_envelopes_serialize_as_pinned() {
             &to_value(&ErrorReceipt::new(
                 ErrorCode::SerializationFailure,
                 "the proposal could not be decided: restart the transaction".to_string(),
+                None,
                 17,
             )),
         );
@@ -1684,6 +1698,7 @@ fn report_envelopes_serialize_as_pinned() {
                 "the commit outcome is unknown - read the record before re-submitting: \
                  the commit outcome is unknown: connection reset by peer"
                     .to_string(),
+                None,
                 18,
             )),
         );
@@ -2293,6 +2308,17 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         &to_value(&morpholog_cli::envelopes::RequestError::new(
             morpholog_cli::envelopes::ErrorCode::SerializationFailure,
             "the proposal could not be decided: restart the transaction".to_string(),
+            None,
+        )),
+    );
+    assert_golden(
+        "propose_error_kernel_error.json",
+        &to_value(&morpholog_cli::envelopes::RequestError::new(
+            morpholog_cli::envelopes::ErrorCode::KernelError,
+            "the proposal could not be decided: `Manifest` declares field `source_name` \
+             Date, but the value admitted there is Subject"
+                .to_string(),
+            Some("claim_kind_mismatch"),
         )),
     );
     // One-shot `propose` states a known non-commit the same way.
@@ -2301,6 +2327,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         &to_value(&morpholog_cli::envelopes::RequestError::new(
             morpholog_cli::envelopes::ErrorCode::NotCommitted,
             "the proposal was not committed: failed to connect to PostgreSQL".to_string(),
+            None,
         )),
     );
     let mut in_session = to_value(&PgAtomicOutcome::Rejected {
@@ -3193,11 +3220,13 @@ fn every_golden_validates_against_its_defs_entry() {
         ("batch_rejected_receipt.json", "batch_receipt"),
         ("batch_rejected_receipt_with_compared.json", "batch_receipt"),
         ("batch_error_receipt.json", "batch_receipt"),
+        ("batch_error_receipt_kernel_error.json", "batch_receipt"),
         ("batch_error_receipt_not_committed.json", "batch_receipt"),
         ("transact_committed.json", "atomic_outcome"),
         ("transact_rejected.json", "atomic_outcome"),
         ("transact_error.json", "atomic_outcome"),
         ("propose_error_not_committed.json", "request_error"),
+        ("propose_error_kernel_error.json", "request_error"),
         ("transact_rejected_session.json", "atomic_outcome"),
         (
             "session_error_receipt_commit_outcome_unknown.json",
@@ -3498,13 +3527,31 @@ fn every_session_error_code_is_in_the_pinned_enum() {
     // The session receipt uses the whole set, the batch only what a
     // proposal row can produce. The schema admits nothing more.
     assert_eq!(
-        schema["$defs"]["session_error_receipt"]["properties"]["code"]["$ref"],
-        "#/$defs/error_code"
+        schema["$defs"]["session_error_receipt"]["oneOf"][0]["properties"]["code"]["$ref"],
+        "#/$defs/error_code_without_kind"
     );
     assert_eq!(
-        schema["$defs"]["batch_receipt"]["oneOf"][2]["properties"]["code"]["$ref"],
-        "#/$defs/propose_error_code"
+        schema["$defs"]["batch_receipt"]["oneOf"][2]["oneOf"][0]["properties"]["code"]["$ref"],
+        "#/$defs/propose_error_code_without_kind"
     );
+    // The codes without a kind are every code but `kernel_error`, which
+    // has its own branch carrying the kind.
+    let codes = |def: &str| -> Vec<String> {
+        schema["$defs"][def]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect()
+    };
+    for (with_kind, without) in [
+        ("propose_error_code", "propose_error_code_without_kind"),
+        ("error_code", "error_code_without_kind"),
+    ] {
+        let mut expected = codes(with_kind);
+        expected.retain(|c| c != "kernel_error");
+        assert_eq!(codes(without), expected, "{without}");
+    }
     let propose_published: Vec<String> = schema["$defs"]["propose_error_code"]["enum"]
         .as_array()
         .expect("the propose code enum is an array")
@@ -3556,6 +3603,21 @@ fn every_session_error_code_is_in_the_pinned_enum() {
         ErrorCode::ALL.len(),
         "result.json publishes codes the binary cannot emit: {published:?}"
     );
+}
+
+/// A `kernel_error` says which kernel error it was by a published name,
+/// one per error the kernel can raise, so a caller matches the name and
+/// never the message.
+#[test]
+fn every_kernel_error_kind_is_in_the_pinned_enum() {
+    let schema = result_schema();
+    let published: Vec<&str> = schema["$defs"]["kernel_error_kind"]["enum"]
+        .as_array()
+        .expect("the kind enum is an array")
+        .iter()
+        .map(|v| v.as_str().expect("kinds are strings"))
+        .collect();
+    assert_eq!(published, morpholog_core::EvalError::KINDS);
 }
 
 /// The embedder guide's table of proposal-row codes lists exactly the codes

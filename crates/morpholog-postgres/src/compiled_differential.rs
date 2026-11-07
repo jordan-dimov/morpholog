@@ -850,12 +850,13 @@ async fn an_overflow_that_compares_as_holding_is_the_kernels_error_on_both_stage
     }
 }
 
-/// Two units the declaration never named, from an older declaration or an
-/// untyped caller, and a third arriving in the delta. The wildcard
+/// Two units the declaration never named, from an older declaration, and
+/// a row of the declared unit arriving in the delta. The wildcard
 /// antecedent makes every admission check the whole rule, so the kernel
-/// meets all three rows and raises on the first in its order: the loaded
-/// rows, then the delta. The compiled check must name the same pair, which
-/// only its ordering keys can guarantee.
+/// meets every row and raises on the first foreign one in its order. The
+/// compiled check must name the same pair, which only its ordering keys
+/// can guarantee. A foreign unit cannot arrive in the delta: admission
+/// refuses it before any rule runs.
 #[tokio::test]
 async fn a_foreign_unit_is_the_kernels_error_naming_the_kernels_first_pair() {
     let program = morpholog_surface::parse_program(
@@ -893,11 +894,7 @@ transformation enable_and_hold(flag, x, q):
         &prepared,
         &sql_set,
         "enable_and_hold",
-        vec![
-            subj("f"),
-            subj("c"),
-            morpholog_test_support::qty("9", "USD"),
-        ],
+        vec![subj("f"), subj("c"), morpholog_test_support::qty("9", "MW")],
     )
     .await;
     match probe {
@@ -912,8 +909,8 @@ transformation enable_and_hold(flag, x, q):
 
 /// One act admits another predicate's row with the same arguments as
 /// its own last admission. The error query places a row among its own
-/// predicate's admissions, so the first of the two foreign units the
-/// kernel meets, in statement order, is the one it names.
+/// predicate's admissions, so the first of the two out-of-range products
+/// the kernel meets, in statement order, is the one it names.
 #[tokio::test]
 async fn error_order_does_not_confuse_equal_arguments_from_different_predicates() {
     let program = morpholog_surface::parse_program(
@@ -921,8 +918,8 @@ async fn error_order_does_not_confuse_equal_arguments_from_different_predicates(
 predicate Enabled(flag: Subject)
 predicate Noise(x: Subject, q: Decimal[MW])
 predicate Terms(x: Subject, q: Decimal[MW])
-invariant quantity_is_positive:
-    Enabled(_) and Terms(_, q) implies q > 0 MW
+invariant scaled_quantity_is_positive:
+    Enabled(_) and Terms(_, q) implies q * 10 > 0 MW
 transformation enable_and_hold(flag, x1, q1, x2, q2):
     admit Enabled(flag)
     admit Noise(x2, q2)
@@ -944,9 +941,9 @@ transformation enable_and_hold(flag, x1, q1, x2, q2):
         vec![
             subj("f"),
             subj("b"),
-            morpholog_test_support::qty("7", "GBP"),
+            morpholog_test_support::qty("79228162514264337593543950335", "MW"),
             subj("a"),
-            morpholog_test_support::qty("5", "EUR"),
+            morpholog_test_support::qty("79228162514264337593543950334", "MW"),
         ],
     )
     .await;
@@ -961,10 +958,12 @@ transformation enable_and_hold(flag, x1, q1, x2, q2):
 }
 
 /// A value admitted under an older shape, at a position now declared
-/// another kind. The kernel binds and compares the value it finds, so the
-/// mirrored row satisfies the rule; the compiled join compares keys, which
-/// are the kernel's equality whatever the declaration, so both stages
-/// admit too. Attacker capability modelled: none; the row is history.
+/// another kind, held on both sides of a join. The kernel binds and
+/// compares the value it finds, so the mirrored row satisfies the rule;
+/// the compiled join compares keys, which are the kernel's equality
+/// whatever the declaration, so both stages admit too. Attacker
+/// capability modelled: none; both rows are history, since admission
+/// refuses such a value today.
 #[tokio::test]
 async fn a_join_over_an_old_shape_value_is_kernel_equality() {
     for (declared, stored) in [
@@ -988,13 +987,13 @@ async fn a_join_over_an_old_shape_value_is_kernel_equality() {
     ] {
         let program = morpholog_surface::parse_program(&format!(
             "program old_shape
-predicate Old(q: {declared})
-predicate Mirror(q: {declared})
+predicate Old(x: Subject, q: {declared})
+predicate Mirror(x: Subject, q: {declared})
+predicate Checked(x: Subject)
 invariant mirrored:
-    Old(q) implies Mirror(q)
-transformation copy():
-    bind Old(q)
-    admit Mirror(q)
+    Checked(x) and Old(x, q) implies Mirror(x, q)
+transformation check(x):
+    admit Checked(x)
 "
         ))
         .expect("parses");
@@ -1003,15 +1002,15 @@ transformation copy():
         let prepared = PreparedProgram::new(program).expect("valid");
         let pool = test_pool().await;
         reset_db(&pool).await;
-        sqlx::query(
-            "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in) VALUES ('Old', $1, $2)",
-        )
-        .bind(serde_json::json!([stored]))
-        .bind(Uuid::nil())
-        .execute(&pool)
-        .await
-        .expect("old-shape fixture insert");
-        match probe_raw(&pool, &prepared, &sql_set, "copy", vec![]).await {
+        for predicate in ["Old", "Mirror"] {
+            insert_rows(
+                &pool,
+                predicate,
+                &[serde_json::json!([{"type":"subject","value":"a"}, stored])],
+            )
+            .await;
+        }
+        match probe_raw(&pool, &prepared, &sql_set, "check", vec![subj("a")]).await {
             Ok(Probe::Observed(obs)) => {
                 assert!(
                     matches!(obs.kernel, Some(Outcome::Accepted { .. })),
@@ -1077,17 +1076,18 @@ transformation check(x):
 }
 
 /// A subject whose text would parse as a timestamp, at a timestamp
-/// position, arriving in the proposal itself. The kernel refuses to order
-/// it, and both compiled checks report the kernel's own error.
+/// position, held in history. The kernel refuses to order it, and both
+/// compiled checks report the kernel's own error.
 #[tokio::test]
 async fn a_subject_that_reads_as_a_timestamp_is_the_kernels_kind_error() {
     let program = morpholog_surface::parse_program(
         "program window
 predicate Window(x: Subject, s: Timestamp, e: Timestamp)
+predicate Checked(x: Subject)
 invariant window_is_ordered:
-    Window(x, s, e) implies s strictly_before e
-transformation open(x, s, e):
-    admit Window(x, s, e)
+    Checked(x) and Window(x, s, e) implies s strictly_before e
+transformation check(x):
+    admit Checked(x)
 ",
     )
     .expect("parses");
@@ -1096,18 +1096,17 @@ transformation open(x, s, e):
     let prepared = PreparedProgram::new(program).expect("valid");
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let probe = probe_raw(
+    insert_rows(
         &pool,
-        &prepared,
-        &sql_set,
-        "open",
-        vec![
-            subj("w"),
-            subj("2026-01-01T00:00:00Z"),
-            morpholog_test_support::ts("2026-01-02T00:00:00Z"),
-        ],
+        "Window",
+        &[serde_json::json!([
+            {"type":"subject","value":"w"},
+            {"type":"subject","value":"2026-01-01T00:00:00Z"},
+            {"type":"timestamp","value":"2026-01-02T00:00:00Z"}
+        ])],
     )
     .await;
+    let probe = probe_raw(&pool, &prepared, &sql_set, "check", vec![subj("w")]).await;
     match probe {
         Ok(Probe::KernelErrorAgreed) => {}
         other => panic!(
@@ -1117,17 +1116,18 @@ transformation open(x, s, e):
     }
 }
 
-/// A subject at a decimal position, ordered against a literal: the
-/// kernel's error, on both stages.
+/// A subject at a decimal position in history, ordered against a
+/// literal: the kernel's error, on both stages.
 #[tokio::test]
 async fn a_subject_at_a_decimal_position_is_the_kernels_kind_error_when_ordered() {
     let program = morpholog_surface::parse_program(
         "program floor
 predicate Level(x: Subject, n: Decimal)
+predicate Checked(x: Subject)
 invariant level_is_positive:
-    Level(x, n) implies n > 0
-transformation set(x, n):
-    admit Level(x, n)
+    Checked(x) and Level(x, n) implies n > 0
+transformation check(x):
+    admit Checked(x)
 ",
     )
     .expect("parses");
@@ -1136,14 +1136,13 @@ transformation set(x, n):
     let prepared = PreparedProgram::new(program).expect("valid");
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let probe = probe_raw(
+    insert_rows(
         &pool,
-        &prepared,
-        &sql_set,
-        "set",
-        vec![subj("a"), subj("5")],
+        "Level",
+        &[serde_json::json!([{"type":"subject","value":"a"}, {"type":"subject","value":"5"}])],
     )
     .await;
+    let probe = probe_raw(&pool, &prepared, &sql_set, "check", vec![subj("a")]).await;
     match probe {
         Ok(Probe::KernelErrorAgreed) => {}
         other => panic!(
@@ -1156,8 +1155,7 @@ transformation set(x, n):
 /// A sum meeting a value it cannot take: the kernel's wording depends on
 /// whether it was the sum's first value, and names the first such value
 /// in its order. Each placement, on both stages: first summand, a later
-/// one, several in one act, and one in history ahead of one in the
-/// proposal.
+/// one, and several.
 #[tokio::test]
 async fn a_sum_over_a_value_it_cannot_take_is_the_kernels_error_in_its_order() {
     let source = "program pots
@@ -1178,34 +1176,36 @@ transformation add_two(p, amount, q, other):
     let pool = test_pool().await;
     let subject = |s: &str| serde_json::json!({"type":"subject","value":s});
     let decimal = |s: &str| serde_json::json!({"type":"decimal","value":s});
+    // Every foreign value is history, since admission refuses one in the
+    // proposal; the proposal's row is a decimal the sum can take.
     let cases: Vec<(&str, Vec<serde_json::Value>, &str, Vec<EvalValue>)> = vec![
-        // The proposal's own row is the sum's first value.
-        ("first", vec![], "add_pot", vec![subj("p"), subj("five")]),
-        // History holds a decimal; the proposal's row comes later.
+        // History's foreign row is the sum's first value.
         (
-            "later",
-            vec![serde_json::json!([subject("a"), decimal("1")])],
-            "add_pot",
-            vec![subj("p"), subj("five")],
-        ),
-        // Two foreign rows in one act: the first in statement order.
-        (
-            "several",
-            vec![serde_json::json!([subject("a"), decimal("1")])],
-            "add_two",
-            vec![
-                subj("p"),
-                subj("five"),
-                subj("q"),
-                morpholog_test_support::qty("1", "MW"),
-            ],
-        ),
-        // A foreign row in history ahead of one in the proposal.
-        (
-            "history first",
+            "first",
             vec![serde_json::json!([subject("a"), subject("legacy")])],
             "add_pot",
-            vec![subj("p"), subj("five")],
+            vec![subj("p"), dec(1)],
+        ),
+        // History holds a decimal; its foreign row comes later.
+        (
+            "later",
+            vec![
+                serde_json::json!([subject("a"), decimal("1")]),
+                serde_json::json!([subject("b"), subject("legacy")]),
+            ],
+            "add_pot",
+            vec![subj("p"), dec(1)],
+        ),
+        // Two foreign rows in history: the first in the kernel's order.
+        (
+            "several",
+            vec![
+                serde_json::json!([subject("a"), decimal("1")]),
+                serde_json::json!([subject("b"), subject("legacy")]),
+                serde_json::json!([subject("c"), subject("other")]),
+            ],
+            "add_two",
+            vec![subj("p"), dec(1), subj("q"), dec(2)],
         ),
     ];
     for (label, rows, transformation, args) in cases {
@@ -1856,17 +1856,18 @@ transformation enable(flag):
     .await;
 }
 
-/// A subject at a date position, ordered against a date: the kernel's
-/// kind error, on both stages.
+/// A subject at a date position in history, ordered against a date: the
+/// kernel's kind error, on both stages.
 #[tokio::test]
 async fn a_subject_that_reads_as_a_date_is_the_kernels_kind_error() {
     let program = morpholog_surface::parse_program(
         "program period
 predicate Period(x: Subject, opened: Date, closed: Date)
+predicate Checked(x: Subject)
 invariant period_is_ordered:
-    Period(x, opened, closed) implies opened on_or_before closed
-transformation open(x, opened, closed):
-    admit Period(x, opened, closed)
+    Checked(x) and Period(x, opened, closed) implies opened on_or_before closed
+transformation check(x):
+    admit Checked(x)
 ",
     )
     .expect("parses");
@@ -1875,18 +1876,17 @@ transformation open(x, opened, closed):
     let prepared = PreparedProgram::new(program).expect("valid");
     let pool = test_pool().await;
     reset_db(&pool).await;
-    let probe = probe_raw(
+    insert_rows(
         &pool,
-        &prepared,
-        &sql_set,
-        "open",
-        vec![
-            subj("p"),
-            subj("2026-01-01"),
-            morpholog_test_support::date("2026-01-02"),
-        ],
+        "Period",
+        &[serde_json::json!([
+            {"type":"subject","value":"p"},
+            {"type":"subject","value":"2026-01-01"},
+            {"type":"date","value":"2026-01-02"}
+        ])],
     )
     .await;
+    let probe = probe_raw(&pool, &prepared, &sql_set, "check", vec![subj("p")]).await;
     match probe {
         Ok(Probe::KernelErrorAgreed) => {}
         other => panic!(
@@ -2695,7 +2695,7 @@ async fn arithmetic_over_sums_is_the_kernels() {
         (
             "sum(p | Price(_, p)) * sum(p | Price(_, p)) <= c",
             vec![price("a", MAX)],
-            |e| matches!(e, EvalError::ArithOutOfRange(m) if m.contains("Mul")),
+            |e| matches!(e, EvalError::ArithOutOfRange(m) if m.contains(" * ")),
         ),
         (
             "(c / (c - c)) + sum(p | Price(_, p)) <= c",
@@ -2724,17 +2724,20 @@ async fn arithmetic_over_sums_is_the_kernels() {
 /// Quantities carry the unit their values hold, not the one declared:
 /// two units under `+` are the kernel's error, an equality across units
 /// is false, and a bare decimal stored where a quantity is declared
-/// computes as the decimal it is.
+/// computes as the decimal it is. Each drifted pair is history, which
+/// admission no longer lets a proposal write; the act only touches its
+/// case.
 #[tokio::test]
 async fn quantity_arithmetic_reads_the_values_own_units() {
-    let source = |body: &str| {
+    let source = |declared: &str, body: &str| {
         format!(
             "program qty
-predicate Pair(x: Subject, a: Decimal[t], b: Decimal[t])
+predicate Pair(x: Subject, a: {declared}, b: {declared})
+predicate Checked(x: Subject)
 invariant rule:
-    Pair(x, a, b) implies {body}
-transformation set(x, a, b):
-    admit Pair(x, a, b)
+    Checked(x) and Pair(x, a, b) implies {body}
+transformation check(x):
+    admit Checked(x)
 "
         )
     };
@@ -2744,25 +2747,23 @@ transformation set(x, a, b):
         )
         .expect("a quantity")
     };
-    match arithmetic_probe(
-        &source("a + b > 0 t"),
-        &[],
-        "set",
-        vec![subj("p"), q("1", "t"), q("1", "EUR")],
-    )
-    .await
-    {
+    let probe = async |declared: &str, body: &str, a: EvalValue, b: EvalValue| {
+        let row = (
+            "Pair",
+            serde_json::json!([
+                subject("p"),
+                serde_json::to_value(a).unwrap(),
+                serde_json::to_value(b).unwrap()
+            ]),
+        );
+        arithmetic_probe(&source(declared, body), &[row], "check", vec![subj("p")]).await
+    };
+    match probe("Decimal[t]", "a + b > 0 t", q("1", "t"), q("1", "EUR")).await {
         Verdict::Errored(EvalError::TypeMismatch(m)) => assert!(m.contains("same unit"), "{m}"),
         _ => panic!("two units under + are the kernel's error"),
     }
     for (b, accepted) in [(q("2", "t"), true), (q("2", "EUR"), false)] {
-        let verdict = arithmetic_probe(
-            &source("a * 2 = b"),
-            &[],
-            "set",
-            vec![subj("p"), q("1", "t"), b],
-        )
-        .await;
+        let verdict = probe("Decimal[t]", "a * 2 = b", q("1", "t"), b).await;
         assert!(matches!(
             (&verdict, accepted),
             (Verdict::Accepted, true) | (Verdict::Rejected, false)
@@ -2770,56 +2771,24 @@ transformation set(x, a, b):
     }
     // Bare decimals stored where quantities are declared compute and
     // compare as the decimals they are.
-    let verdict = arithmetic_probe(
-        &source("a * 2 > b"),
-        &[],
-        "set",
-        vec![subj("p"), dec_text("2"), dec_text("3")],
-    )
-    .await;
+    let verdict = probe("Decimal[t]", "a * 2 > b", dec_text("2"), dec_text("3")).await;
     assert!(
         matches!(verdict, Verdict::Accepted),
         "two drifted bare decimals compare"
     );
     // Quantities of one unit stored where decimals are declared compare
     // as those quantities.
-    let declared_bare = "program bare
-predicate Pair(x: Subject, a: Decimal, b: Decimal)
-invariant rule:
-    Pair(x, a, b) implies a * 2 > b
-transformation set(x, a, b):
-    admit Pair(x, a, b)
-";
-    let verdict = arithmetic_probe(
-        declared_bare,
-        &[],
-        "set",
-        vec![subj("p"), q("2", "t"), q("3", "t")],
-    )
-    .await;
+    let verdict = probe("Decimal", "a * 2 > b", q("2", "t"), q("3", "t")).await;
     assert!(
         matches!(verdict, Verdict::Accepted),
         "two drifted quantities of one unit compare"
     );
-    let verdict = arithmetic_probe(
-        declared_bare,
-        &[],
-        "set",
-        vec![subj("p"), q("1", "t"), q("3", "t")],
-    )
-    .await;
+    let verdict = probe("Decimal", "a * 2 > b", q("1", "t"), q("3", "t")).await;
     assert!(
         matches!(verdict, Verdict::Rejected),
         "and refuse where the kernel does"
     );
-    match arithmetic_probe(
-        &source("a * 2 > 0 t"),
-        &[],
-        "set",
-        vec![subj("p"), dec_text("1"), q("1", "t")],
-    )
-    .await
-    {
+    match probe("Decimal[t]", "a * 2 > 0 t", dec_text("1"), q("1", "t")).await {
         Verdict::Errored(EvalError::TypeMismatch(m)) => {
             assert!(m.contains("got decimal vs Decimal[t]"), "{m}")
         }
@@ -2830,17 +2799,19 @@ transformation set(x, a, b):
 /// A stored value's flavour decides a comparison of plain columns too:
 /// bare decimals where quantities are declared order as decimals, and
 /// quantities where decimals are declared order as quantities of their
-/// own unit, refusing where the kernel does.
+/// own unit, refusing where the kernel does. The drifted pairs are
+/// history, and the act only touches their case.
 #[tokio::test]
 async fn column_orderings_read_the_values_own_flavour() {
     let rule = |kind: &str, body: &str| {
         format!(
             "program flavour
 predicate Pair(x: Subject, a: {kind}, b: {kind})
+predicate Checked(x: Subject)
 invariant rule:
-    Pair(x, a, b) implies {body}
-transformation set(x, a, b):
-    admit Pair(x, a, b)
+    Checked(x) and Pair(x, a, b) implies {body}
+transformation check(x):
+    admit Checked(x)
 "
         )
     };
@@ -2889,7 +2860,15 @@ transformation set(x, a, b):
         ),
     ];
     for (source, a, b, expected) in cases {
-        let verdict = arithmetic_probe(&source, &[], "set", vec![subj("p"), a, b]).await;
+        let row = (
+            "Pair",
+            serde_json::json!([
+                subject("p"),
+                serde_json::to_value(a).unwrap(),
+                serde_json::to_value(b).unwrap()
+            ]),
+        );
+        let verdict = arithmetic_probe(&source, &[row], "check", vec![subj("p")]).await;
         let got = match verdict {
             Verdict::Accepted => "accepted",
             Verdict::Rejected => "rejected",

@@ -711,7 +711,7 @@
         "kind": "invariant",
         "model_hash": "sha256:ad4909eab4a80f64f70c15795c7c04804e34975a0a0bd179aace225a6ea58f1a",
         "rule": "small_notes",
-        "semantics_version": 5,
+        "semantics_version": 6,
         "transformation": "note",
         "transition_id": "t3",
         "witness": [
@@ -747,7 +747,7 @@
         "kind": "invariant",
         "model_hash": "sha256:ad4909eab4a80f64f70c15795c7c04804e34975a0a0bd179aace225a6ea58f1a",
         "rule": "small_notes",
-        "semantics_version": 5,
+        "semantics_version": 6,
         "transformation": "note",
         "transition_id": "t9",
         "witness": [
@@ -781,8 +781,8 @@
         "would_refuse": 2
       }
     ],
-    "rehearsal_format_version": 1,
-    "semantics_version": 5,
+    "rehearsal_format_version": 2,
+    "semantics_version": 6,
     "totals": {
       "different_delta": 0,
       "same": 11,
@@ -842,7 +842,7 @@
         "kind": "invariant",
         "model_hash": "sha256:ad4909eab4a80f64f70c15795c7c04804e34975a0a0bd179aace225a6ea58f1a",
         "rule": "small_notes",
-        "semantics_version": 5,
+        "semantics_version": 6,
         "transformation": "note",
         "transition_id": "t3",
         "witness": [
@@ -878,7 +878,7 @@
         "kind": "invariant",
         "model_hash": "sha256:ad4909eab4a80f64f70c15795c7c04804e34975a0a0bd179aace225a6ea58f1a",
         "rule": "small_notes",
-        "semantics_version": 5,
+        "semantics_version": 6,
         "transformation": "note",
         "transition_id": "t9",
         "witness": [
@@ -912,8 +912,8 @@
         "would_refuse": 2
       }
     ],
-    "rehearsal_format_version": 1,
-    "semantics_version": 5,
+    "rehearsal_format_version": 2,
+    "semantics_version": 6,
     "totals": {
       "different_delta": 0,
       "same": 11,

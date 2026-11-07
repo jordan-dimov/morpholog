@@ -156,10 +156,11 @@ impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::Checkpoi
 pub struct morpholog_cli::envelopes::ErrorReceipt
 pub morpholog_cli::envelopes::ErrorReceipt::code: morpholog_cli::envelopes::ErrorCode
 pub morpholog_cli::envelopes::ErrorReceipt::error: alloc::string::String
+pub morpholog_cli::envelopes::ErrorReceipt::kind: core::option::Option<&'static str>
 pub morpholog_cli::envelopes::ErrorReceipt::row: u64
 pub morpholog_cli::envelopes::ErrorReceipt::status: &'static str
 impl morpholog_cli::envelopes::ErrorReceipt
-pub fn morpholog_cli::envelopes::ErrorReceipt::new(morpholog_cli::envelopes::ErrorCode, alloc::string::String, u64) -> Self
+pub fn morpholog_cli::envelopes::ErrorReceipt::new(morpholog_cli::envelopes::ErrorCode, alloc::string::String, core::option::Option<&'static str>, u64) -> Self
 impl serde_core::ser::Serialize for morpholog_cli::envelopes::ErrorReceipt
 pub fn morpholog_cli::envelopes::ErrorReceipt::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl core::marker::Freeze for morpholog_cli::envelopes::ErrorReceipt
@@ -364,9 +365,10 @@ impl<'a, E> core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::R
 pub struct morpholog_cli::envelopes::RequestError
 pub morpholog_cli::envelopes::RequestError::code: morpholog_cli::envelopes::ErrorCode
 pub morpholog_cli::envelopes::RequestError::error: alloc::string::String
+pub morpholog_cli::envelopes::RequestError::kind: core::option::Option<&'static str>
 pub morpholog_cli::envelopes::RequestError::status: &'static str
 impl morpholog_cli::envelopes::RequestError
-pub fn morpholog_cli::envelopes::RequestError::new(morpholog_cli::envelopes::ErrorCode, alloc::string::String) -> Self
+pub fn morpholog_cli::envelopes::RequestError::new(morpholog_cli::envelopes::ErrorCode, alloc::string::String, core::option::Option<&'static str>) -> Self
 impl serde_core::ser::Serialize for morpholog_cli::envelopes::RequestError
 pub fn morpholog_cli::envelopes::RequestError::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl core::marker::Freeze for morpholog_cli::envelopes::RequestError
@@ -419,7 +421,7 @@ impl<R, T> core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes:
 impl<R, T> core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::Traced<R, T> where R: core::panic::unwind_safe::UnwindSafe, T: core::panic::unwind_safe::UnwindSafe
 pub struct morpholog_cli::envelopes::TracedError
 impl morpholog_cli::envelopes::TracedError
-pub fn morpholog_cli::envelopes::TracedError::new(alloc::string::String) -> Self
+pub fn morpholog_cli::envelopes::TracedError::new(&morpholog_core::eval::EvalError) -> Self
 impl serde_core::ser::Serialize for morpholog_cli::envelopes::TracedError
 pub fn morpholog_cli::envelopes::TracedError::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl core::marker::Freeze for morpholog_cli::envelopes::TracedError

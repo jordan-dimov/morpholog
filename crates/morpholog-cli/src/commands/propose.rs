@@ -53,7 +53,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
             }
             PgTracedOutcome::KernelErrored { error, trace } => {
                 print_json(&envelopes::Traced {
-                    result: envelopes::TracedError::new(format!("{error}")),
+                    result: envelopes::TracedError::new(&error),
                     trace: &trace,
                 })?;
                 return Err(AlreadyReported.into());
@@ -222,6 +222,25 @@ impl RowError {
     }
 }
 
+/// The name of the kernel error a `kernel_error` carries, for the `kind`
+/// beside its code; `None` on every other code, which carries no kind.
+pub(crate) fn kernel_kind(
+    code: envelopes::ErrorCode,
+    reason: &anyhow::Error,
+) -> Option<&'static str> {
+    if code != envelopes::ErrorCode::KernelError {
+        return None;
+    }
+    reason
+        .chain()
+        .find_map(|e| match e.downcast_ref::<morpholog_postgres::PgError>() {
+            Some(morpholog_postgres::PgError::Kernel(k)) => Some(k.kind()),
+            _ => e
+                .downcast_ref::<morpholog_core::EvalError>()
+                .map(morpholog_core::EvalError::kind),
+        })
+}
+
 /// Report a one-shot request's failure. A coded one prints its error
 /// object on stdout, the positive statement a caller relies on, and the
 /// same prose on stderr for a person; it exits 3 for an unknown commit
@@ -235,6 +254,7 @@ pub(crate) fn report_request_failure(failure: RowError) -> anyhow::Result<()> {
     print_json(&envelopes::RequestError::new(
         code.into(),
         format!("{reason:#}"),
+        kernel_kind(code.into(), &reason),
     ))?;
     if code == envelopes::ProposeCode::CommitOutcomeUnknown {
         return Err(CommitOutcomeUnknown(format!("{reason:#}")).into());
@@ -258,6 +278,7 @@ fn report_batch_refusal(failure: RowError) -> anyhow::Result<()> {
         serde_json::to_string(&envelopes::RequestError::new(
             code.into(),
             format!("{reason:#}"),
+            kernel_kind(code.into(), &reason),
         ))?
     )?;
     out.flush()?;
@@ -424,6 +445,7 @@ async fn run_batch(
                 serde_json::to_value(envelopes::ErrorReceipt::new(
                     code.into(),
                     format!("{reason:#}"),
+                    kernel_kind(code.into(), &reason),
                     row as u64,
                 ))?
             }

@@ -652,7 +652,7 @@ class Session:
                         f"session request {receipt.row}: unpublished error code "
                         f"{receipt.code!r}: {receipt.error}"
                     )
-                raise MorphologRequestError(receipt.code, receipt.error, receipt.row)
+                raise MorphologRequestError(receipt.code, receipt.error, receipt.row, receipt.kind)
             try:
                 return decode(payload, expected_row)
             except _ResponseContract as exc:

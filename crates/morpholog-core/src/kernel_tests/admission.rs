@@ -197,6 +197,7 @@ fn the_trace_records_only_the_obligations_evaluated() {
     let fresh = transition("post", vec![subj("e1"), subj("cash"), dec(5), dec(5)]);
     let tf = &p.transformations[0];
     let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         tf,
         &fresh,
         &state,
@@ -223,6 +224,7 @@ fn the_trace_records_only_the_obligations_evaluated() {
     // A delta that touches nothing evaluates nothing.
     let duplicate = transition("post", vec![subj("legacy"), subj("cash"), dec(100), dec(0)]);
     let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
         tf,
         &duplicate,
         &state,

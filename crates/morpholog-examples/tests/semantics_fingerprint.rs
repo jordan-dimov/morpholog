@@ -92,6 +92,30 @@ fn error(e: &EvalError) -> Value {
         EvalError::ArithOutOfRange(_) => json!({"error": "arith_out_of_range"}),
         EvalError::EmptyExtremum { op, body: _ } => json!({"error": "empty_extremum", "op": op}),
         EvalError::UnknownDefinition(name) => json!({"error": "unknown_definition", "name": name}),
+        EvalError::ClaimKindMismatch {
+            predicate,
+            field,
+            declared,
+            found,
+        } => json!({
+            "error": "claim_kind_mismatch",
+            "predicate": predicate,
+            "field": field,
+            "declared": declared.to_string(),
+            "found": found.to_string(),
+        }),
+        EvalError::IntentKindMismatch {
+            intent,
+            field,
+            declared,
+            found,
+        } => json!({
+            "error": "intent_kind_mismatch",
+            "intent": intent,
+            "field": field,
+            "declared": declared.to_string(),
+            "found": found.to_string(),
+        }),
     }
 }
 
@@ -341,6 +365,154 @@ transformation mark_b(x):
     );
 }
 
+/// Values admitted or emitted into fields of another declared kind,
+/// beside values that fit. The arguments are tagged, as `propose --args`
+/// sends them, so nothing checks them before the body runs.
+fn kind_fixtures(out: &mut BTreeMap<String, Fingerprints>) {
+    use morpholog_test_support::{claim_instance, coll, date, dec, qty, subj};
+    let program = morpholog_surface::parse_program(
+        "
+program kinds
+
+predicate Manifest(id: Subject, source_name: Date)
+predicate Priced(id: Subject, amount: Decimal[USD])
+predicate Noted(id: Subject, note: Any)
+predicate Tagged(id: Subject, tags: Collection)
+predicate Day(id: Subject, on: Date)
+
+intent Pay(account: Subject, amount: Decimal[GBP])
+
+transformation manifest(id, source_name):
+    admit Manifest(id, source_name)
+
+transformation price(id, amount):
+    admit Priced(id, amount)
+
+transformation note(id, note):
+    admit Noted(id, note)
+
+transformation tag(id, tags):
+    admit Tagged(id, tags)
+
+transformation pay(account, amount):
+    emit Pay(account, amount)
+
+transformation price_then_pay(id, amount, paid):
+    admit Priced(id, amount)
+    emit Pay(id, paid)
+
+transformation pay_then_manifest(id, paid, source_name):
+    emit Pay(id, paid)
+    admit Manifest(id, source_name)
+
+transformation days(id, dates):
+    for d in dates:
+        admit Day(id, d)
+
+transformation drop_manifest(id):
+    require Manifest(id, _)
+    retract Manifest(id, _)
+",
+    )
+    .unwrap();
+    let empty = State::default();
+    let misfit = State::from_claims(vec![claim_instance("Manifest", &[subj("m1"), subj("s1")])]);
+    let cases: Vec<(&str, &str, Vec<EvalValue>, &State)> = vec![
+        (
+            "subject_into_date",
+            "manifest",
+            vec![subj("m1"), subj("s1")],
+            &empty,
+        ),
+        (
+            "date_into_date",
+            "manifest",
+            vec![subj("m1"), date("2026-11-07")],
+            &empty,
+        ),
+        (
+            "bare_decimal_into_quantity",
+            "price",
+            vec![subj("p1"), dec(5)],
+            &empty,
+        ),
+        (
+            "quantity_in_another_unit",
+            "price",
+            vec![subj("p1"), qty("5", "EUR")],
+            &empty,
+        ),
+        (
+            "quantity_in_the_unit",
+            "price",
+            vec![subj("p1"), qty("5", "USD")],
+            &empty,
+        ),
+        (
+            "any_takes_a_subject",
+            "note",
+            vec![subj("n1"), subj("x")],
+            &empty,
+        ),
+        (
+            "any_takes_a_decimal",
+            "note",
+            vec![subj("n1"), dec(7)],
+            &empty,
+        ),
+        (
+            "collection_takes_mixed_items",
+            "tag",
+            vec![subj("t1"), coll(vec![subj("a"), dec(1)])],
+            &empty,
+        ),
+        (
+            "intent_of_another_kind",
+            "pay",
+            vec![subj("a1"), dec(5)],
+            &empty,
+        ),
+        (
+            "intent_in_the_unit",
+            "pay",
+            vec![subj("a1"), qty("5", "GBP")],
+            &empty,
+        ),
+        (
+            "fitting_claim_then_misfitting_intent",
+            "price_then_pay",
+            vec![subj("p1"), qty("5", "USD"), dec(5)],
+            &empty,
+        ),
+        (
+            "fitting_intent_then_misfitting_claim",
+            "pay_then_manifest",
+            vec![subj("m1"), qty("5", "GBP"), subj("s1")],
+            &empty,
+        ),
+        (
+            "for_with_a_subject_third",
+            "days",
+            vec![
+                subj("d1"),
+                coll(vec![date("2026-11-07"), date("2026-11-08"), subj("x")]),
+            ],
+            &empty,
+        ),
+        (
+            "retract_of_a_stored_misfit",
+            "drop_manifest",
+            vec![subj("m1")],
+            &misfit,
+        ),
+    ];
+    for (case, transformation, args, state) in cases {
+        let t = program.transformation(transformation).unwrap();
+        let (input, decided) = proposal_case(&program, t, args, state);
+        record(out, format!("fixture/kinds/{case}"), &input, &decided);
+    }
+}
+
 /// A bounded obligation evaluates nothing outside its cases. The
 /// antecedent divides by a figure one row holds as zero; a change to
 /// another case is admitted (version 4 scanned that row and errored),
@@ -483,6 +655,7 @@ fn corpus() -> BTreeMap<String, Fingerprints> {
     fixtures(&mut out);
     arithmetic_fixtures(&mut out);
     bounded_fixtures(&mut out);
+    kind_fixtures(&mut out);
     out
 }
 

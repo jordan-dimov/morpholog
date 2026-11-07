@@ -415,17 +415,23 @@ class Rejected:
 @dataclass(frozen=True)
 class Errored:
     """A traced proposal whose transformation raised a kernel error:
-    nothing was committed, and ``code`` is always ``kernel_error``."""
+    nothing was committed, ``code`` is always ``kernel_error``, and
+    ``kind`` says which kernel error it was."""
 
     code: str
     error: str
+    kind: str
 
     @classmethod
     def from_json(cls, payload: object) -> Errored:
-        data = _strict("errored result", payload, {"status", "code", "error"})
+        data = _strict("errored result", payload, {"status", "code", "error", "kind"})
         data.constant("status", "errored")
         data.constant("code", "kernel_error")
-        return cls(code="kernel_error", error=data.text("error"))
+        return cls(
+            code="kernel_error",
+            error=data.text("error"),
+            kind=data.member("kind", KERNEL_ERROR_KINDS),
+        )
 
 
 def parse_run_outcome(payload: object) -> Committed | Rejected:
@@ -1027,6 +1033,42 @@ NOTHING_RECORDED_CODES = PROPOSE_ERROR_CODES - {"commit_outcome_unknown"}
 #: not know.
 SESSION_ERROR_CODES = PROPOSE_ERROR_CODES | {"unknown_operation"}
 
+#: Which kernel error a ``kernel_error`` was - the schema's
+#: ``kernel_error_kind``, which a test holds this set to. Match on the
+#: kind, never on the message beside it.
+KERNEL_ERROR_KINDS = frozenset(
+    {
+        "unbound_variable",
+        "type_mismatch",
+        "value_of_zero_matches",
+        "value_of_multiple_matches",
+        "unbound_actor",
+        "unbound_decision_time",
+        "pre_state_unavailable",
+        "subject_source_exhausted",
+        "division_by_zero",
+        "round_quantum_not_positive",
+        "period_span_not_positive",
+        "period_index_not_whole",
+        "round_out_of_range",
+        "arith_out_of_range",
+        "empty_extremum",
+        "unknown_definition",
+        "claim_kind_mismatch",
+        "intent_kind_mismatch",
+    }
+)
+
+
+def _kernel_kind(data: _Fields, code: str) -> str | None:
+    """The ``kind`` a ``kernel_error`` must carry; every other code
+    carries none."""
+    if code == "kernel_error":
+        return data.member("kind", KERNEL_ERROR_KINDS)
+    if "kind" in data:
+        raise EnvelopeError(f"a `{code}` error carries no kind, got {data.raw('kind')!r}")
+    return None
+
 
 @dataclass(frozen=True)
 class RequestError:
@@ -1037,12 +1079,15 @@ class RequestError:
 
     code: str
     error: str
+    #: Which kernel error, on a ``kernel_error`` only.
+    kind: str | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> RequestError:
-        data = _strict("request error", payload, {"code", "error", "status"})
+        data = _strict("request error", payload, {"code", "error", "status"}, {"kind"})
         data.constant("status", "error")
-        return cls(code=data.member("code", PROPOSE_ERROR_CODES), error=data.text("error"))
+        code = data.member("code", PROPOSE_ERROR_CODES)
+        return cls(code=code, error=data.text("error"), kind=_kernel_kind(data, code))
 
 
 @dataclass(frozen=True)
@@ -1055,15 +1100,21 @@ class SessionErrorReceipt:
     code: str
     error: str
     row: int
+    #: Which kernel error, on a ``kernel_error`` only.
+    kind: str | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> SessionErrorReceipt:
-        data = _strict("session error receipt", payload, {"code", "error", "row", "status"})
+        data = _strict(
+            "session error receipt", payload, {"code", "error", "row", "status"}, {"kind"}
+        )
         data.constant("status", "error")
+        code = data.member("code", SESSION_ERROR_CODES)
         return cls(
-            code=data.member("code", SESSION_ERROR_CODES),
+            code=code,
             error=data.text("error"),
             row=data.integer("row", minimum=1),
+            kind=_kernel_kind(data, code),
         )
 
 
@@ -1074,6 +1125,8 @@ class BatchError:
 
     code: str
     error: str
+    #: Which kernel error, on a ``kernel_error`` only.
+    kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1088,9 +1141,12 @@ class BatchReceipt:
         row = _Fields("batch receipt", payload).integer("row", minimum=1)
         body = {k: v for k, v in payload.items() if k != "row"}
         if body.get("status") == "error":
-            data = _strict("batch error receipt", body, {"status", "code", "error"})
+            data = _strict("batch error receipt", body, {"status", "code", "error"}, {"kind"})
+            code = data.member("code", PROPOSE_ERROR_CODES)
             error = BatchError(
-                code=data.member("code", PROPOSE_ERROR_CODES), error=data.text("error")
+                code=code,
+                error=data.text("error"),
+                kind=_kernel_kind(data, code),
             )
             return cls(row=row, outcome=error)
         return cls(row=row, outcome=parse_run_outcome(body))
@@ -2077,7 +2133,8 @@ class RehearsalRow:
     ``klass`` is ``different_delta`` (``recorded`` and ``candidate``
     effects), ``would_reject`` (``rule``, ``kind``, ``witness`` absent when
     no binding was pinned, ``compared`` when a comparison failed),
-    ``would_error`` (``error``) or ``unreplayable`` (``because``, one of
+    ``would_error`` (``error``, and ``kind`` the kernel error's name from
+    ``KERNEL_ERROR_KINDS``) or ``unreplayable`` (``because``, one of
     ``no_such_act``, ``arity`` and ``draws``, with the prose ``reason``).
     ``model_hash`` is the programme that admitted the row and
     ``semantics_version`` the semantics, each ``None`` on rows written
@@ -2121,7 +2178,14 @@ class RehearsalRow:
             recorded=data.optional_nested("recorded", RehearsalEffect.from_json),
             candidate=data.optional_nested("candidate", RehearsalEffect.from_json),
             rule=data.optional_text("rule"),
-            kind=data.member("kind", _REHEARSAL_REFUSAL_KINDS) if "kind" in data else None,
+            kind=(
+                data.member(
+                    "kind",
+                    KERNEL_ERROR_KINDS if klass == "would_error" else _REHEARSAL_REFUSAL_KINDS,
+                )
+                if "kind" in data
+                else None
+            ),
             witness=(
                 _non_empty(data, "witness", data.array("witness", WitnessBinding.from_json))
                 if "witness" in data
@@ -2139,7 +2203,7 @@ class RehearsalRow:
 _REHEARSAL_ROW_SHAPES: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "different_delta": (frozenset({"recorded", "candidate"}), frozenset()),
     "would_reject": (frozenset({"rule", "kind"}), frozenset({"witness", "compared"})),
-    "would_error": (frozenset({"error"}), frozenset()),
+    "would_error": (frozenset({"error", "kind"}), frozenset()),
     "unreplayable": (frozenset({"because", "reason"}), frozenset()),
 }
 _REHEARSAL_ROW_OPTIONAL = frozenset(

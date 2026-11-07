@@ -21,8 +21,8 @@ use crate::eval::{
 use crate::format;
 use crate::impact::Impact;
 use crate::ir::{
-    Claim, Definition, Intent, Invariant, InvariantName, PredicateName, Prop, RuleName, Stmt,
-    Subject, Term, Transformation, TransformationName, Var,
+    ArgDecl, Claim, Definition, Intent, IntentName, Invariant, InvariantName, PredicateName, Prop,
+    RuleName, Stmt, Subject, Term, Transformation, TransformationName, Var,
 };
 use crate::state::{
     Bindings, Bound, Candidate, ClaimInstance, EvalValue, IntentInstance, State, StateRef,
@@ -403,19 +403,52 @@ pub(crate) fn propose(
     subjects: &mut dyn SubjectSource,
 ) -> Result<Outcome, EvalError> {
     propose_inner(
+        Vocabulary::undeclared(),
         transformation,
         transition,
         pre_state,
-        invariants,
-        definitions,
+        &Admission::of(invariants, definitions),
         &mut TraceSink::Off,
         subjects,
     )
 }
 
+/// The declarations an admitted claim and an emitted intent are checked
+/// against: each value must be of the kind its field declares. Borrowed
+/// from a [`crate::PreparedProgram`], whose lookups it uses, so every way
+/// of deciding checks against the same declarations.
+#[derive(Clone, Copy)]
+pub(crate) struct Vocabulary<'a>(Option<&'a crate::PreparedProgram>);
+
+impl<'a> Vocabulary<'a> {
+    pub(crate) fn of(program: &'a crate::PreparedProgram) -> Self {
+        Self(Some(program))
+    }
+
+    /// No declarations, for kernel tests that run a hand-built body
+    /// outside any programme. Nothing outside tests can build one.
+    #[cfg(test)]
+    pub(crate) fn undeclared() -> Self {
+        Self(None)
+    }
+
+    fn predicate(self, name: &PredicateName) -> Option<&'a [ArgDecl]> {
+        self.0
+            .and_then(|p| p.predicate(name))
+            .map(|d| d.args.as_slice())
+    }
+
+    fn intent(self, name: &IntentName) -> Option<&'a [ArgDecl]> {
+        self.0
+            .and_then(|p| p.intent(name))
+            .map(|d| d.args.as_slice())
+    }
+}
+
 /// `propose` with a per-statement and per-invariant trace, returned on
 /// both the success and the error path.
 pub(crate) fn propose_with_trace(
+    vocabulary: Vocabulary<'_>,
     transformation: &Transformation,
     transition: &Transition,
     pre_state: &State,
@@ -427,11 +460,11 @@ pub(crate) fn propose_with_trace(
     let result = {
         let mut sink = TraceSink::On(&mut entries);
         propose_inner(
+            vocabulary,
             transformation,
             transition,
             pre_state,
-            invariants,
-            definitions,
+            &Admission::of(invariants, definitions),
             &mut sink,
             subjects,
         )
@@ -450,34 +483,30 @@ pub(crate) fn propose_with_trace(
 
 /// The executor behind `propose` and `propose_with_trace`.
 pub(crate) fn propose_inner(
+    vocabulary: Vocabulary<'_>,
     transformation: &Transformation,
     transition: &Transition,
     pre_state: &State,
-    invariants: &[Invariant],
-    definitions: &[Definition],
+    admission: &Admission<'_>,
     trace: &mut TraceSink<'_>,
     subjects: &mut dyn SubjectSource,
 ) -> Result<Outcome, EvalError> {
     let staged = stage_delta_inner(
+        vocabulary,
         transformation,
         transition,
         pre_state,
-        definitions,
+        admission.definitions(),
         trace,
         subjects,
     )?;
-    finish_staged_inner(
-        staged,
-        pre_state,
-        &Admission::of(invariants, definitions),
-        None,
-        trace,
-    )
+    finish_staged_inner(staged, pre_state, admission, None, trace)
 }
 
 /// [`propose`] with impact plans built ahead of time (see
 /// [`crate::PreparedProgram::admission`]), so nothing is planned per call.
 pub(crate) fn propose_with(
+    vocabulary: Vocabulary<'_>,
     transformation: &Transformation,
     transition: &Transition,
     pre_state: &State,
@@ -486,6 +515,7 @@ pub(crate) fn propose_with(
 ) -> Result<Outcome, EvalError> {
     let mut trace = TraceSink::Off;
     let staged = stage_delta_inner(
+        vocabulary,
         transformation,
         transition,
         pre_state,
@@ -526,6 +556,10 @@ impl<I: Iterator<Item = Subject>> SubjectSource for I {
 /// gate rejection, or the claims it would admit and retract and the
 /// intents it would emit. Lets an adapter run a body once and then check
 /// the invariants its own way.
+///
+/// Staging checks each admitted and emitted value against its declared
+/// kind. A delta built by hand skips that check, so a caller who builds
+/// one vouches that every value fits its field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StagedDelta {
     Rejected {
@@ -541,6 +575,7 @@ pub enum StagedDelta {
 /// Run only the transformation body, stopping before the invariants.
 /// `propose` is exactly this followed by [`finish_staged_delta_with`].
 pub(crate) fn propose_stage_delta(
+    vocabulary: Vocabulary<'_>,
     transformation: &Transformation,
     transition: &Transition,
     pre_state: &State,
@@ -548,6 +583,7 @@ pub(crate) fn propose_stage_delta(
     subjects: &mut dyn SubjectSource,
 ) -> Result<StagedDelta, EvalError> {
     stage_delta_inner(
+        vocabulary,
         transformation,
         transition,
         pre_state,
@@ -560,7 +596,8 @@ pub(crate) fn propose_stage_delta(
 /// Evaluate the invariants over the candidate state a staged delta
 /// implies, completing what [`crate::PreparedProgram::stage_delta`] began, under rules
 /// whose impact plans were built once. A staged rejection passes through
-/// unchanged.
+/// unchanged. The delta's values are not checked against their declared
+/// kinds here; staging did that, and a hand-built delta is trusted.
 pub fn finish_staged_delta_with(
     staged: StagedDelta,
     pre_state: &State,
@@ -570,6 +607,7 @@ pub fn finish_staged_delta_with(
 }
 
 pub(crate) fn stage_delta_inner(
+    vocabulary: Vocabulary<'_>,
     transformation: &Transformation,
     transition: &Transition,
     pre_state: &State,
@@ -623,6 +661,7 @@ pub(crate) fn stage_delta_inner(
     let definition_table = DefinitionTable::new(definitions);
     for stmt in &transformation.body {
         match execute_stmt(
+            vocabulary,
             stmt,
             pre_state,
             &mut bindings,
@@ -817,6 +856,7 @@ pub(crate) fn finish_staged_inner(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn execute_stmt(
+    vocabulary: Vocabulary<'_>,
     stmt: &Stmt,
     pre_state: &State,
     bindings: &mut Bindings,
@@ -962,7 +1002,7 @@ pub(crate) fn execute_stmt(
             Ok(StmtOutcome::Continue)
         }
         Stmt::Assert(claim) => {
-            let instance = resolve_claim(claim, bindings, transition)?;
+            let instance = resolve_claim(vocabulary, claim, bindings, transition)?;
             if trace.is_on() {
                 trace.push(TraceEntry::Assert {
                     claim: instance.clone(),
@@ -1011,6 +1051,7 @@ pub(crate) fn execute_stmt(
                         let mut iter_sink = TraceSink::On(&mut iter_entries);
                         for inner in body {
                             match execute_stmt(
+                                vocabulary,
                                 inner,
                                 pre_state,
                                 bindings,
@@ -1072,6 +1113,7 @@ pub(crate) fn execute_stmt(
                     bindings.insert(binding.clone(), Bound::from(item));
                     for inner in body {
                         match execute_stmt(
+                            vocabulary,
                             inner,
                             pre_state,
                             bindings,
@@ -1096,7 +1138,7 @@ pub(crate) fn execute_stmt(
             }
         }
         Stmt::Emit(intent) => {
-            let instance = resolve_intent(intent, bindings, transition)?;
+            let instance = resolve_intent(vocabulary, intent, bindings, transition)?;
             if trace.is_on() {
                 trace.push(TraceEntry::Emit {
                     intent: instance.clone(),
@@ -1109,12 +1151,14 @@ pub(crate) fn execute_stmt(
 }
 
 pub(crate) fn resolve_claim(
+    vocabulary: Vocabulary<'_>,
     claim: &Claim,
     bindings: &Bindings,
     transition: Option<&Transition>,
 ) -> Result<ClaimInstance, EvalError> {
+    let declared = vocabulary.predicate(&claim.predicate);
     let mut args = Vec::with_capacity(claim.args.len());
-    for t in &claim.args {
+    for (i, t) in claim.args.iter().enumerate() {
         if matches!(t, Term::Wildcard) {
             return Err(EvalError::TypeMismatch(
                 "wildcard not allowed in assert".into(),
@@ -1128,6 +1172,17 @@ pub(crate) fn resolve_claim(
                 claim.predicate
             )));
         }
+        if let Some(field) = declared.and_then(|d| d.get(i)) {
+            let found = value.kind();
+            if !field.kind.holds(&found) {
+                return Err(EvalError::ClaimKindMismatch {
+                    predicate: claim.predicate.to_string(),
+                    field: field.name.clone(),
+                    declared: field.kind.clone(),
+                    found,
+                });
+            }
+        }
         args.push(value);
     }
     Ok(ClaimInstance {
@@ -1137,12 +1192,14 @@ pub(crate) fn resolve_claim(
 }
 
 pub(crate) fn resolve_intent(
+    vocabulary: Vocabulary<'_>,
     intent: &Intent,
     bindings: &Bindings,
     transition: Option<&Transition>,
 ) -> Result<IntentInstance, EvalError> {
+    let declared = vocabulary.intent(&intent.name);
     let mut args = Vec::with_capacity(intent.args.len());
-    for t in &intent.args {
+    for (i, t) in intent.args.iter().enumerate() {
         if matches!(t, Term::Wildcard) {
             return Err(EvalError::TypeMismatch(
                 "wildcard not allowed in emit".into(),
@@ -1155,6 +1212,17 @@ pub(crate) fn resolve_intent(
                  date inside an expression and is never itself a governed value",
                 intent.name
             )));
+        }
+        if let Some(field) = declared.and_then(|d| d.get(i)) {
+            let found = value.kind();
+            if !field.kind.holds(&found) {
+                return Err(EvalError::IntentKindMismatch {
+                    intent: intent.name.to_string(),
+                    field: field.name.clone(),
+                    declared: field.kind.clone(),
+                    found,
+                });
+            }
         }
         args.push(value);
     }
