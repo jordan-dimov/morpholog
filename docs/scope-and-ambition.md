@@ -4,6 +4,22 @@ Companion to [`runtime-semantics.md`](runtime-semantics.md) and to [`design-hist
 
 This document fixes what Morpholog is *for*, what it should grow into, and - equally important - what it must never become. It is a defence against two opposite mistakes: under-claiming the value, and over-claiming the surface.
 
+## Product ambition: make consequential business changes easier to trust
+
+**North star.** Make business software substantially easier to **build, verify and change** by reducing how often the same business obligations must be implemented and independently checked across application code. This is an aspiration to test, not a guarantee of lower cost or fewer defects in today's applications.
+
+The enduring boundary is **proposal versus authority**. People, conventional software and AI agents may propose actions; the approved, independently enforced programme decides whether their effects are admissible under its case-local rules. The proposer need not enforce those rules itself. The surrounding application still owns computation, presentation and external effects.
+
+There are three distinct trust questions:
+
+- **AI or other untrusted software proposes an action.** A pinned, protected Morpholog runtime can enforce the deployed rules independently of that proposer. This is a capability of the runtime, conditional on its actual deployment and credential boundary.
+- **AI changes the surrounding application code.** Independent governance *may* reduce the number of business-policy checks reviewers must re-establish, but only where the integration preserves atomicity, one authoritative state owner and no bypass. Less code to inspect is not, by itself, evidence of a safer change.
+- **AI changes the rulebook or its deployment.** New rules must be reviewed and activated by trusted authorities; proposal admission under an existing approved rulebook does not authorise policy changes. End-to-end protected rulebook promotion remains a separate concern (#627).
+
+No rulebook can establish that its own requirements are complete or correct, that incoming facts are true, or that every downstream effect succeeds. Those are explicit human, integration and operational obligations.
+
+**Product test.** For a proposed capability, ask which recurring *obligation* disappears for the caller, developer, reviewer or operator, which obligations remain, and which integration, authoring, deployment and maintenance work is added. Compare the lifetime cost of a **correct, accepted business change**, not generated lines of code or model throughput. AI-assisted application change is the first commercial hypothesis, not Morpholog's identity. Evidence and next experiments are tracked in [#697](https://github.com/jordan-dimov/morpholog/issues/697) and the [roadmap](roadmap.md).
+
 ## The thesis
 
 Morpholog governs **commit legitimacy**. The only way governed state changes is through a transformation; a transformation commits only if it introduces no violation in any case it touches. The product is not a programming language. It is a runtime where the question "may this state be admitted as legitimate?" is decidable by the language itself, not by code somebody remembered to write.
