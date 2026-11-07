@@ -338,7 +338,7 @@ fn known_term(term: &Term, known: &Env) -> Option<KnownTerm> {
         Term::Literal(v) => Some(KnownTerm::Literal(v.clone())),
         Term::Actor => Some(KnownTerm::Actor),
         Term::Var(v) => known.get(v).cloned(),
-        Term::Wildcard => None,
+        Term::Wildcard | Term::DecidedAt => None,
     }
 }
 

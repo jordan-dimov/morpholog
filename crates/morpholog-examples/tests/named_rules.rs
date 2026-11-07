@@ -234,6 +234,7 @@ fn explain_names_the_gate_that_would_refuse() {
             transformation_name: transformation.name.clone(),
             args: vec![subj("doc_1")],
             actor: morpholog_test_support::test_actor(),
+            decided_at: None,
         };
         match explain(
             &program,

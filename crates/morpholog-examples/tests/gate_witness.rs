@@ -56,6 +56,7 @@ fn transition(name: &str, args: Vec<EvalValue>) -> Transition {
         transformation_name: name.into(),
         args,
         actor: "trader_t".into(),
+        decided_at: None,
     }
 }
 

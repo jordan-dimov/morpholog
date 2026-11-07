@@ -39,6 +39,7 @@ fn act(name: &str, k: &str) -> Proposal {
         transformation_name: name.into(),
         args: vec![subj(k)],
         actor: Subject::from("visibility_test"),
+        decided_at: None,
     })
 }
 

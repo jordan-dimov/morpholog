@@ -1,4 +1,5 @@
 use super::*;
+use crate::ir::Subject;
 use crate::ir_builder::{
     dec, div, max, min, modulo, mul, subj, term, value_of, value_of_with_default, wildcard,
 };
@@ -242,7 +243,13 @@ fn claim_matches_agrees_with_unify_args_and_extends_base() {
     let s = |x: &str| EvalValue::Subject(Subject::from(x));
     let var = |x: &str| Term::Var(Var::from(x));
     let lit = |x: &str| Term::Literal(Value::Subject(x.into()));
-    let actor = Subject::from("alice");
+    let at = |x: &str| EvalValue::Timestamp(x.parse().expect("timestamp"));
+    let transition = Transition {
+        transformation_name: "t".into(),
+        args: vec![],
+        actor: Subject::from("alice"),
+        decided_at: Some("2026-11-06T12:00:00Z".parse().expect("timestamp")),
+    };
     let mut base = Bindings::new();
     base.insert(Var::from("known"), s("k").into());
 
@@ -255,19 +262,30 @@ fn claim_matches_agrees_with_unify_args_and_extends_base() {
         (vec![Term::Wildcard], vec![s("z")], true),             // wildcard
         (vec![Term::Actor], vec![s("alice")], true),            // actor match
         (vec![Term::Actor], vec![s("bob")], false),             // actor mismatch
+        (
+            vec![Term::DecidedAt],
+            vec![at("2026-11-06T12:00:00Z")],
+            true,
+        ), // the decision time
+        (
+            vec![Term::DecidedAt],
+            vec![at("2026-11-06T12:00:01Z")],
+            false,
+        ), // another instant
+        (vec![Term::DecidedAt], vec![s("alice")], false),       // another kind
         (vec![var("known")], vec![s("k")], true),               // agrees with base
         (vec![var("known")], vec![s("other")], false),          // conflicts with base
         (vec![var("x"), var("y")], vec![s("a")], false),        // arity mismatch never matches
     ];
     for (pats, vals, expect) in cases {
-        let m = claim_matches(&pats, &vals, &base, Some(&actor));
-        let u = unify_args(&pats, &vals, &base, Some(&actor));
+        let m = claim_matches(&pats, &vals, &base, Some(&transition));
+        let u = unify_args(&pats, &vals, &base, Some(&transition));
         assert_eq!(m, u.is_some(), "verdicts disagree on {pats:?}");
         assert_eq!(m, expect, "wrong verdict on {pats:?}");
     }
 
     // A match extends the base with the new binding and keeps base entries.
-    let u = unify_args(&[var("x")], &[s("a")], &base, Some(&actor)).unwrap();
+    let u = unify_args(&[var("x")], &[s("a")], &base, Some(&transition)).unwrap();
     assert_eq!(u.get(&Var::from("x")).map(|v| &**v), Some(&s("a")));
     assert_eq!(u.get(&Var::from("known")).map(|v| &**v), Some(&s("k")));
 }
@@ -384,13 +402,17 @@ fn price_state(rows: &[(&str, i64)]) -> State {
     )
 }
 
-fn eval_in(e: &ValueExpr, state: &State, actor: Option<&Subject>) -> Result<EvalValue, EvalError> {
+fn eval_in(
+    e: &ValueExpr,
+    state: &State,
+    transition: Option<&Transition>,
+) -> Result<EvalValue, EvalError> {
     let bindings = Bindings::new();
     let ctx = EvalContext::new(
         state,
         None,
         &bindings,
-        actor,
+        transition,
         crate::definitions::DefinitionTable::new(&[]),
     );
     eval_value(e, &ctx)
@@ -474,6 +496,28 @@ fn value_of_unbound_actor_errors_position_independently() {
     let state = price_state(&[("t1", 100)]);
     let e = value_of("Triple", vec![subj("absent"), Term::Actor, wildcard()]);
     assert_eq!(eval_in(&e, &state, None), Err(EvalError::UnboundActor));
+}
+
+/// A body run with no decision time to give it, as by an offline tool,
+/// refuses wherever `decided_at` sits, as `actor` does.
+#[test]
+fn value_of_unbound_decision_time_errors_position_independently() {
+    let state = price_state(&[("t1", 100)]);
+    let e = value_of("Triple", vec![subj("absent"), Term::DecidedAt, wildcard()]);
+    assert_eq!(
+        eval_in(&e, &state, None),
+        Err(EvalError::UnboundDecisionTime)
+    );
+    let undated = Transition {
+        transformation_name: "t".into(),
+        args: vec![],
+        actor: Subject::from("alice"),
+        decided_at: None,
+    };
+    assert_eq!(
+        eval_in(&e, &state, Some(&undated)),
+        Err(EvalError::UnboundDecisionTime)
+    );
 }
 
 // matching_claims: the retract path's claim lookup. Same indexed

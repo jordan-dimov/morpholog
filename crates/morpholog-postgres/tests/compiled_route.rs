@@ -58,6 +58,7 @@ async fn both_routes_reach_the_same_decision_over_the_gallery() {
                     transformation_name: t.name.clone(),
                     args,
                     actor: Subject::from("route_test"),
+                    decided_at: None,
                 };
                 let spec = observe(&pool, &interpreted, &seeded, &transition).await;
                 let real = observe(&pool, &compiled, &seeded, &transition).await;
@@ -125,6 +126,7 @@ async fn both_routes(
             dec(amount),
         ],
         actor: Subject::from("route_test"),
+        decided_at: None,
     };
     let interpreted = PgProgram::interpreted(PreparedProgram::new(ledger_program()).unwrap());
     let spec = observe(pool, &interpreted, seeded, &transition).await;
@@ -222,6 +224,7 @@ async fn a_rule_calling_a_definition_is_case_local_on_both_routes() {
             subj("investigator"),
         ],
         actor: Subject::from("route_test"),
+        decided_at: None,
     };
     let compiled =
         PgProgram::new(PreparedProgram::new(clinical_trial_enrolment::program()).unwrap());
@@ -306,6 +309,7 @@ fn posting(entry: &str, amount: i64) -> Proposal {
             dec(amount),
         ],
         actor: Subject::from("route_test"),
+        decided_at: None,
     })
 }
 
@@ -325,6 +329,7 @@ fn split_posting(entry: &str, debit: i64, credit_a: i64, credit_b: i64) -> Propo
             dec(credit_b),
         ],
         actor: Subject::from("route_test"),
+        decided_at: None,
     })
 }
 
@@ -496,6 +501,7 @@ fn churn() -> Transition {
         transformation_name: "churn".into(),
         args: vec![subj("legacy"), subj("cash"), dec(100), dec(0)],
         actor: Subject::from("route_test"),
+        decided_at: None,
     }
 }
 
@@ -576,11 +582,13 @@ transformation hold(x, q):
             transformation_name: "hold".into(),
             args: vec![subj("c"), morpholog_test_support::qty("9", "USD")],
             actor: Subject::from("route_test"),
+            decided_at: None,
         }),
         Proposal::gateway(&Transition {
             transformation_name: "enable".into(),
             args: vec![subj("f")],
             actor: Subject::from("route_test"),
+            decided_at: None,
         }),
     ];
     let pool = test_pool().await;
@@ -691,6 +699,7 @@ async fn both_routes_blame_the_same_comparison_with_the_same_values() {
         transformation_name: "load".into(),
         args: vec![subj("p2"), subj("v1"), dec(7)],
         actor: Subject::from("route_test"),
+        decided_at: None,
     };
     let both = refusals(t).await;
     assert_eq!(both[0], both[1], "interpreted vs compiled");
@@ -707,6 +716,7 @@ async fn both_routes_blame_the_same_comparison_with_the_same_values() {
         transformation_name: "raise".into(),
         args: vec![subj("f1")],
         actor: Subject::from("route_test"),
+        decided_at: None,
     };
     let both = refusals(t).await;
     assert_eq!(both[0], both[1], "interpreted vs compiled");
@@ -727,6 +737,7 @@ async fn both_routes_blame_the_same_comparison_with_the_same_values() {
         transformation_name: "load".into(),
         args: vec![subj("p3"), subj("v2"), dec(95)],
         actor: Subject::from("route_test"),
+        decided_at: None,
     };
     let both = refusals(t).await;
     assert_eq!(both[0], both[1], "interpreted vs compiled");
@@ -836,6 +847,7 @@ async fn a_consequent_or_decides_and_raises_as_the_kernel_does_on_both_routes() 
         transformation_name: "note".into(),
         args: vec![subj(x), dec(v), morpholog_test_support::date(w)],
         actor: Subject::from("route_test"),
+        decided_at: None,
     };
     let claim = |p: &str, args: Vec<EvalValue>| ClaimInstance {
         predicate: p.into(),
@@ -884,6 +896,7 @@ async fn a_consequent_or_decides_and_raises_as_the_kernel_does_on_both_routes() 
         transformation_name: "link".into(),
         args: vec![subj(x), subj(y)],
         actor: Subject::from("route_test"),
+        decided_at: None,
     };
     let a_row = |x: &str| {
         claim(
@@ -926,6 +939,7 @@ async fn a_consequent_or_decides_and_raises_as_the_kernel_does_on_both_routes() 
         transformation_name: "mark_b".into(),
         args: vec![subj(x)],
         actor: Subject::from("route_test"),
+        decided_at: None,
     };
     let drifted = |x: &str, v: EvalValue, w: EvalValue| vec![claim("A", vec![subj(x), v, w])];
     let one = run(
@@ -1050,6 +1064,7 @@ async fn both_routes_bound_the_antecedent_to_the_touched_cases() {
         transformation_name: name.into(),
         args,
         actor: Subject::from("route_test"),
+        decided_at: None,
     };
 
     // A change to a case beside the erroring row is admitted on both.
@@ -1155,6 +1170,7 @@ async fn both_routes_check_a_scope_read_before_its_binding_whole() {
         transformation_name: "tag".into(),
         args: vec![subj("old"), subj("t")],
         actor: Subject::from("route_test"),
+        decided_at: None,
     };
     let mut outcomes = Vec::new();
     for route in [&interpreted, &compiled] {

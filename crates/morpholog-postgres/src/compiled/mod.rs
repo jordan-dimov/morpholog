@@ -2686,6 +2686,11 @@ fn call_frame<'a>(
         match arg {
             Term::Wildcard => {}
             Term::Actor => return Err(CompileReason::Construct { construct: "actor" }),
+            Term::DecidedAt => {
+                return Err(CompileReason::Construct {
+                    construct: "decided_at",
+                });
+            }
             Term::Literal(value) => {
                 frame.insert(param.clone(), Bound::Lit(value.clone()));
             }
@@ -2837,6 +2842,11 @@ fn render_claim(
             Term::Wildcard => {}
             Term::Actor => {
                 return Err(CompileReason::Construct { construct: "actor" });
+            }
+            Term::DecidedAt => {
+                return Err(CompileReason::Construct {
+                    construct: "decided_at",
+                });
             }
             Term::Literal(v) => {
                 where_.push(literal_filter(&col, v, ctx)?);
@@ -3180,6 +3190,9 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
             construct: "wildcard value",
         }),
         ValueExpr::Term(Term::Actor) => Err(CompileReason::Construct { construct: "actor" }),
+        ValueExpr::Term(Term::DecidedAt) => Err(CompileReason::Construct {
+            construct: "decided_at",
+        }),
         ValueExpr::Sum { value, body, seed } => {
             if *seed != SumSeed::Decimal {
                 return Err(CompileReason::SumShape {

@@ -93,18 +93,20 @@ async fn probe_raw(
     transformation_name: &str,
     args: Vec<EvalValue>,
 ) -> Result<Probe, ProbeFailure> {
-    let transition = Transition {
+    let mut transition = Transition {
         transformation_name: transformation_name.into(),
         args,
         actor: Subject::from("differential"),
+        decided_at: None,
     };
     let (transformation, invariants, definitions) =
         crate::propose::resolve(prepared, &transition.transformation_name)
             .map_err(ProbeFailure::Pg)?;
 
-    let (mut tx, _login_role) = begin_authorised_proposal_tx(pool, &transition.actor)
+    let (mut tx, _login_role, decided_at) = begin_authorised_proposal_tx(pool, &transition.actor)
         .await
         .map_err(ProbeFailure::Pg)?;
+    transition.decided_at = Some(decided_at);
     // The kernel judges this probe too, so its invariants' reads load.
     let scope = compute_load_scope(
         transformation,
@@ -334,6 +336,7 @@ async fn sweep(program: Program) -> usize {
                     transformation_name: name.as_str().into(),
                     args: args.clone(),
                     actor: test_actor(),
+                    decided_at: None,
                 };
                 let outcome = propose_against_pg(
                     &pool,
@@ -818,6 +821,7 @@ async fn an_overflow_that_compares_as_holding_is_the_kernels_error_on_both_stage
         transformation_name: "set_floor".into(),
         args: vec![subj("x"), dec(0)],
         actor: test_actor(),
+        decided_at: None,
     };
     let outcome = propose_against_pg(
         &pool,
@@ -2510,6 +2514,7 @@ async fn arithmetic_probe(
             transformation_name: transformation.into(),
             args: args.clone(),
             actor: Subject::from("differential"),
+            decided_at: None,
         },
         &morpholog_core::State::from_claims(claims),
         &mut crate::propose::runtime_subjects(),

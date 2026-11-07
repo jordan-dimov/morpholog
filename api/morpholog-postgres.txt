@@ -2346,6 +2346,7 @@ impl core::marker::UnsafeUnpin for morpholog_postgres::RejectionRow
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::RejectionRow
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::RejectionRow
 pub struct morpholog_postgres::RejectionStateOutcome
+pub morpholog_postgres::RejectionStateOutcome::decided_at: jiff::timestamp::Timestamp
 pub morpholog_postgres::RejectionStateOutcome::drawn_subjects: alloc::vec::Vec<morpholog_core::ir::Subject>
 pub morpholog_postgres::RejectionStateOutcome::outcome: morpholog_postgres::PgProposalOutcome
 pub morpholog_postgres::RejectionStateOutcome::rejection_state: core::option::Option<morpholog_core::state::State>

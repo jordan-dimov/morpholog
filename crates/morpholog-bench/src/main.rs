@@ -1042,6 +1042,7 @@ fn ledger_posting(entry: &str, period: &str) -> Transition {
             dec(42),
         ],
         actor: Subject::from("bench"),
+        decided_at: None,
     }
 }
 
@@ -1434,6 +1435,7 @@ fn decision_phases(
             transformation_name: row.transformation_name.clone(),
             args: row.arguments.clone(),
             actor: row.actor.clone(),
+            decided_at: None,
         };
         let t = Instant::now();
         let staged = prepared
@@ -1667,6 +1669,7 @@ fn policy_fold(
             transformation_name: row.transformation_name.clone(),
             args: row.arguments.clone(),
             actor: row.actor.clone(),
+            decided_at: None,
         };
         let t = Instant::now();
         if let Some(staged) = prepared
@@ -2833,6 +2836,7 @@ async fn contend_worker(
                 transformation_name: transformation.name.clone(),
                 args: vec![subj(&format!("item_r{round}_w{worker_id}_op{op}"))],
                 actor: Subject::from("bench"),
+                decided_at: None,
             };
             let label = format!("disjoint worker {worker_id} op {op}");
             one_op(&pool, &pg, &transition, max_retries, &label, &mut tally).await?;
@@ -3182,6 +3186,7 @@ async fn measure_wide(
             transformation_name: "add_wide".into(),
             args,
             actor: Subject::from("bench"),
+            decided_at: None,
         };
         let t = Instant::now();
         let outcome = propose_against_pg(pool, &pg, &Proposal::gateway(&transition))
@@ -4081,6 +4086,7 @@ fn posting(i: usize, tag: &str) -> Transition {
             dec(42),
         ],
         actor: Subject::from("bench"),
+        decided_at: None,
     }
 }
 

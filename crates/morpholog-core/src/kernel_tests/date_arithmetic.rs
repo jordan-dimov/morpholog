@@ -286,6 +286,7 @@ fn a_span_cannot_arrive_as_a_transition_argument() {
             transformation_name: "takes".into(),
             args: vec![smuggled],
             actor: test_actor(),
+            decided_at: None,
         };
         let err = propose(
             &t,

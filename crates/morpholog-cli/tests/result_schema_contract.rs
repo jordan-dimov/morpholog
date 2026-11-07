@@ -283,6 +283,7 @@ fn transition(name: &str) -> Transition {
         transformation_name: name.into(),
         args: vec![EvalValue::Subject(Subject::from("acct_1"))],
         actor: Subject::from("alex"),
+        decided_at: None,
     }
 }
 
@@ -425,6 +426,7 @@ fn traced_run(
         transformation_name: t.name.clone(),
         args,
         actor: Subject::from("alex"),
+        decided_at: None,
     };
     match propose_with_trace(
         &p,
@@ -490,6 +492,7 @@ fn errored_run() -> (String, Vec<morpholog_core::TraceEntry>) {
         transformation_name: t.name.clone(),
         args: vec![],
         actor: Subject::from("alex"),
+        decided_at: None,
     };
     let pre = State::from_claims(vec![
         ClaimInstance {
@@ -611,6 +614,7 @@ fn explanations_serialize_as_pinned() {
             transformation_name: "flag_account".into(),
             args: vec![EvalValue::Subject(Subject::from("acct_2"))],
             actor: Subject::from("alex"),
+            decided_at: None,
         },
         &State::from_claims(vec![]),
         &mut morpholog_postgres::runtime_subjects(),
@@ -2008,6 +2012,7 @@ fn rehearsal_report_serializes_as_pinned() {
                     "sha256:8a1d8c1f0b7e4e2c9d6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e",
                 ),
                 semantics_version: Some(3),
+                committed_at: jiff::Timestamp::UNIX_EPOCH,
             },
         );
         pre.apply(asserted, &[]);

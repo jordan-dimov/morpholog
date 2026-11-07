@@ -774,6 +774,7 @@ pub(crate) fn format_term(t: &Term) -> String {
         Term::Wildcard => "_".to_string(),
         Term::Literal(v) => format_value(v),
         Term::Actor => "actor".to_string(),
+        Term::DecidedAt => "decided_at".to_string(),
     }
 }
 

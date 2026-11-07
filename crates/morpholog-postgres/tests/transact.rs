@@ -55,6 +55,7 @@ fn act(transformation: &str, actor: &str, args: Vec<EvalValue>) -> Proposal {
         transformation_name: transformation.into(),
         args,
         actor: Subject::from(actor),
+        decided_at: None,
     })
 }
 

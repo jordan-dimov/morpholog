@@ -55,6 +55,7 @@ pub async fn commit_simple_entry(pool: &PgPool, entry_id: &str, period: &str) ->
             dec(100),
         ],
         actor: Subject::from("outbox_test"),
+        decided_at: None,
     };
     let program = PgProgram::new(
         PreparedProgram::new(double_entry_ledger::program()).expect("valid programme"),

@@ -151,6 +151,7 @@ async fn prepare(
         transformation_name: transformation.name.clone(),
         args: eval_args,
         actor: Subject::from(actor),
+        decided_at: None,
     };
     Ok((transition, pool))
 }
@@ -482,6 +483,7 @@ pub(crate) fn decode_row(
         transformation_name: transformation.name.clone(),
         args: eval_args,
         actor: Subject::from(row.actor),
+        decided_at: None,
     })
 }
 

@@ -370,6 +370,7 @@ fn decision_admits_only_with_matching_standing() {
             subj("ver_001"),
         ],
         actor: Subject::from("test_actor"),
+        decided_at: None,
     };
     let TracedProposal::Completed { outcome, trace } = propose_with_trace(
         &verified_revenue::program(),

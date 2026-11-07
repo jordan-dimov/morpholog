@@ -84,6 +84,7 @@ fn a_rehearsal_behind_unrelated_state_clones_nothing_and_rebuilds_nothing() {
         transformation_name: name.into(),
         args,
         actor: test_actor(),
+        decided_at: None,
     };
     let decide = |state: &State, t: &Transition| {
         prepared
@@ -123,6 +124,7 @@ fn a_rehearsal_behind_unrelated_state_clones_nothing_and_rebuilds_nothing() {
                 drawn: Some(&[]),
                 model_hash: None,
                 semantics_version: None,
+                committed_at: jiff::Timestamp::UNIX_EPOCH,
             },
         );
         // The effective delta is the revision and nothing else. A key's
@@ -167,6 +169,7 @@ fn a_rehearsal_behind_unrelated_state_clones_nothing_and_rebuilds_nothing() {
             drawn: Some(&[]),
             model_hash: None,
             semantics_version: None,
+            committed_at: jiff::Timestamp::UNIX_EPOCH,
         },
     );
     assert!(

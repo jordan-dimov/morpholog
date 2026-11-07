@@ -135,6 +135,7 @@ fn a_loop_keeps_its_bindings_as_recorded() {
             transformation_name: act.into(),
             args,
             actor: "tester".into(),
+            decided_at: None,
         };
         let plain = prepared
             .propose(&transition, &pre, &mut std::iter::empty())

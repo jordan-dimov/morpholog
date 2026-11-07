@@ -34,11 +34,20 @@
 -- record of what was decided then - because whether a decision was
 -- allowed is settled when it is made, and stays settled.
 --
--- There is deliberately no clock in this model. Every timestamp is
--- supplied by the proposer and judged by the rules; nothing reads
--- "now" from the machine it happens to run on. That is what makes
--- the record deterministic: replay it next year, or in front of a
--- regulator, and every admission decision comes out the same.
+-- Two kinds of time appear here, and they come from different places.
+-- When a use started, or when the system matched a face, is a report
+-- about the world: the system says so, and the rules judge whether it
+-- fits. But when a person verified a match, or decided on it, is the
+-- moment the record itself changed - and that moment must not be
+-- whatever the person typing says it is. A verifier who could write
+-- any time could date a confirmation before it happened, and the
+-- two-people-first rule would be checking their story instead of the
+-- order of events. So those two actions take no time from anyone.
+-- They read `decided_at`: the instant the runtime began deciding the
+-- change, the same instant it writes into the change's own record.
+-- Replay the record next year, or in front of a regulator, and each
+-- decision reads its recorded instant again, so every admission comes
+-- out the same.
 
 program biometric_identification_oversight
 
@@ -170,7 +179,7 @@ invariant use_cannot_end_before_its_matches:
 -- The *authority* check lives in the gates below, never here - so
 -- revoking an overseer never reaches back into history.
 invariant decision_rests_on_two_distinct_prior_verifications:
-    IdentificationDecision(d, m, _, decided_at, _) implies two_distinct_prior_verifications(m, decided_at)
+    IdentificationDecision(d, m, _, at, _) implies two_distinct_prior_verifications(m, at)
 
 -- The only ways the record may change. Gates police the moment of
 -- each action; the records then stand on their own.
@@ -320,14 +329,17 @@ transformation end_use(use, ended_at):
 -- verifier's name must be armed when they act, not only when they
 -- were assigned, so an assignment the record held before that rule
 -- cannot carry an open name into a verification.
-transformation verify_match(match, verified_at):
+--
+-- The verification is dated `decided_at`, never by the verifier: who
+-- confirms is the actor, and when is the runtime's.
+transformation verify_match(match):
     bind MatchRecorded(match, use, _, _, matched_at)
     bind UseStarted(use: use, system: system, ..)
     require OversightAssigned(actor, system)
     require ActorAssertionRestricted(actor)
     require not MatchVerified(match, actor, _)
-    require matched_at at_or_before verified_at
-    admit MatchVerified(match, actor, verified_at)
+    require matched_at at_or_before decided_at
+    admit MatchVerified(match, actor, decided_at)
 
 -- The decision. Two distinct verifications that both precede it, or
 -- nothing - and the decider must themselves hold live oversight:
@@ -339,7 +351,14 @@ transformation verify_match(match, verified_at):
 -- "verified by two people first" means. When this is refused, the
 -- explanation names the condition and the missing verification in
 -- the statute's own terms.
-transformation decide_on_identification(decision, match, outcome, decided_at):
+--
+-- Two things about time, both easy to get wrong. A refused decision
+-- tried again a second later is a new decision at a new instant: it
+-- may now pass, because a verification landed in between. And this
+-- gate is not a lock. It reads the verifications the record held when
+-- the decision began; one that commits meanwhile is not seen, so the
+-- decision is refused and tried again, never admitted early.
+transformation decide_on_identification(decision, match, outcome):
     bind MatchRecorded(match: match, use: use, ..)
     bind UseStarted(use: use, system: system, ..)
     require OversightAssigned(actor, system)

@@ -12,8 +12,8 @@
 mod common;
 use std::sync::OnceLock;
 
-use common::{Example, refused_by, subj, ts};
-use morpholog_core::{Rejection, State, Subject, Transition, Verdict};
+use common::{Example, has_claim, refused_by, subj, transition_at, ts};
+use morpholog_core::{Rejection, State, Verdict};
 use morpholog_examples::biometric_identification_oversight as bio;
 use morpholog_test_support::enumerate_derived;
 
@@ -156,21 +156,22 @@ fn use_cannot_start_under_a_version_not_in_service() {
 #[test]
 fn decision_with_one_verification_is_refused() {
     let state = match_awaiting_verification();
-    let state = ex().must_accept_as(
+    let state = ex().must_accept_at(
         &bio::verify_match(),
-        vec![subj("match_1"), ts("2026-10-12T10:00:00Z")],
+        vec![subj("match_1")],
         "anna",
+        "2026-10-12T10:00:00Z",
         state,
     );
-    ex().must_reject_as(
+    ex().must_reject_at(
         &bio::decide_on_identification(),
         vec![
             subj("decision_1"),
             subj("match_1"),
             subj("confirmed_identification"),
-            ts("2026-10-12T11:00:00Z"),
         ],
         "anna",
+        "2026-10-12T11:00:00Z",
         &state,
     );
 }
@@ -183,16 +184,16 @@ fn decision_with_one_verification_is_refused() {
 fn the_refused_decision_explains_itself_in_the_statutes_terms() {
     let state = match_awaiting_verification();
     // A match recorded, but not yet verified by anyone.
-    let transition = Transition {
-        transformation_name: bio::decide_on_identification().name.clone(),
-        args: vec![
+    let transition = transition_at(
+        &bio::decide_on_identification(),
+        vec![
             subj("decision_1"),
             subj("match_1"),
             subj("confirmed_identification"),
-            ts("2026-10-12T11:00:00Z"),
         ],
-        actor: Subject::from("anna"),
-    };
+        "anna",
+        "2026-10-12T11:00:00Z",
+    );
     let explanation = morpholog_test_support::explain(
         &bio::program(),
         &transition,
@@ -225,22 +226,23 @@ fn the_refused_decision_explains_itself_in_the_statutes_terms() {
 #[test]
 fn one_verification_names_the_gate_but_distinctness_is_not_a_missing_claim() {
     let state = match_awaiting_verification();
-    let state = ex().must_accept_as(
+    let state = ex().must_accept_at(
         &bio::verify_match(),
-        vec![subj("match_1"), ts("2026-10-12T10:00:00Z")],
+        vec![subj("match_1")],
         "anna",
+        "2026-10-12T10:00:00Z",
         state,
     );
-    let transition = Transition {
-        transformation_name: bio::decide_on_identification().name.clone(),
-        args: vec![
+    let transition = transition_at(
+        &bio::decide_on_identification(),
+        vec![
             subj("decision_1"),
             subj("match_1"),
             subj("confirmed_identification"),
-            ts("2026-10-12T11:00:00Z"),
         ],
-        actor: Subject::from("anna"),
-    };
+        "anna",
+        "2026-10-12T11:00:00Z",
+    );
     let explanation = morpholog_test_support::explain(
         &bio::program(),
         &transition,
@@ -264,16 +266,18 @@ fn one_verification_names_the_gate_but_distinctness_is_not_a_missing_claim() {
 #[test]
 fn the_same_overseer_cannot_be_both_voices() {
     let state = match_awaiting_verification();
-    let state = ex().must_accept_as(
+    let state = ex().must_accept_at(
         &bio::verify_match(),
-        vec![subj("match_1"), ts("2026-10-12T10:00:00Z")],
+        vec![subj("match_1")],
         "anna",
+        "2026-10-12T10:00:00Z",
         state,
     );
-    ex().must_reject_as(
+    ex().must_reject_at(
         &bio::verify_match(),
-        vec![subj("match_1"), ts("2026-10-12T10:05:00Z")],
+        vec![subj("match_1")],
         "anna",
+        "2026-10-12T10:05:00Z",
         &state,
     );
 }
@@ -283,29 +287,49 @@ fn the_same_overseer_cannot_be_both_voices() {
 #[test]
 fn two_distinct_verifications_admit_the_decision() {
     let state = match_awaiting_verification();
-    let state = ex().must_accept_as(
+    let state = ex().must_accept_at(
         &bio::verify_match(),
-        vec![subj("match_1"), ts("2026-10-12T10:00:00Z")],
+        vec![subj("match_1")],
         "anna",
+        "2026-10-12T10:00:00Z",
         state,
     );
-    let state = ex().must_accept_as(
+    let state = ex().must_accept_at(
         &bio::verify_match(),
-        vec![subj("match_1"), ts("2026-10-12T10:20:00Z")],
+        vec![subj("match_1")],
         "ben",
+        "2026-10-12T10:20:00Z",
         state,
     );
-    let state = ex().must_accept_as(
+    let state = ex().must_accept_at(
         &bio::decide_on_identification(),
         vec![
             subj("decision_1"),
             subj("match_1"),
             subj("confirmed_identification"),
-            ts("2026-10-12T11:00:00Z"),
         ],
         "anna",
+        "2026-10-12T11:00:00Z",
         state,
     );
+    // Each record is dated by the decision time it was given, never by
+    // an argument: the proposer had no way to name an instant.
+    assert!(has_claim(
+        &state,
+        "MatchVerified",
+        &[subj("match_1"), subj("ben"), ts("2026-10-12T10:20:00Z")]
+    ));
+    assert!(has_claim(
+        &state,
+        "IdentificationDecision",
+        &[
+            subj("decision_1"),
+            subj("match_1"),
+            subj("confirmed_identification"),
+            ts("2026-10-12T11:00:00Z"),
+            subj("anna"),
+        ]
+    ));
     // Article 12(3)(a): the period of each use, derived once the use
     // ends - eight and a half hours, exactly.
     let state = ex().must_accept_as(
@@ -342,34 +366,31 @@ fn a_decision_id_names_one_decision() {
             ("anna", "2026-10-12T10:00:00Z"),
             ("ben", "2026-10-12T10:20:00Z"),
         ] {
-            state = ex().must_accept_as(&bio::verify_match(), vec![subj(m), ts(at)], who, state);
+            state = ex().must_accept_at(&bio::verify_match(), vec![subj(m)], who, at, state);
         }
     }
-    let decide = |id: &str, m: &str| {
-        vec![
-            subj(id),
-            subj(m),
-            subj("confirmed_identification"),
-            ts("2026-10-12T11:00:00Z"),
-        ]
-    };
-    let state = ex().must_accept_as(
+    let decide = |id: &str, m: &str| vec![subj(id), subj(m), subj("confirmed_identification")];
+    let at = "2026-10-12T11:00:00Z";
+    let state = ex().must_accept_at(
         &bio::decide_on_identification(),
         decide("decision_1", "match_1"),
         "anna",
+        at,
         state,
     );
-    let reason = ex().must_reject_as(
+    let reason = ex().must_reject_at(
         &bio::decide_on_identification(),
         decide("decision_1", "match_2"),
         "anna",
+        at,
         &state,
     );
     refused_by(&reason, "identification_decision_unique_by_decision");
-    ex().must_accept_as(
+    ex().must_accept_at(
         &bio::decide_on_identification(),
         decide("decision_2", "match_2"),
         "anna",
+        at,
         state,
     );
 }
@@ -379,27 +400,29 @@ fn a_decision_id_names_one_decision() {
 #[test]
 fn revocation_stops_future_verifications_and_leaves_past_decisions_standing() {
     let state = match_awaiting_verification();
-    let state = ex().must_accept_as(
+    let state = ex().must_accept_at(
         &bio::verify_match(),
-        vec![subj("match_1"), ts("2026-10-12T10:00:00Z")],
+        vec![subj("match_1")],
         "anna",
+        "2026-10-12T10:00:00Z",
         state,
     );
-    let state = ex().must_accept_as(
+    let state = ex().must_accept_at(
         &bio::verify_match(),
-        vec![subj("match_1"), ts("2026-10-12T10:20:00Z")],
+        vec![subj("match_1")],
         "ben",
+        "2026-10-12T10:20:00Z",
         state,
     );
-    let state = ex().must_accept_as(
+    let state = ex().must_accept_at(
         &bio::decide_on_identification(),
         vec![
             subj("decision_1"),
             subj("match_1"),
             subj("confirmed_identification"),
-            ts("2026-10-12T11:00:00Z"),
         ],
         "ben",
+        "2026-10-12T11:00:00Z",
         state,
     );
     // Anna's authority is revoked - her training lapsed, say.
@@ -422,10 +445,11 @@ fn revocation_stops_future_verifications_and_leaves_past_decisions_standing() {
         "cam_system",
         state,
     );
-    ex().must_reject_as(
+    ex().must_reject_at(
         &bio::verify_match(),
-        vec![subj("match_2"), ts("2026-10-12T12:30:00Z")],
+        vec![subj("match_2")],
         "anna",
+        "2026-10-12T12:30:00Z",
         &state,
     );
     // The decision admitted under her live authority still stands.
@@ -443,30 +467,32 @@ fn revocation_stops_future_verifications_and_leaves_past_decisions_standing() {
 #[test]
 fn decision_dated_before_the_second_verification_is_refused() {
     let state = match_awaiting_verification();
-    let state = ex().must_accept_as(
+    let state = ex().must_accept_at(
         &bio::verify_match(),
-        vec![subj("match_1"), ts("2026-10-12T10:00:00Z")],
+        vec![subj("match_1")],
         "anna",
+        "2026-10-12T10:00:00Z",
         state,
     );
-    let state = ex().must_accept_as(
+    let state = ex().must_accept_at(
         &bio::verify_match(),
-        vec![subj("match_1"), ts("2026-10-12T10:20:00Z")],
+        vec![subj("match_1")],
         "ben",
+        "2026-10-12T10:20:00Z",
         state,
     );
     // Both verifications exist, but the decision is back-dated to
     // 10:10 - after anna, before ben. Two records is not enough; both
     // must precede the decision.
-    ex().must_reject_as(
+    ex().must_reject_at(
         &bio::decide_on_identification(),
         vec![
             subj("decision_1"),
             subj("match_1"),
             subj("confirmed_identification"),
-            ts("2026-10-12T10:10:00Z"),
         ],
         "anna",
+        "2026-10-12T10:10:00Z",
         &state,
     );
 }
@@ -511,14 +537,15 @@ fn use_cannot_be_closed_before_a_match_it_already_produced() {
 #[test]
 fn decision_with_no_verifications_is_a_lawful_rejection() {
     let state = match_awaiting_verification();
-    ex().must_reject(
+    ex().must_reject_at(
         &bio::decide_on_identification(),
         vec![
             subj("decision_1"),
             subj("match_1"),
             subj("confirmed_identification"),
-            ts("2026-10-12T11:00:00Z"),
         ],
+        "anna",
+        "2026-10-12T11:00:00Z",
         &state,
     );
 }
@@ -562,16 +589,18 @@ fn oversight_goes_only_to_a_restricted_name() {
 #[test]
 fn an_overseer_with_an_open_name_cannot_verify_or_decide() {
     // Two real verifications, so only the open name can refuse the decision.
-    let state = ex().must_accept_as(
+    let state = ex().must_accept_at(
         &bio::verify_match(),
-        vec![subj("match_1"), ts("2026-10-12T10:00:00Z")],
+        vec![subj("match_1")],
         "anna",
+        "2026-10-12T10:00:00Z",
         match_awaiting_verification(),
     );
-    let state = ex().must_accept_as(
+    let state = ex().must_accept_at(
         &bio::verify_match(),
-        vec![subj("match_1"), ts("2026-10-12T10:20:00Z")],
+        vec![subj("match_1")],
         "ben",
+        "2026-10-12T10:20:00Z",
         state,
     );
     let mut claims = state.claims().to_vec();
@@ -580,21 +609,22 @@ fn an_overseer_with_an_open_name_cannot_verify_or_decide() {
         &[subj("carl"), subj("cam_system")],
     ));
     let state = State::from_claims(claims);
-    ex().must_reject_as(
+    ex().must_reject_at(
         &bio::verify_match(),
-        vec![subj("match_1"), ts("2026-10-12T10:00:00Z")],
+        vec![subj("match_1")],
         "carl",
+        "2026-10-12T10:00:00Z",
         &state,
     );
-    ex().must_reject_as(
+    ex().must_reject_at(
         &bio::decide_on_identification(),
         vec![
             subj("decision_1"),
             subj("match_1"),
             subj("confirmed_identification"),
-            ts("2026-10-12T11:00:00Z"),
         ],
         "carl",
+        "2026-10-12T11:00:00Z",
         &state,
     );
 }

@@ -792,7 +792,7 @@ fn bind_only_to_retract_findings(
             let kept = |i: usize| match &args[i] {
                 Term::Var(v) => !introduced.contains(v),
                 Term::Literal(_) => true,
-                Term::Wildcard | Term::Actor => false,
+                Term::Wildcard | Term::Actor | Term::DecidedAt => false,
             };
             let keyed = crate::disciplines::uniqueness_keys_for(program, predicate)
                 .iter()

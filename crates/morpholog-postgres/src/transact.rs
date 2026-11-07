@@ -85,14 +85,19 @@ pub async fn propose_all_against_pg(
         ));
     }
     let prepared = program.prepared();
-    let acts: Vec<(&Transformation, Transition)> = proposals
+    let mut acts: Vec<(&Transformation, Transition)> = proposals
         .iter()
         .map(|p| resolve(prepared, &p.transformation_name).map(|(t, _, _)| (t, p.transition())))
         .collect::<Result<_, _>>()?;
     let admission = prepared.admission();
     let route = program.route();
 
-    let (mut tx, login_role) = begin_authorised_proposal_tx(pool, &acts[0].1.actor).await?;
+    let (mut tx, login_role, decided_at) =
+        begin_authorised_proposal_tx(pool, &acts[0].1.actor).await?;
+    // One transaction, one decision time, for every act.
+    for (_, transition) in &mut acts {
+        transition.decided_at = Some(decided_at);
+    }
     if matches!(route, Route::Compiled(_) | Route::Mixed(_)) {
         disable_jit(&mut tx).await?;
     }

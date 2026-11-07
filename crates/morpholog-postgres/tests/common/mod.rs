@@ -215,6 +215,7 @@ pub async fn propose_pg_as(
         transformation_name: transformation.name.clone(),
         args,
         actor: actor.into(),
+        decided_at: None,
     };
     propose_against_pg(pool, pg, &attested(&transition)).await
 }

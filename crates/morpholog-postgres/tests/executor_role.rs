@@ -162,6 +162,7 @@ async fn place_order(pool: &PgPool, pg: &PgProgram, order: &str, qty: &str) {
         transformation_name: place().name,
         args: vec![subj(order), dec_str(qty)],
         actor: "desk".into(),
+        decided_at: None,
     };
     expect_committed(
         propose_against_pg(pool, pg, &attested(&transition))
@@ -281,6 +282,7 @@ async fn the_executor_cannot_change_what_was_admitted_or_touch_the_record() {
         transformation_name: place().name,
         args: vec![subj("o1"), dec_str("10")],
         actor: "desk".into(),
+        decided_at: None,
     };
     let refused = propose_against_pg(&executor, &pg, &attested(&transition)).await;
     assert!(

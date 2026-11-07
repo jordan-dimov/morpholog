@@ -66,6 +66,7 @@ async fn the_mixed_route_reaches_the_kernels_decision_over_the_gallery() {
                     transformation_name: t.name.clone(),
                     args,
                     actor: Subject::from("route_test"),
+                    decided_at: None,
                 };
                 let spec = observe(&pool, &interpreted, &seeded, &transition).await;
                 let real = observe(&pool, &mixed, &seeded, &transition).await;
@@ -152,6 +153,7 @@ async fn both(
         transformation_name: "both".into(),
         args,
         actor: test_actor(),
+        decided_at: None,
     };
     (
         observe(pool, &interpreted, seeded, &transition).await,
@@ -245,6 +247,7 @@ async fn a_kernel_error_after_the_write_leaves_nothing_behind() {
         transformation_name: "both".into(),
         args: vec![subj("a"), dec("1"), dec(MAX)],
         actor: test_actor(),
+        decided_at: None,
     };
     let outcome = propose_against_pg(&pool, &mixed, &Proposal::gateway(&transition)).await;
     assert!(
@@ -290,6 +293,7 @@ async fn a_mixed_batch_carries_both_parts_across_acts() {
         transformation_name: name.into(),
         args: vec![subj("a"), dec(v)],
         actor: test_actor(),
+        decided_at: None,
     };
     // 9.5 passes c_viol (<= 10) and fails i_viol (19 > 18); 11 fails
     // c_viol first.

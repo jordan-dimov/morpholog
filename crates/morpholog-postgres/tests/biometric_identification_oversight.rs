@@ -136,20 +136,8 @@ async fn run_to_decision(pool: &PgPool) -> Uuid {
         "cam_system",
     )
     .await;
-    commit_as(
-        pool,
-        &bio::verify_match(),
-        vec![subj("match_1"), ts("2026-10-12T10:00:00Z")],
-        "anna",
-    )
-    .await;
-    commit_as(
-        pool,
-        &bio::verify_match(),
-        vec![subj("match_1"), ts("2026-10-12T10:20:00Z")],
-        "ben",
-    )
-    .await;
+    commit_as(pool, &bio::verify_match(), vec![subj("match_1")], "anna").await;
+    commit_as(pool, &bio::verify_match(), vec![subj("match_1")], "ben").await;
     commit_as(
         pool,
         &bio::decide_on_identification(),
@@ -157,7 +145,6 @@ async fn run_to_decision(pool: &PgPool) -> Uuid {
             subj("decision_1"),
             subj("match_1"),
             subj("confirmed_identification"),
-            ts("2026-10-12T11:00:00Z"),
         ],
         "anna",
     )
@@ -232,6 +219,7 @@ fn proposal(t: &morpholog_core::Transformation, args: Args, actor: &str) -> Prop
         transformation_name: t.name.clone(),
         args,
         actor: actor.into(),
+        decided_at: None,
     })
 }
 
@@ -413,30 +401,11 @@ async fn walk_the_boundary() {
         "cam_system",
     )
     .await;
-    let verify = |at: &str| -> Args { vec![subj("match_1"), ts(at)] };
-    commit(
-        &anna,
-        bio::verify_match(),
-        verify("2026-10-12T10:00:00Z"),
-        "anna",
-    )
-    .await;
+    let verify = || -> Args { vec![subj("match_1")] };
+    commit(&anna, bio::verify_match(), verify(), "anna").await;
     // Anna's login cannot be Ben's second voice.
-    refused_as(
-        &anna,
-        bio::verify_match(),
-        verify("2026-10-12T10:10:00Z"),
-        "ben",
-        logins[2],
-    )
-    .await;
-    commit(
-        &ben,
-        bio::verify_match(),
-        verify("2026-10-12T10:20:00Z"),
-        "ben",
-    )
-    .await;
+    refused_as(&anna, bio::verify_match(), verify(), "ben", logins[2]).await;
+    commit(&ben, bio::verify_match(), verify(), "ben").await;
     commit(
         &anna,
         bio::decide_on_identification(),
@@ -444,7 +413,6 @@ async fn walk_the_boundary() {
             subj("decision_1"),
             subj("match_1"),
             subj("confirmed_identification"),
-            ts("2026-10-12T11:00:00Z"),
         ],
         "anna",
     )
@@ -507,7 +475,7 @@ async fn walk_the_boundary() {
         "cam_system",
     )
     .await;
-    let second: Args = vec![subj("match_2"), ts("2026-10-12T12:30:00Z")];
+    let second: Args = vec![subj("match_2")];
     refused_as(
         &anna,
         bio::verify_match(),

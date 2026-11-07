@@ -357,6 +357,7 @@ fn bind_one_inside_for_body_composes() {
             EvalValue::Subject("L2".into()),
         ])],
         actor: Subject::from("test_actor"),
+        decided_at: None,
     };
     let Outcome::Accepted {
         asserted_claims, ..
@@ -409,6 +410,7 @@ fn bind_one_with_actor_in_pattern() {
         transformation_name: t.name.clone(),
         args: vec![],
         actor: Subject::from("dr_smith"),
+        decided_at: None,
     };
     let Outcome::Accepted {
         asserted_claims, ..
@@ -848,6 +850,7 @@ fn a_transition_naming_another_transformation_is_an_error() {
         transformation_name: "some_other_name".into(),
         args: vec![],
         actor: Subject::from("tester"),
+        decided_at: None,
     };
     let err = propose(&t, &transition, &State::default(), &[], &[], &mut fresh())
         .expect_err("a mismatched name is an error, never an outcome");

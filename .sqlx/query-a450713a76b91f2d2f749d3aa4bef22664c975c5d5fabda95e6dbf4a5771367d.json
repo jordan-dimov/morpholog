@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT session_user AS \"name!\",\n                  (SELECT oid FROM pg_roles WHERE rolname = session_user) AS oid,\n                  transaction_timestamp() AS \"decided_at!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "oid",
+        "type_info": "Oid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "decided_at!",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "a450713a76b91f2d2f749d3aa4bef22664c975c5d5fabda95e6dbf4a5771367d"
+}
