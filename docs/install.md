@@ -118,7 +118,7 @@ DATABASE_URL=postgres:///morpholog_scratch python3 examples/etrm_embedder/etrm_l
 
 ## Upgrading an existing database
 
-A verifier reads its own evidence-pack format, and the format before it when that one holds rows written before the log had one order: v0.0.17 writes format 19 and still verifies the format 17 packs v0.0.15 and v0.0.16 wrote. A pack in any older format is refused as `unsupported_pack`; export it again from the upgraded database. Keep the old packs, and a binary of the release that wrote them: anyone who holds a pack without the database cannot export it again, and only that release verifies it. This holds even when little changed. A prefix pack from v0.0.14 (format 13) and a v0.0.15 export of the same record differ only in their first line, and v0.0.15 still refuses the older one. The other way round, v0.0.14 reports a format 17 pack as `malformed_pack`, with a detail that says to upgrade. The generated client's pack models, such as `PrefixPackManifest`, read the current format only. That does not change the semantics version an older receipt was decided under: its integrity can verify while the current release reports `not_re_evaluated` for its answer (see [semantics versions](runtime-semantics.md#semantics-versions)).
+A verifier reads its own evidence-pack format, and the format before it when that one holds rows written before the log had one order: v0.0.17 and v0.0.18 write format 19 and still verify the format 17 packs v0.0.15 and v0.0.16 wrote. A pack in any older format is refused as `unsupported_pack`; export it again from the upgraded database. Keep the old packs, and a binary of the release that wrote them: anyone who holds a pack without the database cannot export it again, and only that release verifies it. This holds even when little changed. A prefix pack from v0.0.14 (format 13) and a v0.0.15 export of the same record differ only in their first line, and v0.0.15 still refuses the older one. The other way round, v0.0.14 reports a format 17 pack as `malformed_pack`, with a detail that says to upgrade. The generated client's pack models, such as `PrefixPackManifest`, read the current format only. That does not change the semantics version an older receipt was decided under: its integrity can verify while the current release reports `not_re_evaluated` for its answer (see [semantics versions](runtime-semantics.md#semantics-versions)).
 
 `morpholog init` provisions a schema; it never migrates one. That is
 deliberate - it means running `init` against a live database cannot alter
@@ -197,8 +197,8 @@ forgot writes nothing.
 **Migrating needs ownership of the schema, not the runtime login.** If you
 provisioned with `--least-privilege`, the writer role deliberately cannot
 run DDL, so `migrate` connects as the role that owns the tables - the one
-that ran `init`. `--check` only reads, and both roles are granted `SELECT`
-on the record, so a readiness step can ask without holding the privileges
+that ran `init`. `--check` only reads, and every deployment role is granted
+`SELECT` on the record, so a readiness step can ask without holding the privileges
 to act. `migrate` re-applies the privilege floor on every run, since a `GRANT`
 cannot reach a table that did not exist when it ran.
 
@@ -256,9 +256,9 @@ per version, side by side, and point each project at the one its generated
 client was built for:
 
 ```bash
-mkdir -p ~/.local/lib/morpholog/v0.0.17
-tar -xzf "morpholog-v0.0.17-$TARGET.tar.gz" --strip-components=1 -C ~/.local/lib/morpholog/v0.0.17
-export MORPHOLOG_BIN=~/.local/lib/morpholog/v0.0.17/morpholog   # per project
+mkdir -p ~/.local/lib/morpholog/v0.0.18
+tar -xzf "morpholog-v0.0.18-$TARGET.tar.gz" --strip-components=1 -C ~/.local/lib/morpholog/v0.0.18
+export MORPHOLOG_BIN=~/.local/lib/morpholog/v0.0.18/morpholog   # per project
 ```
 
 The generated Python client reads `MORPHOLOG_BIN` before `PATH`, and its
@@ -283,13 +283,17 @@ morpholog init --least-privilege --role-prefix acme_ --database-url postgres:///
 The generated client takes the same prefix:
 `init(least_privilege=True, role_prefix="acme_")`.
 
-This creates `acme_writer` and `acme_reader`, grants them privileges in
-this database only, and records them there. `migrate` re-applies the
+This creates `acme_writer`, `acme_reader` and `acme_executor`, grants them
+privileges in this database only, and records them there. A prefix is at
+most 55 characters, so every name fits PostgreSQL's limit. Before the
+executor it could be 57, and a deployment with a 56- or 57-character prefix
+cannot add the executor under it: [move it](#moving-a-deployment-to-its-own-roles)
+to a shorter prefix, which creates all three roles. `migrate` re-applies the
 grants to the recorded roles and to no others. It never creates a role,
 and it refuses if a recorded role is gone.
 
-Two owner-only shapes are supported. A recorded pair with no members
-means Morpholog manages a privilege floor that no login currently holds;
+Two owner-only shapes are supported. Recorded roles with no members
+mean Morpholog manages a privilege floor that no login currently holds;
 keep it if the deployment uses the least-privilege model, since an
 application connecting as the owner of the tables stands behind no such
 floor. An empty `morpholog.deployment_roles` means no managed floor, and
@@ -327,8 +331,8 @@ as the role that owns its tables:
 morpholog roles move --role-prefix acme_ --login acme_app --database-url postgres:///acme
 ```
 
-In one transaction this creates `acme_writer` and `acme_reader`, grants them
-the floor, makes each `--login` a member of the new role of every kind it
+In one transaction this creates `acme_writer`, `acme_reader` and
+`acme_executor`, grants them the floor, makes each `--login` a member of the new role of every kind it
 held (with the same inherit and `SET ROLE` settings), revokes the floor from
 the old pair in this database, and records the new pair. It prints a report:
 the logins moved, the old pair's other direct members, which no longer hold

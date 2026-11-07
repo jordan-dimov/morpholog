@@ -37,6 +37,7 @@ fn act(k: &str) -> Proposal {
         transformation_name: "retract_x".into(),
         args: vec![subj(k)],
         actor: Subject::from("deadlock_test"),
+        decided_at: None,
     })
 }
 

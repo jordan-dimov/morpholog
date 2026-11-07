@@ -283,6 +283,7 @@ fn transition(name: &str) -> Transition {
         transformation_name: name.into(),
         args: vec![EvalValue::Subject(Subject::from("acct_1"))],
         actor: Subject::from("alex"),
+        decided_at: None,
     }
 }
 
@@ -425,6 +426,7 @@ fn traced_run(
         transformation_name: t.name.clone(),
         args,
         actor: Subject::from("alex"),
+        decided_at: None,
     };
     match propose_with_trace(
         &p,
@@ -490,6 +492,7 @@ fn errored_run() -> (String, Vec<morpholog_core::TraceEntry>) {
         transformation_name: t.name.clone(),
         args: vec![],
         actor: Subject::from("alex"),
+        decided_at: None,
     };
     let pre = State::from_claims(vec![
         ClaimInstance {
@@ -611,6 +614,7 @@ fn explanations_serialize_as_pinned() {
             transformation_name: "flag_account".into(),
             args: vec![EvalValue::Subject(Subject::from("acct_2"))],
             actor: Subject::from("alex"),
+            decided_at: None,
         },
         &State::from_claims(vec![]),
         &mut morpholog_postgres::runtime_subjects(),
@@ -1164,23 +1168,27 @@ fn migration_reports_serialize_as_pinned() {
     );
 }
 
-/// `roles move`: the pairs, the logins moved, the members left behind, and
-/// where the old pair still reaches.
+/// `roles move`: the roles, the logins moved, the members left behind, and
+/// where the old roles still reach. The old record here predates the
+/// executor, so only the new roles name one.
 #[test]
 fn roles_move_report_serializes_as_pinned() {
     use morpholog_postgres::{MovedLogin, RolePair, RolesMoveReport};
     let report = RolesMoveReport {
         from: RolePair {
+            executor: None,
             reader: "morpholog_reader".to_string(),
             writer: "morpholog_writer".to_string(),
         },
         logins: vec![MovedLogin {
+            executor: false,
             login: "acme_app".to_string(),
             reader: false,
             writer: true,
         }],
         old_pair_reaches: vec!["other_deployment".to_string()],
         to: RolePair {
+            executor: Some("acme_executor".to_string()),
             reader: "acme_reader".to_string(),
             writer: "acme_writer".to_string(),
         },
@@ -1861,6 +1869,33 @@ fn refresh_derived_reports_serialize_as_pinned() {
     );
 }
 
+// `refresh snapshots`: `latest` is absent when nothing is kept.
+#[test]
+fn refresh_snapshots_reports_serialize_as_pinned() {
+    use morpholog_cli::envelopes::RefreshSnapshotsReport;
+
+    assert_golden(
+        "refresh_snapshots_report.json",
+        &to_value(&RefreshSnapshotsReport {
+            built: 2,
+            every: 10_000,
+            kept: 12,
+            latest: Some(sample_uuid()),
+            removed: 1,
+        }),
+    );
+    assert_golden(
+        "refresh_snapshots_report_none_kept.json",
+        &to_value(&RefreshSnapshotsReport {
+            built: 0,
+            every: 10_000,
+            kept: 0,
+            latest: None,
+            removed: 0,
+        }),
+    );
+}
+
 // The schema refuses a one-sided snapshot pair via dependentRequired, and
 // the validator enforces it.
 #[test]
@@ -2004,6 +2039,7 @@ fn rehearsal_report_serializes_as_pinned() {
                     "sha256:8a1d8c1f0b7e4e2c9d6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e",
                 ),
                 semantics_version: Some(3),
+                committed_at: jiff::Timestamp::UNIX_EPOCH,
             },
         );
         pre.apply(asserted, &[]);
@@ -3228,6 +3264,11 @@ fn every_golden_validates_against_its_defs_entry() {
         (
             "refresh_derived_report_no_transitions.json",
             "refresh_derived_report",
+        ),
+        ("refresh_snapshots_report.json", "refresh_snapshots_report"),
+        (
+            "refresh_snapshots_report_none_kept.json",
+            "refresh_snapshots_report",
         ),
         ("verify_report_consistent.json", "verify_report"),
         ("verify_report_divergent.json", "verify_report"),

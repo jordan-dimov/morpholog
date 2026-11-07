@@ -53,12 +53,14 @@ impl Proposal {
 
     /// The kernel transition this proposal evaluates as. The actor is
     /// derived from the attestation - there is no second place to
-    /// supply it, so the two can never disagree.
+    /// supply it, so the two can never disagree. No decision time: the
+    /// transaction that decides it gives one, and nothing else can.
     pub(crate) fn transition(&self) -> Transition {
         Transition {
             transformation_name: self.transformation_name.clone(),
             args: self.args.clone(),
             actor: self.actor().clone(),
+            decided_at: None,
         }
     }
 }

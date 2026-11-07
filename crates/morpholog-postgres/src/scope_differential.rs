@@ -304,6 +304,7 @@ fn body_only_scope_stages_the_same_delta_as_full_state() {
                     transformation_name: t.name.clone(),
                     args,
                     actor: morpholog_test_support::test_actor(),
+                    decided_at: None,
                 };
                 let scope = compute_load_scope(
                     t,
@@ -357,6 +358,7 @@ fn scoped_loading_is_observationally_equivalent_to_full_state() {
                     transformation_name: t.name.clone(),
                     args: args.clone(),
                     actor: morpholog_test_support::test_actor(),
+                    decided_at: None,
                 };
                 let scope = compute_load_scope(
                     t,
@@ -514,6 +516,7 @@ fn a_rebound_parameter_reads_its_predicate_whole() {
         transformation_name: t.name.clone(),
         args: args.clone(),
         actor: morpholog_test_support::test_actor(),
+        decided_at: None,
     };
     let scope = compute_load_scope(
         t,
@@ -566,6 +569,7 @@ fn a_mixed_execution_loads_only_what_its_interpreted_invariants_read() {
             morpholog_test_support::dec(1),
         ],
         actor: morpholog_test_support::test_actor(),
+        decided_at: None,
     };
     let scope = compute_load_scope(
         t,

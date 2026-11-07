@@ -5,6 +5,7 @@
   },
   "logins": [
     {
+      "executor": false,
       "login": "acme_app",
       "reader": false,
       "writer": true
@@ -14,6 +15,7 @@
     "other_deployment"
   ],
   "to": {
+    "executor": "acme_executor",
     "reader": "acme_reader",
     "writer": "acme_writer"
   },

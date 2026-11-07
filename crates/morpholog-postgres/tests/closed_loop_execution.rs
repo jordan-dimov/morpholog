@@ -542,6 +542,89 @@ async fn an_order_for_a_venue_the_executor_is_not_configured_for_fails_closed() 
     assert!(executor.attempts().is_empty());
 }
 
+/// The executor as a deployment runs it: under the executor's own role,
+/// which may move outbox rows through delivery and nothing else. The
+/// operator has declared a second venue whose name reads like an address.
+/// The record admits the agent's order there, since the venue is declared;
+/// a declared venue is not a target the executor is configured for, so it
+/// fails closed, and its role cannot rewrite the intent to aim it
+/// elsewhere.
+#[tokio::test]
+async fn the_executor_under_its_own_role_places_what_was_admitted_and_cannot_be_redirected() {
+    let d = common::Deployment::new("morpholog_ci_cle_exec").await;
+    morpholog_postgres::provision_least_privilege(&d.pool, &d.roles)
+        .await
+        .unwrap();
+    let pool = &d.pool;
+    desk(pool).await;
+    let address = "https://attacker.example/orders";
+    commit_as(pool, &cle::declare_venue(), vec![subj(address)], OPERATOR).await;
+    let order = place(pool, "buy", 10, "48.5").await;
+    expect_committed(
+        propose_pg_as(
+            pool,
+            &program(),
+            &cle::place_order(),
+            vec![
+                subj(address),
+                subj(INSTRUMENT),
+                subj("buy"),
+                dec(10),
+                dec_str("48.5"),
+            ],
+            AGENT,
+        )
+        .await
+        .unwrap(),
+    );
+    let audit_before = audit_count(pool).await;
+
+    let venue = Arc::new(Venue::default());
+    let executor = Executor::new(&venue);
+    let as_executor = d.acting_as(d.executor()).await;
+    let first = run_executor(&as_executor, "executor_a", &executor).await;
+    let second = run_executor(&as_executor, "executor_a", &executor).await;
+    assert!(
+        matches!(first, ProcessOutcome::Delivered { .. }),
+        "{first:?}"
+    );
+    assert!(
+        matches!(&second, ProcessOutcome::Failed { reason, .. } if reason.contains(address)),
+        "{second:?}"
+    );
+    assert_eq!(
+        outbox_status(pool).await,
+        vec!["delivered".to_string(), "failed".to_string()]
+    );
+    let book = venue.orders();
+    assert_eq!(book.len(), 1, "one admitted order, placed once: {book:?}");
+    assert_eq!(book[0].client_ref, text(&order));
+
+    // Aiming the refused intent at the configured venue is a rewrite of
+    // what was admitted, which the role cannot do.
+    let redirect = sqlx::query(
+        "UPDATE morpholog.outbox \
+         SET arguments = jsonb_set(arguments, '{1}', '\"epex_dayahead\"'::jsonb) \
+         WHERE status = 'failed'",
+    )
+    .execute(&as_executor)
+    .await;
+    assert!(
+        redirect
+            .as_ref()
+            .is_err_and(|e| e.to_string().contains("permission denied")),
+        "{redirect:?}"
+    );
+    assert_eq!(
+        audit_count(pool).await,
+        audit_before,
+        "delivery and its failure recorded no governed decision"
+    );
+
+    as_executor.close().await;
+    d.finish().await;
+}
+
 // ============================================================
 // A login cannot speak another party's name
 // ============================================================
@@ -667,6 +750,7 @@ async fn the_agents_login_cannot_act_as_the_operator_or_the_reporter() {
             transformation_name: t.name.clone(),
             args,
             actor: Subject::from(name),
+            decided_at: None,
         };
         let err = propose_against_pg(&agent, &program(), &attested(&transition))
             .await

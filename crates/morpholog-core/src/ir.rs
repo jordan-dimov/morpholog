@@ -650,10 +650,11 @@ pub(crate) fn arith_result_kind(
 }
 
 /// A positional argument in a claim, intent, or expression: a variable,
-/// a wildcard, a literal, or `Actor`. `Term::Actor` resolves only in a
-/// transformation body; in an invariant it raises
-/// `EvalError::UnboundActor`, because authority checks belong in
-/// `require`, not invariants.
+/// a wildcard, a literal, `Actor` or `DecidedAt`. The last two resolve
+/// only in a transformation body; elsewhere they raise
+/// `EvalError::UnboundActor` and `EvalError::UnboundDecisionTime`,
+/// because an invariant judges the state, not who proposed a change or
+/// when.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Term {
     Var(Var),
@@ -663,6 +664,11 @@ pub enum Term {
     /// inside transformation bodies; not available inside invariant
     /// bodies.
     Actor,
+    /// Resolves to the decision time the runtime gave the proposed
+    /// transition: the deciding transaction's start, recorded as the
+    /// audit row's `committed_at`. A timestamp. Available where `Actor`
+    /// is.
+    DecidedAt,
 }
 
 /// A decimal literal: a [`Decimal`] whose identity keeps the scale it

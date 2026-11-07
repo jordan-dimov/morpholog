@@ -57,9 +57,11 @@ mod roles_move;
 mod scope_differential;
 mod score;
 mod signing;
+mod snapshots;
 mod sql_quote;
 mod transact;
 mod txn;
+pub use txn::session_login;
 mod verify;
 pub mod wire_time;
 mod witnesses;
@@ -140,7 +142,7 @@ pub(crate) use provision::reapply_least_privilege;
 pub use provision::{
     DEFAULT_ROLE_PREFIX, DeploymentRoles, DroppedSchema, InitOutcome, RecordedRoles, RoleMember,
     RoleMembers, SessionCount, databases_also_reached, deployment_roles, direct_members,
-    drop_schema, initialise_schema, other_sessions, provision_least_privilege,
+    drop_schema, initialise_schema, listed_roles, other_sessions, provision_least_privilege,
     rebind_least_privilege, redact_database_url, require_can_provision_least_privilege,
     require_deployment_roles, single_connection_pool, with_default_user, with_user,
 };
@@ -165,6 +167,7 @@ pub use signing::{
     render_public_key, render_signature, sign_tree_head, signing_key_from_pem, signing_key_to_pem,
     tree_head_signing_bytes, tree_head_witness_bytes, verify_tree_head,
 };
+pub use snapshots::{SnapshotRefresh, refresh_state_snapshots};
 pub use transact::{AtomicAct, PgAtomicOutcome, propose_all_against_pg};
 pub use verify::{
     VerifyOutcome, VerifyPass, VerifyProgress, VerifyReport, ViewsVerification, coverage_replay,

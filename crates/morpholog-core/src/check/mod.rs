@@ -414,10 +414,21 @@ pub(crate) fn check_program(program: &Program) -> Checked {
         // Bodies are context-free: no `actor` (pass it as a call
         // argument) and no `pre(...)` (wrap the call instead), so a
         // definition means the same thing in a gate as in an invariant.
-        if prop_mentions_actor(&def.body) {
+        if prop_mentions(&def.body, Term::Actor) {
             let context = cx.context.clone();
             cx.errors
                 .push(ValidationError::ActorNotAvailable { context });
+        }
+        if prop_mentions(&def.body, Term::DecidedAt) {
+            let context = cx.context.clone();
+            cx.errors
+                .push(ValidationError::DecisionTimeNotAvailable { context });
+        }
+        if def.parameters.iter().any(|p| p.as_str() == DECIDED_AT) {
+            cx.errors.push(ValidationError::DecisionTimeAsName {
+                context: cx.context.clone(),
+                what: "a parameter".into(),
+            });
         }
         if fold::mentions_pre(&def.body) {
             let context = cx.context.clone();
@@ -482,10 +493,15 @@ pub(crate) fn check_program(program: &Program) -> Checked {
         cx.context = ValidationContext::Invariant {
             name: inv.name.to_string(),
         };
-        if prop_mentions_actor(&inv.body) {
+        if prop_mentions(&inv.body, Term::Actor) {
             let context = cx.context.clone();
             cx.errors
                 .push(ValidationError::ActorNotAvailable { context });
+        }
+        if prop_mentions(&inv.body, Term::DecidedAt) {
+            let context = cx.context.clone();
+            cx.errors
+                .push(ValidationError::DecisionTimeNotAvailable { context });
         }
         if let Some(target) = &inv.totality_for {
             match program.predicates.iter().find(|d| &d.name == target) {
@@ -547,6 +563,20 @@ pub(crate) fn check_program(program: &Program) -> Checked {
             }
         }
 
+        if transformation
+            .parameters
+            .iter()
+            .any(|p| p.as_str() == DECIDED_AT)
+        {
+            cx.errors.push(ValidationError::DecisionTimeAsName {
+                context: ValidationContext::Transformation {
+                    name: transformation.name.to_string(),
+                    statement: None,
+                },
+                what: "a parameter".into(),
+            });
+        }
+
         // The context carries the statement index so a finding points
         // at its statement. Inside a nested `for`, the top-level index.
         for (index, stmt) in transformation.body.iter().enumerate() {
@@ -554,6 +584,7 @@ pub(crate) fn check_program(program: &Program) -> Checked {
                 name: transformation.name.to_string(),
                 statement: Some(index),
             };
+            decision_time_misuse(stmt, &cx.context, &mut cx.errors);
             cx.walk_stmt(stmt, &mut scope);
         }
 
@@ -606,12 +637,25 @@ pub(crate) fn check_program(program: &Program) -> Checked {
                 predicate: derived.predicate.to_string(),
             });
         }
-        if prop_mentions_actor(&derived.domain)
-            || derived.values.iter().any(|v| value_mentions_actor(&v.expr))
+        if prop_mentions(&derived.domain, Term::Actor)
+            || derived
+                .values
+                .iter()
+                .any(|v| value_mentions(&v.expr, Term::Actor))
         {
             let context = cx.context.clone();
             cx.errors
                 .push(ValidationError::ActorNotAvailable { context });
+        }
+        if prop_mentions(&derived.domain, Term::DecidedAt)
+            || derived
+                .values
+                .iter()
+                .any(|v| value_mentions(&v.expr, Term::DecidedAt))
+        {
+            let context = cx.context.clone();
+            cx.errors
+                .push(ValidationError::DecisionTimeNotAvailable { context });
         }
         // Values run once per distinct key tuple, with only the keys
         // bound. So values are inferred in a scope holding just the keys,
@@ -2133,20 +2177,60 @@ fn value_of_result_kind(
         .unwrap_or(InferredKind::UnknownOrAny)
 }
 
-/// Whether a `Term` is `Term::Actor`.
-fn is_actor(t: &Term) -> bool {
-    matches!(t, Term::Actor)
+/// How the surface spells [`Term::DecidedAt`]; no binding may take the
+/// name.
+const DECIDED_AT: &str = "decided_at";
+
+/// `decided_at` bound as a name, or matched against stored claims, in
+/// one statement of a transformation body.
+fn decision_time_misuse(
+    stmt: &Stmt,
+    context: &ValidationContext,
+    errors: &mut Vec<ValidationError>,
+) {
+    let named = |what: &str| ValidationError::DecisionTimeAsName {
+        context: context.clone(),
+        what: what.into(),
+    };
+    let matched = |predicate: &crate::ir::PredicateName| ValidationError::DecisionTimeMatched {
+        context: context.clone(),
+        predicate: predicate.to_string(),
+    };
+    fold::walk_stmt(stmt, &mut |n| match n {
+        fold::Node::Stmt(Stmt::Let { name, .. } | Stmt::LetNewSubject { name })
+            if name.as_str() == DECIDED_AT =>
+        {
+            errors.push(named("a let value"));
+        }
+        fold::Node::Stmt(Stmt::For { binding, .. }) if binding.as_str() == DECIDED_AT => {
+            errors.push(named("a for binder"));
+        }
+        fold::Node::Binder(v) if v.as_str() == DECIDED_AT => {
+            errors.push(named("a quantifier binder"));
+        }
+        fold::Node::Stmt(Stmt::Retract { predicate, args }) if args.contains(&Term::DecidedAt) => {
+            errors.push(matched(predicate));
+        }
+        fold::Node::Prop(Prop::Claim { predicate, args }) if args.contains(&Term::DecidedAt) => {
+            errors.push(matched(predicate));
+        }
+        fold::Node::Stmt(_)
+        | fold::Node::Prop(_)
+        | fold::Node::Value(_)
+        | fold::Node::Slot(_)
+        | fold::Node::Binder(_) => {}
+    });
 }
 
-/// Whether a proposition references `Term::Actor` anywhere, to flag
-/// `actor` in invariant and derived-claim bodies.
-fn prop_mentions_actor(prop: &Prop) -> bool {
-    fold::any_term_in_prop(prop, &|t, _| is_actor(t))
+/// Whether a proposition references `term` (`actor`, `decided_at`)
+/// anywhere, to flag it where only a transformation body can give it.
+fn prop_mentions(prop: &Prop, term: Term) -> bool {
+    fold::any_term_in_prop(prop, &|t, _| *t == term)
 }
 
-/// Value-sort companion to [`prop_mentions_actor`].
-fn value_mentions_actor(expr: &ValueExpr) -> bool {
-    fold::any_term_in_value(expr, &|t, _| is_actor(t))
+/// Value-sort companion to [`prop_mentions`].
+fn value_mentions(expr: &ValueExpr, term: Term) -> bool {
+    fold::any_term_in_value(expr, &|t, _| *t == term)
 }
 
 /// Every rule name a statement carries, including inside `for` bodies.
@@ -2186,6 +2270,7 @@ fn term_kind(term: &Term) -> InferredKind {
     match term {
         Term::Var(_) | Term::Wildcard => InferredKind::UnknownOrAny,
         Term::Actor => InferredKind::Known(PredicateArgKind::Subject),
+        Term::DecidedAt => InferredKind::Known(PredicateArgKind::Timestamp),
         Term::Literal(Value::Subject(_)) => InferredKind::Known(PredicateArgKind::Subject),
         Term::Literal(Value::Decimal(_)) => InferredKind::Known(PredicateArgKind::Decimal),
         Term::Literal(Value::Date(_)) => InferredKind::Known(PredicateArgKind::Date),

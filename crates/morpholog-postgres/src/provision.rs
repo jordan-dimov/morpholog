@@ -219,43 +219,54 @@ async fn this_database(conn: &mut sqlx::PgConnection) -> Result<i64, PgError> {
     .map_err(classify_checked_query)
 }
 
-/// The prefix of the default role names, `morpholog_writer` and
-/// `morpholog_reader`.
+/// The prefix of the default role names, `morpholog_writer`,
+/// `morpholog_reader` and `morpholog_executor`.
 pub const DEFAULT_ROLE_PREFIX: &str = "morpholog_";
 
-/// One deployment's two group roles. The writer holds exactly the
-/// runtime's write set; the reader holds read-only access to the governed
-/// tables and the derived read cache, for dashboards, projections and
-/// auditors. Both are NOLOGIN and passwordless: the operator grants
-/// membership to real login roles.
+/// One deployment's group roles. The writer holds exactly the runtime's
+/// write set; the reader holds read-only access to the governed tables and
+/// the derived read cache, for dashboards, projections and auditors; the
+/// executor may move an outbox row through delivery and nothing else, so
+/// the process that holds an external credential cannot propose, write a
+/// record, or change what an admitted intent says. All are NOLOGIN and
+/// passwordless: the operator grants membership to real login roles.
+///
+/// A database provisioned before the executor existed records none until
+/// `init --least-privilege` runs again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeploymentRoles {
     writer: String,
     reader: String,
+    executor: Option<String>,
 }
 
 impl DeploymentRoles {
-    /// `<prefix>writer` and `<prefix>reader`. A prefix is lowercase ASCII
-    /// letters, digits and `_`, starts with a letter, does not start with
-    /// `pg_` (reserved by PostgreSQL), and keeps both names within
-    /// PostgreSQL's 63-byte limit.
+    /// `<prefix>writer`, `<prefix>reader` and `<prefix>executor`. A prefix
+    /// is lowercase ASCII letters, digits and `_`, starts with a letter,
+    /// does not start with `pg_` (reserved by PostgreSQL), and keeps every
+    /// name within PostgreSQL's 63-byte limit.
     pub fn with_prefix(prefix: &str) -> Result<Self, PgError> {
         let lawful = prefix.starts_with(|c: char| c.is_ascii_lowercase())
             && prefix
                 .chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
             && !prefix.starts_with("pg_")
-            && prefix.len() + "writer".len() <= 63;
+            && prefix.len() + "executor".len() <= 63;
         if !lawful {
             return Err(PgError::InvalidState(format!(
                 "{prefix:?} is not a role prefix: use lowercase letters, digits and `_`, \
-                 starting with a letter and not with `pg_`, at most 57 characters"
+                 starting with a letter and not with `pg_`, at most 55 characters"
             )));
         }
-        Ok(Self {
+        Ok(Self::named(prefix))
+    }
+
+    fn named(prefix: &str) -> Self {
+        Self {
             writer: format!("{prefix}writer"),
             reader: format!("{prefix}reader"),
-        })
+            executor: Some(format!("{prefix}executor")),
+        }
     }
 
     pub fn writer(&self) -> &str {
@@ -266,17 +277,41 @@ impl DeploymentRoles {
         &self.reader
     }
 
-    pub(crate) fn both(&self) -> [&str; 2] {
-        [&self.writer, &self.reader]
+    /// `None` for a database provisioned before the executor existed.
+    pub fn executor(&self) -> Option<&str> {
+        self.executor.as_deref()
+    }
+
+    pub(crate) fn all(&self) -> Vec<&str> {
+        let mut roles = vec![self.writer.as_str(), self.reader.as_str()];
+        roles.extend(self.executor());
+        roles
+    }
+
+    /// The same writer and reader, and the same executor where both name
+    /// one: a record that predates the executor still names this
+    /// deployment.
+    pub fn same_deployment(&self, other: &Self) -> bool {
+        self.writer == other.writer
+            && self.reader == other.reader
+            && (self.executor.is_none()
+                || other.executor.is_none()
+                || self.executor == other.executor)
+    }
+
+    /// Only one role, for the queries that ask about one.
+    pub(crate) fn single(role: &str) -> Self {
+        Self {
+            writer: role.to_string(),
+            reader: role.to_string(),
+            executor: None,
+        }
     }
 }
 
 impl Default for DeploymentRoles {
     fn default() -> Self {
-        Self {
-            writer: format!("{DEFAULT_ROLE_PREFIX}writer"),
-            reader: format!("{DEFAULT_ROLE_PREFIX}reader"),
-        }
+        Self::named(DEFAULT_ROLE_PREFIX)
     }
 }
 
@@ -300,13 +335,39 @@ pub(crate) async fn recorded_roles(
     if !present {
         return Ok(None);
     }
-    let row = sqlx::query!("SELECT writer_role, reader_role FROM morpholog.deployment_roles")
-        .fetch_optional(&mut *conn)
-        .await
-        .map_err(classify_checked_query)?;
+    // `migrate` reads the record before it applies the migration that adds
+    // the executor, so a record without the column still answers.
+    let has_executor = sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM pg_attribute
+               WHERE attrelid = 'morpholog.deployment_roles'::regclass
+                 AND attname = 'executor_role' AND NOT attisdropped
+           ) AS "has!""#
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(classify_checked_query)?;
+    if !has_executor {
+        let row = sqlx::query!("SELECT writer_role, reader_role FROM morpholog.deployment_roles")
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(classify_checked_query)?;
+        return Ok(row.map(|r| DeploymentRoles {
+            writer: r.writer_role,
+            reader: r.reader_role,
+            executor: None,
+        }));
+    }
+    let row = sqlx::query!(
+        "SELECT writer_role, reader_role, executor_role FROM morpholog.deployment_roles"
+    )
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(classify_checked_query)?;
     Ok(row.map(|r| DeploymentRoles {
         writer: r.writer_role,
         reader: r.reader_role,
+        executor: r.executor_role,
     }))
 }
 
@@ -319,11 +380,12 @@ pub struct RoleMember {
     pub can_login: bool,
 }
 
-/// The direct members of a deployment's two roles, each list by name.
+/// The direct members of a deployment's roles, each list by name.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RoleMembers {
     pub writer: Vec<RoleMember>,
     pub reader: Vec<RoleMember>,
+    pub executor: Vec<RoleMember>,
 }
 
 pub async fn direct_members(
@@ -331,7 +393,7 @@ pub async fn direct_members(
     roles: &DeploymentRoles,
 ) -> Result<RoleMembers, PgError> {
     let mut conn = pool.acquire().await.map_err(classify)?;
-    let names: Vec<String> = roles.both().map(str::to_string).to_vec();
+    let names: Vec<String> = roles.all().into_iter().map(str::to_string).collect();
     let rows = sqlx::query!(
         r#"SELECT g.rolname::text AS "group!", m.rolname::text AS "member!", m.rolcanlogin AS "can_login!"
            FROM pg_auth_members am
@@ -352,8 +414,10 @@ pub async fn direct_members(
         };
         if row.group == roles.writer() {
             members.writer.push(member);
-        } else {
+        } else if row.group == roles.reader() {
             members.reader.push(member);
+        } else {
+            members.executor.push(member);
         }
     }
     Ok(members)
@@ -408,7 +472,7 @@ pub(crate) async fn other_databases(
     conn: &mut sqlx::PgConnection,
     roles: &DeploymentRoles,
 ) -> Result<Vec<String>, PgError> {
-    let names: Vec<String> = roles.both().map(str::to_string).to_vec();
+    let names: Vec<String> = roles.all().into_iter().map(str::to_string).collect();
     sqlx::query_scalar!(
         r#"SELECT d.datname::text AS "datname!"
            FROM pg_shdepend s
@@ -443,11 +507,7 @@ pub(crate) async fn existing_role(
     conn: &mut sqlx::PgConnection,
     role: &str,
 ) -> Result<PgError, PgError> {
-    let single = DeploymentRoles {
-        writer: role.to_string(),
-        reader: role.to_string(),
-    };
-    let elsewhere = other_databases(conn, &single).await?;
+    let elsewhere = other_databases(conn, &DeploymentRoles::single(role)).await?;
     let used = if elsewhere.is_empty() {
         String::new()
     } else {
@@ -479,14 +539,14 @@ pub(crate) async fn require_recorded_roles(
     conn: &mut sqlx::PgConnection,
     roles: &DeploymentRoles,
 ) -> Result<(), PgError> {
-    for role in roles.both() {
+    for role in roles.all() {
         if !role_exists(conn, role).await? {
             return Err(PgError::InvalidState(format!(
-                "this database records `{}` and `{}` as its least-privilege roles, but \
-                 `{role}` does not exist; Morpholog never recreates a role that holds a \
-                 deployment's authority. Re-provision the floor deliberately (docs/install.md, \
+                "this database records {} as its least-privilege roles, but `{role}` does \
+                 not exist; Morpholog never recreates a role that holds a deployment's \
+                 authority. Re-provision the floor deliberately (docs/install.md, \
                  \"Several deployments on one cluster\")",
-                roles.writer, roles.reader
+                listed_roles(roles)
             )));
         }
     }
@@ -536,7 +596,7 @@ pub async fn rebind_least_privilege(pool: &PgPool, recorded: RecordedRoles) -> R
 async fn provision(pool: &PgPool, roles: &DeploymentRoles, rebinding: bool) -> Result<(), PgError> {
     let mut tx = pool.begin().await.map_err(classify)?;
     match recorded_roles(&mut tx).await? {
-        Some(recorded) if recorded != *roles => {
+        Some(recorded) if !recorded.same_deployment(roles) => {
             return Err(PgError::InvalidState(format!(
                 "this database records `{}` and `{}` as its least-privilege roles, not `{}` \
                  and `{}`; changing a deployment's roles is a re-provision (docs/install.md, \
@@ -544,14 +604,21 @@ async fn provision(pool: &PgPool, roles: &DeploymentRoles, rebinding: bool) -> R
                 recorded.writer, recorded.reader, roles.writer, roles.reader
             )));
         }
-        Some(recorded) => require_recorded_roles(&mut tx, &recorded).await?,
+        Some(recorded) => {
+            require_recorded_roles(&mut tx, &recorded).await?;
+            if recorded.executor.is_none()
+                && let Some(executor) = roles.executor()
+            {
+                add_executor(&mut tx, executor).await?;
+            }
+        }
         None => {
             // A rebind restores roles that still exist; a missing one is a
             // broken binding, never recreated.
             if rebinding {
                 require_recorded_roles(&mut tx, roles).await?;
             }
-            for role in roles.both() {
+            for role in roles.all() {
                 if role_exists(&mut tx, role).await? {
                     if rebinding {
                         continue;
@@ -569,9 +636,11 @@ async fn provision(pool: &PgPool, roles: &DeploymentRoles, rebinding: bool) -> R
                 .map_err(provision_error)?;
             }
             sqlx::query!(
-                "INSERT INTO morpholog.deployment_roles (writer_role, reader_role) VALUES ($1, $2)",
+                "INSERT INTO morpholog.deployment_roles (writer_role, reader_role, executor_role) \
+                 VALUES ($1, $2, $3)",
                 roles.writer,
                 roles.reader,
+                roles.executor,
             )
             .execute(&mut *tx)
             .await
@@ -581,6 +650,40 @@ async fn provision(pool: &PgPool, roles: &DeploymentRoles, rebinding: bool) -> R
     grant_floor(&mut tx, roles).await?;
     tx.commit().await.map_err(classify)?;
     Ok(())
+}
+
+/// Give a deployment provisioned before the executor existed its executor:
+/// created here, like the other two, and refused if the name is taken.
+async fn add_executor(conn: &mut sqlx::PgConnection, executor: &str) -> Result<(), PgError> {
+    if role_exists(conn, executor).await? {
+        return Err(existing_role(conn, executor).await?);
+    }
+    // Audited for AssertSqlSafe: a validated prefix plus a fixed suffix,
+    // quoted.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "CREATE ROLE {} NOLOGIN",
+        quote_ident(executor)
+    )))
+    .execute(&mut *conn)
+    .await
+    .map_err(provision_error)?;
+    sqlx::query!(
+        "UPDATE morpholog.deployment_roles SET executor_role = $1",
+        executor
+    )
+    .execute(&mut *conn)
+    .await
+    .map_err(classify_checked_query)?;
+    Ok(())
+}
+
+/// "`a`, `b` and `c`", for messages that name a deployment's roles.
+pub fn listed_roles(roles: &DeploymentRoles) -> String {
+    let names: Vec<String> = roles.all().iter().map(|r| format!("`{r}`")).collect();
+    match names.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => names.join(""),
+    }
 }
 
 /// Re-apply the floor to the roles this database records, on every
@@ -642,38 +745,53 @@ pub async fn require_can_provision_least_privilege(
         }
     }
     match recorded_roles(&mut conn).await? {
-        Some(recorded) if recorded != *roles => Err(PgError::InvalidState(format!(
+        Some(recorded) if !recorded.same_deployment(roles) => Err(PgError::InvalidState(format!(
             "this database records `{}` and `{}` as its least-privilege roles, not `{}` and \
              `{}`; pass their prefix, or move the deployment to new roles first \
              (docs/install.md, \"Several deployments on one cluster\")",
             recorded.writer, recorded.reader, roles.writer, roles.reader
         ))),
-        Some(recorded) => require_recorded_roles(&mut conn, &recorded).await,
+        Some(recorded) => {
+            require_recorded_roles(&mut conn, &recorded).await?;
+            match (recorded.executor(), roles.executor()) {
+                (None, Some(executor)) => {
+                    if role_exists(&mut conn, executor).await? {
+                        return Err(existing_role(&mut conn, executor).await?);
+                    }
+                    require_may_create_roles(&mut conn).await
+                }
+                _ => Ok(()),
+            }
+        }
         None => {
-            for role in roles.both() {
+            for role in roles.all() {
                 if role_exists(&mut conn, role).await? {
                     return Err(existing_role(&mut conn, role).await?);
                 }
             }
-            let may_create = sqlx::query_scalar!(
-                "SELECT rolsuper OR rolcreaterole AS \"may!\" FROM pg_roles \
-                 WHERE rolname = current_user"
-            )
-            .fetch_one(&mut *conn)
-            .await
-            .map_err(classify_checked_query)?;
-            if !may_create {
-                return Err(PgError::InvalidState(
-                    "least-privilege provisioning creates the deployment's roles, and this \
-                     role may not create roles; connect as a superuser, or as a role that \
-                     has CREATEROLE and owns the morpholog tables (normally the role that \
-                     ran `morpholog init`)"
-                        .to_string(),
-                ));
-            }
-            Ok(())
+            require_may_create_roles(&mut conn).await
         }
     }
+}
+
+async fn require_may_create_roles(conn: &mut sqlx::PgConnection) -> Result<(), PgError> {
+    let may_create = sqlx::query_scalar!(
+        "SELECT rolsuper OR rolcreaterole AS \"may!\" FROM pg_roles \
+         WHERE rolname = current_user"
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(classify_checked_query)?;
+    if !may_create {
+        return Err(PgError::InvalidState(
+            "least-privilege provisioning creates the deployment's roles, and this \
+             role may not create roles; connect as a superuser, or as a role that \
+             has CREATEROLE and owns the morpholog tables (normally the role that \
+             ran `morpholog init`)"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) async fn grant_floor(
@@ -681,13 +799,10 @@ pub(crate) async fn grant_floor(
     roles: &DeploymentRoles,
 ) -> Result<(), PgError> {
     // Audited: built from validated or recorded names, quoted.
-    sqlx::raw_sql(sqlx::AssertSqlSafe(least_privilege_sql(
-        &roles.writer,
-        &roles.reader,
-    )))
-    .execute(&mut *conn)
-    .await
-    .map_err(provision_error)?;
+    sqlx::raw_sql(sqlx::AssertSqlSafe(least_privilege_sql(roles)))
+        .execute(&mut *conn)
+        .await
+        .map_err(provision_error)?;
     Ok(())
 }
 
@@ -710,11 +825,17 @@ pub(crate) fn provision_error(e: sqlx::Error) -> PgError {
     classify(e)
 }
 
+/// The outbox columns delivery moves: the lease, the attempt count and the
+/// outcome. Neither the writer nor the executor may change the rest, which
+/// is the admitted intent itself.
+const DELIVERY_STATE: &str = "status, attempt_count, last_attempt_at, delivered_at, \
+     failed_at, failure_reason, next_attempt_at, locked_by, lock_expires_at";
+
 /// The REVOKE/GRANT script, pure so a test pins the exact privilege floor.
 /// The grants are the runtime SQL's write set, table by table.
-fn least_privilege_sql(writer: &str, reader: &str) -> String {
-    let w = quote_ident(writer);
-    let r = quote_ident(reader);
+fn least_privilege_sql(roles: &DeploymentRoles) -> String {
+    let w = quote_ident(&roles.writer);
+    let r = quote_ident(&roles.reader);
     let mut out = String::new();
     let _ = writeln!(out, "REVOKE ALL ON SCHEMA morpholog FROM PUBLIC;");
     let _ = writeln!(out, "REVOKE ALL ON SCHEMA morpholog_read FROM PUBLIC;");
@@ -757,13 +878,25 @@ fn least_privilege_sql(writer: &str, reader: &str) -> String {
     );
     let _ = writeln!(out, "GRANT SELECT, INSERT ON morpholog.audit TO {w};");
     let _ = writeln!(out, "GRANT SELECT, INSERT ON morpholog.rejections TO {w};");
+    // Grants add up, so the table-wide UPDATE an older floor granted is
+    // revoked before the narrower one: revoking at the table also revokes
+    // every column grant, so this is the same on every run.
+    let _ = writeln!(out, "REVOKE UPDATE ON morpholog.outbox FROM {w};");
+    let _ = writeln!(out, "GRANT SELECT, INSERT ON morpholog.outbox TO {w};");
+    // The compensation path also records which transition compensated.
     let _ = writeln!(
         out,
-        "GRANT SELECT, INSERT, UPDATE ON morpholog.outbox TO {w};"
+        "GRANT UPDATE ({DELIVERY_STATE}, compensation_transition_id) ON morpholog.outbox TO {w};"
     );
     let _ = writeln!(
         out,
         "GRANT SELECT, INSERT, UPDATE ON morpholog.audit_checkpoints TO {w};"
+    );
+    // An as-of read by the writer starts from a snapshot; building one is
+    // the owner's.
+    let _ = writeln!(
+        out,
+        "GRANT SELECT ON morpholog.state_snapshots, morpholog.state_snapshot_claims TO {w};"
     );
     let _ = writeln!(
         out,
@@ -777,6 +910,18 @@ fn least_privilege_sql(writer: &str, reader: &str) -> String {
         out,
         "GRANT SELECT ON ALL TABLES IN SCHEMA morpholog_read TO {r};"
     );
+    if let Some(executor) = roles.executor() {
+        let e = quote_ident(executor);
+        let _ = writeln!(out, "GRANT USAGE ON SCHEMA morpholog TO {e};");
+        // The schema check every connection makes.
+        let _ = writeln!(out, "GRANT SELECT ON morpholog.schema_migrations TO {e};");
+        let _ = writeln!(out, "GRANT SELECT ON morpholog.outbox TO {e};");
+        let _ = writeln!(out, "REVOKE UPDATE ON morpholog.outbox FROM {e};");
+        let _ = writeln!(
+            out,
+            "GRANT UPDATE ({DELIVERY_STATE}) ON morpholog.outbox TO {e};"
+        );
+    }
     out
 }
 
@@ -787,8 +932,7 @@ mod tests {
 
     #[test]
     fn the_privilege_floor_is_pinned() {
-        let roles = DeploymentRoles::default();
-        let sql = least_privilege_sql(roles.writer(), roles.reader());
+        let sql = least_privilege_sql(&DeploymentRoles::default());
         // The floor's teeth: PUBLIC is revoked, and the writer gets no
         // UPDATE or DELETE on the append-only audit log.
         assert!(sql.contains("REVOKE ALL ON SCHEMA morpholog FROM PUBLIC"));
@@ -796,12 +940,34 @@ mod tests {
         assert!(!sql.contains("UPDATE ON morpholog.audit "));
         assert!(!sql.contains("DELETE ON morpholog.audit "));
         assert!(!sql.contains("TRUNCATE"));
+        // No role gets UPDATE on the whole outbox, only on named columns.
+        assert!(!sql.contains("UPDATE ON morpholog.outbox TO"));
+    }
+
+    #[test]
+    fn a_prefix_keeps_every_role_name_within_the_identifier_limit() {
+        let longest = format!("a{}", "b".repeat(54));
+        let roles = DeploymentRoles::with_prefix(&longest).unwrap();
+        assert_eq!(roles.executor().unwrap().len(), 63);
+        let refused = DeploymentRoles::with_prefix(&format!("{longest}c"));
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|e| e.to_string().contains("at most 55 characters")),
+            "a 56-character prefix makes a 64-byte executor name: {refused:?}"
+        );
     }
 
     #[test]
     fn role_names_are_quoted_identifiers() {
-        let sql = least_privilege_sql("odd\"name", "reader");
+        let roles = DeploymentRoles {
+            writer: "odd\"name".to_string(),
+            reader: "reader".to_string(),
+            executor: Some("odd\"executor".to_string()),
+        };
+        let sql = least_privilege_sql(&roles);
         assert!(sql.contains("\"odd\"\"name\""));
+        assert!(sql.contains("\"odd\"\"executor\""));
     }
 }
 

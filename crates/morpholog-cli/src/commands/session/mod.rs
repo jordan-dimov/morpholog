@@ -27,7 +27,7 @@ use anyhow::Context;
 use std::io::{BufRead, Write};
 
 use crate::SessionArgs;
-use crate::commands::resident::{Resident, ResidentFailure};
+use crate::commands::resident::{Permits, Resident, ResidentFailure};
 use morpholog_cli::envelopes::ErrorReceipt;
 
 /// A runaway guard, not a working limit. A longer request line aborts the
@@ -43,6 +43,9 @@ pub(crate) async fn run(args: SessionArgs) -> anyhow::Result<()> {
     )
     .await?;
 
+    // The stdio caller started the process, so it already holds everything
+    // the process holds: there is nothing to withhold from it.
+    let permits = Permits::all();
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
     write_line(&mut out, resident.ready())?;
@@ -60,7 +63,7 @@ pub(crate) async fn run(args: SessionArgs) -> anyhow::Result<()> {
         if line.trim().is_empty() {
             continue; // Skipped without a receipt, like a batch blank.
         }
-        match resident.handle(line.trim(), row).await {
+        match resident.handle(line.trim(), row, &permits).await {
             Ok(response) => write_line(&mut out, &response)?,
             Err(ResidentFailure::Request { code, reason }) => {
                 let receipt = ErrorReceipt::new(code, format!("{reason:#}"), row);

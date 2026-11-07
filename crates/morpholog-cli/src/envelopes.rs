@@ -311,6 +311,7 @@ pub struct InitReport {
 /// roles the runtime and its read-only consumers actually use).
 #[derive(Serialize)]
 pub struct LeastPrivilegeReport {
+    pub executor_role: String,
     pub next_steps: Vec<String>,
     pub reader_role: String,
     pub writer_role: String,
@@ -320,10 +321,15 @@ impl LeastPrivilegeReport {
     pub fn applied(roles: &morpholog_postgres::DeploymentRoles) -> Self {
         let writer = roles.writer();
         let reader = roles.reader();
+        // Provisioning always leaves an executor; a record without one is
+        // given one before this report is made.
+        let executor = roles.executor().unwrap_or_default();
         Self {
+            executor_role: executor.to_string(),
             next_steps: vec![
                 format!("GRANT {writer} TO <the runtime's login role>;"),
                 format!("GRANT {reader} TO <each reporting or projection login role>;"),
+                format!("GRANT {executor} TO <the outbox worker's login role>;"),
             ],
             reader_role: reader.to_string(),
             writer_role: writer.to_string(),
@@ -471,6 +477,30 @@ pub struct RefreshDerivedReport {
     pub source_snapshot_committed_at: Option<jiff::Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_snapshot_transition_id: Option<uuid::Uuid>,
+}
+
+/// `refresh snapshots`: what the refresh kept. `latest` is absent when no
+/// snapshot is kept, as on a log shorter than the interval.
+#[derive(Serialize)]
+pub struct RefreshSnapshotsReport {
+    pub built: u64,
+    pub every: u64,
+    pub kept: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest: Option<uuid::Uuid>,
+    pub removed: u64,
+}
+
+impl From<&morpholog_postgres::SnapshotRefresh> for RefreshSnapshotsReport {
+    fn from(r: &morpholog_postgres::SnapshotRefresh) -> Self {
+        Self {
+            built: r.built,
+            every: r.every,
+            kept: r.kept,
+            latest: r.latest,
+            removed: r.removed,
+        }
+    }
 }
 
 impl From<&morpholog_postgres::RefreshSummary> for RefreshDerivedReport {

@@ -36,12 +36,20 @@ use crate::state::{
 /// - `actor`: the [`Subject`] proposing it. It is context, not a
 ///   parameter, so domain arguments stay clean. Serialised as a tagged
 ///   [`EvalValue::Subject`] (see [`crate::actor_repr`]).
+/// - `decided_at`: the decision time `decided_at` reads in the body,
+///   given by the runtime: the deciding transaction's start, which the
+///   audit row records as `committed_at`. Not serialised: the record
+///   carries it in that column, and a caller of the runtime cannot
+///   supply it. `None` where nothing gives one, and a body that reads it
+///   then raises [`EvalError::UnboundDecisionTime`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transition {
     pub transformation_name: TransformationName,
     pub args: Vec<EvalValue>,
     #[serde(with = "crate::actor_repr")]
     pub actor: Subject,
+    #[serde(skip)]
+    pub decided_at: Option<jiff::Timestamp>,
 }
 
 /// The result of proposing a transformation: the candidate state is
@@ -611,14 +619,14 @@ pub(crate) fn stage_delta_inner(
     let mut retracted: Vec<ClaimInstance> = vec![];
     let mut emitted: Vec<IntentInstance> = vec![];
 
-    let actor = Some(&transition.actor);
+    let given = Some(transition);
     let definition_table = DefinitionTable::new(definitions);
     for stmt in &transformation.body {
         match execute_stmt(
             stmt,
             pre_state,
             &mut bindings,
-            actor,
+            given,
             definition_table,
             &mut asserted,
             &mut retracted,
@@ -812,7 +820,7 @@ pub(crate) fn execute_stmt(
     stmt: &Stmt,
     pre_state: &State,
     bindings: &mut Bindings,
-    actor: Option<&Subject>,
+    transition: Option<&Transition>,
     definitions: DefinitionTable<'_>,
     asserted: &mut Vec<ClaimInstance>,
     retracted: &mut Vec<ClaimInstance>,
@@ -824,7 +832,7 @@ pub(crate) fn execute_stmt(
         Stmt::Require { prop: expr, name } => {
             // A body reads only the pre-state, so `pre(...)` here is
             // `PreStateUnavailable`.
-            let ctx = EvalContext::new(pre_state, None, bindings, actor, definitions);
+            let ctx = EvalContext::new(pre_state, None, bindings, transition, definitions);
             let matches = find_matches(expr, &ctx)?;
             if matches.is_empty() {
                 let rendered = format::format_prop_inline(expr);
@@ -866,7 +874,7 @@ pub(crate) fn execute_stmt(
         Stmt::BindOne { prop: expr, name } => {
             // A unique match *replaces* the binding context rather than
             // extending it.
-            let ctx = EvalContext::new(pre_state, None, bindings, actor, definitions);
+            let ctx = EvalContext::new(pre_state, None, bindings, transition, definitions);
             let mut matches = find_matches(expr, &ctx)?;
             match matches.len() {
                 0 => {
@@ -927,7 +935,7 @@ pub(crate) fn execute_stmt(
             }
         }
         Stmt::Let { name, value } => {
-            let ctx = EvalContext::new(pre_state, None, bindings, actor, definitions);
+            let ctx = EvalContext::new(pre_state, None, bindings, transition, definitions);
             let v = eval_value(value, &ctx)?;
             if trace.is_on() {
                 trace.push(TraceEntry::Let {
@@ -954,7 +962,7 @@ pub(crate) fn execute_stmt(
             Ok(StmtOutcome::Continue)
         }
         Stmt::Assert(claim) => {
-            let instance = resolve_claim(claim, bindings, actor)?;
+            let instance = resolve_claim(claim, bindings, transition)?;
             if trace.is_on() {
                 trace.push(TraceEntry::Assert {
                     claim: instance.clone(),
@@ -964,7 +972,7 @@ pub(crate) fn execute_stmt(
             Ok(StmtOutcome::Continue)
         }
         Stmt::Retract { predicate, args } => {
-            let ctx = EvalContext::new(pre_state, None, bindings, actor, definitions);
+            let ctx = EvalContext::new(pre_state, None, bindings, transition, definitions);
             let matched = matching_claims(predicate, args, &ctx)?;
             if trace.is_on() {
                 trace.push(TraceEntry::Retract {
@@ -980,7 +988,7 @@ pub(crate) fn execute_stmt(
             collection,
             body,
         } => {
-            let coll_ctx = EvalContext::new(pre_state, None, bindings, actor, definitions);
+            let coll_ctx = EvalContext::new(pre_state, None, bindings, transition, definitions);
             let coll_val = eval_value(collection, &coll_ctx)?;
             let EvalValue::Collection(items) = coll_val else {
                 return Err(EvalError::TypeMismatch("For expects a collection".into()));
@@ -1006,7 +1014,7 @@ pub(crate) fn execute_stmt(
                                 inner,
                                 pre_state,
                                 bindings,
-                                actor,
+                                transition,
                                 definitions,
                                 asserted,
                                 retracted,
@@ -1067,7 +1075,7 @@ pub(crate) fn execute_stmt(
                             inner,
                             pre_state,
                             bindings,
-                            actor,
+                            transition,
                             definitions,
                             asserted,
                             retracted,
@@ -1088,7 +1096,7 @@ pub(crate) fn execute_stmt(
             }
         }
         Stmt::Emit(intent) => {
-            let instance = resolve_intent(intent, bindings, actor)?;
+            let instance = resolve_intent(intent, bindings, transition)?;
             if trace.is_on() {
                 trace.push(TraceEntry::Emit {
                     intent: instance.clone(),
@@ -1103,7 +1111,7 @@ pub(crate) fn execute_stmt(
 pub(crate) fn resolve_claim(
     claim: &Claim,
     bindings: &Bindings,
-    actor: Option<&Subject>,
+    transition: Option<&Transition>,
 ) -> Result<ClaimInstance, EvalError> {
     let mut args = Vec::with_capacity(claim.args.len());
     for t in &claim.args {
@@ -1112,7 +1120,7 @@ pub(crate) fn resolve_claim(
                 "wildcard not allowed in assert".into(),
             ));
         }
-        let value = resolve_term(t, bindings, actor)?;
+        let value = resolve_term(t, bindings, transition)?;
         if value.contains_calendar_span() {
             return Err(EvalError::TypeMismatch(format!(
                 "a calendar span cannot be admitted into claim `{}`: it shifts a \
@@ -1131,7 +1139,7 @@ pub(crate) fn resolve_claim(
 pub(crate) fn resolve_intent(
     intent: &Intent,
     bindings: &Bindings,
-    actor: Option<&Subject>,
+    transition: Option<&Transition>,
 ) -> Result<IntentInstance, EvalError> {
     let mut args = Vec::with_capacity(intent.args.len());
     for t in &intent.args {
@@ -1140,7 +1148,7 @@ pub(crate) fn resolve_intent(
                 "wildcard not allowed in emit".into(),
             ));
         }
-        let value = resolve_term(t, bindings, actor)?;
+        let value = resolve_term(t, bindings, transition)?;
         if value.contains_calendar_span() {
             return Err(EvalError::TypeMismatch(format!(
                 "a calendar span cannot be emitted in intent `{}`: it shifts a \

@@ -238,12 +238,10 @@ where
         // Before bare idents, so `duration(...)` is the constructor.
         duration_ctor().map(Term::Literal),
         subject_lit.map(|s| Term::Literal(Value::Subject(s.into()))),
-        ident.map(|name| {
-            if name == "actor" {
-                Term::Actor
-            } else {
-                Term::Var(name.into())
-            }
+        ident.map(|name| match name.as_str() {
+            "actor" => Term::Actor,
+            "decided_at" => Term::DecidedAt,
+            _ => Term::Var(name.into()),
         }),
     ))
 }
@@ -663,10 +661,10 @@ where
                         args,
                     })
                 }
-                None => ForallSource::BareTerm(if name == "actor" {
-                    Term::Actor
-                } else {
-                    Term::Var(name.into())
+                None => ForallSource::BareTerm(match name.as_str() {
+                    "actor" => Term::Actor,
+                    "decided_at" => Term::DecidedAt,
+                    _ => Term::Var(name.into()),
                 }),
             }),
         ));
@@ -746,13 +744,14 @@ where
             subject_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Subject(s.into()))));
         let wildcard_as_value = just(Token::Wildcard).to(ValueExpr::Term(Term::Wildcard));
 
-        // A variable or `actor`. `Foo(args)` is a claim, which only the proposition grammar takes.
+        // A variable, `actor` or `decided_at`. `Foo(args)` is a claim, which only the proposition
+        // grammar takes.
         let bare_ident = ident.map(|name| {
-            if name == "actor" {
-                ValueExpr::Term(Term::Actor)
-            } else {
-                ValueExpr::Term(Term::Var(name.into()))
-            }
+            ValueExpr::Term(match name.as_str() {
+                "actor" => Term::Actor,
+                "decided_at" => Term::DecidedAt,
+                _ => Term::Var(name.into()),
+            })
         });
 
         // `sum(<target> | <prop>)`. The target is any value over the body's bindings:

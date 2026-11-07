@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM morpholog.state_snapshots\n         WHERE format <> $1 OR NOT (transition_id = ANY($2))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1f32e3fcf2d721e9a41c4d101d196c93749d8a97fa2cce799592aafd7c008f28"
+}

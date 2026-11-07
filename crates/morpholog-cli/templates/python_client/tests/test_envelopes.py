@@ -642,6 +642,7 @@ class Reports(unittest.TestCase):
             golden("init_report_least_privilege.json")
         )
         self.assertEqual(locked.least_privilege.writer_role, "morpholog_writer")
+        self.assertEqual(locked.least_privilege.executor_role, "morpholog_executor")
         self.assertTrue(locked.least_privilege.next_steps)
         named = envelopes.NamedClaim.from_json(golden("named_claim.json"))
         # Named-read values stay wire-true; the generated read models
@@ -879,6 +880,28 @@ class Coverage(unittest.TestCase):
         payload["transformations"][0]["refusals"][0]["surprise"] = 1
         with self.assertRaises(envelopes.EnvelopeError):
             envelopes.CoverageReport.from_json(payload)
+
+
+class RefreshSnapshots(unittest.TestCase):
+    def test_the_report_round_trips_the_golden(self):
+        report = envelopes.RefreshSnapshotsReport.from_json(
+            golden("refresh_snapshots_report.json")
+        )
+        self.assertEqual((report.built, report.kept, report.removed), (2, 12, 1))
+        self.assertEqual(report.every, 10000)
+        self.assertEqual(report.latest, "01900000-0000-7000-8000-000000000001")
+
+    def test_none_kept_omits_latest(self):
+        report = envelopes.RefreshSnapshotsReport.from_json(
+            golden("refresh_snapshots_report_none_kept.json")
+        )
+        self.assertIsNone(report.latest)
+
+    def test_an_interval_of_zero_raises(self):
+        payload = golden("refresh_snapshots_report.json")
+        payload["every"] = 0
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.RefreshSnapshotsReport.from_json(payload)
 
 
 class RefreshDerived(unittest.TestCase):

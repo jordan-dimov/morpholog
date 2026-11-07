@@ -1627,6 +1627,7 @@ fn a_sum_reached_through_many_definitions_keeps_its_unit() {
                 transformation_name: "check_total".into(),
                 args: vec![],
                 actor: morpholog_core::Subject::from("tester"),
+                decided_at: None,
             },
             &morpholog_core::State::default(),
             &mut (0u64..).map(|n| morpholog_core::Subject::from(format!("fresh-{n}"))),

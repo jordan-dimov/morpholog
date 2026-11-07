@@ -195,22 +195,28 @@ pub struct RejectionStateOutcome {
     /// Replay them to explain a refusal: an explanation run with other
     /// subjects would describe an execution that never happened.
     pub drawn_subjects: Vec<Subject>,
+    /// The instant the execution was decided at, which `decided_at` read.
+    pub decided_at: jiff::Timestamp,
 }
 
 impl RejectionStateOutcome {
     /// A refusal's explanation, from the execution that refused: the state
-    /// it read and its own draws for `new Subject()`, replayed. `None` for
-    /// a commit. The path the proposal APIs use, so their explanations never
-    /// name subjects the refusing execution did not draw.
+    /// it read, its own draws for `new Subject()` and its decision time,
+    /// replayed. `None` for a commit. The path the proposal APIs use, so
+    /// their explanations never describe an execution that did not happen.
     pub fn explanation(
         &self,
         prepared: &PreparedProgram,
         transition: &Transition,
     ) -> Option<morpholog_core::Explanation> {
         let state = self.rejection_state.as_ref()?;
+        let transition = Transition {
+            decided_at: Some(self.decided_at),
+            ..transition.clone()
+        };
         matches!(self.outcome, PgProposalOutcome::Rejected { .. }).then(|| {
             prepared.explain(
-                transition,
+                &transition,
                 state,
                 &mut self.drawn_subjects.clone().into_iter(),
             )
@@ -224,6 +230,7 @@ pub(crate) struct ProposalRun {
     outcome: PgProposalOutcome,
     rejection_state: Option<State>,
     drawn_subjects: Vec<Subject>,
+    decided_at: jiff::Timestamp,
     phases: Option<ProposalPhases>,
 }
 
@@ -358,6 +365,7 @@ pub async fn propose_against_pg_with_rejection_state(
         outcome: run.outcome,
         rejection_state: run.rejection_state,
         drawn_subjects: run.drawn_subjects,
+        decided_at: run.decided_at,
     })
 }
 
@@ -376,7 +384,12 @@ pub(crate) async fn propose_against_pg_run(
     let elapsed = |clock: Option<std::time::Instant>| {
         clock.map_or(std::time::Duration::ZERO, |c| c.elapsed())
     };
-    let (mut tx, login_role) = begin_authorised_proposal_tx(pool, &transition.actor).await?;
+    let (mut tx, login_role, decided_at) =
+        begin_authorised_proposal_tx(pool, &transition.actor).await?;
+    let transition = &Transition {
+        decided_at: Some(decided_at),
+        ..transition.clone()
+    };
     let begin = elapsed(clock);
 
     let scope = compute_load_scope(
@@ -496,6 +509,7 @@ pub(crate) async fn propose_against_pg_run(
         outcome: pg_outcome,
         rejection_state,
         drawn_subjects: draws.into_subjects(),
+        decided_at,
         phases: timed.then_some(ProposalPhases {
             begin,
             load,
@@ -630,7 +644,12 @@ pub(crate) async fn propose_against_pg_with_trace_inner(
 ) -> Result<PgTracedOutcome, PgError> {
     let invariants = &prepared.program().invariants;
     let definitions = &prepared.program().definitions;
-    let (mut tx, login_role) = begin_authorised_proposal_tx(pool, &transition.actor).await?;
+    let (mut tx, login_role, decided_at) =
+        begin_authorised_proposal_tx(pool, &transition.actor).await?;
+    let transition = &Transition {
+        decided_at: Some(decided_at),
+        ..transition.clone()
+    };
 
     // Always interpreted, so the trace shows the specification's own steps.
     let scope = compute_load_scope(

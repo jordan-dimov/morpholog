@@ -71,6 +71,7 @@ fn transition(name: &str, args: Vec<crate::EvalValue>) -> Transition {
         transformation_name: name.into(),
         args,
         actor: test_actor(),
+        decided_at: None,
     }
 }
 

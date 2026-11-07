@@ -2,9 +2,9 @@
 //! (`examples/07_chess_transition_invariants/`).
 //!
 //! The key claim: a transition invariant (one using `pre(...)`) catches a
-//! bug that a state invariant cannot. Also covers the census invariants and
-//! square colour, `(file + rank) % 2`, used by
-//! `bishops_on_opposite_square_colors`.
+//! bug that a state invariant cannot. Also covers the census invariants,
+//! the one `move_piece` that covers quiet moves and captures, and square
+//! colour, `(file + rank) % 2`, used by `bishops_on_opposite_square_colors`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -41,16 +41,13 @@ fn program_has_expected_invariant_set() {
         vec![
             "piece_at_unique_by_file_rank",
             "pieces_stand_on_the_board",
-            "turn_belongs_to_a_player",
             "exactly_one_white_king",
             "exactly_one_black_king",
             "bishops_on_opposite_square_colors",
-            "piece_count_matches_board",
-            "board_with_pieces_has_a_counter",
             "at_most_eight_pawns_per_color",
             "move_count_strictly_increases",
             "turn_alternates",
-            "single_capture_per_move",
+            "piece_count_drops_by_at_most_one",
         ],
     );
 }
@@ -63,7 +60,7 @@ fn capturing_a_king_is_rejected() {
 
     // A minimal mid-game position: a white rook on a1 (file 1, rank 1)
     // poised to take the black king on a8 (file 1, rank 8), both kings
-    // present, the counter consistent with the four pieces on the board.
+    // present.
     let pre = State::from_claims(vec![
         claim_instance("PieceAt", &[dec(1), dec(1), subj("rook"), subj("white")]),
         claim_instance("PieceAt", &[dec(5), dec(1), subj("king"), subj("white")]),
@@ -71,36 +68,30 @@ fn capturing_a_king_is_rejected() {
         claim_instance("PieceAt", &[dec(8), dec(8), subj("rook"), subj("black")]),
         claim_instance("CurrentTurn", &[subj("white")]),
         claim_instance("MoveCount", &[dec(10)]),
-        claim_instance("PieceCount", &[dec(4)]),
     ]);
 
-    let program = chess_transition_invariants::program();
-    let capturing = program.transformation("capturing_move").expect("exists");
-    let reason = ex().must_reject(
-        capturing,
-        vec![dec(1), dec(1), dec(1), dec(8), subj("black")],
-        &pre,
-    );
-    assert!(
-        reason.to_string().contains("exactly_one_black_king"),
-        "expected the king-count invariant to reject the capture, got: {reason}"
+    refused_by(
+        &ex().must_reject(
+            &chess_transition_invariants::move_piece(),
+            squares([1, 1, 1, 8]),
+            &pre,
+        ),
+        "exactly_one_black_king",
     );
 }
 
-/// `piece_count_matches_board` rejects a move that leaves a stray piece on
-/// the board, because `PieceCount` no longer equals `sum(1 | PieceAt(...))`.
+/// `piece_count_drops_by_at_most_one` rejects a move that leaves a stray piece on
+/// the board: the board after holds one more piece than the board before.
 #[test]
-fn piece_count_drift_is_rejected() {
-    // Built in Rust IR: the real transition minus one statement, to prove
-    // the invariant has teeth.
+fn a_move_that_adds_a_piece_is_rejected() {
+    // Built in Rust IR: the real move minus one statement, to prove the
+    // invariant has teeth.
     use morpholog_core::ir_builder;
 
     let mut program = chess_transition_invariants::program();
     let state = run_start_game(&program);
 
-    // A knight move that forgets to retract the piece from its source. The
-    // board gains a piece while PieceCount stays at 32, so only the census
-    // invariant can fire.
+    // A move that forgets to retract the piece from its source.
     let drifting_move = ir_builder::transformation(
         "drifting_move",
         ir_builder::params(&["src_f", "src_r", "dst_f", "dst_r", "new_turn"]),
@@ -119,10 +110,6 @@ fn piece_count_drift_is_rejected() {
                 vec![ir_builder::var("turn")],
             )),
             ir_builder::bind_one(ir_builder::claim("MoveCount", vec![ir_builder::var("m")])),
-            ir_builder::require(ir_builder::neq(
-                ir_builder::var("new_turn"),
-                ir_builder::var("turn"),
-            )),
             ir_builder::let_(
                 "next_m",
                 ir_builder::add(
@@ -151,45 +138,45 @@ fn piece_count_drift_is_rejected() {
         .transformation("drifting_move")
         .expect("just pushed");
 
-    // Knight b1 -> c3 (file 2 rank 1 -> file 3 rank 3; c3 is empty in the
-    // opening); the knight ends up on both squares.
-    let reason = ex().must_reject(
-        drifting,
-        vec![dec(2), dec(1), dec(3), dec(3), subj("black")],
-        &state,
-    );
-    assert!(
-        reason.to_string().contains("piece_count_matches_board"),
-        "expected the census invariant to reject the drift, got: {reason}"
+    // Knight b1 -> c3 (c3 is empty in the opening); the knight ends up on
+    // both squares.
+    refused_by(
+        &ex().must_reject(
+            drifting,
+            vec![dec(2), dec(1), dec(3), dec(3), subj("black")],
+            &state,
+        ),
+        "piece_count_drops_by_at_most_one",
     );
 }
 
-/// Dropping the counter is also caught. `piece_count_matches_board` is
-/// vacuous with no `PieceCount`, so `board_with_pieces_has_a_counter`
-/// requires a non-empty board to carry one.
+/// `piece_count_drops_by_at_most_one` also rejects a move that takes two pieces at
+/// once: the board after holds two fewer.
 #[test]
-fn dropping_the_piece_counter_is_rejected() {
-    // Built in Rust IR: the real transition minus one statement, to prove
-    // the invariant has teeth.
+fn a_move_that_takes_two_pieces_is_rejected() {
     use morpholog_core::ir_builder;
 
     let mut program = chess_transition_invariants::program();
     let state = run_start_game(&program);
 
-    let counterless_move = ir_builder::transformation(
-        "counterless_move",
-        ir_builder::params(&["new_turn"]),
+    let square = |f: &str, r: &str| {
+        vec![
+            ir_builder::var(f),
+            ir_builder::var(r),
+            ir_builder::wildcard(),
+            ir_builder::wildcard(),
+        ]
+    };
+    // Clears two squares in one move and advances the game as usual.
+    let double_take = ir_builder::transformation(
+        "double_take",
+        ir_builder::params(&["a_f", "a_r", "b_f", "b_r"]),
         vec![
             ir_builder::bind_one(ir_builder::claim(
                 "CurrentTurn",
                 vec![ir_builder::var("turn")],
             )),
             ir_builder::bind_one(ir_builder::claim("MoveCount", vec![ir_builder::var("m")])),
-            ir_builder::bind_one(ir_builder::claim("PieceCount", vec![ir_builder::var("p")])),
-            ir_builder::require(ir_builder::neq(
-                ir_builder::var("new_turn"),
-                ir_builder::var("turn"),
-            )),
             ir_builder::let_(
                 "next_m",
                 ir_builder::add(
@@ -197,43 +184,39 @@ fn dropping_the_piece_counter_is_rejected() {
                     ir_builder::term(ir_builder::dec("1")),
                 ),
             ),
+            ir_builder::retract("PieceAt", square("a_f", "a_r")),
+            ir_builder::retract("PieceAt", square("b_f", "b_r")),
             ir_builder::retract("CurrentTurn", vec![ir_builder::var("turn")]),
             ir_builder::retract("MoveCount", vec![ir_builder::var("m")]),
-            ir_builder::retract("PieceCount", vec![ir_builder::var("p")]),
-            // Conspicuously missing: re-admit of PieceCount.
-            ir_builder::assert_("CurrentTurn", vec![ir_builder::var("new_turn")]),
+            ir_builder::assert_("CurrentTurn", vec![ir_builder::subj("black")]),
             ir_builder::assert_("MoveCount", vec![ir_builder::var("next_m")]),
         ],
     );
-    program.transformations.push(counterless_move);
-    let counterless = program
-        .transformation("counterless_move")
-        .expect("just pushed");
+    program.transformations.push(double_take);
+    let double_take = program.transformation("double_take").expect("just pushed");
 
-    let reason = ex().must_reject(counterless, vec![subj("black")], &state);
-    assert!(
-        reason
-            .to_string()
-            .contains("board_with_pieces_has_a_counter"),
-        "expected the presence invariant to reject the dropped counter, got: {reason}"
+    // The a7 and b7 pawns, gone in one move.
+    refused_by(
+        &ex().must_reject(double_take, squares([1, 7, 2, 7]), &state),
+        "piece_count_drops_by_at_most_one",
     );
 }
 
 // ============================================================
-// Full-chain propose: start_game and a legal move.
+// Full-chain propose: start_game and move_piece.
 // ============================================================
 
-/// `start_game` on an empty state admits 35 claims (32 pieces plus
-/// `MoveCount`, `PieceCount`, `CurrentTurn`). The transition invariants
-/// hold vacuously: there is no earlier `MoveCount`.
+/// `start_game` on an empty state admits 34 claims (32 pieces plus
+/// `MoveCount` and `CurrentTurn`). The transition invariants hold
+/// vacuously: there is no earlier `MoveCount`.
 #[test]
 fn start_game_admits_opening_position() {
     let program = chess_transition_invariants::program();
     let next = run_start_game(&program);
     assert_eq!(
         next.claims().len(),
-        35,
-        "opening position is 32 pieces + MoveCount + PieceCount + CurrentTurn"
+        34,
+        "opening position is 32 pieces + MoveCount + CurrentTurn"
     );
     refused_by(
         &ex().must_reject(&chess_transition_invariants::start_game(), vec![], &next),
@@ -241,80 +224,83 @@ fn start_game_admits_opening_position() {
     );
 }
 
-/// A legal quiet move on the opening position succeeds. The pawn
-/// at e2 moves to e4, MoveCount goes from 0 to 1, CurrentTurn flips
-/// from white to black, PieceCount stays at 32.
+/// A quiet move on the opening position succeeds. The pawn at e2 moves to
+/// e4, MoveCount goes from 0 to 1, CurrentTurn flips from white to black,
+/// and no piece is taken.
 #[test]
 fn quiet_move_after_opening_succeeds() {
     let program = chess_transition_invariants::program();
     let state = run_start_game(&program);
 
-    let next = run_named(
-        &program,
-        "quiet_move",
-        vec![dec(5), dec(2), dec(5), dec(4), subj("black")],
-        state,
-    );
+    let next = run_move(&program, [5, 2, 5, 4], state);
 
-    // Enforced by `move_count_strictly_increases`.
+    assert!(has(&next, "MoveCount", &[dec(1)]), "MoveCount must be 1");
     assert!(
-        next.claims()
-            .iter()
-            .any(|c| { c.predicate.as_str() == "MoveCount" && c.args == vec![dec(1)] }),
-        "MoveCount must be 1 after one move"
-    );
-    // The turn flipped.
-    assert!(
-        next.claims()
-            .iter()
-            .any(|c| { c.predicate.as_str() == "CurrentTurn" && c.args == vec![subj("black")] }),
+        has(&next, "CurrentTurn", &[subj("black")]),
         "CurrentTurn must be black after white moves"
     );
-    // The pawn relocated from e2 (file 5, rank 2) to e4 (file 5, rank 4).
     assert!(
-        next.claims().iter().any(|c| {
-            c.predicate.as_str() == "PieceAt"
-                && c.args == vec![dec(5), dec(4), subj("pawn"), subj("white")]
-        }),
+        has(
+            &next,
+            "PieceAt",
+            &[dec(5), dec(4), subj("pawn"), subj("white")]
+        ),
         "pawn must be at e4 after the move"
     );
     assert!(
-        !next.claims().iter().any(|c| {
-            c.predicate.as_str() == "PieceAt"
-                && c.args == vec![dec(5), dec(2), subj("pawn"), subj("white")]
-        }),
+        !has(
+            &next,
+            "PieceAt",
+            &[dec(5), dec(2), subj("pawn"), subj("white")]
+        ),
         "pawn must no longer be at e2"
     );
+    assert_eq!(pieces(&next), 32, "a quiet move takes nothing");
 }
 
-/// The turn passes between white and black, and to no one else. A move
-/// may name any other colour as the next turn and pass its own gate, but
-/// `turn_belongs_to_a_player` refuses the result.
+/// The same `move_piece` takes a piece when the destination holds one: e4
+/// takes d5, the black pawn is gone, and the board holds 31 pieces.
 #[test]
-fn the_turn_passes_between_the_two_players_only() {
+fn a_move_onto_an_enemy_piece_takes_it() {
     let program = chess_transition_invariants::program();
     let state = run_start_game(&program);
-    let state = run_named(
-        &program,
-        "quiet_move",
-        vec![dec(5), dec(2), dec(5), dec(4), subj("black")],
-        state,
-    );
-    let state = run_named(
-        &program,
-        "quiet_move",
-        vec![dec(5), dec(7), dec(5), dec(5), subj("white")],
-        state,
-    );
+    let state = run_move(&program, [5, 2, 5, 4], state);
+    let state = run_move(&program, [4, 7, 4, 5], state);
+    let state = run_move(&program, [5, 4, 4, 5], state);
 
-    let quiet = program.transformation("quiet_move").expect("exists");
+    assert!(has(
+        &state,
+        "PieceAt",
+        &[dec(4), dec(5), subj("pawn"), subj("white")]
+    ));
+    assert!(!has(
+        &state,
+        "PieceAt",
+        &[dec(5), dec(4), subj("pawn"), subj("white")]
+    ));
+    assert_eq!(pieces(&state), 31);
+}
+
+/// The turn passes between white and black on its own, and the gates name
+/// what a wrong move breaks: moving the other side's piece, or landing on
+/// your own.
+#[test]
+fn the_move_gates_name_what_is_wrong() {
+    let program = chess_transition_invariants::program();
+    let state = run_start_game(&program);
+    let state = run_move(&program, [5, 2, 5, 4], state);
+    assert!(has(&state, "CurrentTurn", &[subj("black")]));
+    let state = run_move(&program, [5, 7, 5, 5], state);
+    assert!(has(&state, "CurrentTurn", &[subj("white")]));
+
+    let mv = chess_transition_invariants::move_piece();
     refused_by(
-        &ex().must_reject(
-            quiet,
-            vec![dec(4), dec(2), dec(4), dec(4), subj("green")],
-            &state,
-        ),
-        "turn_belongs_to_a_player",
+        &ex().must_reject(&mv, squares([4, 7, 4, 5]), &state),
+        "your_own_piece",
+    );
+    refused_by(
+        &ex().must_reject(&mv, squares([4, 1, 4, 2]), &state),
+        "not_onto_your_own_piece",
     );
 }
 
@@ -328,30 +314,18 @@ fn the_turn_passes_between_the_two_players_only() {
 fn a_piece_may_land_on_the_edge_of_the_board() {
     let program = chess_transition_invariants::program();
     let state = run_start_game(&program);
-    let state = run_named(
-        &program,
-        "quiet_move",
-        vec![dec(7), dec(1), dec(8), dec(3), subj("black")],
-        state,
-    );
-    let state = run_named(
-        &program,
-        "quiet_move",
-        vec![dec(2), dec(8), dec(1), dec(6), subj("white")],
-        state,
-    );
-    for square in [
-        vec![dec(8), dec(3), subj("knight"), subj("white")],
-        vec![dec(1), dec(6), subj("knight"), subj("black")],
-    ] {
-        assert!(
-            state
-                .claims()
-                .iter()
-                .any(|c| c.predicate.as_str() == "PieceAt" && c.args == square),
-            "expected a knight at {square:?}"
-        );
-    }
+    let state = run_move(&program, [7, 1, 8, 3], state);
+    let state = run_move(&program, [2, 8, 1, 6], state);
+    assert!(has(
+        &state,
+        "PieceAt",
+        &[dec(8), dec(3), subj("knight"), subj("white")]
+    ));
+    assert!(has(
+        &state,
+        "PieceAt",
+        &[dec(1), dec(6), subj("knight"), subj("black")]
+    ));
 }
 
 /// Off the board, or between squares, is refused. Each destination keeps
@@ -362,7 +336,7 @@ fn a_piece_may_land_on_the_edge_of_the_board() {
 fn a_piece_off_the_board_is_rejected() {
     let program = chess_transition_invariants::program();
     let state = run_start_game(&program);
-    let quiet = program.transformation("quiet_move").expect("exists");
+    let mv = chess_transition_invariants::move_piece();
     for (file, rank) in [
         (dec(5), dec(9)),
         (dec(4), dec(0)),
@@ -372,11 +346,7 @@ fn a_piece_off_the_board_is_rejected() {
         (dec(5), dec_str("3.5")),
     ] {
         refused_by(
-            &ex().must_reject(
-                quiet,
-                vec![dec(3), dec(1), file, rank, subj("black")],
-                &state,
-            ),
+            &ex().must_reject(&mv, vec![dec(3), dec(1), file, rank], &state),
             "pieces_stand_on_the_board",
         );
     }
@@ -394,18 +364,13 @@ fn a_piece_off_the_board_is_rejected() {
 fn bishop_changing_square_color_is_rejected() {
     let program = chess_transition_invariants::program();
     let state = run_start_game(&program);
-
-    let bishop = program.transformation("quiet_move").expect("exists");
-    let reason = ex().must_reject(
-        bishop,
-        vec![dec(3), dec(1), dec(4), dec(3), subj("black")],
-        &state,
-    );
-    assert!(
-        reason
-            .to_string()
-            .contains("bishops_on_opposite_square_colors"),
-        "expected the parity invariant to reject the colour change, got: {reason}"
+    refused_by(
+        &ex().must_reject(
+            &chess_transition_invariants::move_piece(),
+            squares([3, 1, 4, 3]),
+            &state,
+        ),
+        "bishops_on_opposite_square_colors",
     );
 }
 
@@ -415,19 +380,13 @@ fn bishop_changing_square_color_is_rejected() {
 fn bishop_keeping_square_color_is_allowed() {
     let program = chess_transition_invariants::program();
     let state = run_start_game(&program);
-
-    let next = run_named(
-        &program,
-        "quiet_move",
-        vec![dec(3), dec(1), dec(5), dec(3), subj("black")],
-        state,
-    );
-
+    let next = run_move(&program, [3, 1, 5, 3], state);
     assert!(
-        next.claims().iter().any(|c| {
-            c.predicate.as_str() == "PieceAt"
-                && c.args == vec![dec(5), dec(3), subj("bishop"), subj("white")]
-        }),
+        has(
+            &next,
+            "PieceAt",
+            &[dec(5), dec(3), subj("bishop"), subj("white")]
+        ),
         "bishop must be at e3 after a same-colour move"
     );
 }
@@ -449,9 +408,9 @@ fn transition_invariant_catches_missing_move_count_bump() {
     let mut program = chess_transition_invariants::program();
     let state = run_start_game(&program);
 
-    // A quiet_move that does everything except advance MoveCount.
+    // A move that does everything except advance MoveCount.
     let buggy_move = ir_builder::transformation(
-        "buggy_quiet_move",
+        "buggy_move",
         ir_builder::params(&["src_f", "src_r", "dst_f", "dst_r", "new_turn"]),
         vec![
             ir_builder::bind_one(ir_builder::claim(
@@ -509,9 +468,7 @@ fn transition_invariant_catches_missing_move_count_bump() {
     );
     program.transformations.push(buggy_move);
 
-    let buggy = program
-        .transformation("buggy_quiet_move")
-        .expect("just pushed");
+    let buggy = program.transformation("buggy_move").expect("just pushed");
     let outcome = ex()
         .propose(
             buggy,
@@ -521,15 +478,10 @@ fn transition_invariant_catches_missing_move_count_bump() {
         .expect("kernel must not error");
 
     match outcome {
-        Outcome::Rejected { reason } => {
-            assert!(
-                reason.to_string().contains("move_count_strictly_increases"),
-                "expected rejection to name the transition invariant, got: {reason}"
-            );
-        }
+        Outcome::Rejected { reason } => refused_by(&reason, "move_count_strictly_increases"),
         Outcome::Accepted { .. } => {
             panic!(
-                "a buggy quiet move that fails to bump MoveCount must be rejected by the transition invariant"
+                "a buggy move that fails to bump MoveCount must be rejected by the transition invariant"
             )
         }
     }
@@ -541,19 +493,32 @@ fn transition_invariant_catches_missing_move_count_bump() {
 
 /// Run `start_game` against the empty state and return the result.
 fn run_start_game(program: &Program) -> State {
-    run_named(program, "start_game", vec![], State::default())
+    let t = program.transformation("start_game").expect("exists");
+    ex().must_accept(t, vec![], State::default())
 }
 
-/// Propose `transformation_name` from `program` against `state` and
-/// `must_accept` the result. The rules always come from `ex()`.
-fn run_named(
-    program: &Program,
-    transformation_name: &str,
-    args: Vec<EvalValue>,
-    state: State,
-) -> State {
-    let t = program
-        .transformation(transformation_name)
-        .unwrap_or_else(|| panic!("transformation `{transformation_name}` not found"));
-    ex().must_accept(t, args, state)
+/// `[src_f, src_r, dst_f, dst_r]` as `move_piece` arguments.
+fn squares(squares: [i64; 4]) -> Vec<EvalValue> {
+    squares.into_iter().map(dec).collect()
+}
+
+/// `move_piece` from one square to another and `must_accept` the result.
+fn run_move(program: &Program, from_to: [i64; 4], state: State) -> State {
+    let t = program.transformation("move_piece").expect("exists");
+    ex().must_accept(t, squares(from_to), state)
+}
+
+fn has(state: &State, predicate: &str, args: &[EvalValue]) -> bool {
+    state
+        .claims()
+        .iter()
+        .any(|c| c.predicate.as_str() == predicate && c.args == args)
+}
+
+fn pieces(state: &State) -> usize {
+    state
+        .claims()
+        .iter()
+        .filter(|c| c.predicate.as_str() == "PieceAt")
+        .count()
 }

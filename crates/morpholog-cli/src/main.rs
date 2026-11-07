@@ -38,7 +38,7 @@ mod commands;
         The commands, by what you are doing:\n  \
         authoring a programme    check, hash, schema, generate\n  \
         governing state          propose, explain, inspect, session\n  \
-        running a deployment     init, roles, refresh, outbox\n  \
+        running a deployment     init, roles, refresh, outbox, serve\n  \
         proving the record       audit\n  \
         discovering rules        evaluate, rehearse\n\n\
         Only invariants and transformations are first-class in Morpholog: propose\n\
@@ -82,8 +82,8 @@ enum Command {
     /// the `morpholog` schema already exists (`--skip-if-exists`
     /// reports and exits zero instead, for idempotent entrypoints);
     /// never drops, never migrates. `--least-privilege` additionally
-    /// locks the governed tables down to dedicated writer and reader
-    /// roles, so the governed path is the only way in by default.
+    /// locks the governed tables down to dedicated writer, reader and
+    /// executor roles, so the governed path is the only way in by default.
     Init(InitArgs),
 
     /// Bring an existing database up to the schema this binary expects.
@@ -136,6 +136,18 @@ enum Command {
     /// non-zero exit. Protocol reference in
     /// docs/embedder-integration.md.
     Session(SessionArgs),
+
+    /// Serve one pinned programme on a Unix socket to callers that must
+    /// not hold the database credential or choose the rules.
+    ///
+    /// Each connection speaks the session protocol. The service holds
+    /// one database login per presenter and picks it by the socket
+    /// peer's uid, so the rules and the audit see that login; a peer
+    /// whose uid is not a presenter is closed unanswered. A presenter
+    /// may propose, transact and ping; reads and explanations need a
+    /// `--grant`. The programme must hash to `--expect-hash`, and only
+    /// a restart changes it. Deployment guide in docs/operating.md.
+    Serve(ServeArgs),
 
     /// Propose several changes as one decision: every act or none.
     ///
@@ -311,6 +323,22 @@ pub(crate) enum RefreshCmd {
     /// state). Derived SQL views read this projection; it is as fresh as
     /// the last refresh.
     Derived(RefreshDerivedArgs),
+    /// Keep the admitted state after every `--every` rows of the audit
+    /// log, so an as-of read replays only the rows after the nearest one.
+    /// A disposable cache: builds what is missing, deletes what is off
+    /// that grid, and no verifier reads it. Run it on a schedule.
+    Snapshots(RefreshSnapshotsArgs),
+}
+
+/// Arguments for `refresh snapshots`.
+#[derive(clap::Args, Debug)]
+pub(crate) struct RefreshSnapshotsArgs {
+    /// Rows of the audit log between snapshots.
+    #[arg(long, default_value = "10000")]
+    pub(crate) every: std::num::NonZeroU64,
+
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
 }
 
 /// Arguments for `refresh derived`.
@@ -717,13 +745,14 @@ pub(crate) struct RehearseArgs {
 /// neither.
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum RolesCmd {
-    /// Move this database from its recorded pair of roles to
-    /// `<PREFIX>writer` and `<PREFIX>reader`, created here. Each `--login`
-    /// becomes a member of the new role of every kind it held, with the
-    /// same inherit and `SET ROLE` settings; other members of the old pair
-    /// lose what this deployment granted through it. Refuses, changing
-    /// nothing, when the old pair holds anything here beyond Morpholog's
-    /// floor. Run as the role that owns the tables, with writers stopped.
+    /// Move this database from its recorded roles to `<PREFIX>writer`,
+    /// `<PREFIX>reader` and `<PREFIX>executor`, created here. Each
+    /// `--login` becomes a member of the new role of every kind it held,
+    /// with the same inherit and `SET ROLE` settings; other members of the
+    /// old roles lose what this deployment granted through them. Refuses,
+    /// changing nothing, when the old roles hold anything here beyond
+    /// Morpholog's floor. Run as the role that owns the tables, with
+    /// writers and executors stopped.
     Move(RolesMoveArgs),
 }
 
@@ -1034,17 +1063,19 @@ pub(crate) struct InitArgs {
     #[arg(long)]
     pub(crate) i_know_this_deletes_data: bool,
 
-    /// Also provision the least-privilege floor: dedicated writer and
-    /// reader group roles, PUBLIC revoked from the governed tables, and
-    /// the audit log append-only even for the writer. The report names
-    /// the membership grants the operator still runs. Idempotent;
-    /// combine with --skip-if-exists to retrofit an existing database.
+    /// Also provision the least-privilege floor: dedicated writer, reader
+    /// and executor group roles, PUBLIC revoked from the governed tables,
+    /// the audit log append-only even for the writer, and an admitted
+    /// intent unchangeable by either the writer or the executor. The
+    /// report names the membership grants the operator still runs.
+    /// Idempotent; combine with --skip-if-exists to retrofit an existing
+    /// database, or to add the executor to one provisioned before it.
     #[arg(long)]
     pub(crate) least_privilege: bool,
 
-    /// Name this deployment's roles `<PREFIX>writer` and `<PREFIX>reader`.
-    /// Roles belong to the whole PostgreSQL cluster, so each deployment
-    /// on one cluster needs its own prefix.
+    /// Name this deployment's roles `<PREFIX>writer`, `<PREFIX>reader`
+    /// and `<PREFIX>executor`. Roles belong to the whole PostgreSQL
+    /// cluster, so each deployment on one cluster needs its own prefix.
     #[arg(long, value_name = "PREFIX", requires = "least_privilege",
           default_value = morpholog_postgres::DEFAULT_ROLE_PREFIX)]
     pub(crate) role_prefix: String,
@@ -1628,6 +1659,37 @@ pub(crate) struct SessionArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub(crate) struct ServeArgs {
+    /// Path to the `.morph` source file. Read once at startup.
+    pub(crate) file: PathBuf,
+
+    /// The canonical hash (`sha256:...`, as `morpholog hash` reports
+    /// it) the programme must have; any other refuses to start.
+    #[arg(long, value_name = "SHA256")]
+    pub(crate) expect_hash: String,
+
+    /// The socket to listen on. Refuses to start if the path exists.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) socket: PathBuf,
+
+    /// A presenter: the uid its connections come from and the database
+    /// login they are served as. Repeat for each; a uid or a login may
+    /// appear once.
+    #[arg(long = "presenter", value_name = "UID=LOGIN", required = true)]
+    pub(crate) presenters: Vec<String>,
+
+    /// Operations beyond proposing a presenter may ask: any of explain,
+    /// claims, derived, audit, rejections, comma-separated.
+    #[arg(long = "grant", value_name = "UID=OP[,OP...]")]
+    pub(crate) grants: Vec<String>,
+
+    /// The database. Leave the user out: each presenter's connection
+    /// logs in as its own login.
+    #[command(flatten)]
+    pub(crate) db: DatabaseArgs,
+}
+
+#[derive(clap::Args, Debug)]
 pub(crate) struct ProposeArgs {
     /// Path to a `.morph` source file containing the programme.
     pub(crate) file: PathBuf,
@@ -1787,6 +1849,7 @@ async fn run() -> anyhow::Result<()> {
         Command::Propose(args) => commands::propose::run(args).await,
         Command::Transact(args) => commands::transact::run(args).await,
         Command::Session(args) => commands::session::run(args).await,
+        Command::Serve(args) => commands::serve::run(args).await,
         Command::Explain(args) => commands::explain::run(args).await,
         Command::Outbox { what } => match what {
             OutboxCmd::Claim(args) => commands::outbox::claim(args).await,
@@ -1824,6 +1887,9 @@ async fn run() -> anyhow::Result<()> {
         Command::Refresh {
             what: RefreshCmd::Derived(args),
         } => commands::refresh::run(&args).await,
+        Command::Refresh {
+            what: RefreshCmd::Snapshots(args),
+        } => commands::refresh::snapshots(&args).await,
         Command::Hash(args) => commands::hash::run(args),
         Command::Init(args) => commands::init::run(args).await,
         Command::Roles {

@@ -389,6 +389,7 @@ async fn the_loader_seeks_through_the_provisioned_indexes() {
             dec(1),
         ],
         actor: morpholog_test_support::test_actor(),
+        decided_at: None,
     };
     for reads in [Reads::Body, Reads::BodyAndInvariants] {
         let scope = compute_load_scope(

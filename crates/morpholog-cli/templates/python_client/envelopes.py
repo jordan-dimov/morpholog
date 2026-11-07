@@ -2295,9 +2295,10 @@ def predates_versioned_hash(payload: object) -> bool:
 
 @dataclass(frozen=True)
 class LeastPrivilege:
-    """The `--least-privilege` floor as applied: the two group roles,
-    plus the membership grants only the operator can decide."""
+    """The `--least-privilege` floor as applied: the group roles, plus
+    the membership grants only the operator can decide."""
 
+    executor_role: str
     next_steps: tuple[str, ...]
     reader_role: str
     writer_role: str
@@ -2305,9 +2306,12 @@ class LeastPrivilege:
     @classmethod
     def from_json(cls, payload: object) -> LeastPrivilege:
         data = _strict(
-            "least privilege", payload, {"next_steps", "reader_role", "writer_role"}
+            "least privilege",
+            payload,
+            {"executor_role", "next_steps", "reader_role", "writer_role"},
         )
         return cls(
+            executor_role=data.text("executor_role"),
             next_steps=tuple(data.texts("next_steps")),
             reader_role=data.text("reader_role"),
             writer_role=data.text("writer_role"),
@@ -2683,6 +2687,35 @@ class RefreshDerivedReport:
             source_claim_count=data.integer("source_claim_count", minimum=0),
             source_snapshot_committed_at=data.optional_timestamp("source_snapshot_committed_at"),
             source_snapshot_transition_id=data.optional_text("source_snapshot_transition_id"),
+        )
+
+
+@dataclass(frozen=True)
+class RefreshSnapshotsReport:
+    """What `refresh snapshots` kept: one snapshot after every `every`
+    rows of the audit log. A cache for as-of reads, never evidence;
+    `latest` is absent when none is kept."""
+
+    built: int
+    every: int
+    kept: int
+    removed: int
+    latest: str | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> RefreshSnapshotsReport:
+        data = _strict(
+            "refresh snapshots report",
+            payload,
+            {"built", "every", "kept", "removed"},
+            {"latest"},
+        )
+        return cls(
+            built=data.integer("built", minimum=0),
+            every=data.integer("every", minimum=1),
+            kept=data.integer("kept", minimum=0),
+            removed=data.integer("removed", minimum=0),
+            latest=data.optional_text("latest"),
         )
 
 

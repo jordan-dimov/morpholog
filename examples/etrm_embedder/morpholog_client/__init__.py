@@ -16,7 +16,7 @@ if sys.version_info < (3, 12):
 
 PROGRAM = "trade_lifecycle"
 MODEL_HASH = "sha256:7b63dc6b0e8f297af212deede33ac714cda6418f67b0691320a5ae569496dbb5"
-MORPHOLOG_VERSION = "0.0.17"
+MORPHOLOG_VERSION = "0.0.18"
 PYTHON_FLOOR = (3, 12)
 
 from . import envelopes, models, values  # noqa: E402
@@ -80,6 +80,24 @@ def open_session(
     )
 
 
+def connect_service(
+    socket_path: str,
+    *,
+    timeout: float | None = None,
+) -> Session:
+    """Connect to a ``morpholog serve`` socket pinned to this package's
+    stamps: a service of another version than it was generated for,
+    or one running other rules, is refused at the handshake, before a
+    single proposal is written. ``Session.connect`` connects
+    deliberately unpinned."""
+    return Session.connect(
+        socket_path,
+        timeout=timeout,
+        expected_model_hash=MODEL_HASH,
+        expected_version=MORPHOLOG_VERSION,
+    )
+
+
 __all__ = [
     "PROGRAM",
     "MODEL_HASH",
@@ -96,6 +114,7 @@ __all__ = [
     "Session",
     "open_client",
     "open_session",
+    "connect_service",
     "envelopes",
     "models",
     "values",

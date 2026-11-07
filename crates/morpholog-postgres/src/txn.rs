@@ -56,17 +56,23 @@ pub(crate) async fn begin_isolated_tx(
 ///
 /// The role is returned with the transaction for the audit row, so the
 /// identity checked and the identity recorded are the same read.
+///
+/// So is the decision time: the transaction's start, which the audit
+/// row's `committed_at` defaults to. It is fixed at `BEGIN`, before this
+/// statement takes the snapshot, so a transaction that waits between
+/// the two is decided as of its start against a later state.
 pub(crate) async fn begin_authorised_proposal_tx<'a>(
     pool: &'a PgPool,
     actor: &Subject,
-) -> Result<(Transaction<'a, Postgres>, LoginRole), PgError> {
+) -> Result<(Transaction<'a, Postgres>, LoginRole, jiff::Timestamp), PgError> {
     let mut tx = begin_isolated_tx(pool, TxIsolation::Serializable).await?;
     // Name and OID in one statement. If the session's role was dropped,
     // or dropped and created again, `session_user` itself errors, so a
     // session never records its successor's OID.
     let row = sqlx::query!(
         r#"SELECT session_user AS "name!",
-                  (SELECT oid FROM pg_roles WHERE rolname = session_user) AS oid"#
+                  (SELECT oid FROM pg_roles WHERE rolname = session_user) AS oid,
+                  transaction_timestamp() AS "decided_at!""#
     )
     .fetch_one(&mut *tx)
     .await
@@ -82,7 +88,18 @@ pub(crate) async fn begin_authorised_proposal_tx<'a>(
         oid: oid.0,
     };
     crate::actor_policy::authorise(&mut tx, actor, &login.name).await?;
-    Ok((tx, login))
+    Ok((tx, login, row.decided_at.into()))
+}
+
+/// The role PostgreSQL authenticated the pool's connection as: the name
+/// every proposal through it is attested by. A caller that chose a login
+/// for the connection checks it here rather than trusting the URL.
+pub async fn session_login(pool: &PgPool) -> Result<String, PgError> {
+    let row = sqlx::query!(r#"SELECT session_user AS "name!""#)
+        .fetch_one(pool)
+        .await
+        .map_err(classify_checked_query)?;
+    Ok(row.name)
 }
 
 /// The role that asserted a proposal's actor: its name, which the actor

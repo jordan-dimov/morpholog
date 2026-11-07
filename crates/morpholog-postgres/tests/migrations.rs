@@ -160,6 +160,7 @@ async fn drift_probe(
                 transformation_name: post.name.clone(),
                 args,
                 actor: morpholog_core::Subject::from("alex"),
+                decided_at: None,
             };
             morpholog_postgres::propose_against_pg(
                 pool,

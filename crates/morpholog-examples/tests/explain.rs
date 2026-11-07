@@ -30,6 +30,7 @@ fn transition(name: &str, args: Vec<morpholog_core::EvalValue>, actor: &str) -> 
         transformation_name: name.into(),
         args,
         actor: Subject::from(actor),
+        decided_at: None,
     }
 }
 

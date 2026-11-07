@@ -138,6 +138,7 @@ fn run(t: &Transformation, state: &State) -> Result<Outcome, EvalError> {
         transformation_name: t.name.clone(),
         args: vec![],
         actor: Subject::from("test_actor"),
+        decided_at: None,
     };
     propose(
         t,
@@ -154,6 +155,7 @@ fn trace_transition(t: &Transformation, args: Vec<EvalValue>) -> Transition {
         transformation_name: t.name.clone(),
         args,
         actor: Subject::from("trace_actor"),
+        decided_at: None,
     }
 }
 

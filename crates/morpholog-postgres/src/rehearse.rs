@@ -44,6 +44,7 @@ fn rehearse_rows<'a>(
                 transformation: row.transformation_name.as_str(),
                 args: &row.arguments,
                 actor: &row.actor,
+                committed_at: row.committed_at,
                 asserted: &row.asserted_claims,
                 retracted: &row.retracted_claims,
                 emitted: &row.emitted_intents,

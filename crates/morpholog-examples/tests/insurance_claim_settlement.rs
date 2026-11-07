@@ -205,6 +205,7 @@ fn authorise_settlement_without_authority_is_rejected_at_require() {
         transformation_name: t.name.clone(),
         args: vec![subj("claim_001"), subj("settlement_001"), dec(30_000)],
         actor: Subject::from("alex"),
+        decided_at: None,
     };
     let TracedProposal::Completed { outcome, trace } = propose_with_trace(
         &insurance_claim_settlement::program(),
@@ -375,6 +376,7 @@ fn second_settlement_over_aggregate_is_rejected_at_require() {
         transformation_name: t.name.clone(),
         args: vec![subj("claim_002"), subj("settlement_002"), dec(50_000)],
         actor: Subject::from("alex"),
+        decided_at: None,
     };
     let TracedProposal::Completed { outcome, trace } = propose_with_trace(
         &insurance_claim_settlement::program(),

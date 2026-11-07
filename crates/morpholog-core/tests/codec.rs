@@ -185,6 +185,7 @@ fn transition_actor_round_trips_as_tagged_subject() {
         transformation_name: "do_it".into(),
         args: vec![],
         actor: Subject::from("alice"),
+        decided_at: None,
     };
     let json = serde_json::to_string(&t).unwrap();
     assert!(

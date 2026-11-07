@@ -36,8 +36,12 @@ pub struct RolesMoveReport {
     pub unmoved_members: Vec<String>,
 }
 
+/// A deployment's roles, as the report names them. `executor` is absent
+/// for a deployment recorded before the executor existed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RolePair {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub executor: Option<String>,
     pub reader: String,
     pub writer: String,
 }
@@ -45,6 +49,7 @@ pub struct RolePair {
 impl From<&DeploymentRoles> for RolePair {
     fn from(roles: &DeploymentRoles) -> Self {
         Self {
+            executor: roles.executor().map(str::to_string),
             reader: roles.reader().to_string(),
             writer: roles.writer().to_string(),
         }
@@ -53,6 +58,7 @@ impl From<&DeploymentRoles> for RolePair {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MovedLogin {
+    pub executor: bool,
     pub login: String,
     pub reader: bool,
     pub writer: bool,
@@ -108,14 +114,13 @@ pub async fn move_deployment_roles(
         ));
     };
     require_recorded_roles(&mut tx, &from).await?;
-    if from == *to {
+    if from.same_deployment(to) {
         return Err(PgError::InvalidState(format!(
-            "this database already records `{}` and `{}`",
-            to.writer(),
-            to.reader()
+            "this database already records {}",
+            crate::provision::listed_roles(&from)
         )));
     }
-    for role in to.both() {
+    for role in to.all() {
         if role_exists(&mut tx, role).await? {
             return Err(existing_role(&mut tx, role).await?);
         }
@@ -134,7 +139,7 @@ pub async fn move_deployment_roles(
         ));
     }
 
-    let old: Vec<String> = from.both().map(str::to_string).to_vec();
+    let old: Vec<String> = from.all().into_iter().map(str::to_string).collect();
     let memberships: Vec<Membership> = sqlx::query!(
         r#"SELECT m.rolname::text AS "member!", m.rolcanlogin AS "can_login!",
                   g.rolname::text AS "role!",
@@ -166,11 +171,10 @@ pub async fn move_deployment_roles(
         let held: Vec<&Membership> = memberships.iter().filter(|m| &m.member == login).collect();
         let Some(first) = held.first() else {
             return Err(PgError::InvalidState(format!(
-                "`{login}` is not a direct member of `{}` or `{}`, so moving it would grant \
-                 access it does not have here; name only the logins this deployment's old \
-                 roles were granted to",
-                from.writer(),
-                from.reader()
+                "`{login}` is not a direct member of {}, so moving it would grant access it \
+                 does not have here; name only the logins this deployment's old roles were \
+                 granted to",
+                crate::provision::listed_roles(&from).replace(" and ", " or ")
             )));
         };
         if !first.can_login {
@@ -217,7 +221,7 @@ pub async fn move_deployment_roles(
         )));
     }
 
-    for role in to.both() {
+    for role in to.all() {
         sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
             "CREATE ROLE {} NOLOGIN",
             quote_ident(role)
@@ -240,15 +244,23 @@ pub async fn move_deployment_roles(
     let mut moved: Vec<MovedLogin> = Vec::new();
     for login in logins {
         let mut entry = MovedLogin {
+            executor: false,
             login: login.clone(),
             reader: false,
             writer: false,
         };
         for m in memberships.iter().filter(|m| &m.member == login) {
-            let (new_role, is_writer) = if m.role == from.writer() {
-                (to.writer(), true)
+            let (new_role, held) = if m.role == from.writer() {
+                (to.writer(), &mut entry.writer)
+            } else if m.role == from.reader() {
+                (to.reader(), &mut entry.reader)
             } else {
-                (to.reader(), false)
+                let Some(executor) = to.executor() else {
+                    return Err(PgError::InvalidState(
+                        "the old roles include an executor and the new ones do not".to_string(),
+                    ));
+                };
+                (executor, &mut entry.executor)
             };
             sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
                 "GRANT {} TO {} WITH INHERIT {}, SET {}",
@@ -260,20 +272,22 @@ pub async fn move_deployment_roles(
             .execute(&mut *tx)
             .await
             .map_err(provision_error)?;
-            if is_writer {
-                entry.writer = true;
-            } else {
-                entry.reader = true;
-            }
+            *held = true;
         }
         moved.push(entry);
     }
 
-    let (w, r) = (quote_ident(from.writer()), quote_ident(from.reader()));
+    // Revoking at the table also revokes every column grant.
+    let old_roles = from
+        .all()
+        .into_iter()
+        .map(quote_ident)
+        .collect::<Vec<_>>()
+        .join(", ");
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-        "REVOKE ALL ON ALL TABLES IN SCHEMA morpholog, morpholog_read FROM {w}, {r}; \
-         REVOKE ALL ON ALL FUNCTIONS IN SCHEMA morpholog FROM {w}, {r}; \
-         REVOKE ALL ON SCHEMA morpholog, morpholog_read FROM {w}, {r};"
+        "REVOKE ALL ON ALL TABLES IN SCHEMA morpholog, morpholog_read FROM {old_roles}; \
+         REVOKE ALL ON ALL FUNCTIONS IN SCHEMA morpholog FROM {old_roles}; \
+         REVOKE ALL ON SCHEMA morpholog, morpholog_read FROM {old_roles};"
     )))
     .execute(&mut *tx)
     .await
@@ -291,9 +305,11 @@ pub async fn move_deployment_roles(
         .await
         .map_err(classify_checked_query)?;
     sqlx::query!(
-        "INSERT INTO morpholog.deployment_roles (writer_role, reader_role) VALUES ($1, $2)",
+        "INSERT INTO morpholog.deployment_roles (writer_role, reader_role, executor_role) \
+         VALUES ($1, $2, $3)",
         to.writer(),
         to.reader(),
+        to.executor(),
     )
     .execute(&mut *tx)
     .await
@@ -329,6 +345,7 @@ async fn beyond_the_floor(
                FROM pg_roles o
                JOIN pg_roles n
                  ON (o.rolname = $1 AND n.rolname = $3) OR (o.rolname = $2 AND n.rolname = $4)
+                 OR (o.rolname = $5 AND n.rolname = $6)
            ),
            here AS (SELECT oid FROM pg_database WHERE datname = current_database()),
            deps AS (
@@ -346,9 +363,11 @@ async fn beyond_the_floor(
                                         ELSE 'holds a privilege on' END,
                          pg_describe_object(d.classid, d.objid, d.objsubid)) AS "finding!"
            FROM deps d
-           WHERE NOT (d.deptype = 'a' AND d.objsubid = 0
-                      AND d.classid IN ('pg_class'::regclass, 'pg_namespace'::regclass,
-                                        'pg_proc'::regclass))
+           WHERE NOT (d.deptype = 'a'
+                      AND ((d.objsubid = 0
+                            AND d.classid IN ('pg_class'::regclass, 'pg_namespace'::regclass,
+                                              'pg_proc'::regclass))
+                           OR d.classid = 'pg_class'::regclass))
            UNION ALL
            SELECT format('`%s` holds %s%s on %s', d.old_name, a.privilege_type,
                          CASE WHEN a.is_grantable THEN ' with grant option' ELSE '' END,
@@ -382,11 +401,25 @@ async fn beyond_the_floor(
              AND (a.is_grantable OR NOT EXISTS (
                    SELECT 1 FROM aclexplode(f.proacl) b
                    WHERE b.grantee = d.new_oid AND b.privilege_type = a.privilege_type))
+           UNION ALL
+           SELECT format('`%s` holds %s%s on %s', d.old_name, a.privilege_type,
+                         CASE WHEN a.is_grantable THEN ' with grant option' ELSE '' END,
+                         pg_describe_object(d.classid, d.objid, d.objsubid))
+           FROM deps d
+           JOIN pg_attribute att ON d.classid = 'pg_class'::regclass
+                                AND att.attrelid = d.objid AND att.attnum = d.objsubid
+           CROSS JOIN LATERAL aclexplode(att.attacl) a
+           WHERE d.deptype = 'a' AND d.objsubid <> 0 AND a.grantee = d.old_oid
+             AND (a.is_grantable OR NOT EXISTS (
+                   SELECT 1 FROM aclexplode(att.attacl) b
+                   WHERE b.grantee = d.new_oid AND b.privilege_type = a.privilege_type))
            ORDER BY 1"#,
         from.writer(),
         from.reader(),
         to.writer(),
         to.reader(),
+        from.executor(),
+        to.executor(),
     )
     .fetch_all(&mut *conn)
     .await
@@ -419,7 +452,7 @@ async fn granted_to_public(conn: &mut sqlx::PgConnection) -> Result<Vec<String>,
 /// How many grants, ownerships or policy references of `roles` remain in
 /// this database or on it.
 async fn held_here(conn: &mut sqlx::PgConnection, roles: &DeploymentRoles) -> Result<i64, PgError> {
-    let names: Vec<String> = roles.both().map(str::to_string).to_vec();
+    let names: Vec<String> = roles.all().into_iter().map(str::to_string).collect();
     sqlx::query_scalar!(
         r#"SELECT count(*) AS "count!"
            FROM pg_shdepend s

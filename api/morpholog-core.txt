@@ -292,6 +292,7 @@ pub struct morpholog_core::rehearse::RecordedProposal<'a>
 pub morpholog_core::rehearse::RecordedProposal::actor: &'a morpholog_core::Subject
 pub morpholog_core::rehearse::RecordedProposal::args: &'a [morpholog_core::EvalValue]
 pub morpholog_core::rehearse::RecordedProposal::asserted: &'a [morpholog_core::ClaimInstance]
+pub morpholog_core::rehearse::RecordedProposal::committed_at: jiff::timestamp::Timestamp
 pub morpholog_core::rehearse::RecordedProposal::drawn: core::option::Option<&'a [morpholog_core::Subject]>
 pub morpholog_core::rehearse::RecordedProposal::emitted: &'a [morpholog_core::IntentInstance]
 pub morpholog_core::rehearse::RecordedProposal::model_hash: core::option::Option<&'a str>
@@ -716,6 +717,7 @@ pub morpholog_core::EvalError::RoundQuantumNotPositive(alloc::string::String)
 pub morpholog_core::EvalError::SubjectSourceExhausted
 pub morpholog_core::EvalError::TypeMismatch(alloc::string::String)
 pub morpholog_core::EvalError::UnboundActor
+pub morpholog_core::EvalError::UnboundDecisionTime
 pub morpholog_core::EvalError::UnboundVariable(alloc::string::String)
 pub morpholog_core::EvalError::UnknownDefinition(alloc::string::String)
 pub morpholog_core::EvalError::ValueOfMultipleMatches(alloc::string::String)
@@ -1374,6 +1376,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::SumSeed
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::SumSeed
 pub enum morpholog_core::Term
 pub morpholog_core::Term::Actor
+pub morpholog_core::Term::DecidedAt
 pub morpholog_core::Term::Literal(morpholog_core::Value)
 pub morpholog_core::Term::Var(morpholog_core::Var)
 pub morpholog_core::Term::Wildcard
@@ -1556,6 +1559,14 @@ pub morpholog_core::ValidationError::CondBranchKindMismatch
 pub morpholog_core::ValidationError::CondBranchKindMismatch::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::CondBranchKindMismatch::otherwise_kind: morpholog_core::PredicateArgKind
 pub morpholog_core::ValidationError::CondBranchKindMismatch::then_kind: morpholog_core::PredicateArgKind
+pub morpholog_core::ValidationError::DecisionTimeAsName
+pub morpholog_core::ValidationError::DecisionTimeAsName::context: morpholog_core::ValidationContext
+pub morpholog_core::ValidationError::DecisionTimeAsName::what: alloc::string::String
+pub morpholog_core::ValidationError::DecisionTimeMatched
+pub morpholog_core::ValidationError::DecisionTimeMatched::context: morpholog_core::ValidationContext
+pub morpholog_core::ValidationError::DecisionTimeMatched::predicate: alloc::string::String
+pub morpholog_core::ValidationError::DecisionTimeNotAvailable
+pub morpholog_core::ValidationError::DecisionTimeNotAvailable::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::DefinitionCycle
 pub morpholog_core::ValidationError::DefinitionCycle::names: alloc::vec::Vec<alloc::string::String>
 pub morpholog_core::ValidationError::DefinitionNameCollision
@@ -2995,6 +3006,7 @@ pub morpholog_core::ReadPlan::reads: alloc::collections::btree::map::BTreeMap<mo
 impl morpholog_core::ReadPlan
 pub fn morpholog_core::ReadPlan::of(&morpholog_core::Transformation, &[morpholog_core::Definition]) -> Self
 pub fn morpholog_core::ReadPlan::seek_positions(&self) -> alloc::collections::btree::set::BTreeSet<(morpholog_core::PredicateName, usize)>
+pub fn morpholog_core::ReadPlan::whole_reads(&morpholog_core::Transformation, &[morpholog_core::Definition]) -> alloc::vec::Vec<morpholog_core::WholeRead>
 impl core::clone::Clone for morpholog_core::ReadPlan
 pub fn morpholog_core::ReadPlan::clone(&self) -> morpholog_core::ReadPlan
 impl core::cmp::Eq for morpholog_core::ReadPlan
@@ -3017,6 +3029,7 @@ pub struct morpholog_core::RecordedProposal<'a>
 pub morpholog_core::RecordedProposal::actor: &'a morpholog_core::Subject
 pub morpholog_core::RecordedProposal::args: &'a [morpholog_core::EvalValue]
 pub morpholog_core::RecordedProposal::asserted: &'a [morpholog_core::ClaimInstance]
+pub morpholog_core::RecordedProposal::committed_at: jiff::timestamp::Timestamp
 pub morpholog_core::RecordedProposal::drawn: core::option::Option<&'a [morpholog_core::Subject]>
 pub morpholog_core::RecordedProposal::emitted: &'a [morpholog_core::IntentInstance]
 pub morpholog_core::RecordedProposal::model_hash: core::option::Option<&'a str>
@@ -3470,6 +3483,7 @@ impl core::panic::unwind_safe::UnwindSafe for morpholog_core::TransformationUsag
 pub struct morpholog_core::Transition
 pub morpholog_core::Transition::actor: morpholog_core::Subject
 pub morpholog_core::Transition::args: alloc::vec::Vec<morpholog_core::EvalValue>
+pub morpholog_core::Transition::decided_at: core::option::Option<jiff::timestamp::Timestamp>
 pub morpholog_core::Transition::transformation_name: morpholog_core::TransformationName
 impl core::clone::Clone for morpholog_core::Transition
 pub fn morpholog_core::Transition::clone(&self) -> morpholog_core::Transition
@@ -3636,6 +3650,27 @@ impl core::marker::Unpin for morpholog_core::Var
 impl core::marker::UnsafeUnpin for morpholog_core::Var
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Var
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Var
+pub struct morpholog_core::WholeRead
+pub morpholog_core::WholeRead::predicate: morpholog_core::PredicateName
+pub morpholog_core::WholeRead::rule: core::option::Option<morpholog_core::RuleName>
+pub morpholog_core::WholeRead::statement: usize
+pub morpholog_core::WholeRead::through: alloc::vec::Vec<morpholog_core::DefinitionName>
+impl core::clone::Clone for morpholog_core::WholeRead
+pub fn morpholog_core::WholeRead::clone(&self) -> morpholog_core::WholeRead
+impl core::cmp::Eq for morpholog_core::WholeRead
+pub fn morpholog_core::WholeRead::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_core::WholeRead
+pub fn morpholog_core::WholeRead::eq(&self, &morpholog_core::WholeRead) -> bool
+impl core::fmt::Debug for morpholog_core::WholeRead
+pub fn morpholog_core::WholeRead::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_core::WholeRead
+impl core::marker::Freeze for morpholog_core::WholeRead
+impl core::marker::Send for morpholog_core::WholeRead
+impl core::marker::Sync for morpholog_core::WholeRead
+impl core::marker::Unpin for morpholog_core::WholeRead
+impl core::marker::UnsafeUnpin for morpholog_core::WholeRead
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::WholeRead
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::WholeRead
 pub struct morpholog_core::WitnessBinding
 pub morpholog_core::WitnessBinding::value: morpholog_core::EvalValue
 pub morpholog_core::WitnessBinding::var: morpholog_core::Var

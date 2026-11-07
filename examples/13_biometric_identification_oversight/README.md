@@ -55,10 +55,12 @@ proposal the runtime refuses, with the reason named:
 1. **A use cannot start under a model version not in service.** An unassessed
    version cannot put anything on the record - not flagged later, never
    admitted.
-2. **A decision before any verification is refused, and explains itself.** Ask
-   `morpholog explain` and the answer names the failing gate and the
-   directly-missing claim in the statute's own terms - a `MatchVerified`,
-   with `verify_match` as the transformation that supplies it. (Once one
+2. **A decision before any verification is refused, and explains itself.**
+   Propose it with `--explain-on-reject` and the refusal names the failing
+   gate and the directly-missing claim in the statute's own terms - a
+   `MatchVerified`, with `verify_match` as the transformation that supplies
+   it. (A dry-run `morpholog explain` cannot answer here: the decision reads
+   `decided_at`, and only a real decision has one.) (Once one
    verification exists, the gate still refuses a decision - a second, distinct
    verifier is needed - but the gap is now distinctness rather than an absent
    claim, which the one-hop engine names as the failing gate without a
@@ -99,10 +101,15 @@ version in service, and the oversight assignments in force at that moment.
 That gives the deployer governed evidence from which to write the clear and
 meaningful explanation an affected person may request under Article 86(1).
 
-There is deliberately no clock in the model. Every timestamp is supplied by
-the proposer and judged by the gates; nothing reads "now" from the machine it
-runs on. Replay the record next year, in front of a regulator, and every
-admission decision comes out the same.
+The system reports when a use started and when it matched a face; the gates
+judge whether those reports fit. But a verification and a decision are
+dated by the runtime, never by the person acting: both read `decided_at`,
+the instant the runtime began deciding the change, which the change's own
+audit row records. So nobody can date a confirmation before it happened,
+and the two-people-first rule checks the order of events, not someone's
+account of it. Replay the record next year, in front of a regulator, and
+each decision reads its recorded instant again, so every admission comes
+out the same.
 
 ## Where it fits
 

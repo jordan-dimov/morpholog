@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT predicate_name, arguments, asserted_in\n           FROM morpholog.state_snapshot_claims\n           WHERE snapshot_id = $1 AND ($2::text[] IS NULL OR predicate_name = ANY($2))\n           ORDER BY ordinal",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "predicate_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.state_snapshot_claims",
+            "name": "predicate_name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "arguments",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.state_snapshot_claims",
+            "name": "arguments"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "asserted_in",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "morpholog.state_snapshot_claims",
+            "name": "asserted_in"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "23d5cd60c83d99cffde3c88ded65223001e7347ed59bbf2e534de21078390b9b"
+}

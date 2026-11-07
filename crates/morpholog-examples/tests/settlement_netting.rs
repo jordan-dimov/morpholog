@@ -228,6 +228,7 @@ fn propose_rejects_when_line_already_netted() {
         transformation_name: t.name.clone(),
         args: netting_args(),
         actor: Subject::from("test_actor"),
+        decided_at: None,
     };
     let TracedProposal::Completed { outcome, trace } = propose_with_trace(
         &settlement_netting::program(),
@@ -294,6 +295,7 @@ fn a_transition_naming_no_transformation_runs_nothing() {
         transformation_name: "some_other_name".into(),
         args: netting_args(),
         actor: common::test_actor(),
+        decided_at: None,
     };
     let outcome = prepared
         .propose(

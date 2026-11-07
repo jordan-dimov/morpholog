@@ -458,7 +458,7 @@ class Lifecycle(SessionHarness):
         # refuses everything after the break.
         with self.assertRaises(MorphologError):
             s.claims()
-        self.assertIsNotNone(s._child.poll())
+        self.assertIsNotNone(s._transport.process.poll())
 
     def test_process_death_after_a_propose_is_outcome_unknown(self):
         s = self.session(mode="die_after_ready")
@@ -503,13 +503,13 @@ class Lifecycle(SessionHarness):
         # the request fails - but a failed write does not prove zero
         # bytes crossed, so a propose is unknown, never plain error.
         s = self.session(mode="exit_after_ready")
-        s._child.wait(timeout=10)
+        s._transport.process.wait(timeout=10)
         with self.assertRaises(MorphologOutcomeUnknown):
             s.propose("t", "a", {})
 
     def test_a_failed_write_on_a_read_stays_plain_operational(self):
         s = self.session(mode="exit_after_ready")
-        s._child.wait(timeout=10)
+        s._transport.process.wait(timeout=10)
         with self.assertRaises(MorphologError) as err:
             s.claims()
         self.assertNotIsInstance(err.exception, MorphologOutcomeUnknown)
@@ -621,7 +621,7 @@ class Lifecycle(SessionHarness):
         s = self.session(mode="stderr_flood")
         self.addCleanup(s.close)
         taken = []
-        real = s._stderr_lock
+        real = s._transport._stderr_lock
 
         class Watching:
             def __enter__(self):
@@ -631,9 +631,9 @@ class Lifecycle(SessionHarness):
             def __exit__(self, *exc_info):
                 return real.__exit__(*exc_info)
 
-        s._stderr_lock = Watching()
-        s._stderr_text()
-        self.assertTrue(taken, "_stderr_text read the tail without taking its lock")
+        s._transport._stderr_lock = Watching()
+        s._transport.diagnostic()
+        self.assertTrue(taken, "diagnostic read the tail without taking its lock")
 
     def test_a_malformed_value_inside_a_committed_receipt_is_outcome_unknown(self):
         """The receipt frames correctly but carries a value tag this
@@ -687,7 +687,7 @@ class Lifecycle(SessionHarness):
         started = time.monotonic()
         s.close()
         elapsed = time.monotonic() - started
-        self.assertIsNotNone(s._child.poll())
+        self.assertIsNotNone(s._transport.process.poll())
         self.assertLess(
             elapsed,
             _SHUTDOWN_BUDGET + 2.0,
@@ -697,14 +697,14 @@ class Lifecycle(SessionHarness):
     def test_close_sends_eof_and_reaps_the_child(self):
         s = self.session()
         s.close()
-        self.assertEqual(s._child.poll(), 0)
+        self.assertEqual(s._transport.process.poll(), 0)
         with self.assertRaises(MorphologError):
             s.claims()
 
     def test_a_child_that_ignores_eof_is_terminated(self):
         s = self.session(mode="ignore_eof")
         s.close()
-        self.assertIsNotNone(s._child.poll())
+        self.assertIsNotNone(s._transport.process.poll())
 
     def test_stderr_flooding_cannot_deadlock_the_conversation(self):
         with self.session(mode="stderr_flood", timeout=30.0) as s:

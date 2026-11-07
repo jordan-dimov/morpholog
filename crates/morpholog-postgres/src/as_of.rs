@@ -225,7 +225,7 @@ async fn last_instant_below(
 /// is open: its prefix could still grow, and the same read would later
 /// answer differently. The horizon is read after the target, so every
 /// row below it is final and visible to the replay's later statements.
-async fn settled_target(
+pub(crate) async fn settled_target(
     conn: &mut sqlx::PgConnection,
     transition_id: Uuid,
 ) -> Result<AuditPosition, PgError> {
@@ -266,14 +266,58 @@ pub(crate) async fn reconstruct_inner(
     conn: &mut sqlx::PgConnection,
     transition_id: Uuid,
     predicates: Option<&[String]>,
+    asserted_in: Option<&mut HashMap<ClaimInstance, Uuid>>,
+    on_page: Option<&mut (dyn FnMut(u64) + Send)>,
+) -> Result<State, PgError> {
+    reconstruct_from(
+        conn,
+        Start::Snapshot,
+        transition_id,
+        predicates,
+        asserted_in,
+        on_page,
+    )
+    .await
+}
+
+/// Where a replay begins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Start {
+    /// After the nearest usable snapshot at or before the target.
+    Snapshot,
+    /// At the first row, whatever snapshots are kept.
+    Beginning,
+}
+
+pub(crate) async fn reconstruct_from(
+    conn: &mut sqlx::PgConnection,
+    start: Start,
+    transition_id: Uuid,
+    predicates: Option<&[String]>,
     mut asserted_in: Option<&mut HashMap<ClaimInstance, Uuid>>,
-    mut on_page: Option<&mut dyn FnMut(u64)>,
+    mut on_page: Option<&mut (dyn FnMut(u64) + Send)>,
 ) -> Result<State, PgError> {
     let target = settled_target(&mut *conn, transition_id).await?;
     let scope_set: Option<HashSet<&str>> =
         predicates.map(|preds| preds.iter().map(String::as_str).collect());
-    let mut state = State::default();
-    let mut pages = ReplayPages::new(Some(target));
+    let snapshot = match start {
+        Start::Snapshot => {
+            crate::snapshots::nearest(&mut *conn, target, scope_set.as_ref()).await?
+        }
+        Start::Beginning => None,
+    };
+    let (mut state, mut pages) = match snapshot {
+        Some(snapshot) => {
+            if let Some(map) = asserted_in.as_deref_mut() {
+                *map = snapshot.asserted_in;
+            }
+            (
+                snapshot.state,
+                ReplayPages::new(Some(target)).after(snapshot.position),
+            )
+        }
+        None => (State::default(), ReplayPages::new(Some(target))),
+    };
     let mut replayed = 0u64;
     loop {
         let rows = pages.next(&mut *conn).await?;

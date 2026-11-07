@@ -1,66 +1,196 @@
-# Chess transition invariants
+# Chess: a referee that won't bend
 
-A small chess world that shows three Morpholog ideas at once: rules that constrain not just *what state is allowed* but *how state is allowed to change* (transition invariants); *counting* - a rule fixing how many things of a kind may exist; and a *computed property* - a square's colour, stored nowhere and worked out from where the square sits.
+What if a rule is enforced perfectly, but it is not quite the rule you meant?
 
-It follows Murat Demirbas's [Chess invariants](https://muratbuffalo.blogspot.com/2026/05/chess-invariants.html) post, which models chess in TLA+ and notes that some chess rules are properties of a single board position ("at most one king per colour") while others are properties of a *move* ("the move counter goes up by exactly one"). Morpholog already supported the first kind; this example adds the second, through `pre(...)` - a wrapper that lets an invariant refer to the board *before* the move alongside the board after. The same "what just changed?" shape appears with a real domain in [`examples/05_insurance_claim_settlement`](../05_insurance_claim_settlement/); chess just keeps the idea visible against a familiar backdrop. [`chess.morph`](chess.morph) teaches it construct by construct.
+This example is a chess referee built from Morpholog rules. It refuses every move that breaks a rule, and it tells you which rule. You will:
 
-## What it models
+1. watch a rule refuse a move;
+2. find a hole in that same rule;
+3. close the hole;
+4. ask which past moves the new rule would have refused.
 
-A deliberately small slice of chess: a board as a set of `PieceAt(file, rank, piece_type, color)` claims (a square named by two numbers, file and rank, each 1 to 8); game-level counters `MoveCount`, `PieceCount`, `CurrentTurn`; an opening-setup transformation; and a quiet move and a capturing move. It is not a chess engine - no castling, en passant, promotion, check, or piece-specific movement, and it will happily move a rook diagonally. The point is transition invariants and computed square colour, and the small subset serves it.
+Chess works well here because everyone knows what the rules should be. The same story happens with trading limits, credit checks and approvals. There, the right rule is much harder to see.
 
-## The program
+## How the referee sees the game
 
-The full surface form, with the guided tour of the domain, is in [`chess.morph`](chess.morph).
+The referee doesn't store a board. It stores *claims*: statements it has agreed to accept. There is one claim per piece, `PieceAt(file, rank, piece_type, color)`. A square is two numbers from 1 to 8: the file (the column) and the rank (the row). So the square chess players call c1 is file 3, rank 1.
 
-### Claims
+Two more claims track the game: the number of moves so far, and whose turn it is. Nothing else is stored. The number of pieces left, for example, is never written down. The rules count it from the board when they need it, so it can't disagree with the board.
 
-| Predicate | What it represents |
+A move is a proposal to change these claims. You say which piece moves, by its square, and where it goes. The referee works out the rest: whose turn comes next, and whether the move takes a piece. Then it checks the result against every rule. If they all still hold, it commits the move. If one fails, it refuses the move and changes nothing.
+
+Some rules look at one position, like "each side has exactly one king". Others compare the board before and after a move, like "the move count goes up by exactly one". Those use `pre(...)`, which means "as it was before this move". The idea comes from Murat Demirbas's [Chess invariants](https://muratbuffalo.blogspot.com/2026/05/chess-invariants.html) post, which models chess in TLA+.
+
+The referee knows almost nothing about how pieces move. A rook may move diagonally. A pawn may jump across the board. This is on purpose, and it will come in handy. [`chess.morph`](chess.morph) explains every rule in plain comments.
+
+## Try it
+
+You need:
+
+- a `morpholog` binary;
+- a checkout of this repository at the same version;
+- PostgreSQL 18 or later.
+
+[`docs/install.md`](../../docs/install.md) shows how to get them. You don't need Rust. Run every command from the root of the checkout.
+
+### 1. Make a new database
+
+Use a new, empty database. Never use one you care about.
+
+```sh
+createdb morpholog_chess
+export DATABASE_URL=postgres:///morpholog_chess
+morpholog init
+M=examples/07_chess_transition_invariants/chess.morph
+```
+
+### 2. Start a game
+
+```sh
+morpholog propose "$M" start_game --actor you --args-named '{}'
+```
+
+The answer says `"status": "committed"`. It lists the 34 claims the referee accepted: 32 pieces, a move count of 0, and white to move.
+
+`--actor you` says who made the proposal. Here it is just a name you typed. Nobody checked it.
+
+### 3. Watch a rule work
+
+Each side has two bishops. One moves on light squares, the other on dark squares. A bishop never changes colour.
+
+The referee doesn't store square colours. It works them out: `(file + rank) % 2` is 0 on a dark square and 1 on a light one. The rule `bishops_on_opposite_square_colors` says a side's two bishops always stand on different colours.
+
+Try to move white's dark-squared bishop from c1 to d3, a light square. White's other bishop is still on f1, also a light square. The move gives the piece's square and the square it goes to, as file and rank: c1 is `3, 1` and d3 is `4, 3`.
+
+```sh
+morpholog propose "$M" move_piece --actor you --args-named '{"src_f": "3", "src_r": "1", "dst_f": "4", "dst_r": "3"}'
+```
+
+The answer says `"status": "rejected"` and names the rule `bishops_on_opposite_square_colors`. Its `witness` shows the two bishops the rule compared, on files 4 and 6. Nothing changed. Check where the white bishops are:
+
+```sh
+morpholog inspect claims --named "$M" --predicate PieceAt --where piece_type=bishop --where color=white
+```
+
+They are still on c1 and f1.
+
+### 4. Find the hole
+
+Now play three moves. None of them is legal chess. The bishop can't pass its own pawn on d2. A pawn on f7 can't take a piece on f1. A bishop can't step sideways. Our referee allows all three, because it doesn't know how pieces move. That isn't the hole we're after. Watch what the third move does to a rule the referee *does* check.
+
+```sh
+morpholog propose "$M" move_piece --actor you --args-named '{"src_f": "3", "src_r": "1", "dst_f": "5", "dst_r": "3"}'
+morpholog propose "$M" move_piece --actor you --args-named '{"src_f": "6", "src_r": "7", "dst_f": "6", "dst_r": "1"}'
+morpholog propose "$M" move_piece --actor you --args-named '{"src_f": "5", "src_r": "3", "dst_f": "4", "dst_r": "3"}'
+```
+
+Here is what happens:
+
+1. White's bishop goes from c1 to e3. Both are dark squares.
+2. Black takes white's other bishop, on f1.
+3. White's bishop steps from e3 to d3, a light square.
+
+All three are committed. Check again:
+
+```sh
+morpholog inspect claims --named "$M" --predicate PieceAt --where piece_type=bishop --where color=white
+```
+
+White has one bishop left, on d3. A dark-squared bishop now stands on a light square. In step 3, the referee refused to put it there.
+
+The rule did exactly what it says. It compares a side's two bishops, and white now has only one. A rule that looks at one position can't see where the bishop was before the move.
+
+### 5. Fix the rule
+
+Stop and think for a moment. Could you make the bishop rule stricter? What would it compare, with only one bishop left?
+
+What we want isn't about the position. It's about the move: *a bishop keeps the colour of its square*. So the check belongs on the move itself, where the start and end squares are known. In Morpholog, a check on a move is a `require`. We call it a gate.
+
+First, copy the programme, so the original stays as it is:
+
+```sh
+cp "$M" /tmp/chess_fixed.morph
+```
+
+In the copy, find `transformation move_piece` and add this gate just below the line `require your_own_piece: piece_color = current_turn`:
+
+```
+  require bishop_keeps_its_colour: piece_type != #bishop or (src_f + src_r) % 2 = (dst_f + dst_r) % 2
+```
+
+It reads: the piece is not a bishop, or its old square and its new square have the same colour.
+
+A gate checks only the action it sits in. A rule written as an `invariant` checks every change, whatever made it. Here `move_piece` is the only action that moves pieces, so one gate is enough. If the programme ever gains another way to move a bishop, that action needs the gate too.
+
+Now check the copy:
+
+```sh
+morpholog check /tmp/chess_fixed.morph
+```
+
+No output means the programme passed Morpholog's checks. Its names, kinds and bindings all fit together. That doesn't mean the rules are the ones you meant. The programme in step 4 passed these checks too.
+
+### 6. Look back at the moves already made
+
+We found a mistake in our rules. What about the moves the referee already accepted?
+
+Before you run anything, make a guess. The referee has committed four actions: the start of the game and three moves. Which of them would the fixed rules refuse?
+
+```sh
+morpholog rehearse /tmp/chess_fixed.morph
+```
+
+`rehearse` reads every committed action. It decides each one again under the new rules, on the board as it was at the time. It changes nothing. Its answer includes:
+
+```text
+"transitions_replayed": 4,
+"totals": {
+  "same": 3,
+  "different_delta": 0,
+  "would_reject": 1,
+```
+
+A "transition" is one committed action. Three would be decided the same way, and one would be refused. Under `"refusals"`, the answer names `bishop_keeps_its_colour`, the gate you wrote, and the move it would refuse: e3 to d3. The refused move from step 3 isn't counted, because `rehearse` reads only committed actions.
+
+Now look at the board once more:
+
+```sh
+morpholog inspect claims --named "$M" --predicate PieceAt --where piece_type=bishop --where color=white
+```
+
+The bishop is still on d3. The game hasn't changed. That move really was accepted, under the rules the referee had at the time. And now you also know which move the better rules would refuse, by name. Morpholog gives you both answers, and rewrites neither.
+
+One limit: `rehearse` judges each move on the board the record shows. It can't play out the game that would have followed a refusal. Nobody knows what the players would have done instead.
+
+## What this guarantees, and what it doesn't
+
+**It guarantees** that the referee committed a move only if the move broke none of the rules the referee had. A refused move changes nothing. The record of committed actions stays as it is. `rehearse` can decide those actions again under a new programme. It reports which decisions would change. It also reports any action the new programme can't replay at all, for example one it no longer has.
+
+**It assumes** that `--actor you` is honest. It is a name you typed, and nobody checked it. It also assumes the moves are the ones the players meant. The referee checks the rules, not anyone's intent.
+
+**It does not guarantee** legal chess. Pieces can move anywhere. There is no check or checkmate, no castling, no en passant, no promotion, and only one game at a time. Above all, it can't tell you that your rules are right. Step 4 showed a rule enforced perfectly that still let through a move we didn't want.
+
+## The rules
+
+| Rule | What it says |
 | --- | --- |
-| `PieceAt(file, rank, piece_type, color)` | A piece on a square (file and rank are numbers 1 to 8). A move retracts the source claim and admits one at the destination. |
-| `MoveCount(n)` | Moves played so far; retracted and re-admitted each move. |
-| `PieceCount(n)` | Pieces on the board; re-admitted when a capture happens. |
-| `CurrentTurn(color)` | Whose turn it is; re-admitted each move. |
-
-Subjects are `#white` / `#black` and the six piece types. File and rank are decimals, not subjects, precisely so a square's colour can be computed from them.
-
-### Invariants over a single board (no `pre`)
-
-| Invariant | What it says |
-| --- | --- |
-| `piece_at_unique_by_file_rank` | A square holds at most one piece - generated from `unique by (file, rank)` on `PieceAt`. |
+| `piece_at_unique_by_file_rank` | A square holds at most one piece. It comes from `unique by (file, rank)` on `PieceAt`. |
 | `pieces_stand_on_the_board` | File and rank are whole numbers from 1 to 8. |
-| `turn_belongs_to_a_player` | The turn is always white's or black's. |
-| `exactly_one_white_king` / `exactly_one_black_king` | Each colour has *exactly* one king - so a king can never be captured. |
-| `piece_count_matches_board` | A `PieceCount` counter must equal the actual pieces on the board. |
-| `board_with_pieces_has_a_counter` | A board with pieces must carry a `PieceCount` - the presence half that makes the count check bite. |
-| `at_most_eight_pawns_per_color` | A colour has at most eight pawns. |
+| `exactly_one_white_king` / `exactly_one_black_king` | Each side has exactly one king, so a king can never be taken. |
+| `bishops_on_opposite_square_colors` | A side's two bishops stand on different colours. With one left, there is nothing to compare. |
+| `at_most_eight_pawns_per_color` | A side has at most eight pawns. |
+| `move_count_strictly_increases` | Each move adds exactly one to the move count: `MoveCount(n) and pre(MoveCount(m)) implies n = m + 1`. |
+| `turn_alternates` | The turn changes hands on every move: `CurrentTurn(now) and pre(CurrentTurn(prev)) implies now != prev`. |
+| `piece_count_drops_by_at_most_one` | A move never adds a piece, and the board loses at most one. It counts the pieces before and after, with `sum(1 \| pre(PieceAt(..)))` and `sum(1 \| PieceAt(..))`. It counts; it does not follow which pieces left. |
 
-### Invariants over a transition (`pre` compares before and after)
+There are two actions. `start_game()` sets up the board, once. `move_piece(src_f, src_r, dst_f, dst_r)` moves a piece and takes whatever stood on the destination. It checks two gates first: `your_own_piece` (the piece belongs to the player whose turn it is) and `not_onto_your_own_piece`. To take a piece, it uses `retract PieceAt(file: dst_f, rank: dst_r, ..)`, which removes any piece on that square and does nothing if it is empty.
 
-| Invariant | What it says |
-| --- | --- |
-| `move_count_strictly_increases` | `MoveCount(n) and pre(MoveCount(m)) implies n = m + 1`. |
-| `turn_alternates` | `CurrentTurn(now) and pre(CurrentTurn(prev)) implies now != prev`. |
-| `single_capture_per_move` | `PieceCount(after) and pre(PieceCount(before)) implies (after = before) or (after = before - 1)`. |
+## How this page is checked
 
-On the very first move there is no prior `MoveCount` to compare against, so a `pre`-dependent rule is vacuously satisfied; once `start_game()` has admitted `MoveCount(0)`, every later move has both values and the rule bites.
+A test checks every step on this page against the real `morpholog` binary. It plays the same moves, makes the same fix and runs the same reads. It also checks that each command appears on this page exactly as it runs. If the page and the referee ever disagree, the test fails. It skips the setup step, and it writes the fixed copy itself.
 
-### A computed property: square colour
+The test empties Morpholog's tables in the database that `DATABASE_URL` points to. Use a throwaway database.
 
-| Invariant | What it says |
-| --- | --- |
-| `bishops_on_opposite_square_colors` | The two bishops of a colour stand on opposite-coloured squares - `(file + rank) % 2` differs between them. It turns away a move that would put both on one colour. With one bishop left there is nothing to compare, so the survivor may change colour. |
-
-### Transformations
-
-| Transformation | What it does |
-| --- | --- |
-| `start_game()` | The opening position: 32 pieces, `MoveCount(0)`, `PieceCount(32)`, white to move. Refused once a game is under way. |
-| `quiet_move(src_f, src_r, dst_f, dst_r, new_turn)` | Moves a piece to an empty destination; counter up, turn flips, piece count unchanged. |
-| `capturing_move(src_f, src_r, dst_f, dst_r, new_turn)` | Same, but the destination holds an enemy piece, retracted; piece count down one. |
-
-Each move gates its own preconditions with `require` (the mover owns the turn; the new turn differs), while the transition invariants check the same conservation from the outside - so a future bug in a move transformation is caught on the candidate state, however it got there.
-
-## What it deliberately does not cover
-
-Not a chess engine: no legal-move enforcement (a bishop may move sideways), no check / checkmate / stalemate, no castling / en passant / promotion, no multiple games at once. It keeps every piece on a real square, but says nothing about how a piece got there.
+```sh
+cargo test -p morpholog-cli --test chess_tutorial_e2e
+```

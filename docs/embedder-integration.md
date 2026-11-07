@@ -368,7 +368,7 @@ Refusal surfaces as the `actor_assertion_unauthorised` code everywhere: in `prop
 
 An admitted policy claim whose shape the runtime cannot read stops every durable proposal with an error, rather than being ignored. That is deliberate and it is where the fail-closed guarantee actually lives: `check` and the library facades refuse a misshapen DECLARATION early, but compensation reaches the kernel with a decomposed transformation and no programme, so only a check keyed off the claims themselves covers every path.
 
-**The boundary, stated plainly.** This binds callers reaching the record through Morpholog. The runtime's writer role holds `INSERT`/`DELETE` on `morpholog.claims` and `INSERT` on `morpholog.audit`, so anything holding those credentials can write claims and attestation-shaped audit rows directly without passing this check. Two identities are genuinely distinct only when the two applications and their credentials are genuinely separate. This is adapter-enforced assertion policy, not proof of authorship. `session_user` is also immune to `SET ROLE` but not to a superuser's `SET SESSION AUTHORIZATION` - the same accepted residue as a superuser writing audit rows.
+**The boundary, stated plainly.** This binds callers reaching the record through Morpholog. The runtime's writer role holds `INSERT`/`DELETE` on `morpholog.claims` and `INSERT` on `morpholog.audit`, so anything holding those credentials can write claims and attestation-shaped audit rows directly without passing this check. Two identities are genuinely distinct only when the two applications and their credentials are genuinely separate. `morpholog serve` (below) is how a caller proposes without holding those credentials at all. This is adapter-enforced assertion policy, not proof of authorship. `session_user` is also immune to `SET ROLE` but not to a superuser's `SET SESSION AUTHORIZATION` - the same accepted residue as a superuser writing audit rows.
 
 **For direct SQL readers** (a projector that prefers the table): the `(audit_order, act_ordinal, committed_at, transition_id)` total order is stable - it is load-bearing in `verify`, coverage replay, and the as-of reconstructions, so it cannot drift; the claim JSONB inside `asserted_claims`/`retracted_claims` is the pinned `claim_instance` shape; the column set may grow additively. Name columns, in reads and writes alike: their order depends on the database's history, since a migration adds a column at the end where a fresh `init` may place it elsewhere, so `SELECT *` positions and positional `INSERT`s differ between databases. An upgraded database also keeps the audit log's required-field checks unvalidated, so its old rows stay lawful. Apart from those two, a test holds a database provisioned by the baseline release, v0.0.14, migrated to the current version, to the same schema as a fresh one, grants and policies included. A direct tail wanting lossless resume must follow the same recipe as `--after` above: read `morpholog.audit_watermark()`, take the snapshot, then page strictly below it. A direct read as of a timestamp selects rows whose `coalesce(ordered_at, committed_at)` is at or before it, and is final only as `morpholog.audit_horizon()` says, read first: with an order still held, for instants up to the last row below that order; with none, for instants up to the `quiet_at` it returns, which it has fenced the ordering clock at. The reader and writer roles `provision` creates may call both functions.
 
@@ -406,6 +406,7 @@ What this document promises:
 - The `inspect derived` row shapes: the claim objects of the claims read without `asserted_in`, since a derived claim is computed, not admitted (tagged by default; `--named` decodes by declared field name under the same programme's authority, with the same skew contract), composing with `--as-of`. The whole-stdout arrays are pinned as the `claim_instance_array` / `named_claim_array` `$defs`.
 - The audit row's `invariants_checked`: every active invariant the transition was admitted under, each discharged because the transition's effective delta could not affect it, because every affected case satisfied it, or because the whole invariant was evaluated and held (admission is case-local; see `docs/runtime-semantics.md`).
 - The `refresh derived` typed report (`refresh_derived_report`) on stdout: counts, model hash, generation id, and the source-snapshot pair, which is present or absent together and is a coarse freshness marker, never a lossless audit-resume cursor (for resume, read `inspect audit`). The human summary with timings stays on stderr.
+- The `refresh snapshots` typed report (`refresh_snapshots_report`) on stdout: the interval, and how many snapshots were built, kept and removed, with the latest kept when there is one. The summary with its timing stays on stderr.
 - The `inspect audit` NDJSON tail (the `audit_row` / `audit_row_named` line shapes, the `(audit_order, act_ordinal, committed_at, transition_id)` order, `--after`'s lossless-resume semantics and its preconditions).
 - The `morpholog hash` output shape and its rules-identity semantics (canonical-source SHA-256; formatting and comments excluded).
 - The `morpholog schema --all` manifest shape (program, hash, predicates, transformations, intents; the keyed objects serialise with sorted keys, and declaration order travels in the explicit `transformation_order` / `intent_order` arrays).
@@ -470,7 +471,7 @@ emits a complete, self-contained `morpholog_client/` package:
 - **Envelope models**, strict on keys and values: a field this client does not know, or a value of the wrong type, constant, enum or range, raises `EnvelopeError` instead of dropping data or passing it through. String formats such as a UUID are not checked.
 - **The subprocess adapter** over the whole surface this guide pins: `propose`, `propose_batch`, `transact`, `explain`, `check`; the reads `claims`, `derived` and their `_named` forms, with `as_of` as a transition id or an RFC 3339 timestamp; the audit tail as `audit()` / `audit_named()` with the `--after` cursor, and `rejections`, `coverage`, `guarantees`; `refresh_derived()`; the deploy steps `init`, `migrate()` with `check=True` or `prepare=True`, and `provision_indexes()`; `hash()`; the candidate questions `evaluate()` and `rehearse()`; the tamper-evidence surface (`audit_verify`, `audit_checkpoint`, `audit_witness`, the three exports and their offline `audit_verify_pack` forms, `audit_receipt` and `audit_verify_receipt`); and the outbox lease (`outbox_claim`, `outbox_complete`, `outbox_release`).
 - **A model per declaration**: a frozen request dataclass per transformation with fields in declaration order and `to_args_named()`; a read model per predicate parsing the named read's values by declared kind; a payload per intent with the positional order baked in. Each refuses a value of another kind with `CodecError`; none calls `schema --intent` at runtime.
-- **The stamps** in `__init__.py` (`PROGRAM`, `MODEL_HASH`, `MORPHOLOG_VERSION`), the Python floor (3.12) enforced at first import, and `open_client()` / `open_session()`, which check the binary against the stamps at first use.
+- **The stamps** in `__init__.py` (`PROGRAM`, `MODEL_HASH`, `MORPHOLOG_VERSION`), the Python floor (3.12) enforced at first import, and `open_client()` / `open_session()` / `connect_service()`, which check the binary or the service against the stamps at first use.
 
 Decoded values keep their types, so `json.dumps` cannot print an envelope as it stands; `envelopes.to_json(envelope)` prints any of them, decimals as exact text. That output is not the wire shape, and nothing reads it back.
 
@@ -883,6 +884,8 @@ def submit_with_retries(client, request, actor, attempts=8):
 
 Anything else propagates: `MorphologOutcomeUnknown` in particular means the proposal may have committed, so read the record before submitting again.
 
+A retry is a new decision at a new time. A body that reads `decided_at` sees the start of the transaction deciding it, so a deadline gate that passed on the first attempt can refuse on the second, a second later. Nothing the caller sends can set that instant: it is the database server's clock, read by the adapter, and recorded as the audit row's `committed_at`. Two consequences are worth designing for. Decision times are not in log order, because a transaction that began first can commit last. And a gate on time is not a seal: a bid whose transaction began a moment before a close passes `decided_at strictly_before closes` however late it commits. When a rule must hold across that race, admit the close as a claim and gate the bid on its absence; SERIALIZABLE then places the bid before the close in its logical order, though not necessarily before it on the wall clock. `explain` and other tools that run a body with no recorded instant refuse a body that reads `decided_at` rather than guess one; `rehearse` gives each row the instant it recorded.
+
 How often you retry depends on what your proposals read; `runtime-semantics.md` ("Concurrency: when two proposals conflict") states when two proposals conflict. The current readings, sixteen writers posting to one ledger on both routes, are in `crates/morpholog-bench/README.md` with the method; in short, the compiled route with its indexes provisioned retries a small fraction of what the interpreted route does.
 
 Those rows are the ledger posting, whose only gate reads an empty predicate. The shape that contends is a gate that reads the predicate it then writes, a capture: sixteen writers admitting distinct items into one predicate of five thousand rows, each first requiring its item absent:
@@ -893,6 +896,8 @@ Those rows are the ledger posting, whose only gate reads an empty predicate. The
 | keyed by the item, indexes provisioned | 0.08 | 5,500 |
 
 A keyed read remembers only the index range it searched, so disjoint items stop conflicting. Without its index a keyed read scans the predicate and computes a key per row, which is slower than the old whole read (about 45 against 60 commits a second here) and locks the same relation, so run `provision indexes` for every programme, interpreted or compiled. On the interpreted route the invariants' predicates are still read whole, so a programme whose invariants mention the predicate a gate writes keeps the first row's retries until that is narrowed.
+
+`check -v` lists each read in a transformation body that loads its predicate whole: the transformation, the predicate, the statement, its rule name when it has one, and the definitions the read goes through. A read is keyed only by values the transformation knows before it runs: a parameter no statement rebinds, `actor`, or a literal. A variable a gate binds as it runs, such as a trade it sums over, does not key anything, and the selector `effective by` generates looks for a later version by its keys alone, so passing it another field does not key that read. A limit gate that sums every trade's terms in force through that selector therefore reads every organisation's terms. A definition that names the organisation in its reads, passed the parameter, keys it. The list is text in `check -v`, not part of `check --json`.
 
 ## The resident session (`morpholog session`)
 
@@ -1111,3 +1116,208 @@ The whole conversation is pinned: the session's envelopes are in
 generated client emits and the response lines it parses - the Rust
 end-to-end test records it against a real database, the Python
 session tests replay it.
+
+## Serving callers you do not trust (`morpholog serve`)
+
+A caller that holds a writer login can write claims and audit rows
+without Morpholog. A caller that starts its own session chooses the file
+it serves. `serve` is for a caller you want governed without trusting it:
+an agent, a script, a service you do not control. The service holds the
+database logins and the programme. The caller holds a socket.
+
+```bash
+morpholog serve rules.morph \
+  --expect-hash sha256:... \
+  --socket /run/morpholog/serve.sock \
+  --presenter 1001=m_operator \
+  --presenter 1002=m_agent \
+  --grant 1001=claims,derived,audit \
+  --database-url postgres:///ledger
+```
+
+**Each caller is a presenter.** `--presenter UID=LOGIN` maps the OS user
+a connection comes from to the database login it is served as. The
+service opens one connection per presenter, as that login, and checks
+that PostgreSQL logged it in as exactly that login before it listens.
+Leave the user out of the database URL. A connection from any other uid
+is closed before anything is read or written, and the service logs the
+uid. One uid on two logins, or two uids on one login, refuses to start:
+the rules could not tell such callers apart.
+
+**What the audit row means here.** The row's `authenticated_by` is the
+presenter's login, so `ActorAssertionAuthority` grants (see "Restricting
+who may assert an actor") work as they do for a direct connection. But
+PostgreSQL authenticated the service, not the caller. The service read
+the caller's uid from the socket and chose the login. So the service is
+part of what the row's evidence trusts.
+
+**The wire is the session's.** Each connection gets the ready line, then
+the lockstep requests and receipts above. A presenter may `propose`,
+`transact` and `ping`. Reads (`claims`, `derived`, `audit`, `rejections`)
+and explanations (`explain`, and `explain_on_reject` on a proposal) need
+`--grant UID=OP,...`. A read can show state a caller has no business
+seeing, and repeated explanations can map out a path the rules allow. An
+ungranted operation answers `unknown_operation`; `explain_on_reject`
+without the grant answers `invalid_request`. No request can name a
+programme or a hash.
+
+**Bounds.** A request line is at most 1 MiB; a longer one closes its
+connection. A presenter holds at most four connections at once, and a
+fifth is closed. They share the presenter's one database connection, so
+no presenter can take another's connections. The database itself is
+shared: an expensive proposal, or contention on the same claims, still
+slows the others. Refusals are logged at most once a minute
+per caller, with a count of those held back, so a caller that keeps
+connecting cannot flood the log.
+
+**Failures.** A failure that cannot be a receipt closes that connection,
+not the service. A caller whose connection closes with a request in
+flight cannot know whether it committed: read the record before
+re-submitting, as after a session abort.
+
+**From Python.** The generated package's `connect_service` opens one
+connection, pinned to the version and model hash the package was
+generated for:
+
+```python
+from morpholog_client import connect_service
+
+with connect_service("/run/morpholog/serve.sock") as session:
+    receipt = session.propose("place_order", "agent", args)
+```
+
+It is the session client above, over a socket, with the same methods and
+the same rules. A connection that falls out of lockstep (a timeout, a
+hang-up, an answer out of step) refuses every later call, so a late
+answer is never read as the next one: open a new connection. A proposal
+whose answer is lost raises `MorphologOutcomeUnknown`, and nothing is
+sent again. If the service hangs up before its ready line, the error
+names the possible causes (an OS user that is not a presenter, one at
+its connection limit, a service that stopped) and the service's log
+says which. A `timeout` bounds each send as well as each wait for an
+answer, so a service that stops reading cannot hold a call forever; a
+proposal whose send times out is outcome-unknown, like any failed write.
+`Session.connect` opens a connection unpinned.
+
+**An unknown outcome may need a person.** Reading the record before
+re-submitting is safe, but a caller without a read grant cannot do it,
+and a caller with one may not be able to tell its proposal from another:
+`examples/21_closed_loop_execution` makes each order's identifier inside
+Morpholog. Such a caller stops and asks its operator instead of
+proposing again.
+
+**The socket.** Its mode is set to 0666: who is served is the uid map's
+to decide, and a user who cannot write the socket cannot connect at all.
+Its path must not be changeable by anyone but the service's user or root.
+The service refuses to start when any directory above the socket is owned
+by someone else or writable by group or others (a sticky directory such
+as `/tmp` is allowed above it, since others cannot rename or remove an
+entry there they do not own). A caller that could swap the socket could
+answer the other presenters in the service's place. A directory made
+with `install -d -m 755 -o <service user> /run/morpholog` will do.
+
+**Starting and stopping.** `--expect-hash` is required. The socket path
+must not exist; SIGTERM or SIGINT stops the service and removes it. A new
+programme is a stop, then a start with the new hash. Never run two
+services on one database under different hashes.
+
+**What the deployment must hold.** Morpholog checks the programme's hash,
+the login of each connection, the uid of each caller and the socket's
+directory. It cannot check
+that a caller has no other way in. The deployment makes the writer logins
+reachable only through the service. In `pg_hba.conf`, before every
+general rule (the first matching line decides):
+
+```
+local  all  +morpholog_writer      peer    map=serve
+host   all  +morpholog_writer  all reject
+```
+
+and in `pg_ident.conf`, one line per presenter login, from the service's
+OS user:
+
+```
+serve  morpholog  m_operator
+serve  morpholog  m_agent
+```
+
+`+morpholog_writer` matches every member of the writer role, so a writer
+login added later is covered; with a role prefix, name that writer role.
+Without these lines, Ubuntu's packaged `local all all peer` lets an OS
+user log in as a writer login of the same name, with no password. Set
+`listen_addresses` explicitly. Bootstrap before the socket opens:
+migrate, provision, and make the programme's trust-root acts (appointing
+an operator, its first grants) as the service's OS user with the
+operator's login, the one route to that login, so no caller can race to
+become the trust root.
+
+## Running the action outside the proposer
+
+`serve` keeps the agent from writing the record. The action in the world
+needs the same: the agent may propose `place_order`, but it must never
+hold the venue's key. The executor holds the key. It takes only intents
+the record admitted, from the outbox, and does what each one says.
+
+**The executor's role.** `init --least-privilege` provisions a third role
+beside the writer and the reader, `<prefix>executor` (`morpholog_executor`
+by default). Grant it to the executor's login:
+
+```sql
+GRANT morpholog_executor TO m_executor;
+```
+
+The role can read the outbox and move a row through delivery: claim it,
+mark it delivered, schedule a retry, mark it failed. That is all. It
+cannot change what an admitted intent says (its arguments, type,
+idempotency key or transition), add or remove an intent, read or write
+claims or the audit log, or propose. Run the outbox worker with that
+login, in process or through `morpholog outbox claim` / `complete`. The
+executor does not compensate: a compensation is a proposal, and proposing
+needs a writer. Run it without a compensation spec; a failed row waits for
+a writer to deal with it.
+
+The writer cannot change an admitted intent either. It needs to add
+intents, not rewrite them. That does not make the writer safe to hand an
+agent: it can still write claims, audit rows and new intents, which is why
+`serve` holds it.
+
+**The target is the deployment's, never the intent's.** A worker serves
+one intent type, and its adapter owns where the action goes: the endpoint,
+the credential, the method, and the check of the payload's shape. The
+intent's arguments are business data only. They never choose a URL or a
+host, a credential or its name, a method, headers, TLS trust, a command or
+a path. That is why there is no generic HTTP deliverer that reads its URL
+from the payload. A venue the rules accept is not a target the executor is
+configured for: `examples/21_closed_loop_execution` declares a venue named
+like an address, the record admits an order there, and the executor fails
+it closed.
+
+**What the executor is still trusted with.** It holds the key, so it can
+misuse it, and its role lets it mark a row delivered without acting, or
+fail it. The grants stop it from rewriting what was admitted, not from
+misbehaving. Reconciliation exposes an order the venue never saw, or one it
+saw and the record never admitted (example 21). Delivery is at least once:
+a redelivery carries the same intent id and idempotency key, so a receiver
+that deduplicates on the key acts once. Morpholog cannot promise exactly
+once across two systems.
+
+**What the deployment must hold.** Morpholog checks the grants. It cannot
+check that the key exists nowhere else, or that the agent cannot reach the
+venue by another route. Like the writer logins, the executor's login is
+reachable only from the executor's OS user, before every general rule in
+`pg_hba.conf`:
+
+```
+local  all  +morpholog_executor      peer    map=executor
+host   all  +morpholog_executor  all reject
+```
+
+and in `pg_ident.conf`:
+
+```
+executor  morpholog-executor  m_executor
+```
+
+Otherwise an agent that learns the executor's password could mark admitted
+intents delivered without anything happening. `scripts/serve_acceptance.sh`
+runs this whole path with separate OS users.

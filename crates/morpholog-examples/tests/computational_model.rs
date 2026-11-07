@@ -121,7 +121,7 @@ fn value(v: &ValueExpr) -> &'static [Draws] {
 
 fn term(t: &Term) -> &'static [Draws] {
     match t {
-        Term::Var(_) | Term::Wildcard | Term::Actor => &[],
+        Term::Var(_) | Term::Wildcard | Term::Actor | Term::DecidedAt => &[],
         Term::Literal(v) => match v {
             Value::Decimal(_)
             | Value::Subject(_)

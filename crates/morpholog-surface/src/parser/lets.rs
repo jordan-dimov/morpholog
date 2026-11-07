@@ -63,6 +63,14 @@ pub(crate) fn apply(
                     .to_string(),
             ));
         }
+        if b.name == "decided_at" {
+            errors.push((
+                b.span.clone(),
+                "`decided_at` cannot name a let value - `decided_at` always denotes the \
+                 decision time the runtime gives a transformation"
+                    .to_string(),
+            ));
+        }
         if !seen.insert(b.name.as_str()) {
             errors.push((
                 b.span.clone(),

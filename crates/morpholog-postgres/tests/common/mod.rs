@@ -215,6 +215,7 @@ pub async fn propose_pg_as(
         transformation_name: transformation.name.clone(),
         args,
         actor: actor.into(),
+        decided_at: None,
     };
     propose_against_pg(pool, pg, &attested(&transition)).await
 }
@@ -601,5 +602,110 @@ pub async fn with_gateway_roles(
     drop_roles_if_present(pool, roles).await;
     if let Err(failure) = outcome {
         std::panic::resume_unwind(failure.into_panic());
+    }
+}
+
+// ============================================================
+// Scratch deployments
+// ============================================================
+
+pub fn with_database(url: &str, name: &str) -> String {
+    let (base, query) = url
+        .split_once('?')
+        .map_or((url, None), |(b, q)| (b, Some(q)));
+    let swapped = match base.rsplit_once('/') {
+        Some((prefix, _)) => format!("{prefix}/{name}"),
+        None => base.to_string(),
+    };
+    match query {
+        Some(q) => format!("{swapped}?{q}"),
+        None => swapped,
+    }
+}
+
+pub async fn run_sql(pool: &PgPool, sql: &str) {
+    sqlx::raw_sql(sqlx::AssertSqlSafe(sql.to_string()))
+        .execute(pool)
+        .await
+        .unwrap_or_else(|e| panic!("{sql}: {e}"));
+}
+
+/// One scratch deployment of its own: a database with the schema, its
+/// least-privilege role names (not yet provisioned), and a superuser pool
+/// on it. Removed before it starts, in case an earlier run died, and by
+/// `finish`.
+pub struct Deployment {
+    pub admin: PgPool,
+    pub pool: PgPool,
+    pub name: String,
+    pub roles: morpholog_postgres::DeploymentRoles,
+}
+
+impl Deployment {
+    pub async fn new(name: &str) -> Self {
+        let base = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+        let admin = PgPool::connect(&morpholog_postgres::with_default_user(&with_database(
+            &base, "postgres",
+        )))
+        .await
+        .expect("maintenance database");
+        let roles = morpholog_postgres::DeploymentRoles::with_prefix(&format!("{name}_")).unwrap();
+        clean(&admin, name, &roles).await;
+        run_sql(&admin, &format!("CREATE DATABASE {name}")).await;
+        let pool = PgPool::connect(&morpholog_postgres::with_default_user(&with_database(
+            &base, name,
+        )))
+        .await
+        .expect("scratch database");
+        morpholog_postgres::initialise_schema(&pool)
+            .await
+            .expect("initialise");
+        Self {
+            admin,
+            pool,
+            name: name.to_string(),
+            roles,
+        }
+    }
+
+    pub fn executor(&self) -> &str {
+        self.roles.executor().expect("a provisioned executor")
+    }
+
+    /// A pool whose every connection acts with `role`'s privileges only.
+    pub async fn acting_as(&self, role: &str) -> PgPool {
+        let set = format!("SET ROLE \"{role}\"");
+        let base = std::env::var("DATABASE_URL").unwrap();
+        sqlx::postgres::PgPoolOptions::new()
+            .after_connect(move |conn, _| {
+                let set = set.clone();
+                Box::pin(async move {
+                    sqlx::raw_sql(sqlx::AssertSqlSafe(set))
+                        .execute(&mut *conn)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect(&morpholog_postgres::with_default_user(&with_database(
+                &base, &self.name,
+            )))
+            .await
+            .unwrap()
+    }
+
+    pub async fn finish(self) {
+        self.pool.close().await;
+        clean(&self.admin, &self.name, &self.roles).await;
+    }
+}
+
+async fn clean(admin: &PgPool, name: &str, roles: &morpholog_postgres::DeploymentRoles) {
+    run_sql(
+        admin,
+        &format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"),
+    )
+    .await;
+    for role in [roles.writer(), roles.reader(), roles.executor().unwrap()] {
+        run_sql(admin, &format!("DROP ROLE IF EXISTS {role}")).await;
     }
 }

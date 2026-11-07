@@ -41,6 +41,9 @@ one act is a margin-call run.
 | cap a running total exactly, at the moment of admission | [05_insurance_claim_settlement](05_insurance_claim_settlement/) | `sum(... ) + amount <= limit` |
 | bound a figure from both sides | [05_insurance_claim_settlement](05_insurance_claim_settlement/) | `min(a, b)` and `max(a, b)` |
 | write a rule about the state before a change and after it | [07_chess_transition_invariants](07_chess_transition_invariants/) | `pre(...)` |
+| find out which past decisions a changed rule would have refused | [07_chess_transition_invariants](07_chess_transition_invariants/) | `rehearse` |
+| remove whatever a key holds, if anything, without naming it | [07_chess_transition_invariants](07_chess_transition_invariants/) | `retract Pred(key: k, ..)` |
+| count claims before a change and after it, in one rule | [07_chess_transition_invariants](07_chess_transition_invariants/) | `pre(...)` inside `sum(...)` |
 | insist a document was valid *on* a particular date | [06_clinical_trial_enrolment](06_clinical_trial_enrolment/) | `on_or_before` / `before` over `Date` |
 | reuse one condition in several rules | [06_clinical_trial_enrolment](06_clinical_trial_enrolment/) | `define name(params): body` |
 | work with exact instants and exact spans of time | [12_laytime_demurrage](12_laytime_demurrage/) | `Timestamp`, `Duration`, `at_or_before`, `no_longer_than` |
@@ -60,6 +63,7 @@ one act is a margin-call run.
 | refuse a combination that is fine one at a time | [01_settlement_netting](01_settlement_netting/) | `forall x in source: body` over the proposed set |
 | show that a rule comes from a named statute | [13_biometric_identification_oversight](13_biometric_identification_oversight/) | the article-to-rule table in its README |
 | let only an authorised login act under a name | [13_biometric_identification_oversight](13_biometric_identification_oversight/) | `ActorAssertionRestricted` + `ActorAssertionAuthority` |
+| date a record by when it was decided, not by what the proposer says | [13_biometric_identification_oversight](13_biometric_identification_oversight/) | `decided_at` in an `admit` and a `require` |
 | watch a limit on a net position, long minus short | [10_trade_lifecycle](10_trade_lifecycle/) | `abs(...)` |
 | make a skipped process step uncommittable, not just reviewable | [16_release_governance](16_release_governance/) | `require name: ...` gates, one per checklist step |
 | list the records one source has that another lacks | [21_closed_loop_execution](21_closed_loop_execution/) | `not` over a claim pattern in a `derived` domain |

@@ -391,6 +391,13 @@ struct AsOfArgs {
     /// `steady median` reporting, same contract as the other scenarios.
     #[arg(long, default_value_t = 1)]
     repeat: usize,
+
+    /// Keep a snapshot of the state after every K-th transition before
+    /// the timed reads, built outside every sample by the same call an
+    /// operator would make, so the reads replay only the rows after the
+    /// nearest one. `0` (default) keeps none.
+    #[arg(long, default_value_t = 0)]
+    snapshot_every: usize,
 }
 
 /// Arguments for the `contend` scenario. Concurrency is the axis the
@@ -1042,6 +1049,7 @@ fn ledger_posting(entry: &str, period: &str) -> Transition {
             dec(42),
         ],
         actor: Subject::from("bench"),
+        decided_at: None,
     }
 }
 
@@ -1434,6 +1442,7 @@ fn decision_phases(
             transformation_name: row.transformation_name.clone(),
             args: row.arguments.clone(),
             actor: row.actor.clone(),
+            decided_at: None,
         };
         let t = Instant::now();
         let staged = prepared
@@ -1667,6 +1676,7 @@ fn policy_fold(
             transformation_name: row.transformation_name.clone(),
             args: row.arguments.clone(),
             actor: row.actor.clone(),
+            decided_at: None,
         };
         let t = Instant::now();
         if let Some(staged) = prepared
@@ -2444,6 +2454,7 @@ impl AsOfLog {
 /// The as-of case: one immutable fabricated log, reused across
 /// repeats; one `reconstruct_state_at` plus one `list_derived_at` per
 /// repeat against the `--at`-selected target.
+#[allow(clippy::too_many_arguments)]
 async fn measure_as_of(
     implementation: Implementation,
     pool: &PgPool,
@@ -2452,6 +2463,7 @@ async fn measure_as_of(
     at: f64,
     log: AsOfLog,
     repeat: usize,
+    snapshot_every: usize,
 ) -> Result<CaseResult> {
     // The programmes whose index condition this scenario establishes.
     let cores: Vec<Program> = vec![double_entry_ledger::program()];
@@ -2493,6 +2505,54 @@ async fn measure_as_of(
     .await
     .context("resolve target transition_id")?;
 
+    // Snapshots, outside every sample: one after every K-th transition.
+    let mut snapshot_metrics = Vec::new();
+    if snapshot_every > 0 {
+        let t = Instant::now();
+        let every =
+            std::num::NonZeroU64::new(snapshot_every as u64).context("snapshot interval")?;
+        let refresh = morpholog_postgres::refresh_state_snapshots(pool, every)
+            .await
+            .context("refresh_state_snapshots")?;
+        let built = t.elapsed();
+        let (bytes,): (i64,) = sqlx::query_as(
+            "SELECT pg_total_relation_size('morpholog.state_snapshots')
+                  + pg_total_relation_size('morpholog.state_snapshot_claims')",
+        )
+        .fetch_one(pool)
+        .await
+        .context("snapshot storage")?;
+        let nearest = (offset + 1) / snapshot_every as i64 * snapshot_every as i64;
+        // The read from the snapshots must be the whole replay's, at scale.
+        let from_snapshot = morpholog_postgres::read_claims_at(pool, target_tid)
+            .await
+            .context("read_claims_at")?;
+        let replayed = morpholog_postgres::testing::read_claims_at_replayed(pool, target_tid, None)
+            .await
+            .context("read_claims_at_replayed")?;
+        if from_snapshot != replayed {
+            return Err(anyhow!(
+                "the read from a snapshot differs from the whole replay at {target_tid}"
+            ));
+        }
+        snapshot_metrics.push(Metric::ms("snapshot_build", &[built]));
+        snapshot_metrics.push(Metric::series(
+            "snapshots",
+            "count",
+            vec![(refresh.built + refresh.kept) as f64],
+        ));
+        snapshot_metrics.push(Metric::series(
+            "snapshot_storage",
+            "bytes",
+            vec![bytes as f64],
+        ));
+        snapshot_metrics.push(Metric::series(
+            "suffix_rows",
+            "count",
+            vec![(offset + 1 - nearest) as f64],
+        ));
+    }
+
     let ledger = double_entry_ledger::program();
     let mut reconstruct = Vec::with_capacity(repeat);
     let mut list_at = Vec::with_capacity(repeat);
@@ -2531,7 +2591,10 @@ async fn measure_as_of(
             Metric::series("state_claims", "count", vec![state_claims as f64]),
             Metric::series("derived_rows", "count", vec![derived_rows as f64]),
             Metric::series("retracts", "count", vec![retract_count as f64]),
-        ],
+        ]
+        .into_iter()
+        .chain(snapshot_metrics)
+        .collect(),
     })
 }
 
@@ -2560,8 +2623,8 @@ async fn run_as_of(args: AsOfArgs) -> Result<()> {
     let pool = connect(&args.database_url).await?;
     require_migration_head(&pool).await?;
     println!(
-        "scenario=as-of n={} at={} retract_fraction={} revise={} repeat={}",
-        args.n, args.at, args.retract_fraction, args.revise, args.repeat
+        "scenario=as-of n={} at={} retract_fraction={} revise={} repeat={} snapshot_every={}",
+        args.n, args.at, args.retract_fraction, args.revise, args.repeat, args.snapshot_every
     );
     let result = measure_as_of(
         args.implementation,
@@ -2571,6 +2634,7 @@ async fn run_as_of(args: AsOfArgs) -> Result<()> {
         args.at,
         AsOfLog::of(args.retract_fraction, args.revise),
         args.repeat,
+        args.snapshot_every,
     )
     .await?;
     print_case_human(&result);
@@ -2833,6 +2897,7 @@ async fn contend_worker(
                 transformation_name: transformation.name.clone(),
                 args: vec![subj(&format!("item_r{round}_w{worker_id}_op{op}"))],
                 actor: Subject::from("bench"),
+                decided_at: None,
             };
             let label = format!("disjoint worker {worker_id} op {op}");
             one_op(&pool, &pg, &transition, max_retries, &label, &mut tally).await?;
@@ -3182,6 +3247,7 @@ async fn measure_wide(
             transformation_name: "add_wide".into(),
             args,
             actor: Subject::from("bench"),
+            decided_at: None,
         };
         let t = Instant::now();
         let outcome = propose_against_pg(pool, &pg, &Proposal::gateway(&transition))
@@ -3880,6 +3946,7 @@ async fn run_case(
                 1.0,
                 AsOfLog::of(*retract_fraction, *revise),
                 repeat,
+                0,
             )
             .await
         }
@@ -4081,6 +4148,7 @@ fn posting(i: usize, tag: &str) -> Transition {
             dec(42),
         ],
         actor: Subject::from("bench"),
+        decided_at: None,
     }
 }
 
@@ -4561,6 +4629,7 @@ mod smoke {
                 reset: true,
                 implementation,
                 repeat: 1,
+                snapshot_every: 2,
             })
             .await
             .expect("as-of scenario smoke, compiled");
@@ -4692,6 +4761,7 @@ mod smoke {
             reset: true,
             implementation: Implementation::Interpreted,
             repeat: 2,
+            snapshot_every: 0,
         })
         .await
         .expect("as-of scenario smoke (asserts only)");
@@ -4707,6 +4777,7 @@ mod smoke {
             reset: true,
             implementation: Implementation::Interpreted,
             repeat: 1,
+            snapshot_every: 0,
         })
         .await
         .expect("as-of scenario smoke (retract-heavy)");
@@ -4720,6 +4791,7 @@ mod smoke {
             reset: true,
             implementation: Implementation::Interpreted,
             repeat: 1,
+            snapshot_every: 0,
         })
         .await
         .expect("as-of scenario smoke (revisions)");

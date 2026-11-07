@@ -1324,7 +1324,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-bench"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "anyhow",
  "clap",
@@ -1344,7 +1344,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-cli"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -1370,7 +1370,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-core"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "ahash",
  "jiff",
@@ -1386,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-examples"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "morpholog-core",
  "morpholog-surface",
@@ -1397,7 +1397,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-outbox"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "jiff",
  "jiff-sqlx",
@@ -1414,7 +1414,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-postgres"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "base64 0.23.1",
  "ed25519-dalek",
@@ -1441,7 +1441,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-surface"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "ariadne",
  "chumsky",
@@ -1451,7 +1451,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-test-support"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "jiff",
  "morpholog-core",
@@ -1461,7 +1461,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-witness"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "bcder",
  "bytes",
@@ -2107,6 +2107,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "signal-hook-registry"
+version = "1.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
+dependencies = [
+ "errno",
+ "libc",
+]
+
+[[package]]
 name = "signature"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2506,6 +2516,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",

@@ -1,25 +1,24 @@
 # Morpholog: Scope and Ambition
 
-## Proposed product ambition: safer, cheaper business-software change (5 November 2026)
-
-**Decision status: hypothesis under a two-week public test, not a change to kernel semantics.** See [#697](https://github.com/jordan-dimov/morpholog/issues/697) and the [InvenTree experiment #696](https://github.com/jordan-dimov/morpholog/issues/696).
-
-**Product north star:** make business software substantially easier to **build, verify and change**, by making its essential rules explicit, executable and independently enforceable. The immediate *commercial entry point* is: **let AI change critical business software without having to trust every line of code it writes**. Neither claim says an unreviewed AI-written rulebook can be trusted. A rulebook that is incomplete or weakened will be faithfully enforced; source data, application integrations and external effects retain their own obligations.
-
-**Kernel versus product:** the constitutional claims / transformations / invariants model, deterministic finite decisions, explicit external compute, transactional enforcement, source/proposal identity, honest audit evidence and no-bypass rule stay unchanged. The fact the *kernel* does not implement UI, Django, arbitrary Python, workflows or an ORM does not itself prohibit separate optional tooling to simplify application development. Such tooling earns its place only when it removes recurring work and does not introduce an independently mutable second business truth. The runtime/language non-goals below remain defaults, not an excuse to create a general-purpose framework.
-
-The [InvenTree experiment](https://github.com/jordan-dimov/morpholog/issues/696) tests a bounded but **complete stock-allocation authority boundary** covering competing build/sales/transfer paths and a hard 19 November 2026 stop. Once essential stock and PostgreSQL concurrency tests pass, a solo-runnable AI change sprint compares conventional Django and Morpholog variants under withheld acceptance tests. The initial question is whether Morpholog reduces **defects, reviewer burden and the cost/risk of accepting changes**, not how many lines it can generate. Measure adoption/integration cost too; report failed attempts and negative results instead of expanding the rewrite to rescue the outcome.
-
-Do not mistake `rehearse` for a correctness oracle: it re-decides *recorded Morpholog proposals* under candidate rules and identifies differences, not necessarily defects; it cannot reconstruct unrecorded original InvenTree events or prove that an amended rulebook is complete. Explicit human approval of the rulebook remains essential.
-
-**Product test for future additions:** which recurring engineering or verification task will the capability make unnecessary? Does the removal of that work outweigh authoring, integration and operating costs? The larger question is the expected lifetime cost across initial build/adoption, later changes, their verification and residual failure risk, and operation. A positive result may support a broader Morpholog product or a separate application-building product; neither is pre-decided.
-
-Until there is evidence, the constitution and runtime guarantees below remain the operational contract.
-
-
 Companion to [`runtime-semantics.md`](runtime-semantics.md) and to [`design-history.md`](design-history.md), which records (retrospectively) which specific examples forced which design decisions.
 
 This document fixes what Morpholog is *for*, what it should grow into, and - equally important - what it must never become. It is a defence against two opposite mistakes: under-claiming the value, and over-claiming the surface.
+
+## Product ambition: make consequential business changes easier to trust
+
+**North star.** Make business software substantially easier to **build, verify and change** by reducing how often the same business obligations must be implemented and independently checked across application code. This is an aspiration to test, not a guarantee of lower cost or fewer defects in today's applications.
+
+The enduring boundary is **proposal versus authority**. People, conventional software and AI agents may propose actions; the approved, independently enforced programme decides whether their effects are admissible under its case-local rules. The proposer need not enforce those rules itself. The surrounding application still owns computation, presentation and external effects.
+
+There are three distinct trust questions:
+
+- **AI or other untrusted software proposes an action.** A pinned, protected Morpholog runtime can enforce the deployed rules independently of that proposer. This is a capability of the runtime, conditional on its actual deployment and credential boundary.
+- **AI changes the surrounding application code.** Independent governance *may* reduce the number of business-policy checks reviewers must re-establish, but only where the integration preserves atomicity, one authoritative state owner and no bypass. Less code to inspect is not, by itself, evidence of a safer change.
+- **AI changes the rulebook or its deployment.** New rules must be reviewed and activated by trusted authorities; proposal admission under an existing approved rulebook does not authorise policy changes. End-to-end protected rulebook promotion remains a separate concern (#627).
+
+No rulebook can establish that its own requirements are complete or correct, that incoming facts are true, or that every downstream effect succeeds. Those are explicit human, integration and operational obligations.
+
+**Product test.** For a proposed capability, ask which recurring *obligation* disappears for the caller, developer, reviewer or operator, which obligations remain, and which integration, authoring, deployment and maintenance work is added. Compare the lifetime cost of a **correct, accepted business change**, not generated lines of code or model throughput. AI-assisted application change is the first commercial hypothesis, not Morpholog's identity. Evidence and next experiments are tracked in [#697](https://github.com/jordan-dimov/morpholog/issues/697) and the [roadmap](roadmap.md).
 
 ## The thesis
 
