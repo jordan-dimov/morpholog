@@ -275,7 +275,7 @@ fn drawing<T>(
 }
 
 /// The interpreted act over `state`, drawing the runtime's subjects.
-pub(crate) fn propose_drawing(
+fn propose_drawing(
     prepared: &PreparedProgram,
     transition: &Transition,
     state: &State,
@@ -284,7 +284,7 @@ pub(crate) fn propose_drawing(
 }
 
 /// The act's staged delta over `state`, drawing the runtime's subjects.
-pub(crate) fn stage_drawing(
+fn stage_drawing(
     prepared: &PreparedProgram,
     transition: &Transition,
     state: &State,
@@ -402,108 +402,33 @@ pub(crate) async fn propose_against_pg_run(
     let state = load_state(&mut tx, &scope).await?;
     let load = elapsed(clock) - begin;
 
-    let (decided, rejection_state, draws) = match route {
-        Route::Interpreted => {
-            let Drawn {
-                decided: outcome,
-                draws,
-            } = propose_drawing(prepared, transition, &state)?;
-            let rejection_state = matches!(outcome, Outcome::Rejected { .. }).then_some(state);
-            (Decided::Kernel(outcome), rejection_state, draws)
-        }
-        Route::Compiled(_) | Route::Mixed(_) => {
-            let Drawn {
-                decided: staged,
-                draws,
-            } = stage_drawing(prepared, transition, &state)?;
-            let (decided, rejection_state) = match staged {
-                StagedDelta::Rejected { reason } => {
-                    (Decided::Kernel(Outcome::Rejected { reason }), Some(state))
-                }
-                StagedDelta::Staged {
-                    asserted,
-                    retracted,
-                    emitted,
-                } => {
-                    let transition_id = Uuid::now_v7();
-                    // Check only what the database says the delta changed.
-                    let (effective, operations) =
-                        write_claim_delta(&mut tx, transition_id, &asserted, &retracted).await?;
-                    disable_jit(&mut tx).await?;
-                    let steps = [DeltaStep {
-                        transition_id,
-                        asserted: asserted.clone(),
-                    }];
-                    let violation = check_in_order(
-                        &mut tx, route, admission, &state, &asserted, &retracted, &effective,
-                        &steps,
-                    )
-                    .await?;
-                    match violation {
-                        Some(reason) => (Decided::Kernel(Outcome::Rejected { reason }), None),
-                        None => (
-                            Decided::Checked {
-                                transition_id,
-                                asserted,
-                                retracted,
-                                operations,
-                                emitted,
-                            },
-                            None,
-                        ),
-                    }
-                }
-            };
-            (decided, rejection_state, draws)
-        }
-    };
+    if !matches!(route, Route::Interpreted) {
+        disable_jit(&mut tx).await?;
+    }
+    let Drawn { decided, draws } = decide_act(
+        &mut tx,
+        route,
+        prepared,
+        transition,
+        &state,
+        &mut Vec::new(),
+    )
+    .await?;
+    let rejection_state =
+        matches!(decided, Decided::Kernel(Outcome::Rejected { .. })).then_some(state);
     let kernel = elapsed(clock) - begin - load;
 
-    let pg_outcome = match decided {
-        Decided::Kernel(outcome) => {
-            finalise_outcome(
-                pool,
-                tx,
-                transformation,
-                transition,
-                prepared,
-                outcome,
-                &draws,
-                &login_role,
-            )
-            .await?
-        }
-        Decided::Checked {
-            transition_id,
-            asserted,
-            retracted,
-            operations,
-            emitted,
-        } => {
-            write_acceptance_record(
-                &mut tx,
-                transition_id,
-                transformation,
-                transition,
-                prepared,
-                &asserted,
-                &retracted,
-                &operations,
-                &emitted,
-                &draws,
-                &login_role,
-            )
-            .await?;
-            tx.commit().await.map_err(classify_commit)?;
-            PgProposalOutcome::Committed {
-                transition_id,
-                actor: transition.actor.clone(),
-                asserted_claims: asserted,
-                retracted_claims: retracted,
-                emitted_intents: emitted,
-            }
-        }
-    };
+    let pg_outcome = finalise_outcome(
+        pool,
+        tx,
+        transformation,
+        transition,
+        prepared,
+        decided,
+        &draws,
+        &login_role,
+    )
+    .await?;
     let finalise = elapsed(clock) - begin - load - kernel;
     Ok(ProposalRun {
         outcome: pg_outcome,
@@ -527,7 +452,7 @@ pub(crate) async fn propose_against_pg_run(
 /// from the one effective delta the table reported. The first violation
 /// or error in programme order is the answer, as the kernel's would be.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn check_in_order(
+async fn check_in_order(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     route: Route<'_>,
     admission: &Admission<'_>,
@@ -588,10 +513,10 @@ pub(crate) async fn check_in_order(
     Ok(None)
 }
 
-/// What the deciding phase settled: a kernel outcome still to persist, or
-/// a delta the compiled checks already admitted, owing only the record
-/// and the commit.
-enum Decided {
+/// What deciding one act settled: a kernel outcome still to persist, a
+/// delta the checks admitted that owes only its record, or a delta the
+/// checks refused.
+pub(crate) enum Decided {
     Kernel(Outcome),
     Checked {
         transition_id: Uuid,
@@ -600,6 +525,155 @@ enum Decided {
         operations: Vec<Operation>,
         emitted: Vec<IntentInstance>,
     },
+    Violated(RejectionReason),
+}
+
+/// Decide one act inside the open transaction, committing nothing. Off
+/// the interpreted route the staged delta is written and checked, and
+/// joins `steps`, every delta the transaction has written in order.
+pub(crate) async fn decide_act(
+    tx: &mut Transaction<'_, Postgres>,
+    route: Route<'_>,
+    prepared: &PreparedProgram,
+    transition: &Transition,
+    state: &State,
+    steps: &mut Vec<DeltaStep>,
+) -> Result<Drawn<Decided>, PgError> {
+    if matches!(route, Route::Interpreted) {
+        let Drawn { decided, draws } = propose_drawing(prepared, transition, state)?;
+        return Ok(Drawn {
+            decided: Decided::Kernel(decided),
+            draws,
+        });
+    }
+    let Drawn { decided, draws } = stage_drawing(prepared, transition, state)?;
+    let decided = match decided {
+        StagedDelta::Rejected { reason } => Decided::Kernel(Outcome::Rejected { reason }),
+        StagedDelta::Staged {
+            asserted,
+            retracted,
+            emitted,
+        } => {
+            let transition_id = Uuid::now_v7();
+            // Check only what the database says the delta changed.
+            let (effective, operations) =
+                write_claim_delta(tx, transition_id, &asserted, &retracted).await?;
+            steps.push(DeltaStep {
+                transition_id,
+                asserted: asserted.clone(),
+            });
+            let admission = prepared.admission();
+            let violation = check_in_order(
+                tx, route, &admission, state, &asserted, &retracted, &effective, steps,
+            )
+            .await?;
+            match violation {
+                Some(reason) => Decided::Violated(reason),
+                None => Decided::Checked {
+                    transition_id,
+                    asserted,
+                    retracted,
+                    operations,
+                    emitted,
+                },
+            }
+        }
+    };
+    Ok(Drawn { decided, draws })
+}
+
+/// An act recorded inside the open transaction, not yet committed.
+pub(crate) struct Admitted {
+    pub(crate) transition_id: Uuid,
+    pub(crate) asserted: Vec<ClaimInstance>,
+    pub(crate) retracted: Vec<ClaimInstance>,
+    pub(crate) emitted: Vec<IntentInstance>,
+    candidate: Option<State>,
+}
+
+impl Admitted {
+    /// Move `state` to what this act left, matching the claims table.
+    pub(crate) fn advance(&mut self, state: &mut State) {
+        match self.candidate.take() {
+            Some(candidate) => *state = candidate,
+            None => state.apply(&self.asserted, &self.retracted),
+        }
+    }
+}
+
+/// Write a decided act's record inside the open transaction (and on the
+/// interpreted route its claims first), or hand back its refusal.
+pub(crate) async fn record_act(
+    tx: &mut Transaction<'_, Postgres>,
+    transformation: &Transformation,
+    transition: &Transition,
+    prepared: &PreparedProgram,
+    decided: Decided,
+    draws: &DrawRecord,
+    login_role: &LoginRole,
+) -> Result<Result<Admitted, RejectionReason>, PgError> {
+    match decided {
+        Decided::Kernel(Outcome::Rejected { reason }) | Decided::Violated(reason) => {
+            Ok(Err(reason))
+        }
+        Decided::Kernel(Outcome::Accepted {
+            asserted_claims,
+            retracted_claims,
+            emitted_intents,
+            candidate_state,
+        }) => {
+            let transition_id = Uuid::now_v7();
+            write_accepted(
+                tx,
+                transition_id,
+                transformation,
+                transition,
+                prepared,
+                &asserted_claims,
+                &retracted_claims,
+                &emitted_intents,
+                draws,
+                login_role,
+            )
+            .await?;
+            Ok(Ok(Admitted {
+                transition_id,
+                asserted: asserted_claims,
+                retracted: retracted_claims,
+                emitted: emitted_intents,
+                candidate: Some(candidate_state),
+            }))
+        }
+        Decided::Checked {
+            transition_id,
+            asserted,
+            retracted,
+            operations,
+            emitted,
+        } => {
+            write_acceptance_record(
+                tx,
+                transition_id,
+                transformation,
+                transition,
+                prepared,
+                &asserted,
+                &retracted,
+                &operations,
+                &emitted,
+                draws,
+                login_role,
+            )
+            .await?;
+            Ok(Ok(Admitted {
+                transition_id,
+                asserted,
+                retracted,
+                emitted,
+                candidate: None,
+            }))
+        }
+    }
 }
 
 /// What [`propose_against_pg_with_trace`] returns for kernel-side results;
@@ -676,7 +750,7 @@ pub(crate) async fn propose_against_pg_with_trace_inner(
                 transformation,
                 transition,
                 prepared,
-                outcome,
+                Decided::Kernel(outcome),
                 &draws,
                 &login_role,
             )
@@ -736,21 +810,41 @@ pub(crate) async fn record_refusal(
     })
 }
 
-/// Persist a kernel [`Outcome`]: commit it, or roll back and log the
-/// refusal.
+/// Persist a decided act: record and commit it, or roll back and log
+/// the refusal.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn finalise_outcome(
+async fn finalise_outcome(
     pool: &PgPool,
     mut tx: Transaction<'_, Postgres>,
     transformation: &Transformation,
     transition: &Transition,
     prepared: &PreparedProgram,
-    outcome: Outcome,
+    decided: Decided,
     draws: &DrawRecord,
     login_role: &LoginRole,
 ) -> Result<PgProposalOutcome, PgError> {
-    match outcome {
-        Outcome::Rejected { reason } => {
+    let recorded = record_act(
+        &mut tx,
+        transformation,
+        transition,
+        prepared,
+        decided,
+        draws,
+        login_role,
+    )
+    .await?;
+    match recorded {
+        Ok(admitted) => {
+            tx.commit().await.map_err(classify_commit)?;
+            Ok(PgProposalOutcome::Committed {
+                transition_id: admitted.transition_id,
+                actor: transition.actor.clone(),
+                asserted_claims: admitted.asserted,
+                retracted_claims: admitted.retracted,
+                emitted_intents: admitted.emitted,
+            })
+        }
+        Err(reason) => {
             let Refusal {
                 reason,
                 rule,
@@ -762,35 +856,6 @@ pub(crate) async fn finalise_outcome(
                 rule,
                 witness,
                 compared,
-            })
-        }
-        Outcome::Accepted {
-            asserted_claims,
-            retracted_claims,
-            emitted_intents,
-            candidate_state: _,
-        } => {
-            let transition_id = Uuid::now_v7();
-            write_accepted(
-                &mut tx,
-                transition_id,
-                transformation,
-                transition,
-                prepared,
-                &asserted_claims,
-                &retracted_claims,
-                &emitted_intents,
-                draws,
-                login_role,
-            )
-            .await?;
-            tx.commit().await.map_err(classify_commit)?;
-            Ok(PgProposalOutcome::Committed {
-                transition_id,
-                actor: transition.actor.clone(),
-                asserted_claims,
-                retracted_claims,
-                emitted_intents,
             })
         }
     }
@@ -1218,7 +1283,7 @@ pub(crate) async fn write_claim_delta(
 /// acceptance record. The interpreted paths call this; the compiled
 /// route writes the delta first, checks, then records.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn write_accepted(
+async fn write_accepted(
     tx: &mut Transaction<'_, Postgres>,
     transition_id: Uuid,
     transformation: &Transformation,
@@ -1253,7 +1318,7 @@ pub(crate) async fn write_accepted(
 /// `invariants_checked` lists all of the programme's invariants on either
 /// route, so the audit leaf does not depend on the route.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn write_acceptance_record(
+async fn write_acceptance_record(
     tx: &mut Transaction<'_, Postgres>,
     transition_id: Uuid,
     transformation: &Transformation,

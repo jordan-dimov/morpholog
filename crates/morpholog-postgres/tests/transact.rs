@@ -5,13 +5,13 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use morpholog_core::{EvalValue, Program, Subject, Transition};
+use morpholog_core::{EvalValue, PreparedProgram, Program, Subject, Transition};
 use morpholog_postgres::{
-    PgAtomicOutcome, PgError, PgPool, PgProposalOutcome, Proposal, propose_against_pg,
+    PgAtomicOutcome, PgError, PgPool, PgProgram, PgProposalOutcome, Proposal, propose_against_pg,
     propose_all_against_pg,
 };
 use morpholog_surface::parse_program;
-use morpholog_test_support::{dec, subj};
+use morpholog_test_support::{dec, dec_str, subj};
 use uuid::Uuid;
 
 mod common;
@@ -307,4 +307,77 @@ async fn an_empty_or_unknown_batch_is_refused_before_a_transaction_opens() {
         count(&pool, "SELECT count(*) FROM morpholog.claims").await,
         0
     );
+}
+
+const OVERFLOW: &str = r"
+program error_order
+
+predicate Enabled(flag: Subject)
+predicate Terms(x: Subject, q: Decimal)
+
+invariant scaled_is_positive:
+    Enabled(_) and Terms(_, q) implies q * 10 > 0
+
+transformation hold(x1, q1, x2, q2):
+    admit Terms(x1, q1)
+    admit Terms(x2, q2)
+
+transformation enable(flag):
+    admit Enabled(flag)
+
+transformation enable_and_hold(flag, x1, q1, x2, q2):
+    admit Enabled(flag)
+    admit Terms(x1, q1)
+    admit Terms(x2, q2)
+";
+
+/// The kernel error a proposal or batch raises on one route.
+async fn kernel_error(
+    pool: &PgPool,
+    pg: &PgProgram,
+    proposals: &[Proposal],
+) -> morpholog_core::EvalError {
+    reset_db(pool).await;
+    let err = match proposals {
+        [one] => propose_against_pg(pool, pg, one).await.map(|_| ()),
+        many => propose_all_against_pg(pool, pg, many).await.map(|_| ()),
+    };
+    match err {
+        Err(PgError::Kernel(e)) => e,
+        other => panic!("a product overflows: {other:?}"),
+    }
+}
+
+/// Two products overflow and the kernel names the first it meets, in
+/// statement order and, across a batch, in act order. The compiled
+/// checks meet the transaction's rows in that order only if each act
+/// hands them its own admissions and every earlier act's. Each case runs
+/// both ways round, so one of them disagrees with any other order.
+#[tokio::test]
+async fn the_compiled_checks_meet_the_kernels_first_error() {
+    let pool = test_pool().await;
+    let program = || PreparedProgram::new(parse_program(OVERFLOW).expect("parses")).unwrap();
+    let interpreted = PgProgram::interpreted(program());
+    let compiled = PgProgram::new(program());
+    let (big, bigger) = (
+        dec_str("79228162514264337593543950334"),
+        dec_str("79228162514264337593543950335"),
+    );
+    for (q1, q2) in [(big.clone(), bigger.clone()), (bigger, big)] {
+        let held = vec![subj("x1"), q1.clone(), subj("x2"), q2.clone()];
+        let single = [act(
+            "enable_and_hold",
+            "teller",
+            [vec![subj("f")], held.clone()].concat(),
+        )];
+        let batch = [
+            act("hold", "teller", held),
+            act("enable", "teller", vec![subj("f")]),
+        ];
+        for proposals in [&single[..], &batch[..]] {
+            let expected = kernel_error(&pool, &interpreted, proposals).await;
+            let got = kernel_error(&pool, &compiled, proposals).await;
+            assert_eq!(got, expected, "{} act(s), q1 = {q1:?}", proposals.len());
+        }
+    }
 }
