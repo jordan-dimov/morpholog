@@ -66,6 +66,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write as _;
 
+use morpholog_core::{Admission, EffectiveDelta, Outcome, StagedDelta, State, execution};
 use morpholog_core::{
     ClaimInstance, CompareOp, Compared, Definition, DefinitionName, EvalError, EvalValue, Impact,
     ImpactPlan, Invariant, InvariantName, OrderedDomain, PredicateArgKind, PredicateDecl,
@@ -215,6 +216,138 @@ impl From<SqlViolation> for RejectionReason {
     }
 }
 
+/// What the kernel needs to decide one invariant itself, where a compiled
+/// sum meets a value other than the decimals it adds, as history written
+/// under an older programme can hold: the programme's admission, and the
+/// delta the claims table reported for this act.
+pub(crate) struct KernelFallback<'a> {
+    pub(crate) admission: &'a Admission<'a>,
+    pub(crate) effective: &'a EffectiveDelta,
+}
+
+impl KernelFallback<'_> {
+    /// The kernel's verdict on the invariant `name`, case-local over this
+    /// act's effective delta, from the state before it.
+    async fn verdict(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        name: &InvariantName,
+        steps: &[DeltaStep],
+    ) -> Result<Option<SqlViolation>, PgError> {
+        let invariants = self.admission.invariants();
+        let index = invariants
+            .iter()
+            .position(|i| &i.name == name)
+            .ok_or_else(|| PgError::InvalidState(format!("no invariant {name} to decide")))?;
+        let mut predicates = BTreeSet::new();
+        morpholog_core::predicates_referenced_by_prop(
+            &invariants[index].body,
+            self.admission.definitions(),
+            &mut predicates,
+        );
+        let pre = self.pre_state(tx, &predicates, steps).await?;
+        let staged = StagedDelta::Staged {
+            asserted: self.effective.asserted.clone(),
+            retracted: self.effective.retracted.clone(),
+            emitted: Vec::new(),
+        };
+        let outcome = execution::finish_staged_delta_with_effective(
+            staged,
+            &pre,
+            &execution::admission_range(self.admission, index..index + 1),
+            self.effective,
+        )
+        .map_err(PgError::Kernel)?;
+        match outcome {
+            Outcome::Accepted { .. } => Ok(None),
+            Outcome::Rejected {
+                reason:
+                    RejectionReason::Invariant {
+                        name,
+                        version,
+                        witness,
+                        compared,
+                    },
+            } => Ok(Some(SqlViolation {
+                name,
+                version,
+                witness,
+                compared,
+            })),
+            Outcome::Rejected { reason } => Err(PgError::InvalidState(format!(
+                "an invariant check refused by another rule: {reason}"
+            ))),
+        }
+    }
+
+    /// The claims of `predicates` as the kernel held them before this act:
+    /// the table, which already holds the act's delta, with the act's
+    /// admissions taken out and its retractions put back. In the kernel's
+    /// order: what this transaction's acts did not write, by key, then each
+    /// earlier act's admissions as it made them.
+    async fn pre_state(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        predicates: &BTreeSet<PredicateName>,
+        steps: &[DeltaStep],
+    ) -> Result<State, PgError> {
+        let names: Vec<String> = predicates.iter().map(ToString::to_string).collect();
+        let rows = sqlx::query!(
+            r#"SELECT predicate_name, arguments, arguments_hash, asserted_in
+               FROM morpholog.claims
+               WHERE predicate_name = ANY($1::text[])"#,
+            &names
+        )
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(classify)?;
+        let earlier = steps.split_last().map_or(&[][..], |(_, earlier)| earlier);
+        let made_by = |claim: &ClaimInstance| {
+            earlier.iter().enumerate().find_map(|(step, s)| {
+                s.asserted
+                    .iter()
+                    .position(|c| c == claim)
+                    .map(|place| (step, place))
+            })
+        };
+        let mut base: Vec<(String, Vec<u8>, ClaimInstance)> = Vec::new();
+        let mut overlay: Vec<((usize, usize), ClaimInstance)> = Vec::new();
+        for row in rows {
+            let claim = ClaimInstance {
+                predicate: PredicateName::from(row.predicate_name.as_str()),
+                args: serde_json::from_value(row.arguments)?,
+            };
+            if self.effective.asserted.contains(&claim) {
+                continue;
+            }
+            let written_here = earlier.iter().any(|s| s.transition_id == row.asserted_in);
+            match made_by(&claim).filter(|_| written_here) {
+                Some(place) => overlay.push((place, claim)),
+                None => base.push((row.predicate_name, row.arguments_hash, claim)),
+            }
+        }
+        for claim in &self.effective.retracted {
+            if !predicates.contains(&claim.predicate) {
+                continue;
+            }
+            match made_by(claim) {
+                Some(place) => overlay.push((place, claim.clone())),
+                None => {
+                    let hash = crate::claim_key::arguments_hash(&claim.args)
+                        .map_err(PgError::InvalidState)?;
+                    base.push((claim.predicate.to_string(), hash.to_vec(), claim.clone()));
+                }
+            }
+        }
+        base.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+        overlay.sort_by_key(|(place, _)| *place);
+        let mut state = State::from_claims(base.into_iter().map(|(_, _, c)| c).collect());
+        let admitted: Vec<ClaimInstance> = overlay.into_iter().map(|(_, c)| c).collect();
+        state.apply(&admitted, &[]);
+        Ok(state)
+    }
+}
+
 /// Turn off JIT for the rest of this transaction. Correlated-subquery
 /// estimates push planned cost past the JIT threshold, costing ~118ms of
 /// compilation for a sub-millisecond plan (measured at 100k claims).
@@ -239,7 +372,9 @@ impl CompiledInvariantSet {
     /// kernel's order: state as loaded, then each transition's admissions
     /// in statement order, which `steps` supplies. That error wins over any
     /// violation, as it does in the kernel. With no error, the diagnostic
-    /// query finds the witness in the same order.
+    /// query finds the witness in the same order. Where the first erroring
+    /// binding is a sum meeting a value other than a decimal, the kernel
+    /// decides that invariant instead (`fallback`).
     /// Production walks runs; the differentials check a set whole.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) async fn first_violation(
@@ -249,6 +384,7 @@ impl CompiledInvariantSet {
         asserted: &[ClaimInstance],
         retracted: &[ClaimInstance],
         steps: &[DeltaStep],
+        fallback: &KernelFallback<'_>,
     ) -> Result<Option<SqlViolation>, PgError> {
         self.first_violation_in(
             0..self.invariants.len(),
@@ -257,6 +393,7 @@ impl CompiledInvariantSet {
             asserted,
             retracted,
             steps,
+            fallback,
         )
         .await
     }
@@ -264,6 +401,7 @@ impl CompiledInvariantSet {
     /// [`Self::first_violation`] over one run of the set's invariants, so
     /// an execution that interleaves this evaluator with the kernel keeps
     /// the programme's order.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn first_violation_in(
         &self,
         run: std::ops::Range<usize>,
@@ -272,8 +410,9 @@ impl CompiledInvariantSet {
         asserted: &[ClaimInstance],
         retracted: &[ClaimInstance],
         steps: &[DeltaStep],
+        fallback: &KernelFallback<'_>,
     ) -> Result<Option<SqlViolation>, PgError> {
-        for inv in &self.invariants[run] {
+        'invariants: for inv in &self.invariants[run] {
             let cases = match stage {
                 Stage::Full => None,
                 Stage::CaseBound => match inv.case_filter(asserted, retracted) {
@@ -300,7 +439,13 @@ impl CompiledInvariantSet {
                     .await
                     .map_err(classify)?;
                 if let Some(erroring) = erroring {
-                    return Err(PgError::Kernel(decode_error(&erroring, &inv.values)?));
+                    match decode_error(&erroring, &inv.values)? {
+                        Some(error) => return Err(PgError::Kernel(error)),
+                        None => match fallback.verdict(tx, &inv.name, steps).await? {
+                            Some(violation) => return Ok(Some(violation)),
+                            None => continue 'invariants,
+                        },
+                    }
                 }
             }
             let (witness, compared) = inv.diagnose(tx, cases.as_ref(), steps).await?;
@@ -518,25 +663,21 @@ async fn fetch(
 }
 
 /// The kernel's error for the first erroring binding: a sum's range, or
-/// the kernel's own verdict on the two operands it could not order.
-fn decode_error(row: &sqlx::postgres::PgRow, values: &[ValueExpr]) -> Result<EvalError, PgError> {
+/// the kernel's own verdict on the two operands it could not order. None
+/// when a sum met a value other than a decimal: the kernel may add it,
+/// refuse to, or add it and fail later, so the kernel decides.
+fn decode_error(
+    row: &sqlx::postgres::PgRow,
+    values: &[ValueExpr],
+) -> Result<Option<EvalError>, PgError> {
     let column = |name: &str| -> Result<String, PgError> {
         row.try_get::<Option<String>, _>(name)
             .map_err(|e| PgError::InvalidState(format!("error column {name} missing: {e}")))?
             .ok_or_else(|| PgError::InvalidState(format!("error column {name} is null")))
     };
     match column("kind")?.as_str() {
-        "range" => Ok(EvalError::sum_out_of_decimal_range()),
-        "sum_kind" => {
-            let first: bool = row
-                .try_get::<Option<bool>, _>("first")
-                .map_err(|e| PgError::InvalidState(format!("error column first missing: {e}")))?
-                .ok_or_else(|| PgError::InvalidState("error column first is null".to_string()))?;
-            let value: EvalValue = serde_json::from_str(&column("left")?).map_err(|e| {
-                PgError::InvalidState(format!("error operand left undecodable: {e}"))
-            })?;
-            Ok(EvalError::sum_cannot_take(first, &value))
-        }
+        "range" => Ok(Some(EvalError::sum_out_of_decimal_range())),
+        "sum_kind" => Ok(None),
         "compare" => {
             let domain = match column("domain")?.as_str() {
                 "decimal" => OrderedDomain::Decimal,
@@ -554,11 +695,13 @@ fn decode_error(row: &sqlx::postgres::PgRow, values: &[ValueExpr]) -> Result<Eva
                 })
             };
             let (left, right) = (operand("left")?, operand("right")?);
-            ordered_compare_error(domain, &left, &right).ok_or_else(|| {
-                PgError::InvalidState(format!(
-                    "the compiled check reported an error the kernel does not raise for {left:?} vs {right:?}"
-                ))
-            })
+            ordered_compare_error(domain, &left, &right)
+                .map(Some)
+                .ok_or_else(|| {
+                    PgError::InvalidState(format!(
+                        "the compiled check reported an error the kernel does not raise for {left:?} vs {right:?}"
+                    ))
+                })
         }
         "value" => {
             let index: usize = column("domain")?.parse().map_err(|e| {
@@ -571,11 +714,14 @@ fn decode_error(row: &sqlx::postgres::PgRow, values: &[ValueExpr]) -> Result<Eva
                 serde_json::from_str(&column("left")?).map_err(|e| {
                     PgError::InvalidState(format!("error value payload undecodable: {e}"))
                 })?;
-            let (bindings, sums) = arith::decode(&payload).ok_or_else(|| {
+            let decoded = arith::decode(&payload).ok_or_else(|| {
                 PgError::InvalidState(format!("error value payload malformed: {payload}"))
             })?;
+            let arith::Decoded::Values(bindings, sums) = decoded else {
+                return Ok(None);
+            };
             match morpholog_core::eval_value_over(expr, &bindings, &sums) {
-                Some(Err(e)) => Ok(e),
+                Some(Err(e)) => Ok(Some(e)),
                 other => Err(PgError::InvalidState(format!(
                     "the compiled check reported an error the kernel does not raise for {payload}: {other:?}"
                 ))),
@@ -1416,14 +1562,8 @@ fn error_report(probes: &[Probe], order: &OrderRenderer<'_>) -> Result<String, P
     let domain = case_over(probes, Column::Domain, order)?;
     let left = case_over(probes, Column::Left, order)?;
     let right = case_over(probes, Column::Right, order)?;
-    let first = case_over(probes, Column::First, order)?;
-    let first = if first == "NULL::text" {
-        "NULL::boolean".to_string()
-    } else {
-        first
-    };
     Ok(format!(
-        "{kind} AS \"kind\",\n       {domain} AS \"domain\",\n       {left} AS \"left\",\n       {right} AS \"right\",\n       {first} AS \"first\""
+        "{kind} AS \"kind\",\n       {domain} AS \"domain\",\n       {left} AS \"left\",\n       {right} AS \"right\""
     ))
 }
 
@@ -1433,9 +1573,6 @@ enum Column {
     Domain,
     Left,
     Right,
-    /// Whether the value a sum could not take was its first: the kernel
-    /// words that differently.
-    First,
 }
 
 /// One report column across a scope's probes: the first probe that
@@ -1467,7 +1604,7 @@ fn report_column(
 ) -> Result<Option<String>, PgError> {
     Ok(match (report, column) {
         (ErrorReport::SumRange, Column::Kind) => Some("'range'".to_string()),
-        (ErrorReport::SumKind(_), Column::Kind) => Some("'sum_kind'".to_string()),
+        (ErrorReport::SumKind, Column::Kind) => Some("'sum_kind'".to_string()),
         (ErrorReport::Compare { .. }, Column::Kind) => Some("'compare'".to_string()),
         (ErrorReport::Value { .. }, Column::Kind) => Some("'value'".to_string()),
         (ErrorReport::Value { index, .. }, Column::Domain) => Some(format!("'{index}'")),
@@ -1478,29 +1615,8 @@ fn report_column(
                 .collect();
             let mut parts = Vec::with_capacity(sums.len());
             for sum in sums {
-                let (value, first) = match &sum.scope {
-                    Some(scope) => (
-                        format!(
-                            "(SELECT {}.arguments -> {} FROM {} WHERE {} AND {} ORDER BY {} LIMIT 1)",
-                            scope.alias,
-                            scope.position,
-                            scope.from,
-                            scope.where_,
-                            scope.foreign(),
-                            order(&scope.aliases)?
-                        ),
-                        format!(
-                            "(SELECT ({}) FROM {} WHERE {} ORDER BY {} LIMIT 1)",
-                            scope.foreign(),
-                            scope.from,
-                            scope.where_,
-                            order(&scope.aliases)?
-                        ),
-                    ),
-                    None => ("NULL::jsonb".to_string(), "NULL::boolean".to_string()),
-                };
                 parts.push(format!(
-                    "jsonb_build_object('total', trim_scale({})::text, 'kind', ({}), 'range', ({}), 'value', {value}, 'first', {first})",
+                    "jsonb_build_object('total', trim_scale({})::text, 'kind', ({}), 'range', ({}))",
                     sum.total, sum.kind, sum.range
                 ));
             }
@@ -1518,22 +1634,6 @@ fn report_column(
         }),
         (ErrorReport::Compare { left, .. }, Column::Left) => Some(format!("({left})::text")),
         (ErrorReport::Compare { right, .. }, Column::Right) => Some(format!("({right})::text")),
-        (ErrorReport::SumKind(sum), Column::Left) => Some(format!(
-            "(SELECT ({}.arguments -> {})::text FROM {} WHERE {} AND {} ORDER BY {} LIMIT 1)",
-            sum.alias,
-            sum.position,
-            sum.from,
-            sum.where_,
-            sum.foreign(),
-            order(&sum.aliases)?
-        )),
-        (ErrorReport::SumKind(sum), Column::First) => Some(format!(
-            "(SELECT ({}) FROM {} WHERE {} ORDER BY {} LIMIT 1)",
-            sum.foreign(),
-            sum.from,
-            sum.where_,
-            order(&sum.aliases)?
-        )),
         // A lifted scope's column is read on the first inner row where
         // any of its probes fires, from the first that does there.
         (
@@ -1562,10 +1662,9 @@ fn report_column(
                 ))
             }
         }
-        (ErrorReport::SumRange, Column::Domain | Column::Left | Column::Right | Column::First)
-        | (ErrorReport::SumKind(_), Column::Domain | Column::Right)
-        | (ErrorReport::Compare { .. }, Column::First)
-        | (ErrorReport::Value { .. }, Column::Right | Column::First) => None,
+        (ErrorReport::SumRange, Column::Domain | Column::Left | Column::Right)
+        | (ErrorReport::SumKind, Column::Domain | Column::Left | Column::Right)
+        | (ErrorReport::Value { .. }, Column::Right) => None,
     })
 }
 
@@ -1724,7 +1823,6 @@ struct SumPart {
     total: String,
     kind: String,
     range: String,
-    scope: Option<SumScope>,
 }
 
 /// One sum, computed once per row of the scope it sits in as a LATERAL
@@ -1734,31 +1832,9 @@ struct RenderedSum {
     lateral: String,
     range_error: String,
     kind_error: String,
-    /// Where to look for the value the sum could not take; none for a
-    /// literal target, which cannot meet one.
-    kind_report: Option<SumScope>,
-}
-
-/// Where a sum's values come from, so the error query can find the first
-/// one the kernel could not take.
-#[derive(Debug, Clone)]
-struct SumScope {
-    from: String,
-    where_: String,
-    /// The target's column.
-    alias: String,
-    position: usize,
-    aliases: Vec<(String, PredicateName)>,
-}
-
-impl SumScope {
-    /// The target row is not the decimal the sum adds.
-    fn foreign(&self) -> String {
-        format!(
-            "({}.arguments -> {} ->> 'type') IS DISTINCT FROM 'decimal'",
-            self.alias, self.position
-        )
-    }
+    /// Whether the sum can meet a value other than a decimal: a literal
+    /// target cannot.
+    can_meet_foreign: bool,
 }
 
 /// One way a scope can raise: the condition that holds on the row the
@@ -1774,8 +1850,8 @@ struct Probe {
 enum ErrorReport {
     /// A sum's total no decimal can hold.
     SumRange,
-    /// A sum met a value it cannot add.
-    SumKind(SumScope),
+    /// A sum met a value other than a decimal, which the kernel decides.
+    SumKind,
     /// Two operands the kernel cannot order: the tagged values, as jsonb
     /// expressions, for the kernel to judge.
     Compare {
@@ -3108,10 +3184,10 @@ fn close_comparison(
     for p in pending {
         match p {
             Pending::Sum(s) => {
-                if let Some(scope) = &s.kind_report {
+                if s.can_meet_foreign {
                     probes.push(Probe {
                         condition: s.kind_error.clone(),
-                        report: ErrorReport::SumKind(scope.clone()),
+                        report: ErrorReport::SumKind,
                     });
                 }
                 probes.push(Probe {
@@ -3217,43 +3293,38 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
             }
             // The sum target must be a bound decimal variable or a decimal
             // literal; a computed target refuses.
-            let (val, kind_test, kind_report): (String, String, Option<SumScope>) =
-                match value.as_ref() {
-                    ValueExpr::Term(Term::Var(v)) => {
-                        let Some(Bound::Col(col)) = r.env.get(v) else {
-                            return Err(CompileReason::UnvalidatedShape {
-                                detail: format!("sum target unbound: {v}"),
-                            });
-                        };
-                        if col.kind != PredicateArgKind::Decimal {
-                            return Err(CompileReason::SumShape {
-                                detail: "target is not a decimal position",
-                            });
-                        }
-                        let scope = SumScope {
-                            from: from_list(&r),
-                            where_: r.conjunction(),
-                            alias: col.alias.clone(),
-                            position: col.position,
-                            aliases: r.aliases(),
-                        };
-                        (
-                            decimal_sql(col),
-                            format!("bool_or({})", scope.foreign()),
-                            Some(scope),
-                        )
-                    }
-                    ValueExpr::Term(Term::Literal(Value::Decimal(d))) => (
-                        format!("{}::numeric", quote_literal(&d.to_string())),
-                        "false".to_string(),
-                        None,
-                    ),
-                    _ => {
+            let (val, kind_test, can_meet_foreign): (String, String, bool) = match value.as_ref() {
+                ValueExpr::Term(Term::Var(v)) => {
+                    let Some(Bound::Col(col)) = r.env.get(v) else {
+                        return Err(CompileReason::UnvalidatedShape {
+                            detail: format!("sum target unbound: {v}"),
+                        });
+                    };
+                    if col.kind != PredicateArgKind::Decimal {
                         return Err(CompileReason::SumShape {
-                            detail: "computed target",
+                            detail: "target is not a decimal position",
                         });
                     }
-                };
+                    (
+                        decimal_sql(col),
+                        format!(
+                            "bool_or(({}.arguments -> {} ->> 'type') IS DISTINCT FROM 'decimal')",
+                            col.alias, col.position
+                        ),
+                        true,
+                    )
+                }
+                ValueExpr::Term(Term::Literal(Value::Decimal(d))) => (
+                    format!("{}::numeric", quote_literal(&d.to_string())),
+                    "false".to_string(),
+                    false,
+                ),
+                _ => {
+                    return Err(CompileReason::SumShape {
+                        detail: "computed target",
+                    });
+                }
+            };
             // Computed once per row of the enclosing scope, so the
             // comparison, the representability test and the kind test
             // read one pass.
@@ -3268,7 +3339,7 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
                 ),
                 range_error: range_error_sql(&total),
                 kind_error: format!("{alias}.f"),
-                kind_report,
+                can_meet_foreign,
             }));
             Ok(Operand {
                 key: None,

@@ -212,7 +212,10 @@ enum Command {
     /// take, more fresh subjects than the row recorded). Refusals are
     /// counted per rule. Read-only; output is JSON. The log holds admitted
     /// history only, so this answers what the candidate would have refused,
-    /// never what demand there was.
+    /// never what demand there was. It re-decides the recorded arguments,
+    /// so it cannot vouch that every stored claim fits the candidate's
+    /// declarations: that is `check --database-url`'s question, and a
+    /// deploy gate asks both.
     Rehearse(RehearseArgs),
 
     /// Everything about the audit log: prove it, anchor it, carry it.

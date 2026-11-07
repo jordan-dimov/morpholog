@@ -2653,7 +2653,12 @@ class ProvisionReport:
     def is_current(self) -> bool:
         """Nothing is outstanding: every index is kept or satisfied by
         another, every statistics object kept. What `provision indexes
-        --check` passes."""
+        --check` passes.
+
+        It reads the plan, not the result: an applying run reports what it
+        did, so its actions read `create` and this is false straight after
+        a successful apply. Gate an applying run on `applied` and not
+        `has_conflict`, and a check run on this."""
         return all(i.action in ("keep", "satisfied_externally") for i in self.indexes) and all(
             s.action == "keep" for s in self.statistics
         )

@@ -375,6 +375,19 @@ Four statement classes serve different binding purposes; conflating them is the 
 
 - **`for binding in collection: body`** is **controlled iteration**. Variables bound inside the body are **scoped to the iteration**: they do not leak across iterations and do not survive the loop. Without this scoping, a residual `bind_one` binding from iteration N would constrain the lookup in iteration N+1; with it, each iteration sees only the outer bindings plus the iteration variable.
 
+  To copy a prior record's claims only when it has some, in one act, today's language has a workaround: pass them as a collection parameter, which is empty when there are none, and gate that it is exactly the prior's set:
+
+  ```
+  transformation correct(id, prior, marks):
+      require forall m in marks: Mark(prior, m)
+      require not (exists n: Mark(prior, n) and not (n in marks))
+      admit Corrects(id, prior)
+      for m in marks:
+          admit Mark(id, m)
+  ```
+
+  The caller states the set and the record checks it: a short or padded list is refused, and an empty one, for a prior with no marks, commits with nothing copied.
+
 The idiomatic pattern for "this claim exists and I need values from it" - lifted from `examples/05_insurance_claim_settlement/insurance_claim_settlement.morph`:
 
 ```
