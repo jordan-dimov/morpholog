@@ -64,7 +64,7 @@ fn check_verbose_clean_program_prints_summary() {
         String::from_utf8_lossy(&out.stderr)
     );
     let expected = format!(
-        "ok: {}\nprogram: demo\n  predicates: 1\n  definitions: 0\n  invariants: 1\n  transformations: 1\n  intents: 1\n  derived claims: 0\n  invariant checks: compiled\n  invariant cases: all bound\n",
+        "ok: {}\nprogram: demo\n  predicates: 1\n  definitions: 0\n  invariants: 1\n  transformations: 1\n  intents: 1\n  derived claims: 0\n  invariant checks: compiled\n  invariant cases: all bound\n  body reads: all keyed\n",
         tmp.path().display()
     );
     assert_eq!(
@@ -110,9 +110,69 @@ fn check_verbose_reports_a_mixed_programme_with_its_counts() {
         "got: {stdout}"
     );
     assert!(
-        stdout.ends_with("  invariant cases: 1 may check whole\n    sticky: `pre`\n"),
+        stdout.ends_with(
+            "  invariant cases: 1 may check whole\n    sticky: `pre`\n  body reads: all keyed\n"
+        ),
         "got: {stdout}"
     );
+}
+
+/// A limit gate that sums the terms in force through the selector
+/// `effective by` generates reads every organisation's terms: the
+/// selector is keyed by the item, which the gate binds as it runs, so the
+/// read is whole and every capture conflicts with every other. The same
+/// rule through a definition keyed by the organisation, a parameter, is
+/// keyed. The summary names the first, with its gate and the selector it
+/// went through, and is silent on the second.
+#[test]
+fn check_verbose_names_a_gate_that_reads_a_predicate_whole() {
+    const HEAD: &str = "program limits\n\
+         predicate Limit(org: Subject, cap: Decimal)\n    unique by (org)\n\
+         predicate Held(org: Subject, item: Subject)\n\
+         predicate Terms(org: Subject, item: Subject, version: Subject, qty: Decimal, from: Date)\n    \
+         unique by (version)\n    effective by (item) on (from) partial\n";
+    let gate = |selector: &str| {
+        format!(
+            "transformation capture(org, item, version, qty, on):\n    \
+             require within_limit: forall cap in Limit(org, cap): \
+             sum(q | {selector} and Held(org: org, item: i)) + qty <= cap\n    \
+             admit Held(org, item)\n    admit Terms(org, item, version, qty, on)\n"
+        )
+    };
+    let verbose = |source: String| {
+        let tmp = temp_morph(&source);
+        let out = Command::new(bin())
+            .args(["check", "--verbose"])
+            .arg(tmp.path())
+            .output()
+            .expect("morpholog check should run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    let generated = verbose(format!(
+        "{HEAD}{}",
+        gate("terms_in_force_on(item: i, as_of: on, qty: q, ..)")
+    ));
+    assert!(
+        generated.ends_with(
+            "  body reads: 1 whole\n    capture reads Terms whole: statement 1 `within_limit`, through terms_in_force_on\n"
+        ),
+        "got: {generated}"
+    );
+
+    let keyed = verbose(format!(
+        "{HEAD}define terms_in_org(org, item, as_of, qty):\n    \
+         Terms(org: org, item: item, qty: qty, from: f1, ..)\n    \
+         and f1 on_or_before as_of\n    \
+         and not (exists f2: Terms(org: org, item: item, from: f2, ..) and f1 before f2 and f2 on_or_before as_of)\n{}",
+        gate("terms_in_org(org, i, on, q)")
+    ));
+    assert!(keyed.ends_with("  body reads: all keyed\n"), "got: {keyed}");
 }
 
 #[test]
@@ -1006,9 +1066,11 @@ fn check_json_routes_agree_with_the_verbose_summary_for_every_worked_example() {
             .output()
             .expect("morpholog check should run");
         let stdout = String::from_utf8_lossy(&out.stdout);
+        // The body reads that follow are not in the JSON report.
         let tail = stdout
             .find("  invariant checks: ")
             .map(|at| &stdout[at..])
+            .and_then(|tail| tail.find("  body reads: ").map(|end| &tail[..end]))
             .unwrap_or_else(|| panic!("{}: no verdict in: {stdout}", example.name));
         assert_eq!(
             tail,
