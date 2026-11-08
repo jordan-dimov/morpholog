@@ -160,7 +160,7 @@ fn check_verbose_names_a_gate_that_reads_a_predicate_whole() {
     ));
     assert!(
         generated.ends_with(
-            "  body reads: 1 whole\n    capture reads Terms whole: statement 1 `within_limit`, through terms_in_force_on\n"
+            "  body reads: 1 whole\n    capture reads Terms whole: statement 1 `within_limit`, through terms_in_force_on; capture also writes Terms, so concurrent capture proposals can conflict even on different records\n"
         ),
         "got: {generated}"
     );
@@ -173,6 +173,48 @@ fn check_verbose_names_a_gate_that_reads_a_predicate_whole() {
         gate("terms_in_org(org, i, on, q)")
     ));
     assert!(keyed.ends_with("  body reads: all keyed\n"), "got: {keyed}");
+}
+
+/// A definition that looks a claim up again by a key bound inside a sum
+/// reads its predicate whole. When the act also writes that predicate,
+/// two copies of it can conflict on different records, and the line says
+/// so; a whole read of a predicate the act never writes is listed plain.
+#[test]
+fn check_verbose_marks_a_whole_read_of_a_predicate_the_act_writes() {
+    let tmp = temp_morph(
+        "program reads\n\n\
+         predicate Alloc(alloc: Subject, item: Subject, qty: Decimal)\n    unique by (alloc)\n\
+         predicate Item(item: Subject, part: Subject)\n    unique by (item)\n\
+         predicate Shipped(item: Subject)\n\n\
+         define live(a):\n    Alloc(a, _, _)\n\n\
+         transformation allocate(alloc, item, qty):\n    \
+         require within_stock: sum(q | Alloc(a, item, q) and live(a)) + qty <= 10\n    \
+         admit Alloc(alloc, item, qty)\n\n\
+         transformation ship(alloc):\n    \
+         bind the_alloc: Alloc(alloc, item, _)\n    \
+         bind the_item: Item(item, _)\n    \
+         admit Shipped(item)\n",
+    );
+    let out = Command::new(bin())
+        .args(["check", "--verbose"])
+        .arg(tmp.path())
+        .output()
+        .expect("morpholog check should run");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.ends_with(
+            "  body reads: 2 whole\n    \
+             allocate reads Alloc whole: statement 1 `within_stock`, through live; \
+             allocate also writes Alloc, so concurrent allocate proposals can conflict even on different records\n    \
+             ship reads Item whole: statement 2 `the_item`\n"
+        ),
+        "got: {stdout}"
+    );
 }
 
 #[test]
