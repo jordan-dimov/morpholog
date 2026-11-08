@@ -1740,6 +1740,7 @@ impl core::marker::UnsafeUnpin for morpholog_core::ValidationError
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::ValidationError
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::ValidationError
 pub enum morpholog_core::Value
+pub morpholog_core::Value::Bool(bool)
 pub morpholog_core::Value::CalendarSpan(morpholog_core::calendar::CalendarSpan)
 pub morpholog_core::Value::Date(jiff::civil::date::Date)
 pub morpholog_core::Value::Decimal(morpholog_core::LiteralDecimal)
