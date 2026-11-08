@@ -8,9 +8,15 @@
 //! rows matching any of its patterns' known coordinates contains every row
 //! the body can observe. One pattern with no known coordinate makes its
 //! predicate whole. The plan is static; the values arrive with the
-//! transition. Keys a body binds as it runs (a `bind`, a `let`, a `for`)
-//! are unknown here and make their reads whole; narrowing those is left
-//! for a forcing example.
+//! transition.
+//!
+//! A `bind` of one claim pattern with a known coordinate makes its other
+//! variables known to the statements after it, each as the value some
+//! matching row holds at that position. The kernel binds only rows of
+//! the snapshot, so a load keeping the rows equal to any such value
+//! holds every row a later pattern can match, and a chain is keyed as
+//! far as each link is keyed by the one before it. A key a `let` or a
+//! `for` produces is still unknown here and makes its reads whole.
 //!
 //! Admits are kept apart from reads: an interpreter needs the admitted
 //! predicates' membership to tell an effective admission from a repeat,
@@ -27,12 +33,47 @@ use crate::ir::{
 use crate::propose::Transition;
 use crate::state::EvalValue;
 
-/// A term whose value is fixed before the body runs.
+/// A term whose value is fixed before the body runs, or is one of the
+/// values a snapshot row holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KnownTerm {
     Literal(Value),
     Actor,
     Parameter(Var),
+    /// The value at `position` of a `predicate` row matching the
+    /// coordinates `of`: what a `bind` earlier in the body found there.
+    /// `of` is never empty.
+    Field {
+        predicate: PredicateName,
+        position: usize,
+        of: Vec<(usize, KnownTerm)>,
+    },
+}
+
+/// A known coordinate with the transition's values in place: a value,
+/// or the value at `position` of a `predicate` row matching `of`. A
+/// loader resolves the second against the database, a reference
+/// implementation against the whole state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Key {
+    Value(EvalValue),
+    Field {
+        predicate: PredicateName,
+        position: usize,
+        of: Vec<(usize, Key)>,
+    },
+}
+
+impl Key {
+    /// Whether any predicate the key reads through is one of `these`.
+    pub fn reads_any(&self, these: &BTreeSet<PredicateName>) -> bool {
+        match self {
+            Key::Value(_) => false,
+            Key::Field { predicate, of, .. } => {
+                these.contains(predicate) || of.iter().any(|(_, key)| key.reads_any(these))
+            }
+        }
+    }
 }
 
 /// One claim pattern's known coordinates, all of which a matching row
@@ -58,10 +99,7 @@ impl ReadFilter {
             return;
         }
         if let ReadFilter::Keyed(patterns) = self {
-            let pattern = KeyedPattern { coordinates };
-            if !patterns.contains(&pattern) {
-                patterns.push(pattern);
-            }
+            insert(patterns, KeyedPattern { coordinates });
         }
     }
 
@@ -72,42 +110,75 @@ impl ReadFilter {
             (_, ReadFilter::Whole) => *self = ReadFilter::Whole,
             (ReadFilter::Keyed(mine), ReadFilter::Keyed(theirs)) => {
                 for pattern in theirs {
-                    if !mine.contains(pattern) {
-                        mine.push(pattern.clone());
-                    }
+                    insert(mine, pattern.clone());
                 }
             }
         }
     }
 
-    /// The coordinates as values, for one transition. `None` when the
+    /// The coordinates as keys, for one transition. `None` when the
     /// filter is whole.
     pub fn resolve(
         &self,
         transformation: &Transformation,
         transition: &Transition,
-    ) -> Option<Vec<Vec<(usize, EvalValue)>>> {
+    ) -> Option<Vec<Vec<(usize, Key)>>> {
         let ReadFilter::Keyed(patterns) = self else {
             return None;
         };
-        let mut resolved = Vec::with_capacity(patterns.len());
-        for pattern in patterns {
-            let mut coordinates = Vec::with_capacity(pattern.coordinates.len());
-            for (position, term) in &pattern.coordinates {
-                let value = match term {
-                    KnownTerm::Literal(v) => EvalValue::from(v),
-                    KnownTerm::Actor => EvalValue::Subject(transition.actor.clone()),
-                    KnownTerm::Parameter(p) => {
-                        let index = transformation.parameters.iter().position(|q| q == p)?;
-                        transition.args.get(index)?.clone()
-                    }
-                };
-                coordinates.push((*position, value));
-            }
-            resolved.push(coordinates);
-        }
-        Some(resolved)
+        patterns
+            .iter()
+            .map(|pattern| resolve_coordinates(&pattern.coordinates, transformation, transition))
+            .collect()
     }
+}
+
+/// A pattern fixing everything another fixes matches only rows the other
+/// matches, so the filter keeps the one fixing less. A keyed bind
+/// followed by a retract of the row it found would otherwise add a key on
+/// every other position, over values few rows tell apart.
+fn insert(patterns: &mut Vec<KeyedPattern>, pattern: KeyedPattern) {
+    let within = |narrow: &KeyedPattern, wide: &KeyedPattern| {
+        narrow
+            .coordinates
+            .iter()
+            .all(|c| wide.coordinates.contains(c))
+    };
+    if patterns.iter().any(|kept| within(kept, &pattern)) {
+        return;
+    }
+    patterns.retain(|kept| !within(&pattern, kept));
+    patterns.push(pattern);
+}
+
+fn resolve_coordinates(
+    coordinates: &[(usize, KnownTerm)],
+    transformation: &Transformation,
+    transition: &Transition,
+) -> Option<Vec<(usize, Key)>> {
+    coordinates
+        .iter()
+        .map(|(position, term)| {
+            let key = match term {
+                KnownTerm::Literal(v) => Key::Value(EvalValue::from(v)),
+                KnownTerm::Actor => Key::Value(EvalValue::Subject(transition.actor.clone())),
+                KnownTerm::Parameter(p) => {
+                    let index = transformation.parameters.iter().position(|q| q == p)?;
+                    Key::Value(transition.args.get(index)?.clone())
+                }
+                KnownTerm::Field {
+                    predicate,
+                    position,
+                    of,
+                } => Key::Field {
+                    predicate: predicate.clone(),
+                    position: *position,
+                    of: resolve_coordinates(of, transformation, transition)?,
+                },
+            };
+            Some((*position, key))
+        })
+        .collect()
 }
 
 /// A transformation's reads and admits, by predicate.
@@ -169,7 +240,7 @@ impl ReadPlan {
         for stmt in &transformation.body {
             rebound_names(stmt, &mut rebound);
         }
-        let known: Env = transformation
+        let mut known: Env = transformation
             .parameters
             .iter()
             .filter(|p| !rebound.contains(*p))
@@ -177,6 +248,7 @@ impl ReadPlan {
             .collect();
         let mut walker = Walker {
             definitions: DefinitionTable::new(definitions),
+            rebound,
             plan,
             trace,
         };
@@ -185,6 +257,7 @@ impl ReadPlan {
                 trace.statement = index + 1;
             }
             walker.stmt(stmt, &known, &mut BTreeSet::new());
+            walker.extend(stmt, &mut known);
         }
     }
 
@@ -247,6 +320,8 @@ type Env = BTreeMap<Var, KnownTerm>;
 
 struct Walker<'a> {
     definitions: DefinitionTable<'a>,
+    /// Names some statement binds as the body runs: never known.
+    rebound: BTreeSet<Var>,
     plan: &'a mut ReadPlan,
     trace: Option<&'a mut Trace>,
 }
@@ -291,9 +366,45 @@ impl Walker<'_> {
                 collection, body, ..
             } => {
                 self.value(collection, known, seen);
+                let mut known = known.clone();
                 for inner in body {
-                    self.stmt(inner, known, seen);
+                    self.stmt(inner, &known, seen);
+                    self.extend(inner, &mut known);
                 }
+            }
+        }
+    }
+
+    /// What a statement makes known to the statements after it in its
+    /// block: a `bind` of one claim pattern with a known coordinate fixes
+    /// each variable it binds to that row's value at the variable's
+    /// position. A name already known, or bound as the body runs, is left
+    /// as it is.
+    fn extend(&self, stmt: &Stmt, known: &mut Env) {
+        let Stmt::BindOne {
+            prop: Prop::Claim { predicate, args },
+            ..
+        } = stmt
+        else {
+            return;
+        };
+        let of = coordinates(args, known);
+        if of.is_empty() {
+            return;
+        }
+        for (position, term) in args.iter().enumerate() {
+            if let Term::Var(name) = term
+                && !known.contains_key(name)
+                && !self.rebound.contains(name)
+            {
+                known.insert(
+                    name.clone(),
+                    KnownTerm::Field {
+                        predicate: predicate.clone(),
+                        position,
+                        of: of.clone(),
+                    },
+                );
             }
         }
     }

@@ -179,6 +179,58 @@ fn check_verbose_names_a_gate_that_reads_a_predicate_whole() {
 /// reads its predicate whole. When the act also writes that predicate,
 /// two copies of it can conflict on different records, and the line says
 /// so; a whole read of a predicate the act never writes is listed plain.
+/// Reads keyed by a value an earlier `bind` found are keyed, two links
+/// down and through a retract pattern, so the spike's ship act reports
+/// none whole; a `let` in between still makes its read whole.
+#[test]
+fn check_verbose_keys_a_read_by_what_an_earlier_bind_found() {
+    const HEAD: &str = "program shipping\n\n\
+         predicate Allocation(a: Subject, shipment: Subject, item: Subject)\n\
+         predicate Shipment(shipment: Subject, order: Subject)\n\
+         predicate Order(order: Subject, customer: Subject)\n\
+         predicate Stock(item: Subject, on_hand: Decimal)\n\
+         predicate Good(customer: Subject)\n\n";
+    let verbose = |body: &str| {
+        let tmp = temp_morph(&format!("{HEAD}{body}"));
+        let out = Command::new(bin())
+            .args(["check", "--verbose"])
+            .arg(tmp.path())
+            .output()
+            .expect("morpholog check should run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let keyed = verbose(
+        "transformation ship(a):\n    \
+         bind Allocation(a, shipment, item)\n    \
+         bind Shipment(shipment, order)\n    \
+         bind Order(order, customer)\n    \
+         require Good(customer)\n    \
+         bind Stock(item, on_hand)\n    \
+         require on_hand >= 1\n    \
+         let left = on_hand - 1\n    \
+         retract Stock(item, on_hand)\n    \
+         admit Stock(item, left)\n",
+    );
+    assert!(keyed.ends_with("  body reads: all keyed\n"), "got: {keyed}");
+
+    let through_let = verbose(
+        "transformation ship(a):\n    \
+         bind Allocation(a, shipment, item)\n    \
+         let order = value Shipment(shipment, _)\n    \
+         bind Order(order, customer)\n    \
+         admit Good(customer)\n",
+    );
+    assert!(
+        through_let.ends_with("  body reads: 1 whole\n    ship reads Order whole: statement 3\n"),
+        "got: {through_let}"
+    );
+}
+
 #[test]
 fn check_verbose_marks_a_whole_read_of_a_predicate_the_act_writes() {
     let tmp = temp_morph(
@@ -191,9 +243,9 @@ fn check_verbose_marks_a_whole_read_of_a_predicate_the_act_writes() {
          require within_stock: sum(q | Alloc(a, item, q) and live(a)) + qty <= 10\n    \
          admit Alloc(alloc, item, qty)\n\n\
          transformation ship(alloc):\n    \
-         bind the_alloc: Alloc(alloc, item, _)\n    \
-         bind the_item: Item(item, _)\n    \
-         admit Shipped(item)\n",
+         bind the_alloc: Alloc(alloc, _, _)\n    \
+         bind the_item: Item(_, _)\n    \
+         admit Shipped(alloc)\n",
     );
     let out = Command::new(bin())
         .args(["check", "--verbose"])

@@ -7,14 +7,15 @@ use crate::sql_quote::quote_literal;
 use crate::txn::{LoginRole, begin_authorised_proposal_tx};
 use morpholog_core::{
     Admission, ClaimInstance, Compared, Definition, EffectiveDelta, EvalError, EvalValue,
-    IntentInstance, Invariant, InvariantName, Outcome, PredicateName, PreparedProgram, ReadFilter,
-    ReadPlan, RejectionReason, RuleName, StagedDelta, State, Subject, SubjectSource, TraceEntry,
-    TracedProposal, Transformation, TransformationName, Transition, WitnessBinding, execution,
+    IntentInstance, Invariant, InvariantName, Key, Outcome, PredicateName, PreparedProgram,
+    ReadFilter, ReadPlan, RejectionReason, RuleName, StagedDelta, State, Subject, SubjectSource,
+    TraceEntry, TracedProposal, Transformation, TransformationName, Transition, WitnessBinding,
+    execution,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use sqlx::{PgPool, Postgres, Row as _, Transaction};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use uuid::Uuid;
 
 /// The result of proposing a transformation against PostgreSQL.
@@ -869,9 +870,10 @@ async fn finalise_outcome(
 /// One statement, each predicate its own branch with the predicate
 /// spelled as a literal, so the partial indexes' predicates are provable;
 /// a coordinate seeks by the digest of its key, what those indexes hold,
-/// against the bound value's key through the same function. A seek that
-/// finds nothing still locks the index range it searched, which is how
-/// SERIALIZABLE protects the absence.
+/// against the bound value's key through the same function, or against
+/// the keys a subquery over another predicate's matching rows yields. A
+/// seek that finds nothing still locks the index range it searched, which
+/// is how SERIALIZABLE protects the absence.
 pub(crate) async fn load_state(
     tx: &mut Transaction<'_, Postgres>,
     scope: &LoadScope,
@@ -917,16 +919,8 @@ pub(crate) fn load_sql(scope: &LoadScope) -> Result<(String, Vec<serde_json::Val
             LoadFilter::Keyed(patterns) => {
                 let mut disjuncts = Vec::with_capacity(patterns.len());
                 for pattern in patterns {
-                    let mut conjuncts = Vec::with_capacity(pattern.len());
-                    for (position, value) in pattern {
-                        binds.push(serde_json::to_value(value)?);
-                        conjuncts.push(format!(
-                            "{} = morpholog.claim_digest(morpholog.value_key_v1(${}::jsonb))",
-                            crate::compiled::seek_expression("", *position),
-                            binds.len()
-                        ));
-                    }
-                    disjuncts.push(format!("({})", conjuncts.join(" AND ")));
+                    let conjunction = seek_all(pattern, "", &mut binds, &mut 0)?;
+                    disjuncts.push(format!("({conjunction})"));
                 }
                 format!(
                     "predicate_name = {literal} AND ({})",
@@ -950,6 +944,49 @@ pub(crate) fn load_sql(scope: &LoadScope) -> Result<(String, Vec<serde_json::Val
     Ok((sql, binds))
 }
 
+/// The conjunction that seeks one pattern's coordinates on the rows
+/// `qualifier` names. A value binds a parameter; a field becomes the
+/// array of keys its own predicate's matching rows hold, each nesting
+/// level under its own alias. An array, not `IN (subquery)`: the planner
+/// computes the array once and seeks the outer index with it, where it
+/// turned a disjunction of subqueries into a filter over every row.
+fn seek_all(
+    pattern: &[(usize, Key)],
+    qualifier: &str,
+    binds: &mut Vec<serde_json::Value>,
+    depth: &mut usize,
+) -> Result<String, PgError> {
+    let mut conjuncts = Vec::with_capacity(pattern.len());
+    for (position, key) in pattern {
+        let sought = crate::compiled::seek_expression(qualifier, *position);
+        conjuncts.push(match key {
+            Key::Value(value) => {
+                binds.push(serde_json::to_value(value)?);
+                format!(
+                    "{sought} = morpholog.claim_digest(morpholog.value_key_v1(${}::jsonb))",
+                    binds.len()
+                )
+            }
+            Key::Field {
+                predicate,
+                position: held,
+                of,
+            } => {
+                *depth += 1;
+                let alias = format!("f{depth}");
+                let inner = format!("{alias}.");
+                let matching = seek_all(of, &inner, binds, depth)?;
+                format!(
+                    "{sought} = ANY(ARRAY(SELECT {} FROM morpholog.claims {alias} WHERE {alias}.predicate_name = {} AND {matching}))",
+                    crate::compiled::seek_expression(&inner, *held),
+                    quote_literal(predicate.as_str())
+                )
+            }
+        });
+    }
+    Ok(conjuncts.join(" AND "))
+}
+
 /// What a loaded state must serve. `Body`: the compiled route, where the
 /// claims table serves the checks and reports the effective delta.
 /// `BodyAndInvariants`: the interpreter, which evaluates invariants and
@@ -969,10 +1006,24 @@ pub(crate) enum Reads<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum LoadFilter {
     Whole,
-    Keyed(Vec<Vec<(usize, EvalValue)>>),
+    Keyed(Vec<Vec<(usize, Key)>>),
 }
 
 impl LoadFilter {
+    /// Without the coordinates that read through any of `predicates`:
+    /// whole once a pattern has none left.
+    fn without_fields_through(&mut self, predicates: &BTreeSet<PredicateName>) {
+        let LoadFilter::Keyed(patterns) = self else {
+            return;
+        };
+        for pattern in patterns.iter_mut() {
+            pattern.retain(|(_, key)| !key.reads_any(predicates));
+        }
+        if patterns.iter().any(Vec::is_empty) {
+            *self = LoadFilter::Whole;
+        }
+    }
+
     fn union(&mut self, other: LoadFilter) {
         match (&mut *self, other) {
             (LoadFilter::Whole, _) => {}
@@ -1011,24 +1062,56 @@ impl LoadScope {
         }
     }
 
+    /// The scope for an act that runs after acts admitting `predicates`.
+    /// A key read through one of them may name a value only a row an
+    /// earlier act admits holds, whose dependants the snapshot load would
+    /// miss; that coordinate goes, the pattern's others stay. A retract
+    /// only removes rows, so it changes nothing here.
+    pub(crate) fn after_admissions_of(&mut self, predicates: &BTreeSet<PredicateName>) {
+        for filter in self.filters.values_mut() {
+            filter.without_fields_through(predicates);
+        }
+    }
+
     /// The predicates in scope, whatever their filters.
     pub(crate) fn predicates(&self) -> Vec<PredicateName> {
         self.filters.keys().cloned().collect()
     }
 
-    /// Whether a claim would be loaded: the same test in the kernel's
-    /// terms, for holding the loader to the plan.
+    /// Whether a claim of `full` would be loaded: the same test in the
+    /// kernel's terms, for holding the loader to the plan. A field is
+    /// resolved against the whole state.
     #[cfg(test)]
-    pub(crate) fn admits(&self, claim: &ClaimInstance) -> bool {
+    pub(crate) fn admits(&self, claim: &ClaimInstance, full: &State) -> bool {
         match self.filters.get(&claim.predicate) {
             None => false,
             Some(LoadFilter::Whole) => true,
-            Some(LoadFilter::Keyed(patterns)) => patterns.iter().any(|pattern| {
-                pattern
-                    .iter()
-                    .all(|(position, value)| claim.args.get(*position) == Some(value))
-            }),
+            Some(LoadFilter::Keyed(patterns)) => patterns
+                .iter()
+                .any(|pattern| matches_all(pattern, &claim.args, full)),
         }
+    }
+}
+
+#[cfg(test)]
+fn matches_all(pattern: &[(usize, Key)], args: &[EvalValue], full: &State) -> bool {
+    pattern.iter().all(|(position, key)| {
+        args.get(*position)
+            .is_some_and(|value| key_matches(key, value, full))
+    })
+}
+
+#[cfg(test)]
+fn key_matches(key: &Key, value: &EvalValue, full: &State) -> bool {
+    match key {
+        Key::Value(v) => v == value,
+        Key::Field {
+            predicate,
+            position,
+            of,
+        } => full
+            .claims_for(predicate.as_str())
+            .any(|row| row.args.get(*position) == Some(value) && matches_all(of, &row.args, full)),
     }
 }
 

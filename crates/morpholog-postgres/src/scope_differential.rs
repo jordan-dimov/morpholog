@@ -17,12 +17,20 @@
 //! predicate.
 //!
 //! The projection is keyed as the loader keys it: a predicate a body
-//! reads only through patterns with coordinates known before it runs
-//! keeps only the rows matching one of those patterns. The hostile
-//! fragments cover each way a coordinate can be known (a parameter, the
-//! actor, a literal, a definition's parameter passed a known argument)
-//! and each way it cannot (a key a `bind` or a `let` produces, a
-//! rebound parameter, a pattern beside a keyed one that fixes nothing).
+//! reads only through patterns with known coordinates keeps only the
+//! rows matching one of those patterns, a coordinate a `bind` fixed
+//! resolved against the whole state. The hostile fragments cover each
+//! way a coordinate can be known (a parameter, the actor, a literal, a
+//! definition's parameter passed a known argument, a value an earlier
+//! `bind` found) and each way it cannot (a key a `let` produces, a
+//! rebound parameter, a pattern beside a keyed one that fixes nothing, a
+//! read before the bind that would key it).
+//!
+//! Generated states seldom let a `bind` match, so the dependent reads
+//! are also exercised over built states where every link of a chain
+//! matches, and the projection is held to be strictly smaller than the
+//! whole state there: equal outcomes over a projection that dropped
+//! nothing would also hold for one that narrowed nothing.
 //!
 //! In-crate so `compute_load_scope` can stay `pub(crate)`: the promise is
 //! the equivalence, not the scope set itself.
@@ -83,8 +91,9 @@ transformation note(x):
     admit Out(x)
 ",
     ),
-    // A key produced by `bind` is unknown before the body runs, so the
-    // read it keys is whole; the bind's own pattern keys on the parameter.
+    // A value a `bind` found keys the read after it: the bind's own
+    // pattern keys on the parameter, the read on the field the matching
+    // row holds.
     (
         "bind_key_deferred",
         "program bind_key_deferred
@@ -177,6 +186,104 @@ transformation settle(k):
     admit Total(k, 1)
 ",
     ),
+    // The spike's shape: each link of a chain keyed by the one before
+    // it, a gate and a retract pattern keyed two and one links down.
+    (
+        "bind_chain",
+        "program bind_chain
+predicate Allocation(a: Subject, shipment: Subject, item: Subject)
+predicate Shipment(shipment: Subject, order: Subject)
+predicate Order(order: Subject, customer: Subject)
+predicate Stock(item: Subject, on_hand: Decimal)
+predicate Good(customer: Subject)
+transformation ship(a):
+    bind Allocation(a, shipment, item)
+    bind Shipment(shipment, order)
+    bind Order(order, customer)
+    require Good(customer)
+    bind Stock(item, on_hand)
+    require on_hand >= 1
+    let left = on_hand - 1
+    retract Stock(item, on_hand)
+    admit Stock(item, left)
+",
+    ),
+    // A read before the bind names a fresh variable, not the bind's.
+    (
+        "read_before_bind",
+        "program read_before_bind
+predicate Owner(k: Subject, who: Subject)
+predicate Cleared(who: Subject)
+predicate Out(k: Subject)
+transformation clear(k):
+    require Cleared(who)
+    bind Owner(k, who)
+    admit Out(k)
+",
+    ),
+    // A name a `let` also binds is never known, before or after.
+    (
+        "bind_then_let",
+        "program bind_then_let
+predicate Owner(k: Subject, who: Subject)
+predicate Pointer(k: Subject, to: Subject)
+predicate Cleared(who: Subject)
+predicate Out(k: Subject)
+transformation clear(k):
+    bind Owner(k, who)
+    let who = value Pointer(k, _) default who
+    require Cleared(who)
+    admit Out(k)
+",
+    ),
+    // A bind inside a `for` body keys the rest of that body and nothing
+    // after it.
+    (
+        "bind_in_for",
+        "program bind_in_for
+predicate Owner(k: Subject, who: Subject)
+predicate Cleared(who: Subject)
+predicate Done(who: Subject)
+predicate Out(k: Subject)
+transformation clear(k, others):
+    for o in others:
+        bind Owner(k, who)
+        require Cleared(who)
+        admit Out(o)
+    require Done(who)
+    admit Out(k)
+",
+    ),
+    // A bind whose own pattern fixes nothing gives nothing.
+    (
+        "whole_bind_gives_nothing",
+        "program whole_bind_gives_nothing
+predicate Owner(k: Subject, who: Subject)
+predicate Cleared(who: Subject)
+predicate Out(k: Subject)
+transformation clear(k):
+    bind Owner(_, who)
+    require Cleared(who)
+    admit Out(k)
+",
+    ),
+    // A bound field passes into a definition and keys a retract pattern.
+    (
+        "bind_key_through_definition_and_retract",
+        "program bind_key_through_definition_and_retract
+predicate Owner(k: Subject, who: Subject)
+predicate Cleared(who: Subject)
+predicate Flag(who: Subject, n: Decimal)
+predicate Out(k: Subject)
+define cleared(x):
+    Cleared(x)
+transformation clear(k):
+    bind Owner(k, who)
+    require cleared(who)
+    retract Flag(who, _)
+    admit Out(k)
+",
+    ),
     // A key produced by `let` is unknown before the body runs.
     (
         "let_key_deferred",
@@ -240,6 +347,14 @@ transformation mint(x):
     ),
 ];
 
+pub(crate) fn hostile_program(name: &str) -> Program {
+    hostile_programs()
+        .into_iter()
+        .find(|(n, _)| n == &format!("hostile:{name}"))
+        .unwrap_or_else(|| panic!("{name} is a hostile fragment"))
+        .1
+}
+
 fn hostile_programs() -> Vec<(String, Program)> {
     HOSTILE
         .iter()
@@ -267,7 +382,7 @@ fn project(full: &State, scope: &LoadScope) -> State {
     State::from_claims(
         full.claims()
             .iter()
-            .filter(|c| scope.admits(c))
+            .filter(|c| scope.admits(c, full))
             .cloned()
             .collect(),
     )
@@ -410,10 +525,7 @@ fn scoped_loading_is_observationally_equivalent_to_full_state() {
 fn the_read_plan_keys_what_the_body_fixes_and_nothing_else() {
     use morpholog_core::{KeyedPattern, KnownTerm, ReadFilter, ReadPlan};
     let plan = |program_name: &str, transformation: &str| -> ReadPlan {
-        let (_, program) = hostile_programs()
-            .into_iter()
-            .find(|(n, _)| n == &format!("hostile:{program_name}"))
-            .unwrap_or_else(|| panic!("{program_name} is a hostile fragment"));
+        let program = hostile_program(program_name);
         let t = program
             .transformations
             .iter()
@@ -433,10 +545,56 @@ fn the_read_plan_keys_what_the_body_fixes_and_nothing_else() {
         )
     };
 
+    let field = |predicate: &str, position: usize, of: &[(usize, KnownTerm)]| KnownTerm::Field {
+        predicate: predicate.into(),
+        position,
+        of: of.to_vec(),
+    };
+
     let p = plan("bind_key_deferred", "clear");
     assert_eq!(p.reads[&"Owner".into()], keyed(&[&[(0, param("k"))]]));
-    assert_eq!(p.reads[&"Cleared".into()], ReadFilter::Whole);
+    let who = field("Owner", 1, &[(0, param("k"))]);
+    assert_eq!(p.reads[&"Cleared".into()], keyed(&[&[(0, who.clone())]]));
     assert_eq!(p.admits[&"Out".into()], keyed(&[&[(0, param("k"))]]));
+
+    let p = plan("bind_chain", "ship");
+    let shipment = field("Allocation", 1, &[(0, param("a"))]);
+    let item = field("Allocation", 2, &[(0, param("a"))]);
+    let order = field("Shipment", 1, &[(0, shipment.clone())]);
+    let customer = field("Order", 1, &[(0, order.clone())]);
+    assert_eq!(p.reads[&"Shipment".into()], keyed(&[&[(0, shipment)]]));
+    assert_eq!(p.reads[&"Order".into()], keyed(&[&[(0, order)]]));
+    assert_eq!(p.reads[&"Good".into()], keyed(&[&[(0, customer)]]));
+    assert_eq!(
+        p.reads[&"Stock".into()],
+        keyed(&[&[(0, item.clone())]]),
+        "the retract pattern, keyed by the item and the quantity the bind found, adds nothing to the bind's own"
+    );
+    assert_eq!(
+        p.admits[&"Stock".into()],
+        keyed(&[&[(0, item)]]),
+        "`left` is a let, so the admit keys on the item alone"
+    );
+
+    let p = plan("read_before_bind", "clear");
+    assert_eq!(p.reads[&"Cleared".into()], ReadFilter::Whole);
+    assert_eq!(p.reads[&"Owner".into()], keyed(&[&[(0, param("k"))]]));
+
+    let p = plan("bind_then_let", "clear");
+    assert_eq!(p.reads[&"Owner".into()], keyed(&[&[(0, param("k"))]]));
+    assert_eq!(p.reads[&"Cleared".into()], ReadFilter::Whole);
+
+    let p = plan("bind_in_for", "clear");
+    assert_eq!(p.reads[&"Cleared".into()], keyed(&[&[(0, who.clone())]]));
+    assert_eq!(p.reads[&"Done".into()], ReadFilter::Whole);
+
+    let p = plan("whole_bind_gives_nothing", "clear");
+    assert_eq!(p.reads[&"Owner".into()], ReadFilter::Whole);
+    assert_eq!(p.reads[&"Cleared".into()], ReadFilter::Whole);
+
+    let p = plan("bind_key_through_definition_and_retract", "clear");
+    assert_eq!(p.reads[&"Cleared".into()], keyed(&[&[(0, who.clone())]]));
+    assert_eq!(p.reads[&"Flag".into()], keyed(&[&[(0, who)]]));
 
     let p = plan("parameter_survives_bind", "clear");
     assert_eq!(p.reads[&"Owner".into()], ReadFilter::Whole);
@@ -540,6 +698,260 @@ fn a_rebound_parameter_reads_its_predicate_whole() {
         staged_observable(&on_full),
         staged_observable(&on_projected)
     );
+}
+
+/// The chain fixture: two shipments, each through its own shipment and
+/// order to its own good customer, and a third item nobody allocated.
+pub(crate) fn chain_state() -> Vec<morpholog_core::ClaimInstance> {
+    use morpholog_test_support::{claim_instance, dec, subj};
+    vec![
+        claim_instance("Allocation", &[subj("a1"), subj("s1"), subj("i1")]),
+        claim_instance("Allocation", &[subj("a2"), subj("s2"), subj("i2")]),
+        claim_instance("Shipment", &[subj("s1"), subj("o1")]),
+        claim_instance("Shipment", &[subj("s2"), subj("o2")]),
+        claim_instance("Order", &[subj("o1"), subj("c1")]),
+        claim_instance("Order", &[subj("o2"), subj("c2")]),
+        claim_instance("Good", &[subj("c1")]),
+        claim_instance("Good", &[subj("c2")]),
+        claim_instance("Stock", &[subj("i1"), dec(5)]),
+        claim_instance("Stock", &[subj("i2"), dec(5)]),
+        claim_instance("Stock", &[subj("i3"), dec(5)]),
+    ]
+}
+
+/// Stage `ship(a1)` of the chain fragment over `full` and over its
+/// body-only projection; both must show the same, and the projection is
+/// returned for the caller to say how small it had to be.
+fn ship_a1_over(full: Vec<morpholog_core::ClaimInstance>) -> (String, State) {
+    let program = hostile_program("bind_chain");
+    let t = &program.transformations[0];
+    let prepared = morpholog_test_support::prepare(&program);
+    let full = State::from_claims(full);
+    let transition = morpholog_core::Transition {
+        transformation_name: t.name.clone(),
+        args: vec![morpholog_test_support::subj("a1")],
+        actor: morpholog_test_support::test_actor(),
+        decided_at: None,
+    };
+    let scope = compute_load_scope(
+        t,
+        Some(&transition),
+        &program.invariants,
+        &program.definitions,
+        Reads::Body,
+    );
+    let projected = project(&full, &scope);
+    let on_full = prepared
+        .stage_delta(&transition, &full, &mut same_subjects())
+        .map(|staged| staged.expect("the transformation is declared"));
+    let on_projected = prepared
+        .stage_delta(&transition, &projected, &mut same_subjects())
+        .map(|staged| staged.expect("the transformation is declared"));
+    let shown = staged_observable(&on_full);
+    assert_eq!(
+        shown,
+        staged_observable(&on_projected),
+        "the projection changed the staged delta (scope: {scope:?})"
+    );
+    (shown, projected)
+}
+
+/// Every link matches: the projection holds one row per link and the
+/// one stock row the allocation names, and the act stages through it.
+#[test]
+fn a_chain_of_binds_reads_only_the_rows_the_links_name() {
+    let (shown, projected) = ship_a1_over(chain_state());
+    assert!(shown.starts_with("staged:"), "{shown}");
+    let mut rows: Vec<String> = projected
+        .claims()
+        .iter()
+        .map(|c| format!("{} {:?}", c.predicate, c.args))
+        .collect();
+    rows.sort();
+    let wanted = ["Allocation", "Good", "Order", "Shipment", "Stock"];
+    assert_eq!(rows.len(), wanted.len(), "{rows:#?}");
+    for (row, predicate) in rows.iter().zip(wanted) {
+        assert!(row.starts_with(predicate), "{row} is not a {predicate} row");
+    }
+    assert!(
+        rows.iter()
+            .any(|r| r.starts_with("Stock") && r.contains("i1")),
+        "{rows:#?}"
+    );
+}
+
+/// A parent matching several rows: every value they hold reaches the
+/// load, and the kernel's error is the same over the projection.
+#[test]
+fn a_parent_matching_several_rows_loads_every_dependant_and_errors_alike() {
+    use morpholog_test_support::{claim_instance, subj};
+    let mut full = chain_state();
+    full.push(claim_instance(
+        "Allocation",
+        &[subj("a1"), subj("s1"), subj("i2")],
+    ));
+    let (shown, projected) = ship_a1_over(full);
+    assert!(shown.starts_with("error:"), "{shown}");
+    assert_eq!(
+        projected.claims_for("Stock").count(),
+        2,
+        "both items' stock"
+    );
+}
+
+/// The dependent row is absent: the act stops at that bind on both.
+#[test]
+fn an_absent_dependant_decides_alike() {
+    let full: Vec<_> = chain_state()
+        .into_iter()
+        .filter(|c| !(c.predicate.as_str() == "Stock" && format!("{:?}", c.args).contains("i1")))
+        .collect();
+    let (shown, projected) = ship_a1_over(full);
+    assert!(!shown.starts_with("staged:"), "{shown}");
+    assert_eq!(projected.claims_for("Stock").count(), 0);
+}
+
+/// Two allocations name one item: the item's row is loaded once, and the
+/// act stages.
+#[test]
+fn two_parents_naming_one_dependant_load_it_once() {
+    use morpholog_test_support::{claim_instance, subj};
+    let full: Vec<_> = chain_state()
+        .into_iter()
+        .map(|c| {
+            if c.predicate.as_str() == "Allocation" && format!("{:?}", c.args).contains("a2") {
+                claim_instance("Allocation", &[subj("a2"), subj("s2"), subj("i1")])
+            } else {
+                c
+            }
+        })
+        .collect();
+    let (shown, projected) = ship_a1_over(full);
+    assert!(shown.starts_with("staged:"), "{shown}");
+    assert_eq!(projected.claims_for("Stock").count(), 1);
+}
+
+/// A refusal after the dependent read: the quantity the chain reached
+/// fails the gate on both.
+#[test]
+fn a_refusal_after_the_dependent_read_decides_alike() {
+    use morpholog_test_support::{claim_instance, dec, subj};
+    let full: Vec<_> = chain_state()
+        .into_iter()
+        .map(|c| {
+            if c.predicate.as_str() == "Stock" && format!("{:?}", c.args).contains("i1") {
+                claim_instance("Stock", &[subj("i1"), dec(0)])
+            } else {
+                c
+            }
+        })
+        .collect();
+    let (shown, _) = ship_a1_over(full);
+    assert!(shown.starts_with("rejected:"), "{shown}");
+}
+
+/// In an atomic batch, an act after one that admits a predicate a key
+/// reads through loses that key and keeps its others; one that only
+/// retracts, or admits a predicate off the chain, changes nothing.
+#[test]
+fn a_key_read_through_an_earlier_admission_is_dropped_and_the_rest_kept() {
+    use crate::propose::LoadFilter;
+    use std::collections::BTreeSet;
+    let program = morpholog_surface::parse_program(
+        "program batch_keys
+predicate Allocation(a: Subject, item: Subject)
+predicate Stock(warehouse: Subject, item: Subject, on_hand: Decimal)
+predicate Out(a: Subject)
+transformation ship(a, warehouse):
+    bind Allocation(a, item)
+    bind Stock(warehouse, item, on_hand)
+    admit Out(a)
+",
+    )
+    .expect("parses");
+    let t = &program.transformations[0];
+    let transition = morpholog_core::Transition {
+        transformation_name: t.name.clone(),
+        args: vec![
+            morpholog_test_support::subj("a1"),
+            morpholog_test_support::subj("w1"),
+        ],
+        actor: morpholog_test_support::test_actor(),
+        decided_at: None,
+    };
+    let scope = || {
+        compute_load_scope(
+            t,
+            Some(&transition),
+            &program.invariants,
+            &program.definitions,
+            Reads::Body,
+        )
+    };
+    let stock_positions = |scope: &LoadScope| -> Vec<Vec<usize>> {
+        match &scope.filters[&"Stock".into()] {
+            LoadFilter::Whole => vec![],
+            LoadFilter::Keyed(patterns) => patterns
+                .iter()
+                .map(|p| p.iter().map(|(i, _)| *i).collect())
+                .collect(),
+        }
+    };
+    let untouched = scope();
+    assert_eq!(stock_positions(&untouched), vec![vec![0, 1]]);
+
+    let mut after_allocation = scope();
+    after_allocation.after_admissions_of(&BTreeSet::from(["Allocation".into()]));
+    assert_eq!(
+        stock_positions(&after_allocation),
+        vec![vec![0]],
+        "the item key read through Allocation goes, the warehouse parameter stays"
+    );
+    assert_eq!(
+        after_allocation.filters[&"Allocation".into()],
+        untouched.filters[&"Allocation".into()],
+        "the parent's own parameter key is untouched"
+    );
+
+    let mut after_stock = scope();
+    after_stock.after_admissions_of(&BTreeSet::from(["Stock".into()]));
+    assert_eq!(
+        after_stock, untouched,
+        "an admission off the chain changes nothing"
+    );
+
+    let mut after_nothing = scope();
+    after_nothing.after_admissions_of(&BTreeSet::new());
+    assert_eq!(after_nothing, untouched);
+
+    // With no other coordinate, the pattern becomes whole.
+    let program = morpholog_surface::parse_program(
+        "program batch_keys_alone
+predicate Allocation(a: Subject, item: Subject)
+predicate Stock(item: Subject, on_hand: Decimal)
+predicate Out(a: Subject)
+transformation ship(a):
+    bind Allocation(a, item)
+    bind Stock(item, on_hand)
+    admit Out(a)
+",
+    )
+    .expect("parses");
+    let t = &program.transformations[0];
+    let mut alone = compute_load_scope(
+        t,
+        Some(&morpholog_core::Transition {
+            transformation_name: t.name.clone(),
+            args: vec![morpholog_test_support::subj("a1")],
+            actor: morpholog_test_support::test_actor(),
+            decided_at: None,
+        }),
+        &program.invariants,
+        &program.definitions,
+        Reads::Body,
+    );
+    alone.after_admissions_of(&BTreeSet::from(["Allocation".into()]));
+    assert_eq!(alone.filters[&"Stock".into()], LoadFilter::Whole);
 }
 
 /// A mixed execution loads what its interpreted invariants read, whole,

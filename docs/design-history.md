@@ -1350,6 +1350,12 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 
 **Landed:** `check -v` lists each body read that loads its predicate whole, with its statement, its rule name and the definitions it went through. The list comes from the read plan the loader uses, `ReadPlan`, which now records where each read lost its keys. It is text only: no envelope, planner or semantic change.
 
+### A read keyed by what an earlier bind found
+
+**Forced by:** #726, from the InvenTree spike. Its programme's ship acts bind an allocation by the parameter, then bind the shipment, the order and the stock item by what the allocation names, and every one of those reads loaded its predicate whole, so two shipments of different items conflicted on each other. Of the programme's 49 whole reads, 18 were keyed this way by a value an earlier `bind` had found.
+
+**Landed:** the read plan is flow-sensitive for statement binds. After a `bind` of one claim pattern with a known coordinate, each variable it binds is known as the value a matching row holds at that position, for the rest of its block, so a chain is keyed as far as each link is keyed by the one before it. The loader renders such a key as the array of keys the parent's own keyed read yields, and seeks the dependent's index with it: an `IN (subquery)` became a filter over every row once two patterns met in one `or`. A pattern fixing everything another fixes is dropped, since a keyed bind followed by a retract of the row it found would otherwise key the same predicate by a quantity few rows tell apart, and the planner took that index. An atomic batch, which loads once, drops a key read through a predicate an earlier act admits and keeps the pattern's other keys. The pure projection resolves a dependent key against the whole state, so the scope differential still holds the kernel over the keyed load to the kernel over full state, over built states where every link matches; the loader is held to that projection, and two shipments of different items commit together with no relation-level lock where they conflicted before.
+
 ### Snapshots for as-of reads
 
 **Forced by:** #377, with grid-mysteries' 137k-row record as the scale case. An as-of read replays the log from its first row, so a read at the end of a long history cost seconds and grew with it.
