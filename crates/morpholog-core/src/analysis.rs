@@ -254,7 +254,7 @@ pub fn has_admission_gate(transformation: &crate::ir::Transformation) -> bool {
 /// Every predicate a transformation's body asserts (`admit`), descending
 /// into `for` bodies. Used by the control matrix to decide which
 /// invariants a transformation could trigger.
-pub fn predicates_asserted_by(
+pub(crate) fn predicates_asserted_by(
     transformation: &crate::ir::Transformation,
     out: &mut BTreeSet<PredicateName>,
 ) {

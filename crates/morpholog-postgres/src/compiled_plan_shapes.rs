@@ -478,6 +478,63 @@ async fn the_loader_seeks_a_bind_keyed_read_through_its_index() {
     );
 }
 
+/// A read keyed by a collection parameter's elements binds one parameter
+/// per element. The planner must seek the index at every size, no
+/// elements, a few and the thousand the key allows, with no row read and
+/// discarded, and at a few elements as a plain index scan, not a bitmap
+/// one, since a bitmap scan locks heap pages and a neighbouring row's
+/// writer then conflicts.
+#[tokio::test]
+async fn the_loader_seeks_an_element_keyed_read_through_its_index_at_every_size() {
+    use crate::load_differential::{merge_transition, merges_program, populate_merges};
+    use crate::propose::{Reads, compute_load_scope, load_sql};
+    let pool = test_pool().await;
+    reset(&pool).await;
+    let program = merges_program();
+    let pg = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
+    provision_indexes(&pool, &[&pg], false).await.unwrap();
+    populate_merges(&pool, POPULATED).await;
+    let merge = program.transformation("merge").unwrap();
+    let stock = crate::compiled::IndexSpec::new("Stock".into(), 0).index_name();
+    let big: Vec<String> = (2..=1001).map(|i| format!("i{i}")).collect();
+    let big: Vec<&str> = big.iter().map(String::as_str).collect();
+    for others in [vec![], vec!["i2", "i3", "i4"], big] {
+        let scope = compute_load_scope(
+            merge,
+            Some(&merge_transition("i1", &others)),
+            &program.invariants,
+            &program.definitions,
+            Reads::Body,
+        );
+        let (sql, binds) = load_sql(&scope).unwrap();
+        let plan = analyzed_plan(&pool, &sql, &binds).await;
+        assert_eq!(
+            rows_returned(&plan),
+            1 + others.len() as u64,
+            "{} elements: the load returns the target's row and the elements' and nothing else: {plan:#}",
+            others.len()
+        );
+        if others.len() == 3 {
+            assert!(
+                !plan.to_string().contains("Bitmap"),
+                "{} elements: a bitmap scan locks heap pages: {plan:#}",
+                others.len()
+            );
+        }
+        assert!(
+            executed_index_conditions(&plan).contains(&stock),
+            "{} elements: the stock read seeks no executed index condition: {plan:#}",
+            others.len()
+        );
+        assert_eq!(
+            rows_removed_by_filters(&plan),
+            0,
+            "{} elements: the load read rows it then discarded: {plan:#}",
+            others.len()
+        );
+    }
+}
+
 /// `EXPLAIN (ANALYZE, FORMAT JSON)` of a statement with its binds, the
 /// planner left alone.
 async fn analyzed_plan(pool: &PgPool, sql: &str, binds: &[serde_json::Value]) -> serde_json::Value {
@@ -532,6 +589,15 @@ fn executed_index_conditions(plan: &serde_json::Value) -> BTreeSet<String> {
         }
     });
     out
+}
+
+/// Rows the whole statement returned.
+fn rows_returned(plan: &serde_json::Value) -> u64 {
+    // A float since PostgreSQL 18, which averages rows over loops.
+    let rows = plan[0]["Plan"]["Actual Rows"]
+        .as_f64()
+        .expect("an analyzed plan reports its rows");
+    rows.round() as u64
 }
 
 /// Rows the statement read and then dropped, over every executed node.

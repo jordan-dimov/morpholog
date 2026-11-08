@@ -867,13 +867,16 @@ async fn finalise_outcome(
 /// patterns' coordinates. Nothing else can affect the proposal. An empty
 /// scope returns an empty state without a query.
 ///
-/// One statement, each predicate its own branch with the predicate
-/// spelled as a literal, so the partial indexes' predicates are provable;
-/// a coordinate seeks by the digest of its key, what those indexes hold,
-/// against the bound value's key through the same function, or against
-/// the keys a subquery over another predicate's matching rows yields. A
-/// seek that finds nothing still locks the index range it searched, which
-/// is how SERIALIZABLE protects the absence.
+/// One statement, each pattern of each predicate its own branch with the
+/// predicate spelled as a literal, so the partial indexes' predicates are
+/// provable and each branch is its own index scan: two patterns in one
+/// `or` became a bitmap scan, which locks heap pages, so a neighbouring
+/// row's writer conflicted. A coordinate seeks by the digest of its key,
+/// what those indexes hold, against the bound value's key through the
+/// same function, or against the keys a subquery over another predicate's
+/// matching rows yields. A seek that finds nothing still locks the index
+/// range it searched, which is how SERIALIZABLE protects the absence. A
+/// row two patterns both match comes back twice and is kept once.
 pub(crate) async fn load_state(
     tx: &mut Transaction<'_, Postgres>,
     scope: &LoadScope,
@@ -891,8 +894,18 @@ pub(crate) async fn load_state(
     let rows = query.fetch_all(&mut **tx).await.map_err(classify)?;
 
     let mut claims = Vec::with_capacity(rows.len());
+    let mut last: Option<(String, Vec<u8>)> = None;
     for row in rows {
         let predicate: String = row.try_get("predicate_name").map_err(classify)?;
+        let hash: Vec<u8> = row.try_get("arguments_hash").map_err(classify)?;
+        // Ordered by predicate and hash, so a repeat is the row before.
+        if last
+            .as_ref()
+            .is_some_and(|(p, h)| *p == predicate && *h == hash)
+        {
+            continue;
+        }
+        last = Some((predicate.clone(), hash));
         let arguments: serde_json::Value = row.try_get("arguments").map_err(classify)?;
         let args: Vec<EvalValue> = serde_json::from_value(arguments)?;
         claims.push(ClaimInstance {
@@ -906,31 +919,29 @@ pub(crate) async fn load_state(
 /// The loader's statement and its bound values, apart so a plan gate can
 /// explain what production runs.
 pub(crate) fn load_sql(scope: &LoadScope) -> Result<(String, Vec<serde_json::Value>), PgError> {
-    // One select per predicate, joined by UNION ALL, so the planner plans
-    // each predicate's scan on its own: a keyed predicate seeks its
-    // indexes whatever a whole one beside it costs, and each read's lock
-    // footprint is its own.
+    // One select per pattern, joined by UNION ALL, so the planner plans
+    // each on its own: a keyed pattern seeks its index whatever a whole
+    // predicate beside it costs, and each read's lock footprint is its
+    // own.
     let mut selects = Vec::with_capacity(scope.filters.len());
     let mut binds: Vec<serde_json::Value> = Vec::new();
     for (predicate, filter) in &scope.filters {
         let literal = quote_literal(predicate.as_str());
-        let condition = match filter {
-            LoadFilter::Whole => format!("predicate_name = {literal}"),
+        let mut conditions = Vec::new();
+        match filter {
+            LoadFilter::Whole => conditions.push(format!("predicate_name = {literal}")),
             LoadFilter::Keyed(patterns) => {
-                let mut disjuncts = Vec::with_capacity(patterns.len());
                 for pattern in patterns {
                     let conjunction = seek_all(pattern, "", &mut binds, &mut 0)?;
-                    disjuncts.push(format!("({conjunction})"));
+                    conditions.push(format!("predicate_name = {literal} AND {conjunction}"));
                 }
-                format!(
-                    "predicate_name = {literal} AND ({})",
-                    disjuncts.join(" OR ")
-                )
             }
-        };
-        selects.push(format!(
-            "SELECT predicate_name, arguments, arguments_hash FROM morpholog.claims WHERE {condition}"
-        ));
+        }
+        for condition in conditions {
+            selects.push(format!(
+                "SELECT predicate_name, arguments, arguments_hash FROM morpholog.claims WHERE {condition}"
+            ));
+        }
     }
     // Ordered because a refusal's witness is the first violating match;
     // an unordered scan could explain the same refusal differently between
@@ -938,7 +949,7 @@ pub(crate) fn load_sql(scope: &LoadScope) -> Result<(String, Vec<serde_json::Val
     // by `asserted_at` forces a sort (measured ~1.8x propose latency at 20k
     // claims) and depends on history.
     let sql = format!(
-        "SELECT predicate_name, arguments FROM (\n{}\n) AS scope\n ORDER BY predicate_name, arguments_hash",
+        "SELECT predicate_name, arguments, arguments_hash FROM (\n{}\n) AS scope\n ORDER BY predicate_name, arguments_hash",
         selects.join("\nUNION ALL\n")
     );
     Ok((sql, binds))
@@ -949,7 +960,11 @@ pub(crate) fn load_sql(scope: &LoadScope) -> Result<(String, Vec<serde_json::Val
 /// array of keys its own predicate's matching rows hold, each nesting
 /// level under its own alias. An array, not `IN (subquery)`: the planner
 /// computes the array once and seeks the outer index with it, where it
-/// turned a disjunction of subqueries into a filter over every row.
+/// turned a disjunction of subqueries into a filter over every row. A
+/// collection's elements bind one parameter each inside the array, so
+/// the planner knows how many it seeks and keeps a plain index scan: an
+/// array built from one bound JSON array was a bitmap scan at any size,
+/// which locks heap pages.
 fn seek_all(
     pattern: &[(usize, Key)],
     qualifier: &str,
@@ -966,6 +981,18 @@ fn seek_all(
                     "{sought} = morpholog.claim_digest(morpholog.value_key_v1(${}::jsonb))",
                     binds.len()
                 )
+            }
+            Key::OneOf(values) if values.is_empty() => "FALSE".to_string(),
+            Key::OneOf(values) => {
+                let mut keys = Vec::with_capacity(values.len());
+                for value in values {
+                    binds.push(serde_json::to_value(value)?);
+                    keys.push(format!(
+                        "morpholog.claim_digest(morpholog.value_key_v1(${}::jsonb))",
+                        binds.len()
+                    ));
+                }
+                format!("{sought} = ANY(ARRAY[{}])", keys.join(", "))
             }
             Key::Field {
                 predicate,
@@ -1105,6 +1132,7 @@ fn matches_all(pattern: &[(usize, Key)], args: &[EvalValue], full: &State) -> bo
 fn key_matches(key: &Key, value: &EvalValue, full: &State) -> bool {
     match key {
         Key::Value(v) => v == value,
+        Key::OneOf(values) => values.contains(value),
         Key::Field {
             predicate,
             position,

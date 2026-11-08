@@ -50,11 +50,10 @@ fn a_whole_read_names_its_gate_and_every_definition_it_went_through() {
                 &["flagged_holding", "held"]
             ),
             read("Flag", 1, Some("within_limit"), &["flagged_holding"]),
-            // An unnamed gate after a named one carries no name.
+            // An unnamed gate after a named one carries no name. The
+            // loop's binder ranges over a parameter, so both reads inside
+            // the loop are keyed and neither is listed.
             read("Holding", 2, None, &["held"]),
-            // A `for` binder is not known before the body runs; the gate
-            // inside it is named. The keyed read beside it is not listed.
-            read("Flag", 3, Some("is_flagged"), &[]),
         ]
     );
 

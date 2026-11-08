@@ -108,7 +108,9 @@ pub async fn propose_all_against_pg(
         let mut own = program.load_scope(t, transition, route);
         own.after_admissions_of(&admitted_before);
         scope.union(own);
-        morpholog_core::predicates_asserted_by(t, &mut admitted_before);
+        for stmt in &t.body {
+            morpholog_core::predicates_asserted_by_stmt(stmt, &mut admitted_before);
+        }
     }
     let mut state = load_state(&mut tx, &scope).await?;
 

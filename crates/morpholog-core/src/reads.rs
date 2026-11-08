@@ -15,8 +15,11 @@
 //! matching row holds at that position. The kernel binds only rows of
 //! the snapshot, so a load keeping the rows equal to any such value
 //! holds every row a later pattern can match, and a chain is keyed as
-//! far as each link is keyed by the one before it. A key a `let` or a
-//! `for` produces is still unknown here and makes its reads whole.
+//! far as each link is keyed by the one before it. A variable ranging
+//! over a collection parameter, through a `for`, a `forall ... in`, or a
+//! membership test beside a pattern in one conjunction, is known as one
+//! of that parameter's elements. A key a `let` produces is still unknown
+//! here and makes its reads whole.
 //!
 //! Admits are kept apart from reads: an interpreter needs the admitted
 //! predicates' membership to tell an effective admission from a repeat,
@@ -48,6 +51,8 @@ pub enum KnownTerm {
         position: usize,
         of: Vec<(usize, KnownTerm)>,
     },
+    /// One of the elements of the collection this parameter carries.
+    Element(Var),
 }
 
 /// A known coordinate with the transition's values in place: a value,
@@ -62,13 +67,23 @@ pub enum Key {
         position: usize,
         of: Vec<(usize, Key)>,
     },
+    /// Any of these values: a collection argument's elements, each once,
+    /// never more than [`MAX_ELEMENT_KEYS`].
+    OneOf(Vec<EvalValue>),
 }
+
+/// The most elements a collection may hold and still key a read; a
+/// larger one reads its predicate whole. Measured at this size an index
+/// seek over the elements already locks the relation, as a whole read
+/// does, so keys beyond it narrow nothing, and the statement stays far
+/// from PostgreSQL's limit on bound parameters, one per element.
+pub const MAX_ELEMENT_KEYS: usize = 1_000;
 
 impl Key {
     /// Whether any predicate the key reads through is one of `these`.
     pub fn reads_any(&self, these: &BTreeSet<PredicateName>) -> bool {
         match self {
-            Key::Value(_) => false,
+            Key::Value(_) | Key::OneOf(_) => false,
             Key::Field { predicate, of, .. } => {
                 these.contains(predicate) || of.iter().any(|(_, key)| key.reads_any(these))
             }
@@ -175,6 +190,22 @@ fn resolve_coordinates(
                     position: *position,
                     of: resolve_coordinates(of, transformation, transition)?,
                 },
+                KnownTerm::Element(p) => {
+                    let index = transformation.parameters.iter().position(|q| q == p)?;
+                    let EvalValue::Collection(items) = transition.args.get(index)? else {
+                        return None;
+                    };
+                    let mut distinct: Vec<EvalValue> = Vec::with_capacity(items.len());
+                    for item in items {
+                        if !distinct.contains(item) {
+                            distinct.push(item.clone());
+                        }
+                    }
+                    if distinct.len() > MAX_ELEMENT_KEYS {
+                        return None;
+                    }
+                    Key::OneOf(distinct)
+                }
             };
             Some((*position, key))
         })
@@ -237,8 +268,10 @@ impl ReadPlan {
         trace: Option<&mut Trace>,
     ) {
         let mut rebound = BTreeSet::new();
+        let mut let_bound = BTreeSet::new();
         for stmt in &transformation.body {
             rebound_names(stmt, &mut rebound);
+            let_names(stmt, &mut let_bound);
         }
         let mut known: Env = transformation
             .parameters
@@ -249,6 +282,7 @@ impl ReadPlan {
         let mut walker = Walker {
             definitions: DefinitionTable::new(definitions),
             rebound,
+            let_bound,
             plan,
             trace,
         };
@@ -315,6 +349,27 @@ fn rebound_names(stmt: &Stmt, out: &mut BTreeSet<Var>) {
     }
 }
 
+/// Names a `let` or a `new Subject()` binds, anywhere in the body: a
+/// loop binding so named is replaced as the body runs, so it is never
+/// known as an element.
+fn let_names(stmt: &Stmt, out: &mut BTreeSet<Var>) {
+    match stmt {
+        Stmt::Let { name, .. } | Stmt::LetNewSubject { name } => {
+            out.insert(name.clone());
+        }
+        Stmt::For { body, .. } => {
+            for inner in body {
+                let_names(inner, out);
+            }
+        }
+        Stmt::Require { .. }
+        | Stmt::BindOne { .. }
+        | Stmt::Assert(_)
+        | Stmt::Retract { .. }
+        | Stmt::Emit(_) => {}
+    }
+}
+
 /// The variables known at a point, and what they are known as.
 type Env = BTreeMap<Var, KnownTerm>;
 
@@ -322,6 +377,8 @@ struct Walker<'a> {
     definitions: DefinitionTable<'a>,
     /// Names some statement binds as the body runs: never known.
     rebound: BTreeSet<Var>,
+    /// Names a `let` or a `new Subject()` binds: never an element.
+    let_bound: BTreeSet<Var>,
     plan: &'a mut ReadPlan,
     trace: Option<&'a mut Trace>,
 }
@@ -363,16 +420,55 @@ impl Walker<'_> {
             }
             Stmt::Retract { predicate, args } => self.pattern(predicate, args, known),
             Stmt::For {
-                collection, body, ..
+                binding,
+                collection,
+                body,
             } => {
                 self.value(collection, known, seen);
                 let mut known = known.clone();
+                known.remove(binding);
+                if let ValueExpr::Term(Term::Var(source)) = collection {
+                    self.element(binding, source, &mut known);
+                }
                 for inner in body {
                     self.stmt(inner, &known, seen);
                     self.extend(inner, &mut known);
                 }
             }
         }
+    }
+
+    /// `binding` ranges over the elements of `source`: known as one of
+    /// them when `source` is a parameter known as itself and nothing
+    /// else binds the name.
+    fn element(&self, binding: &Var, source: &Var, known: &mut Env) {
+        if known.contains_key(binding) || self.let_bound.contains(binding) {
+            return;
+        }
+        if matches!(known.get(source), Some(KnownTerm::Parameter(p)) if p == source) {
+            known.insert(binding.clone(), KnownTerm::Element(source.clone()));
+        }
+    }
+
+    /// The environment a conjunction's conjuncts are walked in: a
+    /// variable a membership test ranges over a known parameter is one
+    /// of its elements. The scan stops at the first conjunct that is
+    /// neither a pattern nor a membership test: the kernel evaluates a
+    /// conjunction left to right over every live binding, so a row the
+    /// pattern matched outside the collection reaches each conjunct
+    /// before the test, and a conjunct there that can raise would raise
+    /// on it. A load without that row would answer differently.
+    fn members(&self, conjuncts: &[Prop], known: &Env) -> Env {
+        let mut inner = known.clone();
+        for conjunct in conjuncts {
+            match conjunct {
+                Prop::Claim { .. } => {}
+                Prop::In(Term::Var(x), Term::Var(source)) => self.element(x, source, &mut inner),
+                Prop::In(_, _) => {}
+                _ => break,
+            }
+        }
+        inner
     }
 
     /// What a statement makes known to the statements after it in its
@@ -457,7 +553,13 @@ impl Walker<'_> {
                     trace.through.pop();
                 }
             }
-            Prop::And(props) | Prop::Or(props) => {
+            Prop::And(props) => {
+                let known = self.members(props, known);
+                for p in props {
+                    self.prop(p, &known, seen);
+                }
+            }
+            Prop::Or(props) => {
                 for p in props {
                     self.prop(p, known, seen);
                 }
@@ -466,12 +568,26 @@ impl Walker<'_> {
                 self.prop(left, known, seen);
                 self.prop(right, known, seen);
             }
-            Prop::Not(p) | Prop::Exists { body: p, .. } | Prop::Pre(p) => {
-                self.prop(p, known, seen);
+            Prop::Not(p) | Prop::Pre(p) => self.prop(p, known, seen),
+            Prop::Exists { binding, body } => {
+                let mut inner = known.clone();
+                inner.remove(binding);
+                self.prop(body, &inner, seen);
             }
-            Prop::Forall { source, body, .. } => {
+            Prop::Forall {
+                binding,
+                source,
+                body,
+            } => {
                 self.prop(source, known, seen);
-                self.prop(body, known, seen);
+                let mut inner = known.clone();
+                inner.remove(binding);
+                if let Prop::In(Term::Var(x), Term::Var(collection)) = &**source
+                    && x == binding
+                {
+                    self.element(binding, collection, &mut inner);
+                }
+                self.prop(body, &inner, seen);
             }
             Prop::Eq(l, r)
             | Prop::Neq(l, r)

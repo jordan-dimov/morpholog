@@ -22,9 +22,12 @@
 //! resolved against the whole state. The hostile fragments cover each
 //! way a coordinate can be known (a parameter, the actor, a literal, a
 //! definition's parameter passed a known argument, a value an earlier
-//! `bind` found) and each way it cannot (a key a `let` produces, a
-//! rebound parameter, a pattern beside a keyed one that fixes nothing, a
-//! read before the bind that would key it).
+//! `bind` found, an element of a collection parameter a `for`, a
+//! `forall` or a membership test ranges over) and each way it cannot (a
+//! key a `let` produces, a rebound parameter, a pattern beside a keyed
+//! one that fixes nothing, a read before the bind that would key it, a
+//! membership test behind a conjunct that can raise, a loop binding a
+//! `let` replaces).
 //!
 //! Generated states seldom let a `bind` match, so the dependent reads
 //! are also exercised over built states where every link of a chain
@@ -282,6 +285,174 @@ transformation clear(k):
     require cleared(who)
     retract Flag(who, _)
     admit Out(k)
+",
+    ),
+    // An element of a collection parameter keys a read, through a `for`,
+    // a `forall ... in`, or a membership test beside a pattern; the
+    // fragments after the first four are the ways it does not.
+    (
+        "for_over_parameter",
+        "program for_over_parameter
+predicate Stock(item: Subject, n: Decimal)
+predicate Held(item: Subject)
+predicate Out(t: Subject)
+transformation merge(t, others):
+    for o in others:
+        require Held(o)
+        retract Stock(o, _)
+    admit Out(t)
+",
+    ),
+    (
+        "forall_in_parameter",
+        "program forall_in_parameter
+predicate Stock(item: Subject, n: Decimal)
+predicate Out(t: Subject)
+transformation merge(t, others):
+    require all_stocked: forall o in others: Stock(o, _)
+    admit Out(t)
+",
+    ),
+    (
+        "member_in_negated_exists",
+        "program member_in_negated_exists
+predicate Alloc(a: Subject, item: Subject)
+predicate Out(t: Subject)
+transformation merge(t, others, listed):
+    require every_listed: not (exists a: Alloc(a, i) and i in others and not (a in listed))
+    admit Out(t)
+",
+    ),
+    (
+        "member_in_sum",
+        "program member_in_sum
+predicate Stock(item: Subject, n: Decimal)
+predicate Total(t: Subject, n: Decimal)
+transformation merge(t, others):
+    let added = sum(q | Stock(o, q) and o in others)
+    admit Total(t, added)
+",
+    ),
+    (
+        "member_before_pattern",
+        "program member_before_pattern
+predicate Stock(item: Subject, n: Decimal)
+predicate Out(t: Subject)
+transformation merge(t, others):
+    require some: exists o: o in others and Stock(o, _)
+    admit Out(t)
+",
+    ),
+    (
+        "member_after_raising",
+        "program member_after_raising
+predicate Stock(item: Subject, q: Decimal)
+predicate Out(t: Subject)
+transformation check(t, others):
+    require exists x: Stock(x, q) and 1 / q > 0 and x in others
+    admit Out(t)
+",
+    ),
+    (
+        "negated_membership",
+        "program negated_membership
+predicate Stock(item: Subject, n: Decimal)
+predicate Out(t: Subject)
+transformation merge(t, others):
+    require none_outside: not (exists o: Stock(o, _) and not (o in others))
+    admit Out(t)
+",
+    ),
+    (
+        "membership_under_or",
+        "program membership_under_or
+predicate Stock(item: Subject, n: Decimal)
+predicate Out(t: Subject)
+transformation merge(t, others):
+    require some: exists o: Stock(o, _) and (o in others or o = t)
+    admit Out(t)
+",
+    ),
+    (
+        "for_over_let_collection",
+        "program for_over_let_collection
+predicate Items(t: Subject, items: Collection)
+predicate Stock(item: Subject, n: Decimal)
+predicate Out(t: Subject)
+transformation merge(t):
+    let items = value Items(t, _)
+    for o in items:
+        require Stock(o, _)
+    admit Out(t)
+",
+    ),
+    (
+        "collection_rebound_by_let",
+        "program collection_rebound_by_let
+predicate Items(t: Subject, items: Collection)
+predicate Stock(item: Subject, n: Decimal)
+predicate Out(t: Subject)
+transformation merge(t, others):
+    let others = value Items(t, _) default others
+    for o in others:
+        require Stock(o, _)
+    admit Out(t)
+",
+    ),
+    (
+        "loop_binding_rebound_by_let",
+        "program loop_binding_rebound_by_let
+predicate Stock(item: Subject)
+predicate Out(t: Subject)
+transformation check(t, others):
+    for o in others:
+        let o = #outside
+        require Stock(o)
+    admit Out(t)
+",
+    ),
+    (
+        "loop_binding_read_after_loop",
+        "program loop_binding_read_after_loop
+predicate Stock(item: Subject, n: Decimal)
+predicate Done(item: Subject)
+predicate Out(t: Subject)
+transformation merge(t, others):
+    for o in others:
+        require Stock(o, _)
+    require Done(o)
+    admit Out(t)
+",
+    ),
+    // A loop binding named like an earlier bind's variable is the loop's
+    // element inside the loop, not the bind's value.
+    (
+        "loop_binding_shadows_bind_field",
+        "program loop_binding_shadows_bind_field
+predicate Link(t: Subject, o: Subject)
+predicate Stock(item: Subject)
+predicate Out(t: Subject)
+transformation check(t, others):
+    bind Link(t, o)
+    for o in others:
+        require Stock(o)
+    admit Out(t)
+",
+    ),
+    // An inner loop over a collection the body computed reuses the outer
+    // loop's name: inside it the name is the inner loop's, unknown.
+    (
+        "nested_loop_rebinds_the_name",
+        "program nested_loop_rebinds_the_name
+predicate Items(t: Subject, items: Collection)
+predicate Stock(item: Subject)
+predicate Out(t: Subject)
+transformation check(t, others):
+    let more = value Items(t, _)
+    for o in others:
+        for o in more:
+            require Stock(o)
+    admit Out(t)
 ",
     ),
     // A key produced by `let` is unknown before the body runs.
@@ -643,8 +814,225 @@ fn the_read_plan_keys_what_the_body_fixes_and_nothing_else() {
     assert_eq!(p.reads[&"P".into()], ReadFilter::Whole);
     assert_eq!(p.admits[&"Out".into()], ReadFilter::Whole);
     let p = plan("parameter_rebound_by_for", "t");
-    assert_eq!(p.reads[&"P".into()], ReadFilter::Whole);
+    assert_eq!(
+        p.reads[&"P".into()],
+        keyed(&[&[(0, KnownTerm::Element("items".into()))]]),
+        "inside the loop the name is the loop's element, whatever it was outside"
+    );
     assert_eq!(p.admits[&"Out".into()], ReadFilter::Whole);
+
+    let element = |p: &str| KnownTerm::Element(p.into());
+    let p = plan("for_over_parameter", "merge");
+    assert_eq!(p.reads[&"Held".into()], keyed(&[&[(0, element("others"))]]));
+    assert_eq!(
+        p.reads[&"Stock".into()],
+        keyed(&[&[(0, element("others"))]])
+    );
+    let p = plan("forall_in_parameter", "merge");
+    assert_eq!(
+        p.reads[&"Stock".into()],
+        keyed(&[&[(0, element("others"))]])
+    );
+    let p = plan("member_in_negated_exists", "merge");
+    assert_eq!(
+        p.reads[&"Alloc".into()],
+        keyed(&[&[(1, element("others"))]])
+    );
+    let p = plan("member_in_sum", "merge");
+    assert_eq!(
+        p.reads[&"Stock".into()],
+        keyed(&[&[(0, element("others"))]])
+    );
+    let p = plan("member_before_pattern", "merge");
+    assert_eq!(
+        p.reads[&"Stock".into()],
+        keyed(&[&[(0, element("others"))]])
+    );
+    for (fragment, transformation) in [
+        ("member_after_raising", "check"),
+        ("negated_membership", "merge"),
+        ("membership_under_or", "merge"),
+        ("for_over_let_collection", "merge"),
+        ("collection_rebound_by_let", "merge"),
+        ("loop_binding_rebound_by_let", "check"),
+    ] {
+        let p = plan(fragment, transformation);
+        assert_eq!(
+            p.reads[&"Stock".into()],
+            ReadFilter::Whole,
+            "{fragment}: no element key here"
+        );
+    }
+    let p = plan("loop_binding_read_after_loop", "merge");
+    assert_eq!(
+        p.reads[&"Stock".into()],
+        keyed(&[&[(0, element("others"))]])
+    );
+    assert_eq!(p.reads[&"Done".into()], ReadFilter::Whole);
+    let p = plan("loop_binding_shadows_bind_field", "check");
+    assert_eq!(
+        p.reads[&"Stock".into()],
+        keyed(&[&[(0, element("others"))]]),
+        "the loop's name wins over the bind's inside the loop"
+    );
+    let p = plan("nested_loop_rebinds_the_name", "check");
+    assert_eq!(
+        p.reads[&"Stock".into()],
+        ReadFilter::Whole,
+        "inside the inner loop the name is the inner loop's"
+    );
+}
+
+/// Stage one transformation of a hostile fragment over `full` and over
+/// its body-only projection; both must show the same.
+fn stage_over(
+    fragment: &str,
+    args: Vec<morpholog_core::EvalValue>,
+    full: Vec<morpholog_core::ClaimInstance>,
+) -> (String, State) {
+    let program = hostile_program(fragment);
+    let t = &program.transformations[0];
+    let prepared = morpholog_test_support::prepare(&program);
+    let full = State::from_claims(full);
+    let transition = morpholog_core::Transition {
+        transformation_name: t.name.clone(),
+        args,
+        actor: morpholog_test_support::test_actor(),
+        decided_at: None,
+    };
+    let scope = compute_load_scope(
+        t,
+        Some(&transition),
+        &program.invariants,
+        &program.definitions,
+        Reads::Body,
+    );
+    let projected = project(&full, &scope);
+    let on_full = prepared
+        .stage_delta(&transition, &full, &mut same_subjects())
+        .map(|staged| staged.expect("the transformation is declared"));
+    let on_projected = prepared
+        .stage_delta(&transition, &projected, &mut same_subjects())
+        .map(|staged| staged.expect("the transformation is declared"));
+    let shown = staged_observable(&on_full);
+    assert_eq!(
+        shown,
+        staged_observable(&on_projected),
+        "{fragment}: the projection changed the staged delta (scope: {scope:?})"
+    );
+    (shown, projected)
+}
+
+/// Three held items in stock, two of them in the collection: the loop
+/// runs over two, the projection holds two of three, and the act stages.
+#[test]
+fn a_loop_over_a_collection_parameter_reads_only_its_elements() {
+    use morpholog_test_support::{claim_instance, coll, dec, subj};
+    let full = vec![
+        claim_instance("Held", &[subj("i1")]),
+        claim_instance("Held", &[subj("i2")]),
+        claim_instance("Held", &[subj("i3")]),
+        claim_instance("Stock", &[subj("i1"), dec(5)]),
+        claim_instance("Stock", &[subj("i2"), dec(5)]),
+        claim_instance("Stock", &[subj("i3"), dec(5)]),
+    ];
+    let (shown, projected) = stage_over(
+        "for_over_parameter",
+        vec![subj("t"), coll(vec![subj("i1"), subj("i2")])],
+        full.clone(),
+    );
+    assert!(shown.starts_with("staged:"), "{shown}");
+    assert_eq!(projected.claims_for("Stock").count(), 2);
+    assert_eq!(projected.claims_for("Held").count(), 2);
+
+    // An empty collection: the loop runs over nothing, the load holds nothing.
+    let (shown, projected) = stage_over(
+        "for_over_parameter",
+        vec![subj("t"), coll(vec![])],
+        full.clone(),
+    );
+    assert!(shown.starts_with("staged:"), "{shown}");
+    assert_eq!(projected.claims().len(), 0);
+
+    // A duplicate element: the kernel iterates it twice, the load holds it once.
+    let (shown, projected) = stage_over(
+        "for_over_parameter",
+        vec![subj("t"), coll(vec![subj("i1"), subj("i1")])],
+        full,
+    );
+    assert!(shown.starts_with("staged:"), "{shown}");
+    assert_eq!(projected.claims_for("Stock").count(), 1);
+}
+
+/// The merge act's own shape: a positive membership test inside a
+/// negated existential narrows the pattern beside it.
+#[test]
+fn a_membership_test_inside_a_negated_existential_keys_its_pattern() {
+    use morpholog_test_support::{claim_instance, coll, subj};
+    let full = vec![
+        claim_instance("Alloc", &[subj("a1"), subj("i1")]),
+        claim_instance("Alloc", &[subj("a2"), subj("i2")]),
+        claim_instance("Alloc", &[subj("a3"), subj("i3")]),
+    ];
+    // a1 is listed, so the gate holds; a3's item is outside and never read.
+    let (shown, projected) = stage_over(
+        "member_in_negated_exists",
+        vec![subj("t"), coll(vec![subj("i1")]), coll(vec![subj("a1")])],
+        full.clone(),
+    );
+    assert!(shown.starts_with("staged:"), "{shown}");
+    assert_eq!(projected.claims_for("Alloc").count(), 1);
+    // a2 is in the collection and unlisted, so the gate refuses, alike.
+    let (shown, _) = stage_over(
+        "member_in_negated_exists",
+        vec![
+            subj("t"),
+            coll(vec![subj("i1"), subj("i2")]),
+            coll(vec![subj("a1")]),
+        ],
+        full,
+    );
+    assert!(shown.starts_with("rejected:"), "{shown}");
+}
+
+/// A row outside the collection makes a conjunct raise before the
+/// membership test is reached. The whole state errors; a load that
+/// dropped the row would reject instead. The plan keeps the read whole.
+#[test]
+fn a_membership_test_behind_a_raising_conjunct_keeps_the_error_observable() {
+    use morpholog_test_support::{claim_instance, coll, dec, subj};
+    let full = vec![
+        claim_instance("Stock", &[subj("outside"), dec(0)]),
+        claim_instance("Stock", &[subj("inside"), dec(5)]),
+    ];
+    let (shown, projected) = stage_over(
+        "member_after_raising",
+        vec![subj("t"), coll(vec![subj("inside")])],
+        full,
+    );
+    assert!(
+        shown.starts_with("error:"),
+        "the division by zero must surface: {shown}"
+    );
+    assert_eq!(projected.claims_for("Stock").count(), 2);
+}
+
+/// A `let` in the loop replaces the loop's value, so the read it keys is
+/// of the replacement, which the collection never named.
+#[test]
+fn a_loop_binding_a_let_replaces_reads_through_the_replacement() {
+    use morpholog_test_support::{claim_instance, coll, subj};
+    let full = vec![claim_instance("Stock", &[subj("outside")])];
+    let (shown, projected) = stage_over(
+        "loop_binding_rebound_by_let",
+        vec![subj("t"), coll(vec![subj("inside")])],
+        full,
+    );
+    assert!(
+        shown.starts_with("staged:"),
+        "the replaced value finds its row: {shown}"
+    );
+    assert_eq!(projected.claims_for("Stock").count(), 1);
 }
 
 /// A parameter rebound by `let` reads through its new value: with a link
@@ -1001,4 +1389,41 @@ fn a_mixed_execution_loads_only_what_its_interpreted_invariants_read() {
         scope.filters.get(&"Big".into()),
         Some(&crate::propose::LoadFilter::Whole)
     );
+}
+
+/// The link names one item, the collection another: the loop reads the
+/// collection's, and a load keyed by the link's would miss it.
+#[test]
+fn a_loop_binding_shadowing_a_bind_field_reads_the_elements() {
+    use morpholog_test_support::{claim_instance, coll, subj};
+    let full = vec![
+        claim_instance("Link", &[subj("t"), subj("linked")]),
+        claim_instance("Stock", &[subj("i1")]),
+    ];
+    let (shown, projected) = stage_over(
+        "loop_binding_shadows_bind_field",
+        vec![subj("t"), coll(vec![subj("i1")])],
+        full,
+    );
+    assert!(shown.starts_with("staged:"), "{shown}");
+    assert_eq!(projected.claims_for("Stock").count(), 1);
+}
+
+/// The outer loop names one item, the inner loop's computed collection
+/// another: the read is of the inner one, which a key from the outer
+/// loop would miss.
+#[test]
+fn a_nested_loop_reusing_the_name_reads_its_own_collection() {
+    use morpholog_test_support::{claim_instance, coll, subj};
+    let full = vec![
+        claim_instance("Items", &[subj("t"), coll(vec![subj("i2")])]),
+        claim_instance("Stock", &[subj("i2")]),
+    ];
+    let (shown, projected) = stage_over(
+        "nested_loop_rebinds_the_name",
+        vec![subj("t"), coll(vec![subj("i1")])],
+        full,
+    );
+    assert!(shown.starts_with("staged:"), "{shown}");
+    assert_eq!(projected.claims_for("Stock").count(), 1);
 }
