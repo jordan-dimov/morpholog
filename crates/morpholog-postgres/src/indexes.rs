@@ -81,6 +81,9 @@ pub enum NeedKind {
     /// The transformation's reads, or the check that an admit is new,
     /// seek on it.
     Transformation,
+    /// The derived claim's live view seeks on it at a join or a literal;
+    /// without it each row's sum scans its predicate.
+    Derived,
 }
 
 impl fmt::Display for NeedKind {
@@ -88,6 +91,7 @@ impl fmt::Display for NeedKind {
         f.write_str(match self {
             NeedKind::Invariant => "invariant",
             NeedKind::Transformation => "transformation",
+            NeedKind::Derived => "derived",
         })
     }
 }

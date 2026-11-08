@@ -278,7 +278,7 @@ fn out_and_describe_together_write_both() {
     let sql = std::fs::read_to_string(&out).unwrap();
     let surface: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&described).unwrap()).unwrap();
-    assert_eq!(surface["format"], 1);
+    assert_eq!(surface["format"], 2);
     let hash = surface["model_hash"].as_str().unwrap();
     assert!(sql.contains(&format!("-- model hash: {hash}")));
     for view in surface["views"].as_array().unwrap() {
@@ -345,4 +345,101 @@ fn a_refusal_writes_no_description() {
         .unwrap();
     assert!(!result.status.success());
     assert!(!out.exists() && !described.exists());
+}
+
+const LIVE_FIXTURE: &str = "program live_fixture
+predicate Part(part: Subject)
+predicate StockItem(item: Subject, part: Subject, quantity: Decimal)
+predicate SalesAllocation(allocation: Subject, item: Subject, quantity: Decimal)
+predicate PartAllocated(part: Subject, quantity: Decimal)
+derived PartAllocated(part):
+    over Part(part: part)
+    value quantity = sum(q | SalesAllocation(_, i, q) and StockItem(i, part, _))
+transformation allocate(allocation, item, quantity):
+    admit SalesAllocation(allocation, item, quantity)
+";
+
+/// `--derived live` renders a derived view from its definition and the
+/// description says so; the default stays the cache, byte for byte.
+#[test]
+fn derived_live_renders_from_the_definition_and_describes_it() {
+    let (dir, file) = refusal_fixture(LIVE_FIXTURE);
+    let described = dir.path().join("views.json");
+    let live = Command::new(bin())
+        .args([
+            "generate",
+            "views",
+            file.to_str().unwrap(),
+            "--derived",
+            "live",
+            "--describe",
+            described.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        live.status.success(),
+        "{}",
+        String::from_utf8_lossy(&live.stderr)
+    );
+    let sql = String::from_utf8(live.stdout).unwrap();
+    assert!(
+        sql.contains("computed from its definition at read time"),
+        "{sql}"
+    );
+    assert!(sql.contains("SELECT DISTINCT ON ("), "{sql}");
+    assert!(
+        !sql.contains("morpholog_read."),
+        "a live view never reads the cache"
+    );
+    let surface: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&described).unwrap()).unwrap();
+    let derived: Vec<&serde_json::Value> = surface["views"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|v| v["kind"] == "derived")
+        .collect();
+    assert_eq!(derived[0]["source"], "live");
+    assert_eq!(derived[0]["columns"][1]["name"], "_morpholog_error");
+
+    let cached = Command::new(bin())
+        .args(["generate", "views", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let cached_sql = String::from_utf8(cached.stdout).unwrap();
+    assert!(
+        cached_sql.contains("morpholog_read.derived_claims"),
+        "the default reads the cache"
+    );
+    assert!(!cached_sql.contains("DISTINCT ON"));
+}
+
+/// A derived claim the renderer cannot express refuses the live run by
+/// name, with the reason and the way out, and writes nothing; the
+/// trade-lifecycle gallery programme's value lookup is one.
+#[test]
+fn derived_live_refuses_a_definition_outside_the_fragment_by_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("views.sql");
+    let result = Command::new(bin())
+        .args([
+            "generate",
+            "views",
+            trade_lifecycle().to_str().unwrap(),
+            "--derived",
+            "live",
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    let stderr = String::from_utf8(result.stderr).unwrap();
+    assert!(
+        stderr.contains("derived `TermsTimeline` cannot be read live: `value lookup` is outside the compiled fragment; keep `--derived cache` or respell it"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("nothing was written"));
+    assert!(!out.exists());
 }

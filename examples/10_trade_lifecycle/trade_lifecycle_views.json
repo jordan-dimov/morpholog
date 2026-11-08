@@ -1,5 +1,5 @@
 {
-  "format": 1,
+  "format": 2,
   "programme": "trade_lifecycle",
   "model_hash": "sha256:7b63dc6b0e8f297af212deede33ac714cda6418f67b0691320a5ae569496dbb5",
   "schema": "morpholog_views",
@@ -548,6 +548,7 @@
       "predicate": "TermsTimeline",
       "view": "terms_timeline",
       "kind": "derived",
+      "source": "cache",
       "columns": [
         {
           "name": "_morpholog_refreshed_at",

@@ -463,6 +463,13 @@ pub(crate) struct GenerateBusinessDaysArgs {
     pub(crate) holidays: PathBuf,
 }
 
+/// Where `generate views` reads a derived predicate's view from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum DerivedSourceArg {
+    Cache,
+    Live,
+}
+
 /// Arguments for `generate views`.
 #[derive(clap::Args, Debug)]
 pub(crate) struct GenerateViewsArgs {
@@ -478,6 +485,14 @@ pub(crate) struct GenerateViewsArgs {
     /// Write the SQL script to this file instead of stdout.
     #[arg(long)]
     pub(crate) out: Option<PathBuf>,
+
+    /// Where a derived predicate's view reads from: `cache`, the
+    /// `morpholog_read` cache that `refresh derived` fills (the default,
+    /// unchanged), or `live`, the claims themselves, computed from the
+    /// derived claim's definition at read time. Under `live` a definition
+    /// the renderer cannot express refuses the run by name.
+    #[arg(long, value_enum, default_value_t = DerivedSourceArg::Cache)]
+    pub(crate) derived: DerivedSourceArg,
 
     /// Also write a description of the generated views to this file, as
     /// JSON: every view with its columns in order, each column's Morpholog

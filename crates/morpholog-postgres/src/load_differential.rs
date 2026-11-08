@@ -36,7 +36,7 @@ async fn reset_db(pool: &PgPool) {
         .expect("failed to truncate test DB");
 }
 
-async fn seed(pool: &PgPool, claims: &[ClaimInstance]) {
+pub(crate) async fn seed(pool: &PgPool, claims: &[ClaimInstance]) {
     for claim in claims {
         sqlx::query(
             "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in) VALUES ($1, $2, $3)

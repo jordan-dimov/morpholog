@@ -1784,6 +1784,26 @@ fn columns(env: &Env) -> BTreeMap<Var, ColRef> {
         .collect()
 }
 
+impl<'a> Ctx<'a> {
+    /// A rendering context at the top of a body: outside any sum or
+    /// consequent, nothing pending.
+    fn fresh(
+        decls: &'a BTreeMap<&'a str, &'a PredicateDecl>,
+        defs: &'a BTreeMap<&'a str, &'a Definition>,
+    ) -> Self {
+        Ctx {
+            decls,
+            defs,
+            in_sum: false,
+            in_consequent: false,
+            counter: 0,
+            required: BTreeSet::new(),
+            pending: Vec::new(),
+            values: Vec::new(),
+        }
+    }
+}
+
 struct Ctx<'a> {
     decls: &'a BTreeMap<&'a str, &'a PredicateDecl>,
     defs: &'a BTreeMap<&'a str, &'a Definition>,
@@ -3482,6 +3502,8 @@ fn literal_operand(value: &Value) -> Result<Operand, CompileReason> {
 }
 
 mod arith;
+mod live;
+pub(crate) use live::{LIVE_METADATA, compile_derived};
 
 #[cfg(test)]
 mod tests;

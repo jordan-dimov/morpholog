@@ -12,8 +12,8 @@ mod sql_views;
 pub mod testing;
 
 pub use sql_views::{
-    ColumnDescription, RenderedViews, VIEW_SURFACE_FORMAT, ViewDescription, ViewRefusal,
-    ViewSurface, render_views,
+    ColumnDescription, DerivedSource, RenderedViews, VIEW_SURFACE_FORMAT, ViewDescription,
+    ViewRefusal, ViewSurface, render_views,
 };
 
 pub use sqlx::PgPool;
@@ -35,6 +35,8 @@ mod compiled_differential;
 #[cfg(test)]
 mod compiled_plan_shapes;
 mod derived;
+#[cfg(test)]
+mod derived_differential;
 mod error;
 mod history;
 mod indexes;
