@@ -107,7 +107,8 @@ and who it really is must be settled at the integration boundary.
 
 The forms: `implies`, `and`, `or`, `not`, `xor`, `forall x in source:
 body`, `exists x: body`, `pre(...)` for the state before the change,
-`x in xs` for membership, and the comparators. `exists` names one
+`x in xs` for membership, `x in (#open, #held)` for one of a list
+written out, and the comparators. `exists` names one
 variable: in `exists r: Report(r, t, o) and ...` the pattern binds `t`
 and `o` as well, because a claim pattern binds every free variable it
 meets, so `exists r, t, o:` is not a form. A rule may open with

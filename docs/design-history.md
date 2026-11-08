@@ -1367,3 +1367,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** the InvenTree spike (#722). `Bool` was a field kind and a runtime value, but no rule could compare one with a value the programme wrote, so a flag such as `allow_incomplete` was passed as `#yes` or `#no`.
 
 **Landed:** `Value::Bool`, spelled `true` and `false`, accepted wherever a literal is. It narrows an invariant's cases as a subject literal does. A Bool is compared for equality only; a bare one is still not a proposition. No existing programme's IR or hash changes, so the semantics version stays.
+
+### One of a list, written out
+
+**Forced by:** the InvenTree spike (#729). An open order was one of four statuses, written `s = #pending or s = #on_hold or s = #in_progress or s = #shipped`; the gallery wrote the same chain two-way twice.
+
+**Landed:** `x in (a, b, ...)`, rewritten by the parser to the `or` chain of equalities, so the kernel, the compiled checks and the analyses see nothing new and a rule that switches keeps its hash. The two gallery sites switched, and the canonical-identity golden moved only their source digests. A list needs two values, so `x in (xs)` is still membership in a collection. A `const` naming a list is not in this change.

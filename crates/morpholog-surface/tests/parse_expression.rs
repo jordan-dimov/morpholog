@@ -799,6 +799,44 @@ fn in_rejects_arithmetic_operand() {
     );
 }
 
+/// A list written after `in` is the `or` chain of equalities, as IR, so the two spellings are one
+/// rule. Its left side may be any value, as `=`'s may; an element listed twice stays, as it would
+/// in the chain.
+#[test]
+fn a_written_list_after_in_is_the_chain_of_equalities() {
+    for (list, chain) in [
+        (
+            "s in (#pending, #on_hold)",
+            "(s = #pending or s = #on_hold)",
+        ),
+        ("s in (#a, #b, actor)", "(s = #a or s = #b or s = actor)"),
+        ("s in (#a, #a)", "(s = #a or s = #a)"),
+        ("q + 1 in (1, 2)", "(q + 1 = 1 or q + 1 = 2)"),
+    ] {
+        assert_eq!(
+            parse_expression(list).unwrap(),
+            parse_expression(chain).unwrap(),
+            "`{list}`"
+        );
+    }
+}
+
+/// The comma makes the list. Parentheses alone keep membership in a collection, a trailing comma
+/// makes no list of one, and an empty list is refused by name.
+#[test]
+fn only_a_comma_makes_a_list_after_in() {
+    let collection = Prop::In(Term::Var("s".into()), Term::Var("xs".into()));
+    assert_eq!(parse_expression("s in xs").unwrap(), collection);
+    assert_eq!(parse_expression("s in (xs)").unwrap(), collection);
+    parse_expression("s in (xs,)").expect_err("a trailing comma is no list");
+    let errs = parse_expression("s in ()").expect_err("an empty list");
+    assert!(
+        errs.iter()
+            .any(|d| d.message.contains("`in ()` lists nothing")),
+        "{errs:?}"
+    );
+}
+
 // ---- exists (no source clause) ----
 
 #[test]
