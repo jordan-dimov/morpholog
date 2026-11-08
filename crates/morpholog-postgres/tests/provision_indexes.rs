@@ -16,9 +16,10 @@ use morpholog_postgres::{
 use sqlx::Row as _;
 
 /// The ledger's requirement: its compiled checks' seeks, the case column
-/// of its lineage check, and the two positions its transformations' gates
-/// key on.
-const LEDGER_INDEXES: usize = 6;
+/// of its lineage check, the two positions its transformations' gates
+/// key on, and the derived trial-balance row's join on the journal
+/// line's account, which a live view seeks on.
+const LEDGER_INDEXES: usize = 7;
 
 fn ledger() -> PgProgram {
     pg_program(double_entry_ledger::program())

@@ -1784,6 +1784,31 @@ fn columns(env: &Env) -> BTreeMap<Var, ColRef> {
         .collect()
 }
 
+impl<'a> Ctx<'a> {
+    /// A rendering context at the top of a body: outside any sum or
+    /// consequent, nothing pending.
+    fn fresh(
+        decls: &'a BTreeMap<&'a str, &'a PredicateDecl>,
+        defs: &'a BTreeMap<&'a str, &'a Definition>,
+    ) -> Self {
+        Ctx {
+            decls,
+            defs,
+            in_sum: false,
+            in_consequent: false,
+            binding_calls: false,
+            counter: 0,
+            required: BTreeSet::new(),
+            pending: Vec::new(),
+            values: Vec::new(),
+        }
+    }
+}
+
+/// The prefix of the pseudo-predicate a synthetic table stands under: a
+/// name no declaration can carry, so its columns register no index need.
+pub(super) const CALL_TABLE_PREFIX: &str = "_call:";
+
 struct Ctx<'a> {
     decls: &'a BTreeMap<&'a str, &'a PredicateDecl>,
     defs: &'a BTreeMap<&'a str, &'a Definition>,
@@ -1795,6 +1820,11 @@ struct Ctx<'a> {
     /// already made. Cleared under `not`, `exists`, a sum and a nested
     /// implication.
     in_consequent: bool,
+    /// A defined call that binds under a sum may render as the distinct
+    /// projection of its body's branches: a live derived view's body,
+    /// which reports no witness; an invariant's diagnosis reads claim
+    /// aliases, so there it stays refused.
+    binding_calls: bool,
     counter: usize,
     /// Every (predicate, position) the SQL seeks on, collected where the
     /// seek is emitted: the index specification.
@@ -2158,16 +2188,7 @@ fn compile_invariant(
     defs: &BTreeMap<&str, &Definition>,
     definitions: &[Definition],
 ) -> Result<CompiledInvariant, CompileReason> {
-    let mut ctx = Ctx {
-        decls,
-        defs,
-        in_sum: false,
-        in_consequent: false,
-        counter: 0,
-        required: BTreeSet::new(),
-        pending: Vec::new(),
-        values: Vec::new(),
-    };
+    let mut ctx = Ctx::fresh(decls, defs);
 
     let (select_from_where, order_limit, error, case_cols, diagnosis) = match &inv.body {
         Prop::Implies { left, right } => compile_denial(left, right, &mut ctx)?,
@@ -2694,6 +2715,13 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
         },
         Prop::Or(branches) => {
             if !ctx.in_consequent {
+                if let Some(test) = exclusive_literal_test(branches, &env, ctx)? {
+                    return Ok(Rendered {
+                        where_: vec![test],
+                        env,
+                        ..Rendered::default()
+                    });
+                }
                 return Err(CompileReason::Construct { construct: "or" });
             }
             // Each branch is its own scope under the bindings on entry;
@@ -2787,10 +2815,32 @@ fn render_defined(
     ctx: &mut Ctx<'_>,
 ) -> Result<Rendered, CompileReason> {
     if ctx.in_sum {
-        // A sum observes how many witnesses a call has; the kernel yields
-        // each projection once.
-        return Err(CompileReason::SumShape {
-            detail: "a defined call under a sum",
+        // A sum observes how many witnesses a call has, and the kernel
+        // yields each distinct projection once. With every argument
+        // bound there is one projection, so the call is a truth test and
+        // counts each outer witness once, as the kernel does. A call that
+        // binds has as many projections as distinct bindings, which a
+        // join does not reproduce.
+        if args
+            .iter()
+            .any(|arg| matches!(arg, Term::Var(x) if !env.contains_key(x)))
+        {
+            if ctx.binding_calls {
+                return render_binding_call(name, args, env, ctx);
+            }
+            return Err(CompileReason::SumShape {
+                detail: "a defined call under a sum that binds a parameter",
+            });
+        }
+        let (def, frame) = call_frame(name, args, &env, ctx)?;
+        let r = nested_scope(outside_consequent(ctx, |ctx| {
+            render_prop(&def.body, frame, ctx)
+        })?)?;
+        return Ok(Rendered {
+            where_: vec![r.exists_sql()],
+            probes: lifted_scopes(&r.probes),
+            env,
+            ..Rendered::default()
         });
     }
     let (def, frame) = call_frame(name, args, &env, ctx)?;
@@ -2863,6 +2913,156 @@ fn render_defined(
         closes_scope: truth.closes_scope,
         disjoins: truth.disjoins,
         stages: Vec::new(),
+    })
+}
+
+/// An `or` of equalities of one bound variable against distinct literals,
+/// the shape `x in (a, b)` desugars to, as one SQL test. The kernel keeps
+/// every branch's matches, so an `or` whose branches can hold together
+/// counts a witness once per holding branch, where a SQL `OR` counts it
+/// once; equalities of one variable against distinct literals hold one
+/// at a time, so the two agree. Anything else is not this shape.
+fn exclusive_literal_test(
+    branches: &[Prop],
+    env: &Env,
+    ctx: &mut Ctx<'_>,
+) -> Result<Option<String>, CompileReason> {
+    let mut variable: Option<&Var> = None;
+    let mut literals: Vec<EvalValue> = Vec::new();
+    let mut tests = Vec::new();
+    for branch in branches {
+        let Prop::Eq(a, b) = branch else {
+            return Ok(None);
+        };
+        let ((ValueExpr::Term(Term::Var(x)), ValueExpr::Term(Term::Literal(value)))
+        | (ValueExpr::Term(Term::Literal(value)), ValueExpr::Term(Term::Var(x)))) =
+            (a.as_ref(), b.as_ref())
+        else {
+            return Ok(None);
+        };
+        if variable.is_some_and(|seen| seen != x) || !env.contains_key(x) {
+            return Ok(None);
+        }
+        variable = Some(x);
+        let value = EvalValue::from(value);
+        if literals.contains(&value) {
+            return Err(CompileReason::DisjunctionShape {
+                detail: "a literal repeated in an `or` of equalities, which the kernel counts twice",
+            });
+        }
+        literals.push(value);
+        let rendered = equality_sql(a, b, false, env, ctx)?;
+        tests.push(rendered.conjunction());
+    }
+    Ok(Some(format!("({})", tests.join(" OR "))))
+}
+
+/// A defined call under a sum that binds a parameter, as the kernel
+/// counts it: each distinct projection of the call's arguments once. The
+/// body's branches (the disjuncts of an `or`, or the body itself) each
+/// render under the call frame and project the parameters as one tagged
+/// array; their `UNION ALL` is the kernel's concatenation of matches, and
+/// `DISTINCT ON` the projection's keys is its deduplication, by the
+/// kernel's equality. The unbound arguments then read the synthetic
+/// table's columns as a claim's. A branch that can raise refuses, as any
+/// raising scope under a sum does.
+fn render_binding_call(
+    name: &DefinitionName,
+    args: &[Term],
+    env: Env,
+    ctx: &mut Ctx<'_>,
+) -> Result<Rendered, CompileReason> {
+    let (def, frame) = call_frame(name, args, &env, ctx)?;
+    let branches: Vec<&Prop> = match &def.body {
+        Prop::Or(branches) => branches.iter().collect(),
+        body => vec![body],
+    };
+    let mut selects = Vec::with_capacity(branches.len());
+    let mut kinds: Vec<Option<PredicateArgKind>> = vec![None; def.parameters.len()];
+    for branch in branches {
+        let r = nested_scope(outside_consequent(ctx, |ctx| {
+            render_prop(branch, frame.clone(), ctx)
+        })?)?;
+        if r.has_errors() {
+            return Err(CompileReason::SumShape {
+                detail: "a defined call under a sum whose body can raise",
+            });
+        }
+        if r.from.is_empty() {
+            return Err(CompileReason::SumShape {
+                detail: "a defined call under a sum binding from no claim",
+            });
+        }
+        let mut parts = Vec::with_capacity(def.parameters.len());
+        for (i, param) in def.parameters.iter().enumerate() {
+            match r.env.get(param) {
+                Some(Bound::Col(col)) => {
+                    kinds[i].get_or_insert_with(|| col.kind.clone());
+                    parts.push(tagged_sql(col));
+                }
+                Some(Bound::Lit(value)) => {
+                    let ev = EvalValue::from(value);
+                    kinds[i].get_or_insert_with(|| ev.kind());
+                    parts.push(format!("{}::jsonb", quote_literal(&tagged_json(&ev)?)));
+                }
+                None => {
+                    return Err(CompileReason::UnvalidatedShape {
+                        detail: format!("{name} binds no parameter {param} in a branch"),
+                    });
+                }
+            }
+        }
+        selects.push(format!(
+            "SELECT jsonb_build_array({}) AS arguments FROM {} WHERE {}",
+            parts.join(", "),
+            from_list(&r),
+            r.conjunction()
+        ));
+    }
+    let alias = format!("c{}", ctx.counter);
+    ctx.counter += 1;
+    let pseudo = PredicateName::from(format!("{CALL_TABLE_PREFIX}{name}"));
+    let seeks: Vec<String> = (0..def.parameters.len())
+        .map(|i| seek_expression("u.", i))
+        .collect();
+    let item = format!(
+        "LATERAL (SELECT DISTINCT ON ({seeks}) u.arguments FROM ({union}) u ORDER BY {seeks}) {alias}",
+        seeks = seeks.join(", "),
+        union = selects.join(" UNION ALL ")
+    );
+    let mut env = env;
+    let mut seen: BTreeSet<&Var> = BTreeSet::new();
+    for (i, arg) in args.iter().enumerate() {
+        let Term::Var(x) = arg else {
+            continue;
+        };
+        if env.contains_key(x) {
+            continue;
+        }
+        if !seen.insert(x) {
+            return Err(CompileReason::UnvalidatedShape {
+                detail: format!("{name} called with {x} twice unbound"),
+            });
+        }
+        let kind = kinds[i]
+            .clone()
+            .ok_or_else(|| CompileReason::UnvalidatedShape {
+                detail: format!("{name} binds {x} to no known kind"),
+            })?;
+        env.insert(
+            x.clone(),
+            Bound::Col(ColRef {
+                alias: alias.clone(),
+                predicate: pseudo.clone(),
+                position: i,
+                kind,
+            }),
+        );
+    }
+    Ok(Rendered {
+        from: vec![(alias, pseudo, item)],
+        env,
+        ..Rendered::default()
     })
 }
 
@@ -3416,6 +3616,8 @@ fn literal_operand(value: &Value) -> Result<Operand, CompileReason> {
 }
 
 mod arith;
+mod live;
+pub(crate) use live::{LIVE_METADATA, compile_derived};
 
 #[cfg(test)]
 mod tests;

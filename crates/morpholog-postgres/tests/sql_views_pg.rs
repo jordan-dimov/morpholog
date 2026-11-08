@@ -91,9 +91,14 @@ async fn seed_fixture(
 }
 
 fn render(p: &Program, schema: &str) -> String {
-    render_views(&p.validated().unwrap(), schema, SENTINEL_HASH)
-        .expect("renders")
-        .sql
+    render_views(
+        &p.validated().unwrap(),
+        schema,
+        SENTINEL_HASH,
+        morpholog_postgres::DerivedSource::Cache,
+    )
+    .expect("renders")
+    .sql
 }
 
 async fn claim_count(pool: &PgPool) -> i64 {

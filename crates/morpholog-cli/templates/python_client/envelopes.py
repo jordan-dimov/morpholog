@@ -2538,7 +2538,7 @@ class IndexNeed:
         data = _strict("index need", payload, {"program", "kind", "name"})
         return cls(
             program=data.text("program"),
-            kind=data.member("kind", {"invariant", "transformation"}),
+            kind=data.member("kind", {"invariant", "transformation", "derived"}),
             name=data.text("name"),
         )
 
@@ -4390,18 +4390,24 @@ class ViewDescription:
     kind: str
     columns: list[ViewColumn] = field(default_factory=list)
     identity: list[list[str]] = field(default_factory=list)
+    source: str | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> ViewDescription:
         data = _strict(
-            "view_description", payload, {"predicate", "view", "kind", "columns", "identity"}
+            "view_description",
+            payload,
+            {"predicate", "view", "kind", "columns", "identity"},
+            {"source"},
         )
+        source = data.member("source", {"live", "cache"}) if "source" in data else None
         return cls(
             predicate=data.text("predicate"),
             view=data.text("view"),
             kind=data.member("kind", {"base", "derived"}),
             columns=data.array("columns", ViewColumn.from_json),
             identity=data.array("identity", lambda item: parse_list(item, _text_item)),
+            source=source,
         )
 
     def single_key(self) -> str | None:
@@ -4434,12 +4440,12 @@ class ViewSurface:
             payload,
             {"format", "programme", "model_hash", "schema", "catalog", "seal_table", "views"},
         )
-        if data.raw("format") != 1:
+        if data.raw("format") != 2:
             raise EnvelopeError(
-                f"view_surface: format {data.raw('format')!r} is not the 1 this client reads"
+                f"view_surface: format {data.raw('format')!r} is not the 2 this client reads"
             )
         return cls(
-            format=1,
+            format=2,
             programme=data.text("programme"),
             model_hash=_hash(data, "model_hash"),
             schema=data.text("schema"),

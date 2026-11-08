@@ -192,6 +192,15 @@ impl PgProgram {
                 .or_default()
                 .insert((NeedKind::Invariant, invariant.to_string()));
         }
+        // A derived claim the renderer can read live seeks on these,
+        // whether or not this deployment generates its views live: the
+        // index is the same contract either way.
+        for (predicate, position) in crate::sql_views::live_seek_positions(program) {
+            needs
+                .entry(IndexSpec::new(predicate.0, position))
+                .or_default()
+                .insert((NeedKind::Derived, predicate.1));
+        }
         needs
     }
 
@@ -264,6 +273,44 @@ mod tests {
         assert!(matches!(pinned.route(), Route::Interpreted));
         assert!(
             matches!(pinned.plan(), InvariantPlan::Interpreted { refusals } if refusals.is_empty())
+        );
+    }
+
+    /// A derived claim the renderer can read live needs indexes on the
+    /// positions its body seeks, named as the derived claim's, whichever
+    /// source a deployment generates its views from.
+    #[test]
+    fn a_live_derived_claims_seeks_are_index_needs() {
+        let program = morpholog_surface::parse_program(
+            "program derived_needs
+predicate Part(part: Subject)
+predicate StockItem(item: Subject, part: Subject, quantity: Decimal)
+predicate SalesAllocation(allocation: Subject, item: Subject, quantity: Decimal)
+predicate PartAllocated(part: Subject, quantity: Decimal)
+derived PartAllocated(part):
+    over Part(part: part)
+    value quantity = sum(q | SalesAllocation(_, i, q) and StockItem(i, part, _))
+transformation allocate(allocation, item, quantity):
+    admit SalesAllocation(allocation, item, quantity)
+",
+        )
+        .unwrap();
+        let pg = PgProgram::new(PreparedProgram::new(program).unwrap());
+        let derived: Vec<(String, usize)> = pg
+            .index_needs()
+            .iter()
+            .filter(|(_, by)| by.contains(&(NeedKind::Derived, "PartAllocated".to_string())))
+            .map(|(spec, _)| (spec.predicate.to_string(), spec.position))
+            .collect();
+        assert_eq!(
+            derived,
+            [
+                ("Part".to_string(), 0),
+                ("SalesAllocation".to_string(), 1),
+                ("StockItem".to_string(), 0),
+                ("StockItem".to_string(), 1)
+            ],
+            "both sides of each join: the allocation's item to the stock item, the stock item's part to the key"
         );
     }
 }

@@ -25,12 +25,13 @@ def catalogue_rows(described: envelopes.ViewSurface) -> list[tuple[str, str, str
 class ReadingTheDescription(unittest.TestCase):
     def test_reads_every_view_with_typed_columns(self):
         described = surface()
-        self.assertEqual(described.format, 1)
+        self.assertEqual(described.format, 2)
         self.assertEqual(described.programme, "trade_lifecycle")
         self.assertTrue(described.model_hash.startswith("sha256:"))
         self.assertEqual(described.catalog, "_morpholog_catalog")
         kinds = {v.kind for v in described.views}
         self.assertEqual(kinds, {"base", "derived"})
+        self.assertEqual({v.source for v in described.views}, {None, "cache"})
         base = next(v for v in described.views if v.kind == "base")
         self.assertEqual(
             [c.name for c in base.columns[:3]],
@@ -42,7 +43,7 @@ class ReadingTheDescription(unittest.TestCase):
         self.assertTrue(all(c.kind for c in fields))
 
     def test_single_key_is_the_one_single_field_clause_or_none(self):
-        one = envelopes.ViewDescription("P", "p", "base", [], [["item"]])
+        one = envelopes.ViewDescription("P", "p", "base", [], [["item"]])  # noqa: E501
         composite = envelopes.ViewDescription("P", "p", "base", [], [["a", "b"]])
         several = envelopes.ViewDescription("P", "p", "base", [], [["a"], ["b"]])
         none = envelopes.ViewDescription("P", "p", "base", [], [])
@@ -57,7 +58,7 @@ class ReadingTheDescription(unittest.TestCase):
         with self.assertRaises(envelopes.EnvelopeError):
             envelopes.ViewSurface.from_json(payload)
         payload = json.loads(DESCRIPTION.read_text())
-        payload["format"] = 2
+        payload["format"] = 3
         with self.assertRaises(envelopes.EnvelopeError):
             envelopes.ViewSurface.from_json(payload)
 

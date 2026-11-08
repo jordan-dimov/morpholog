@@ -19,13 +19,19 @@ fn decl(name: &str, args: &[(&str, PredicateArgKind)]) -> PredicateDecl {
 fn render_ok(src: &str) -> RenderedViews {
     let program = parse_program(src).expect("fixture parses");
     let validated = program.validated().expect("fixture validates");
-    render_views(&validated, "morpholog_views", "sha256:testhash").expect("renders")
+    render_views(
+        &validated,
+        "morpholog_views",
+        "sha256:testhash",
+        DerivedSource::Cache,
+    )
+    .expect("renders")
 }
 
 fn refusals(src: &str, schema: &str) -> Vec<ViewRefusal> {
     let program = parse_program(src).expect("fixture parses");
     let validated = program.validated().expect("fixture validates");
-    render_views(&validated, schema, "sha256:testhash").expect_err("refuses")
+    render_views(&validated, schema, "sha256:testhash", DerivedSource::Cache).expect_err("refuses")
 }
 
 // ---- snake_case (pinned, acronym-aware) ----
@@ -170,7 +176,13 @@ fn derived_heads_get_a_derived_view_over_the_cache() {
     // predicates read morpholog.claims.
     let program = morpholog_examples::trade_lifecycle::program();
     let validated = program.validated().expect("validates");
-    let r = render_views(&validated, "morpholog_views", "sha256:x").expect("renders");
+    let r = render_views(
+        &validated,
+        "morpholog_views",
+        "sha256:x",
+        DerivedSource::Cache,
+    )
+    .expect("renders");
     assert!(r.base_view_count >= 1 && r.derived_view_count >= 1);
     assert!(
         r.sql
@@ -201,6 +213,8 @@ fn zero_predicates_is_lawful_empty() {
         "sha256:testhash",
         &[],
         &[],
+        &std::collections::BTreeMap::new(),
+        DerivedSource::Cache,
         &std::collections::BTreeMap::new(),
     );
     assert!(views.is_empty());
@@ -349,6 +363,8 @@ fn header_values_cannot_break_out_of_the_comment() {
         "sha256:a\nb",
         &[],
         &[],
+        &std::collections::BTreeMap::new(),
+        DerivedSource::Cache,
         &std::collections::BTreeMap::new(),
     );
     assert!(
@@ -511,7 +527,7 @@ async fn the_applied_views_have_the_described_columns() {
         let validated = program.validated().unwrap();
         let hash = format!("sha256:{}", "0".repeat(64));
         let schema = "described_views";
-        let Ok(rendered) = render_views(&validated, schema, &hash) else {
+        let Ok(rendered) = render_views(&validated, schema, &hash, DerivedSource::Cache) else {
             continue;
         };
         // Safe: the schema name is this test's constant.
@@ -543,4 +559,255 @@ async fn the_applied_views_have_the_described_columns() {
             assert_eq!(rows, described, "{}.{}", program.name, view.view);
         }
     }
+}
+
+const LIVE_SOURCE: &str = "program live_source
+predicate Part(part: Subject)
+predicate StockItem(item: Subject, part: Subject, quantity: Decimal)
+predicate SalesAllocation(allocation: Subject, item: Subject, quantity: Decimal)
+predicate Allocated(item: Subject, quantity: Decimal)
+predicate PartAllocated(part: Subject, quantity: Decimal)
+define allocated_to(allocation, item, quantity):
+    SalesAllocation(allocation, item, quantity)
+derived Allocated(item):
+    over StockItem(item: item, ..)
+    value quantity = sum(q | SalesAllocation(_, item, q))
+derived PartAllocated(part):
+    over Part(part: part)
+    value quantity = sum(q | SalesAllocation(_, i, q) and StockItem(i, part, _))
+";
+
+/// Under `Live`, a derived view is computed from its definition: the
+/// distinct keys of its domain, each value a sum as a lateral, the model
+/// hash and the error column first; the description says `live`, the
+/// cache's provenance columns are gone, and the base views are untouched.
+#[test]
+fn live_derived_views_are_computed_from_their_definitions() {
+    let program = parse_program(LIVE_SOURCE).unwrap();
+    let validated = program.validated().unwrap();
+    let cached = render_views(
+        &validated,
+        "morpholog_views",
+        "sha256:testhash",
+        DerivedSource::Cache,
+    )
+    .unwrap();
+    let live = render_views(
+        &validated,
+        "morpholog_views",
+        "sha256:testhash",
+        DerivedSource::Live,
+    )
+    .unwrap();
+    assert_eq!(live.derived_view_count, 2);
+    let block = live
+        .sql
+        .split("CREATE OR REPLACE VIEW")
+        .find(|b| b.contains("\"allocated\" AS"))
+        .unwrap();
+    assert!(
+        block.contains("WITH live AS ("),
+        "read-only wrapper: {block}"
+    );
+    assert!(block.contains(
+        "SELECT DISTINCT ON (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0)))"
+    ));
+    assert!(block.contains("LATERAL (SELECT COALESCE(sum("));
+    assert!(block.contains("AS \"_morpholog_error\""));
+    assert!(
+        !block.contains("morpholog_read."),
+        "a live view never reads the cache"
+    );
+    let described: Vec<(&str, Option<&str>, Vec<&str>)> = live
+        .surface
+        .views
+        .iter()
+        .filter(|v| v.kind == "derived")
+        .map(|v| {
+            (
+                v.view.as_str(),
+                v.source.as_deref(),
+                v.columns.iter().map(|c| c.name.as_str()).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        described,
+        vec![
+            (
+                "allocated",
+                Some("live"),
+                vec![
+                    "_morpholog_model_hash",
+                    "_morpholog_error",
+                    "item",
+                    "quantity"
+                ]
+            ),
+            (
+                "part_allocated",
+                Some("live"),
+                vec![
+                    "_morpholog_model_hash",
+                    "_morpholog_error",
+                    "part",
+                    "quantity"
+                ]
+            ),
+        ]
+    );
+    let cached_derived: Vec<Option<&str>> = cached
+        .surface
+        .views
+        .iter()
+        .filter(|v| v.kind == "derived")
+        .map(|v| v.source.as_deref())
+        .collect();
+    assert_eq!(cached_derived, vec![Some("cache"), Some("cache")]);
+    assert!(
+        cached
+            .surface
+            .views
+            .iter()
+            .filter(|v| v.kind == "base")
+            .all(|v| v.source.is_none())
+    );
+    // The base views' SQL is the same under both sources.
+    let base_sql = |sql: &str| sql.split("-- View for derived").next().unwrap().to_string();
+    assert_eq!(base_sql(&cached.sql), base_sql(&live.sql));
+}
+
+/// A definition the renderer cannot express refuses the live run by the
+/// derived claim's name, with the renderer's reason, and writes nothing;
+/// the same programme renders from the cache as before.
+#[test]
+fn a_live_derived_claim_outside_the_fragment_refuses_by_name() {
+    let source = format!(
+        "{LIVE_SOURCE}predicate OnHand(item: Subject, quantity: Decimal)
+derived OnHand(item):
+    over StockItem(item: item, ..)
+    value quantity = value StockItem(item: item, quantity: _, ..)
+"
+    );
+    let program = parse_program(&source).unwrap();
+    let validated = program.validated().unwrap();
+    let refused = render_views(
+        &validated,
+        "morpholog_views",
+        "sha256:testhash",
+        DerivedSource::Live,
+    )
+    .expect_err("a value lookup is outside the fragment");
+    assert_eq!(refused.len(), 1);
+    assert_eq!(
+        refused[0].to_string(),
+        "derived `OnHand` cannot be read live: `value lookup` is outside the compiled fragment; keep `--derived cache` or respell it"
+    );
+    assert!(
+        render_views(
+            &validated,
+            "morpholog_views",
+            "sha256:testhash",
+            DerivedSource::Cache
+        )
+        .is_ok()
+    );
+}
+
+/// A definition call that binds under a sum renders, in a live view
+/// only, as the distinct projection of its body's branches: the kernel
+/// counts each distinct projection once, and so does the SQL.
+#[test]
+fn a_binding_call_under_a_sum_renders_live_as_a_distinct_projection() {
+    let source = format!(
+        "{LIVE_SOURCE}predicate Counted(item: Subject, quantity: Decimal)
+derived Counted(item):
+    over StockItem(item: item, ..)
+    value quantity = sum(q | allocated_to(a, item, q))
+"
+    );
+    let program = parse_program(&source).unwrap();
+    let validated = program.validated().unwrap();
+    let live = render_views(
+        &validated,
+        "morpholog_views",
+        "sha256:testhash",
+        DerivedSource::Live,
+    )
+    .expect("a binding call renders live");
+    let block = live
+        .sql
+        .split("CREATE OR REPLACE VIEW")
+        .find(|b| b.contains("\"counted\" AS"))
+        .unwrap();
+    assert!(block.contains("LATERAL (SELECT DISTINCT ON ("), "{block}");
+    assert!(block.contains("jsonb_build_array("), "{block}");
+    assert!(
+        !block.contains("_call:"),
+        "the pseudo-predicate never reaches the SQL: {block}"
+    );
+}
+
+/// Switching a deployed surface from the cache to live is a view
+/// recreation, not a replacement: a derived view's columns differ between
+/// the two, and PostgreSQL refuses to replace a view whose columns
+/// change. The live script fails against cached views and applies once
+/// the derived views are dropped; the base views are untouched either
+/// way. The drop is the operator's, documented, never done by the script.
+#[tokio::test]
+async fn switching_a_deployed_surface_to_live_needs_the_derived_views_dropped() {
+    let pool = crate::compiled_differential::test_pool().await;
+    crate::testing::reset_database(&pool).await.unwrap();
+    let program = parse_program(LIVE_SOURCE).unwrap();
+    let validated = program.validated().unwrap();
+    let hash = format!("sha256:{}", "0".repeat(64));
+    let schema = "switching_views";
+    // Safe: the schema name is this test's constant.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "DROP SCHEMA IF EXISTS {schema} CASCADE"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let cached = render_views(&validated, schema, &hash, DerivedSource::Cache).unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(cached.sql))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let live = render_views(&validated, schema, &hash, DerivedSource::Live).unwrap();
+    // On its own connection: the script's `BEGIN` leaves the failed
+    // transaction open, and the pool would hand it on.
+    let mut conn = pool.acquire().await.unwrap();
+    let refused = sqlx::raw_sql(sqlx::AssertSqlSafe(live.sql.clone()))
+        .execute(&mut *conn)
+        .await
+        .expect_err("the live script cannot replace a cached derived view");
+    sqlx::raw_sql("ROLLBACK").execute(&mut *conn).await.unwrap();
+    drop(conn);
+    let message = refused.to_string();
+    assert!(
+        message.contains("cannot drop columns from view")
+            || message.contains("cannot change name of view column"),
+        "{message}"
+    );
+    for view in live.surface.views.iter().filter(|v| v.kind == "derived") {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "DROP VIEW {schema}.{}",
+            quote_ident(&view.view)
+        )))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    sqlx::raw_sql(sqlx::AssertSqlSafe(live.sql))
+        .execute(&pool)
+        .await
+        .expect("after the drop the live script applies");
+    let derived: Vec<(String,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT view_name::text FROM {schema}._morpholog_catalog WHERE kind = 'derived' ORDER BY 1"
+    )))
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(derived.len(), 2);
 }

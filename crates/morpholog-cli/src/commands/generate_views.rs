@@ -13,10 +13,10 @@
 
 use std::io::Write as _;
 
-use morpholog_postgres::render_views;
+use morpholog_postgres::{DerivedSource, render_views};
 
-use crate::GenerateViewsArgs;
 use crate::commands::{AlreadyReported, parse_or_report, validate_or_report};
+use crate::{DerivedSourceArg, GenerateViewsArgs};
 
 pub(crate) fn run(args: &GenerateViewsArgs) -> anyhow::Result<()> {
     if let (Some(out), Some(describe)) = (&args.out, &args.describe)
@@ -31,7 +31,11 @@ pub(crate) fn run(args: &GenerateViewsArgs) -> anyhow::Result<()> {
     let validated = validate_or_report(&parsed)?;
     let hash = crate::commands::hash::canonical_hash(&parsed.program);
 
-    let rendered = match render_views(&validated, &args.schema, &hash) {
+    let source = match args.derived {
+        DerivedSourceArg::Cache => DerivedSource::Cache,
+        DerivedSourceArg::Live => DerivedSource::Live,
+    };
+    let rendered = match render_views(&validated, &args.schema, &hash, source) {
         Ok(rendered) => rendered,
         Err(refusals) => {
             for refusal in &refusals {

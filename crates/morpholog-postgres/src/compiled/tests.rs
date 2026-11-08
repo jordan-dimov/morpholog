@@ -233,11 +233,12 @@ fn every_out_of_fragment_family_refuses_with_its_typed_reason() {
         ),
         (
             // A sum observes how many witnesses a call has; the kernel
-            // yields each projection once.
-            "defined call under a sum",
+            // yields each distinct projection once, which a join does not
+            // reproduce when the call binds.
+            "binding defined call under a sum",
             "define amount_of(x, n):\n    Amount(x, n)\n\ninvariant r:\n    Cap(cap) implies sum(n | amount_of(_, n)) <= cap\n",
             CompileReason::SumShape {
-                detail: "a defined call under a sum",
+                detail: "a defined call under a sum that binds a parameter",
             },
         ),
         (
@@ -1079,5 +1080,93 @@ fn deeply_nested_arithmetic_compiles_within_budget_or_refuses() {
         started.elapsed() < std::time::Duration::from_secs(5),
         "compilation returned in {:?}",
         started.elapsed()
+    );
+}
+
+fn sum_fragment(invariant: &str) -> morpholog_core::Program {
+    morpholog_surface::parse_program(&format!(
+        "program sum_fragment
+predicate P(k: Subject, q: Decimal)
+predicate S(k: Subject, s: Subject)
+predicate Cap(k: Subject, cap: Decimal)
+define open(k):
+    S(k, s) and (s = #a or s = #b)
+define bound_call(k, q):
+    P(k, q) and open(k)
+invariant under_test:
+    Cap(k, cap) implies {invariant}
+transformation t(k, q):
+    admit P(k, q)
+"
+    ))
+    .expect("fragment parses")
+}
+
+/// An `or` of equalities of one variable against distinct literals, the
+/// shape `in` desugars to, compiles under a sum as one SQL test, since
+/// its branches hold one at a time as the kernel counts them.
+#[test]
+fn an_exclusive_literal_or_compiles_under_a_sum() {
+    let set = compiled(&sum_fragment(
+        "sum(q | P(k, q) and S(k, s) and (s = #a or s = #b)) <= cap",
+    ));
+    let sql = set.invariants[0].violation_sql(None);
+    assert!(sql.contains(" OR "), "{sql}");
+}
+
+/// Branches that can hold together count a witness once each in the
+/// kernel: not the shape, refused as `or` is.
+#[test]
+fn an_overlapping_or_under_a_sum_is_refused() {
+    let r = refusals(&sum_fragment(
+        "sum(q | P(k, q) and (q > 0 or q < 10)) <= cap",
+    ));
+    assert_eq!(
+        r[0].reason.to_string(),
+        "`or` is outside the compiled fragment"
+    );
+    let r = refusals(&sum_fragment(
+        "sum(q | P(k, q) and S(k, s) and (s = #a or k = #b)) <= cap",
+    ));
+    assert_eq!(
+        r[0].reason.to_string(),
+        "`or` is outside the compiled fragment"
+    );
+}
+
+/// The same literal twice holds twice for one value, and the kernel
+/// counts it twice: refused by name rather than rendered as one test.
+#[test]
+fn a_repeated_literal_in_an_or_under_a_sum_is_refused() {
+    let r = refusals(&sum_fragment(
+        "sum(q | P(k, q) and S(k, s) and (s = #a or s = #a)) <= cap",
+    ));
+    assert!(
+        r[0].reason.to_string().contains("repeated"),
+        "{}",
+        r[0].reason
+    );
+}
+
+/// A defined call under a sum with every argument bound is a truth test:
+/// one projection, so one witness per outer row, as the kernel counts.
+#[test]
+fn a_bound_call_under_a_sum_compiles_as_a_truth_test() {
+    let set = compiled(&sum_fragment("sum(q | P(k, q) and open(k)) <= cap"));
+    let sql = set.invariants[0].violation_sql(None);
+    assert!(
+        sql.contains("EXISTS (SELECT 1 FROM morpholog.claims"),
+        "{sql}"
+    );
+}
+
+/// A call that binds has one projection per distinct binding, which a
+/// join does not reproduce: still refused, by name.
+#[test]
+fn a_binding_call_under_a_sum_is_refused() {
+    let r = refusals(&sum_fragment("sum(q | bound_call(k, q)) <= cap"));
+    assert_eq!(
+        r[0].reason.to_string(),
+        "sum outside the compiled fragment: a defined call under a sum that binds a parameter"
     );
 }
