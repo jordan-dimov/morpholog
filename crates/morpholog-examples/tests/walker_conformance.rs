@@ -391,6 +391,32 @@ transformation sweep(lots):
         admit Late(lot, decided_at)
 ";
 
+/// A Bool literal in every position a literal takes: a claim pattern in a
+/// rule and through a definition, a comparison, a conditional's branches,
+/// a `value` default and an `admit`.
+const BOOL_LITERAL_ACROSS_POSITIONS: &str = "\
+program bool_literal_across_positions
+predicate Flag(order: Subject, on: Bool)
+predicate Hold(order: Subject, held: Bool)
+predicate Done(order: Subject)
+define flagged(order):
+    Flag(order, true)
+invariant done_needs_a_flag:
+    Done(o) implies flagged(o)
+invariant a_held_order_is_not_done:
+    Hold(o, true) implies not Done(o)
+transformation set(order, on):
+    let held = if(on = true, false, true)
+    admit Flag(order, on)
+    admit Hold(order, held)
+transformation complete(order, allow):
+    require allowed: allow = true
+    require not_held: value Hold(order: order, held: _) default false = false
+    admit Hold(order, false)
+    admit Flag(order, allow)
+    admit Done(order)
+";
+
 fn corpus() -> Vec<(&'static str, &'static str)> {
     vec![
         ("sum_through_defined_chain", SUM_THROUGH_DEFINED_CHAIN),
@@ -419,6 +445,10 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         (
             "decided_at_across_body_positions",
             DECIDED_AT_ACROSS_BODY_POSITIONS,
+        ),
+        (
+            "bool_literal_across_positions",
+            BOOL_LITERAL_ACROSS_POSITIONS,
         ),
     ]
 }

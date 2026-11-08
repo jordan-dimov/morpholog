@@ -49,8 +49,8 @@ long expression may break across lines inside them.
 Kinds: `Subject`, `Decimal`, `Bool`, `Date`, `Timestamp`, `Duration`,
 `Collection`, `Any`, and a quantity `Decimal[USD]` whose unit is a label
 of your own. A subject literal is `#name`; a variable is bare. `true` and
-`false` are reserved and not yet writable, so a two-way status is a
-subject, `#open` or `#closed`.
+`false` are the `Bool` literals. A Bool is compared, never used as a
+condition on its own: `require allow = true`.
 
 ## Acts: the statements, and what they read
 

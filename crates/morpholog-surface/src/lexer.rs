@@ -4,9 +4,8 @@
 //! Every reserved word gets its own `Token` variant. An unknown word in a kind position lexes as
 //! `Token::Ident` and the parser reports it.
 //!
-//! `true` and `false` are reserved but not parseable, because the IR has no boolean value to
-//! lower them to. Reserving them makes `require true` a parse error; as identifiers they would
-//! become an unbound variable at runtime.
+//! `true` and `false` are the two `Bool` literals. They are reserved, so neither can name a
+//! variable.
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
@@ -73,7 +72,7 @@ impl Token {
     pub(crate) fn reserved_word(&self) -> Option<String> {
         match self {
             Token::Kind(kind) => Some(kind.to_string()),
-            Token::ReservedBoolLit(value) => Some(value.to_string()),
+            Token::BoolLit(value) => Some(value.to_string()),
             other => other.keyword_spelling().map(str::to_string),
         }
     }
@@ -182,8 +181,8 @@ tokens! {
     others {
         /// Kind keyword in a predicate-arg position.
         Kind(PredicateArgKind),
-        /// `true` or `false`: reserved but not parseable (see the module doc).
-        ReservedBoolLit(bool),
+        /// `true` or `false`.
+        BoolLit(bool),
 
         // ---- Layout tokens, inserted by `layout.rs` rather than lexed ----
         //
@@ -214,7 +213,7 @@ tokens! {
     }
     display |f| {
         Token::Kind(k) => write!(f, "kind `{k:?}`"),
-        Token::ReservedBoolLit(b) => write!(f, "reserved bool literal `{b}`"),
+        Token::BoolLit(b) => write!(f, "`{b}`"),
         Token::Indent => write!(f, "indent"),
         Token::Dedent => write!(f, "dedent"),
         Token::Ident(s) => write!(f, "identifier `{s}`"),
@@ -256,9 +255,8 @@ fn lexer<'a>() -> impl Parser<'a, &'a str, Vec<(Token, SimpleSpan)>, extra::Err<
             "Bool" => Token::Kind(PredicateArgKind::Bool),
             "Collection" => Token::Kind(PredicateArgKind::Collection),
             "Any" => Token::Kind(PredicateArgKind::Any),
-            // Reserved but not parseable; see the module-level note.
-            "true" => Token::ReservedBoolLit(true),
-            "false" => Token::ReservedBoolLit(false),
+            "true" => Token::BoolLit(true),
+            "false" => Token::BoolLit(false),
             "_" => Token::Wildcard,
             other => Token::Ident(other.to_string()),
         }

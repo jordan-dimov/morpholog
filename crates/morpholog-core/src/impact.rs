@@ -712,7 +712,7 @@ fn candidate_case_variables(body: &Prop) -> BTreeSet<Var> {
 /// delta value. A literal of any other kind matches every value, so it
 /// narrows nothing.
 fn literal_narrows(lit: &Value) -> bool {
-    matches!(lit, Value::Subject(_) | Value::Decimal(_))
+    matches!(lit, Value::Subject(_) | Value::Bool(_) | Value::Decimal(_))
 }
 
 /// A literal guard against a delta value. Kinds the bounding proof does
@@ -724,6 +724,7 @@ fn literal_matches(lit: &Value, ev: &EvalValue) -> bool {
     }
     match (lit, ev) {
         (Value::Subject(a), EvalValue::Subject(b)) => a == b,
+        (Value::Bool(a), EvalValue::Bool(b)) => a == b,
         (Value::Decimal(a), EvalValue::Decimal(b)) => a.value() == *b,
         _ => true,
     }

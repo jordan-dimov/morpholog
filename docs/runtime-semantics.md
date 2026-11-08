@@ -122,7 +122,7 @@ Transition                       -- the value object proposed against a Transfor
 Term                             -- a node inside a claim's args, a comprehension binding, etc.
   Var(name)                      -- bound by surrounding context
   Wildcard                       -- matches anything
-  Literal(Value)                 -- IR literal, already a value: subject, decimal
+  Literal(Value)                 -- IR literal, already a value: subject, bool, decimal
                                     (scale kept), quantity, date, timestamp, duration
                                     or calendar span; read once by the source frontend
                                     or the builder, never parsed downstream
@@ -224,6 +224,7 @@ The `.morph` surface verbs map one-to-one onto the IR constructs above. The rena
 | `qty: Decimal[t]` (declaration) | `PredicateArgKind::Quantity(Unit)` | The unit annotation rides the kind keyword: a `Decimal[U]` is an exact decimal under a contractual label, so the declaration syntax says exactly that. Units are opaque, case-sensitive symbols - no registry, no aliases, no compound symbols (`USD/day` is a field name and a formula, never a unit). Only `Decimal` takes the brackets; a unit on any other kind is a parse error. |
 | `25000 USD`, `0 t` | `Value::Quantity { amount, unit }` | Amount-then-unit juxtaposition, the way a charterparty or an invoice writes it. The syntax claim: a numeric literal followed by an identifier in term position is a quantity literal. No signed amounts: the surface has no signed literals, and `-100 USD` in value position is the subtraction `0 - 100 USD`, which the unit algebra has no rule for. |
 | `#NAME` | `Value::Subject("NAME")` | `#` sigil makes subject literals visibly distinct from variables and reflects that subjects are opaque symbolic identifiers, not strings. |
+| `true`, `false` | `Value::Bool` | Reserved, so neither can name a variable. A Bool compares for equality only, and a bare one is not a proposition: a gate says `allow = true`, which keeps every condition a comparison or a claim. |
 
 ## Execution semantics
 

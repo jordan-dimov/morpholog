@@ -57,6 +57,8 @@ fn equivalent_values_decide_the_same_at_runtime() {
         "duration(PT90M) = duration(PT1H30M)",
         "span(P1Y) = span(P12M)",
         "@2026-10-24T14:00:00+01:00 = @2026-10-24T13:00:00Z",
+        "true = true",
+        "false != true",
     ] {
         let p = programme(body);
         let holds = p
@@ -65,6 +67,23 @@ fn equivalent_values_decide_the_same_at_runtime() {
             .eval_invariant("i", &State::from_claims(vec![]), None)
             .expect("evaluates");
         assert_eq!(holds, Some(true), "`{body}` should hold");
+    }
+}
+
+/// A Bool is compared for equality only: no arithmetic, no order and no
+/// `min` or `max`, and never equal to a subject. `check` refuses each.
+#[test]
+fn a_bool_literal_takes_no_arithmetic_or_order() {
+    for body in [
+        "true + 1 > 0",
+        "true < false",
+        "min(true, false) = true",
+        "true = #yes",
+    ] {
+        let source = format!("program p\npredicate P(x: Decimal)\n\ninvariant i:\n  {body}\n");
+        let program =
+            parse_program(&source).unwrap_or_else(|e| panic!("`{body}` should parse: {e:?}"));
+        assert!(program.validated().is_err(), "`{body}` should be refused");
     }
 }
 
@@ -81,6 +100,8 @@ fn canonical_spellings_render_verbatim() {
         "duration(PT0S)",
         "span(P12M)",
         "span(P45D)",
+        "true",
+        "false",
     ] {
         let rendered = format_program(&programme(&format!("{literal} = {literal}")));
         assert!(

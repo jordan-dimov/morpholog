@@ -65,6 +65,7 @@ impl From<&crate::ir::Value> for EvalValue {
         match value {
             Value::Decimal(d) => EvalValue::Decimal(d.value()),
             Value::Subject(s) => EvalValue::Subject(s.clone()),
+            Value::Bool(b) => EvalValue::Bool(*b),
             Value::Date(d) => EvalValue::Date(*d),
             Value::Timestamp(t) => EvalValue::Timestamp(*t),
             Value::Duration(d) => EvalValue::Duration(*d),

@@ -10,7 +10,7 @@ use morpholog_core::ir_builder::{
     add, and, claim, dec as dec_term, defined, eq, implies, invariant, not, subj as lit_subject,
     sum, term, value_of, var, wildcard,
 };
-use morpholog_core::{EvalValue, Impact, ImpactPlan, Invariant, Var};
+use morpholog_core::{EvalValue, Impact, ImpactPlan, Invariant, Term, Value, Var};
 use morpholog_test_support::{claim_instance, dec, subj};
 
 fn ledger_balance() -> Invariant {
@@ -99,6 +99,27 @@ fn a_literal_guard_excludes_the_deltas_it_mismatches() {
     let hot = vec![claim_instance("Flag", &[subj("a"), subj("hot")])];
     assert_eq!(
         plan.classify(&hot, &[]),
+        Impact::Bounded(vec![bound(&[("x", subj("a"))])])
+    );
+}
+
+/// A Bool literal narrows as a subject literal does: a `false` flag
+/// cannot touch a rule about `true` flags, and a `true` one does.
+#[test]
+fn a_bool_literal_guard_excludes_the_deltas_it_mismatches() {
+    let inv = invariant(
+        "set_flags_cool",
+        implies(
+            claim("Flag", vec![var("x"), Term::Literal(Value::Bool(true))]),
+            claim("Cooled", vec![var("x")]),
+        ),
+    );
+    let plan = ImpactPlan::new(&inv);
+    let unset = vec![claim_instance("Flag", &[subj("a"), EvalValue::Bool(false)])];
+    assert_eq!(plan.classify(&unset, &[]), Impact::Untouched);
+    let set = vec![claim_instance("Flag", &[subj("a"), EvalValue::Bool(true)])];
+    assert_eq!(
+        plan.classify(&set, &[]),
         Impact::Bounded(vec![bound(&[("x", subj("a"))])])
     );
 }

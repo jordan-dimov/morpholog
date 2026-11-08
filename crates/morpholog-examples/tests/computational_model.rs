@@ -125,6 +125,7 @@ fn term(t: &Term) -> &'static [Draws] {
         Term::Literal(v) => match v {
             Value::Decimal(_)
             | Value::Subject(_)
+            | Value::Bool(_)
             | Value::Date(_)
             | Value::Timestamp(_)
             | Value::Duration(_)

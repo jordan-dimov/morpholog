@@ -238,6 +238,7 @@ where
         // Before bare idents, so `duration(...)` is the constructor.
         duration_ctor().map(Term::Literal),
         subject_lit.map(|s| Term::Literal(Value::Subject(s.into()))),
+        select! { Token::BoolLit(b) => Term::Literal(Value::Bool(b)) },
         ident.map(|name| match name.as_str() {
             "actor" => Term::Actor,
             "decided_at" => Term::DecidedAt,
@@ -742,6 +743,8 @@ where
         let span_as_value = span_ctor().map(|v| ValueExpr::Term(Term::Literal(v)));
         let subject_as_value =
             subject_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Subject(s.into()))));
+        let bool_as_value =
+            select! { Token::BoolLit(b) => ValueExpr::Term(Term::Literal(Value::Bool(b))) };
         let wildcard_as_value = just(Token::Wildcard).to(ValueExpr::Term(Term::Wildcard));
 
         // A variable, `actor` or `decided_at`. `Foo(args)` is a claim, which only the proposition
@@ -958,6 +961,7 @@ where
             duration_as_value,
             span_as_value,
             subject_as_value,
+            bool_as_value,
             wildcard_as_value,
             bare_ident,
         ));

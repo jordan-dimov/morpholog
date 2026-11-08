@@ -707,13 +707,24 @@ prop_err!(dangling_operator_is_error, "a +");
 // `Foo(x + 1, y)` is not representable: claim args are Terms, not Exprs.
 prop_err!(claim_call_with_arithmetic_arg_is_error, "Foo(x + 1, y)");
 
-/// `true` and `false` are reserved but not parseable, since the IR has no boolean value. They must
-/// fail at parse time, not become an unbound variable at runtime.
+/// `true` and `false` are the Bool literals, in a value and in a claim pattern. A bare one is not
+/// a proposition: `= true` says it.
 #[test]
-fn true_and_false_are_reserved_not_parseable() {
-    for source in ["true", "false", "require true", "Le(true, false)"] {
-        let errs = parse_expression(source).expect_err("bool literals not parseable in v0");
-        assert!(!errs.is_empty());
+fn true_and_false_are_bool_literals() {
+    assert_eq!(
+        parse_value_expr("true").unwrap(),
+        ValueExpr::Term(Term::Literal(Value::Bool(true)))
+    );
+    assert_eq!(
+        parse_value_expr("false").unwrap(),
+        ValueExpr::Term(Term::Literal(Value::Bool(false)))
+    );
+    let Prop::Claim { args, .. } = parse_expression("Flag(x, true)").unwrap() else {
+        panic!("a claim pattern");
+    };
+    assert_eq!(args[1], Term::Literal(Value::Bool(true)));
+    for source in ["true", "require true"] {
+        parse_expression(source).expect_err("a Bool is a value, not a proposition");
     }
 }
 
