@@ -52,10 +52,9 @@ mod validate;
 
 pub use admission::{Admission, EffectiveDelta, effective_delta};
 pub use analysis::{
-    AnalysisError, ParamKind, has_admission_gate, predicates_asserted_by,
-    predicates_asserted_by_stmt, predicates_read_by_stmt, predicates_referenced_by_derived,
-    predicates_referenced_by_prop, predicates_written_by, transformation_param_kinds,
-    transformations_asserting,
+    AnalysisError, ParamKind, has_admission_gate, predicates_asserted_by_stmt,
+    predicates_read_by_stmt, predicates_referenced_by_derived, predicates_referenced_by_prop,
+    predicates_written_by, transformation_param_kinds, transformations_asserting,
 };
 pub use controls::{
     ControlMatrix, GateControl, GateFrontLoad, GateRef, InvariantFrontLoad, TransformationControls,
@@ -97,7 +96,7 @@ pub use propose::{
 #[cfg(any(test, feature = "measure"))]
 #[doc(hidden)]
 pub use propose::{Decided, decide_staged_delta_with};
-pub use reads::{Key, KeyedPattern, KnownTerm, ReadFilter, ReadPlan, WholeRead};
+pub use reads::{Key, KeyedPattern, KnownTerm, MAX_ELEMENT_KEYS, ReadFilter, ReadPlan, WholeRead};
 pub use rehearse::{
     Effect, REHEARSAL_CONTRACT, REHEARSAL_FORMAT_VERSION, RecordedProposal, Rehearsal,
     RehearsalReport, RowClass, RowReport, RuleRefusals, Totals, Unreplayable, UnreplayableTotals,

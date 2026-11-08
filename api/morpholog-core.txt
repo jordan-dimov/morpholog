@@ -48,7 +48,6 @@ impl core::marker::UnsafeUnpin for morpholog_core::analysis::ParamKind
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::analysis::ParamKind
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::analysis::ParamKind
 pub fn morpholog_core::analysis::has_admission_gate(&morpholog_core::Transformation) -> bool
-pub fn morpholog_core::analysis::predicates_asserted_by(&morpholog_core::Transformation, &mut alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>)
 pub fn morpholog_core::analysis::predicates_asserted_by_stmt(&morpholog_core::Stmt, &mut alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>)
 pub fn morpholog_core::analysis::predicates_read_by_stmt(&morpholog_core::Stmt, &[morpholog_core::Definition], &mut alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>)
 pub fn morpholog_core::analysis::predicates_referenced_by_derived(&morpholog_core::DerivedClaim, &[morpholog_core::Definition]) -> alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>
@@ -891,6 +890,7 @@ pub morpholog_core::Key::Field
 pub morpholog_core::Key::Field::of: alloc::vec::Vec<(usize, morpholog_core::Key)>
 pub morpholog_core::Key::Field::position: usize
 pub morpholog_core::Key::Field::predicate: morpholog_core::PredicateName
+pub morpholog_core::Key::OneOf(alloc::vec::Vec<morpholog_core::EvalValue>)
 pub morpholog_core::Key::Value(morpholog_core::EvalValue)
 impl morpholog_core::Key
 pub fn morpholog_core::Key::reads_any(&self, &alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>) -> bool
@@ -912,6 +912,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Key
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Key
 pub enum morpholog_core::KnownTerm
 pub morpholog_core::KnownTerm::Actor
+pub morpholog_core::KnownTerm::Element(morpholog_core::Var)
 pub morpholog_core::KnownTerm::Field
 pub morpholog_core::KnownTerm::Field::of: alloc::vec::Vec<(usize, morpholog_core::KnownTerm)>
 pub morpholog_core::KnownTerm::Field::position: usize
@@ -3744,6 +3745,7 @@ impl core::marker::Unpin for morpholog_core::WitnessBinding
 impl core::marker::UnsafeUnpin for morpholog_core::WitnessBinding
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::WitnessBinding
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::WitnessBinding
+pub const morpholog_core::MAX_ELEMENT_KEYS: usize
 pub const morpholog_core::PYTHON_CLIENT_MEMBERS: &[&str]
 pub const morpholog_core::PYTHON_KEYWORDS: &[&str]
 pub const morpholog_core::REHEARSAL_CONTRACT: &str
@@ -3772,7 +3774,6 @@ pub fn morpholog_core::lower_discipline_definitions(&mut morpholog_core::Program
 pub fn morpholog_core::lower_disciplines(&mut morpholog_core::Program)
 pub fn morpholog_core::lower_sum_seeds(&mut morpholog_core::Program)
 pub fn morpholog_core::ordered_compare_error(morpholog_core::OrderedDomain, &morpholog_core::EvalValue, &morpholog_core::EvalValue) -> core::option::Option<morpholog_core::EvalError>
-pub fn morpholog_core::predicates_asserted_by(&morpholog_core::Transformation, &mut alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>)
 pub fn morpholog_core::predicates_asserted_by_stmt(&morpholog_core::Stmt, &mut alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>)
 pub fn morpholog_core::predicates_read_by_stmt(&morpholog_core::Stmt, &[morpholog_core::Definition], &mut alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>)
 pub fn morpholog_core::predicates_referenced_by_derived(&morpholog_core::DerivedClaim, &[morpholog_core::Definition]) -> alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>

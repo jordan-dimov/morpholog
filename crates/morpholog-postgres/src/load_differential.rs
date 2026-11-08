@@ -485,3 +485,178 @@ async fn the_same_shipments_conflict_under_whole_reads() {
     );
     assert!(relation_locks > 0);
 }
+
+/// The merge shape: a target's stock, the stock of the items a collection
+/// names, summed and retracted, the target's row rewritten.
+pub(crate) fn merges_program() -> morpholog_core::Program {
+    morpholog_surface::parse_program(
+        "program merges
+predicate Stock(item: Subject, n: Decimal)
+transformation merge(t, others):
+    bind Stock(t, before)
+    let added = sum(q | Stock(o, q) and o in others)
+    for o in others:
+        retract Stock(o, _)
+    let merged = before + added
+    retract Stock(t, before)
+    admit Stock(t, merged)
+",
+    )
+    .unwrap()
+}
+
+/// `n` items, each with stock 5.
+pub(crate) async fn populate_merges(pool: &PgPool, n: i64) {
+    // Safe: the one interpolated value is this test's row count.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'Stock', jsonb_build_array(jsonb_build_object('type','subject','value','i' || i), jsonb_build_object('type','decimal','value','5')), '00000000-0000-0000-0000-000000000000'
+         FROM generate_series(1, {n}) AS i;
+         ANALYZE morpholog.claims"
+    )))
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+pub(crate) fn merge_transition(t: &str, others: &[&str]) -> Transition {
+    Transition {
+        transformation_name: "merge".into(),
+        args: vec![
+            subj(t),
+            morpholog_test_support::coll(others.iter().map(|o| subj(o)).collect()),
+        ],
+        actor: test_actor(),
+        decided_at: None,
+    }
+}
+
+fn merge_scope(t: &str, others: &[&str]) -> LoadScope {
+    let program = merges_program();
+    compute_load_scope(
+        program.transformation("merge").unwrap(),
+        Some(&merge_transition(t, others)),
+        &program.invariants,
+        &program.definitions,
+        Reads::Body,
+    )
+}
+
+/// Over a populated table the loader fetches the target's row and the
+/// collection's rows, however many elements and whatever kind they are
+/// stored as; a subject stored where a decimal is declared, or an element
+/// of another kind than the position, keys by the kernel's equality.
+#[tokio::test]
+async fn the_loader_fetches_a_collection_parameter_s_rows_at_every_size() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    populate_merges(&pool, 1200).await;
+    seed(&pool, &[claim_instance("Stock", &[dec(7), dec(5)])]).await;
+    let big: Vec<String> = (1..=1000).map(|i| format!("i{i}")).collect();
+    let big: Vec<&str> = big.iter().map(String::as_str).collect();
+    for others in [vec![], vec!["i2", "i3"], vec!["i2", "i2", "i1"], big] {
+        let scope = merge_scope("i1", &others);
+        let mut tx = pool.begin().await.unwrap();
+        let loaded = load_state(&mut tx, &scope).await.unwrap();
+        tx.rollback().await.unwrap();
+        let mut distinct: Vec<&str> = others.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        let expected = 1 + distinct.iter().filter(|o| **o != "i1").count();
+        assert_eq!(
+            loaded.claims().len(),
+            expected,
+            "{} elements: a row two patterns match is loaded once",
+            others.len()
+        );
+    }
+    // Past the cap the read is whole: every stock row.
+    let beyond: Vec<String> = (2..=1002).map(|i| format!("i{i}")).collect();
+    let beyond: Vec<&str> = beyond.iter().map(String::as_str).collect();
+    let scope = merge_scope("i1", &beyond);
+    assert_eq!(
+        scope.filters[&"Stock".into()],
+        crate::propose::LoadFilter::Whole,
+        "{} elements read whole",
+        beyond.len()
+    );
+    // An element of another kind than the position: the row stored with
+    // that value is fetched, by the kernel's equality.
+    let program = merges_program();
+    let transition = Transition {
+        args: vec![subj("i1"), morpholog_test_support::coll(vec![dec(7)])],
+        ..merge_transition("i1", &[])
+    };
+    let scope = compute_load_scope(
+        program.transformation("merge").unwrap(),
+        Some(&transition),
+        &program.invariants,
+        &program.definitions,
+        Reads::Body,
+    );
+    let mut tx = pool.begin().await.unwrap();
+    let loaded = load_state(&mut tx, &scope).await.unwrap();
+    tx.rollback().await.unwrap();
+    assert_eq!(loaded.claims().len(), 2, "{loaded:?}");
+}
+
+/// `merge(t, others)` as a contender: its load, and the stock move it writes.
+fn merge(t: &str, other: &str) -> Contender {
+    Contender {
+        scope: merge_scope(t, &[other]),
+        asserted: vec![claim_instance("Stock", &[subj(t), dec(10)])],
+        retracted: vec![
+            claim_instance("Stock", &[subj(other), dec(5)]),
+            claim_instance("Stock", &[subj(t), dec(5)]),
+        ],
+    }
+}
+
+async fn merges_pool() -> PgPool {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    populate_merges(&pool, 5000).await;
+    let program = crate::program::PgProgram::new(
+        morpholog_core::PreparedProgram::new(merges_program()).unwrap(),
+    );
+    crate::indexes::provision_indexes(&pool, &[&program], false)
+        .await
+        .unwrap();
+    pool
+}
+
+/// Two merges over disjoint item pairs: both commit, and the reads keyed
+/// by the collection's elements leave no relation-level lock. The pairs
+/// are chosen so their keys sit on different leaf pages of the stock
+/// index: an index seek locks the leaf page it read, and a merge writes
+/// its target's key back to that page, so two merges whose keys share a
+/// leaf page conflict there whatever the loader does. The first fixture,
+/// items 1 to 4, shared one and conflicted every time.
+#[tokio::test]
+async fn two_merges_of_disjoint_items_commit_together_under_element_keyed_reads() {
+    let pool = merges_pool().await;
+    let (a, b, relation_locks) = race(&pool, merge("i1", "i2"), merge("i100", "i101")).await;
+    assert!(a.is_ok() && b.is_ok(), "element-keyed reads: {a:?} / {b:?}");
+    assert_eq!(
+        relation_locks, 0,
+        "a read keyed by a collection's elements must leave no relation-level SIRead lock"
+    );
+}
+
+/// The control: the same two merges reading stock whole conflict.
+#[tokio::test]
+async fn the_same_merges_conflict_under_whole_reads() {
+    let pool = merges_pool().await;
+    let (a, b, relation_locks) = race(
+        &pool,
+        whole(merge("i1", "i2")),
+        whole(merge("i100", "i101")),
+    )
+    .await;
+    assert!(
+        matches!(a, Err(PgError::SerializationFailure))
+            || matches!(b, Err(PgError::SerializationFailure)),
+        "whole reads must conflict: {a:?} / {b:?}"
+    );
+    assert!(relation_locks > 0);
+}

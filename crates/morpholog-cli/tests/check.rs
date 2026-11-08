@@ -231,6 +231,52 @@ fn check_verbose_keys_a_read_by_what_an_earlier_bind_found() {
     );
 }
 
+/// Reads keyed by an element of a collection parameter are keyed: a
+/// `for` over it, a `forall ... in` over it, and a membership test beside
+/// a pattern, the merge act's three shapes. A membership test behind a
+/// conjunct that can raise leaves its read whole.
+#[test]
+fn check_verbose_keys_a_read_by_a_collection_parameter_s_elements() {
+    const HEAD: &str = "program merging\n\n\
+         predicate Stock(item: Subject, n: Decimal)\n\
+         predicate Alloc(a: Subject, item: Subject)\n\
+         predicate Out(t: Subject)\n\n";
+    let verbose = |body: &str| {
+        let tmp = temp_morph(&format!("{HEAD}{body}"));
+        let out = Command::new(bin())
+            .args(["check", "--verbose"])
+            .arg(tmp.path())
+            .output()
+            .expect("morpholog check should run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let keyed = verbose(
+        "transformation merge(t, others, listed):\n    \
+         require all_stocked: forall o in others: Stock(o, _)\n    \
+         require every_listed: not (exists a: Alloc(a, i) and i in others and not (a in listed))\n    \
+         let added = sum(q | Stock(o, q) and o in others)\n    \
+         for o in others:\n        \
+         retract Stock(o, _)\n    \
+         admit Out(t)\n",
+    );
+    assert!(keyed.ends_with("  body reads: all keyed\n"), "got: {keyed}");
+
+    let raising = verbose(
+        "transformation check(t, others):\n    \
+         require exists x: Stock(x, q) and 1 / q > 0 and x in others\n    \
+         admit Out(t)\n",
+    );
+    assert!(
+        raising.ends_with("  body reads: 1 whole\n    check reads Stock whole: statement 1\n"),
+        "got: {raising}"
+    );
+}
+
 #[test]
 fn check_verbose_marks_a_whole_read_of_a_predicate_the_act_writes() {
     let tmp = temp_morph(
