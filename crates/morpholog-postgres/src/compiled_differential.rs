@@ -765,6 +765,28 @@ transformation mark_c(x):
 transformation limit(x, q):
     admit Lim(x, q)
 ",
+    // Under a sum: an `or` of equalities of one variable against distinct
+    // literals, and a defined call with every argument bound. The kernel
+    // counts a witness once per holding branch and once per distinct
+    // projection of a call, so both shapes must count as the SQL does,
+    // one per outer witness, over generated and governed states alike.
+    "program sum_tests
+predicate Cap(b: Subject, cap: Decimal)
+predicate Line(b: Subject, status: Subject, v: Decimal)
+predicate Open(b: Subject)
+define live(b):
+    Open(b) and not Line(b, #void, _)
+invariant open_lines_capped:
+    Cap(b, cap) implies sum(v | Line(b, s, v) and (s = #open or s = #held)) <= cap
+invariant live_lines_capped:
+    Cap(b, cap) implies sum(v | Line(b, _, v) and live(b)) <= cap
+transformation set_cap(b, cap):
+    admit Cap(b, cap)
+transformation open(b):
+    admit Open(b)
+transformation line(b, status, v):
+    admit Line(b, status, v)
+",
 ];
 
 #[tokio::test]

@@ -2694,6 +2694,13 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
         },
         Prop::Or(branches) => {
             if !ctx.in_consequent {
+                if let Some(test) = exclusive_literal_test(branches, &env, ctx)? {
+                    return Ok(Rendered {
+                        where_: vec![test],
+                        env,
+                        ..Rendered::default()
+                    });
+                }
                 return Err(CompileReason::Construct { construct: "or" });
             }
             // Each branch is its own scope under the bindings on entry;
@@ -2787,10 +2794,29 @@ fn render_defined(
     ctx: &mut Ctx<'_>,
 ) -> Result<Rendered, CompileReason> {
     if ctx.in_sum {
-        // A sum observes how many witnesses a call has; the kernel yields
-        // each projection once.
-        return Err(CompileReason::SumShape {
-            detail: "a defined call under a sum",
+        // A sum observes how many witnesses a call has, and the kernel
+        // yields each distinct projection once. With every argument
+        // bound there is one projection, so the call is a truth test and
+        // counts each outer witness once, as the kernel does. A call that
+        // binds has as many projections as distinct bindings, which a
+        // join does not reproduce.
+        if args
+            .iter()
+            .any(|arg| matches!(arg, Term::Var(x) if !env.contains_key(x)))
+        {
+            return Err(CompileReason::SumShape {
+                detail: "a defined call under a sum that binds a parameter",
+            });
+        }
+        let (def, frame) = call_frame(name, args, &env, ctx)?;
+        let r = nested_scope(outside_consequent(ctx, |ctx| {
+            render_prop(&def.body, frame, ctx)
+        })?)?;
+        return Ok(Rendered {
+            where_: vec![r.exists_sql()],
+            probes: lifted_scopes(&r.probes),
+            env,
+            ..Rendered::default()
         });
     }
     let (def, frame) = call_frame(name, args, &env, ctx)?;
@@ -2864,6 +2890,46 @@ fn render_defined(
         disjoins: truth.disjoins,
         stages: Vec::new(),
     })
+}
+
+/// An `or` of equalities of one bound variable against distinct literals,
+/// the shape `x in (a, b)` desugars to, as one SQL test. The kernel keeps
+/// every branch's matches, so an `or` whose branches can hold together
+/// counts a witness once per holding branch, where a SQL `OR` counts it
+/// once; equalities of one variable against distinct literals hold one
+/// at a time, so the two agree. Anything else is not this shape.
+fn exclusive_literal_test(
+    branches: &[Prop],
+    env: &Env,
+    ctx: &mut Ctx<'_>,
+) -> Result<Option<String>, CompileReason> {
+    let mut variable: Option<&Var> = None;
+    let mut literals: Vec<EvalValue> = Vec::new();
+    let mut tests = Vec::new();
+    for branch in branches {
+        let Prop::Eq(a, b) = branch else {
+            return Ok(None);
+        };
+        let (x, value) = match (a.as_ref(), b.as_ref()) {
+            (ValueExpr::Term(Term::Var(x)), ValueExpr::Term(Term::Literal(v)))
+            | (ValueExpr::Term(Term::Literal(v)), ValueExpr::Term(Term::Var(x))) => (x, v),
+            _ => return Ok(None),
+        };
+        if variable.is_some_and(|seen| seen != x) || !env.contains_key(x) {
+            return Ok(None);
+        }
+        variable = Some(x);
+        let value = EvalValue::from(value);
+        if literals.contains(&value) {
+            return Err(CompileReason::DisjunctionShape {
+                detail: "a literal repeated in an `or` of equalities, which the kernel counts twice",
+            });
+        }
+        literals.push(value);
+        let rendered = equality_sql(a, b, false, env, ctx)?;
+        tests.push(rendered.conjunction());
+    }
+    Ok(Some(format!("({})", tests.join(" OR "))))
 }
 
 /// Render under the consequent position, where an `or` compiles.
