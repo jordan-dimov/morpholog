@@ -661,8 +661,8 @@ fn summary(p: &Program, routes: &[CheckedInvariant], file: &Path) -> String {
 /// SERIALIZABLE any concurrent write to a predicate read whole can count
 /// against the read, so these are the first places to look when
 /// concurrent proposals retry; a read keyed by something the
-/// transformation knows before it runs (a parameter, `actor`, a literal)
-/// is not listed. A read of a predicate the transformation itself writes
+/// transformation knows when the read runs (a parameter, `actor`, a
+/// literal, a value an earlier `bind` found) is not listed. A read of a predicate the transformation itself writes
 /// is marked, since two copies of the act can then conflict on unrelated
 /// records.
 fn whole_reads(p: &Program) -> String {

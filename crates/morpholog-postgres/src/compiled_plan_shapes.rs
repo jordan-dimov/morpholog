@@ -432,6 +432,120 @@ async fn the_loader_seeks_through_the_provisioned_indexes() {
     }
 }
 
+/// A read keyed by a value a `bind` found is a subquery in the loader's
+/// statement. On a populated ledger the planner must still seek the
+/// dependent predicate's index with a condition, or the semi-join widens
+/// the read to the relation and the key protects nothing.
+#[tokio::test]
+async fn the_loader_seeks_a_bind_keyed_read_through_its_index() {
+    use crate::load_differential::{populate_shipments, shipments_program};
+    use crate::propose::{Reads, compute_load_scope, load_sql};
+    let pool = test_pool().await;
+    reset(&pool).await;
+    let program = shipments_program();
+    let pg = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
+    provision_indexes(&pool, &[&pg], false).await.unwrap();
+    populate_shipments(&pool, POPULATED).await;
+    let ship = program.transformation("ship").unwrap();
+    let transition = morpholog_core::Transition {
+        transformation_name: ship.name.clone(),
+        args: vec![subj("a7")],
+        actor: morpholog_test_support::test_actor(),
+        decided_at: None,
+    };
+    let scope = compute_load_scope(
+        ship,
+        Some(&transition),
+        &program.invariants,
+        &program.definitions,
+        Reads::Body,
+    );
+    let (sql, binds) = load_sql(&scope).unwrap();
+    assert!(
+        sql.contains("= ANY(ARRAY(SELECT"),
+        "the stock read is keyed by a subquery's keys: {sql}"
+    );
+    let plan = analyzed_plan(&pool, &sql, &binds).await;
+    let stock = crate::compiled::IndexSpec::new("Stock".into(), 0).index_name();
+    assert!(
+        executed_index_conditions(&plan).contains(&stock),
+        "the stock read seeks no executed index condition on the item: {plan:#}"
+    );
+    assert_eq!(
+        rows_removed_by_filters(&plan),
+        0,
+        "the load read rows it then discarded: {plan:#}"
+    );
+}
+
+/// `EXPLAIN (ANALYZE, FORMAT JSON)` of a statement with its binds, the
+/// planner left alone.
+async fn analyzed_plan(pool: &PgPool, sql: &str, binds: &[serde_json::Value]) -> serde_json::Value {
+    let mut tx = pool.begin().await.unwrap();
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "EXPLAIN (ANALYZE, FORMAT JSON) {sql}"
+    )));
+    for value in binds {
+        query = query.bind(value.clone());
+    }
+    let plan: serde_json::Value = query.fetch_one(&mut *tx).await.unwrap().get(0);
+    tx.rollback().await.unwrap();
+    plan
+}
+
+/// Walk every node of a plan that ran at least once.
+fn executed_nodes(
+    plan: &serde_json::Value,
+    visit: &mut dyn FnMut(&serde_json::Map<String, serde_json::Value>),
+) {
+    match plan {
+        serde_json::Value::Object(map) => {
+            let ran = map
+                .get("Actual Loops")
+                .and_then(serde_json::Value::as_u64)
+                .is_none_or(|loops| loops > 0);
+            if ran {
+                visit(map);
+                for v in map.values() {
+                    executed_nodes(v, visit);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for v in items {
+                executed_nodes(v, visit);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The indexes an executed node seeks with a condition. A never-executed
+/// subplan's index is not one of them.
+fn executed_index_conditions(plan: &serde_json::Value) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    executed_nodes(plan, &mut |node| {
+        if let Some(name) = node.get("Index Name").and_then(|v| v.as_str())
+            && node.contains_key("Index Cond")
+        {
+            out.insert(name.to_string());
+        }
+    });
+    out
+}
+
+/// Rows the statement read and then dropped, over every executed node.
+fn rows_removed_by_filters(plan: &serde_json::Value) -> u64 {
+    let mut total = 0;
+    executed_nodes(plan, &mut |node| {
+        total += node
+            .get("Rows Removed by Filter")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+    });
+    total
+}
+
 /// A rule whose case is keyed by a column no read or join touches: the
 /// shape Glasshouse's `delivery_period_is_ordered` has. The case-bound
 /// check must seek on that column and leave no relation-level SIRead

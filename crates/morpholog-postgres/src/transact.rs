@@ -100,10 +100,15 @@ pub async fn propose_all_against_pg(
 
     // One load over everything any act reads, each act keyed by its own
     // arguments: later acts see the earlier acts' effects through the
-    // kernel's candidate state, never a reread.
+    // kernel's candidate state, never a reread. A key an act reads
+    // through a predicate an earlier act admits is dropped.
     let mut scope = crate::propose::LoadScope::default();
+    let mut admitted_before = std::collections::BTreeSet::new();
     for (t, transition) in &acts {
-        scope.union(program.load_scope(t, transition, route));
+        let mut own = program.load_scope(t, transition, route);
+        own.after_admissions_of(&admitted_before);
+        scope.union(own);
+        morpholog_core::predicates_asserted_by(t, &mut admitted_before);
     }
     let mut state = load_state(&mut tx, &scope).await?;
 
