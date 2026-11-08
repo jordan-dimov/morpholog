@@ -743,7 +743,7 @@ Whether two proposals conflict depends on what they read, not on what they mean.
 - on the interpreted route, also every claim of every predicate its invariants mention, and of the predicates its body admits the rows equal to the admitted claims;
 - on the compiled route, the invariants' cases through queries bounded to the cases the change touches.
 
-Both the keyed reads and the compiled checks seek through the indexes `provision indexes` builds, whichever route a programme runs on. Without them a keyed read falls back to scanning its predicate.
+Both the keyed reads and the compiled checks seek through the indexes `provision indexes` builds, whichever route a programme runs on. Without them a keyed read falls back to scanning its predicate, and a compiled check scans the claims table, so concurrent proposals can conflict however disjoint their records are. A deployment that skips the step is correct and slow, and its concurrent writers retry as though they shared records.
 
 All predicates live in one `claims` table. PostgreSQL remembers reads row by row, then page by page, and past a threshold as the whole table; a sequential scan, which it chooses for a tiny or empty table or for a predicate that is most of the table, remembers the whole table at once. So:
 

@@ -224,3 +224,92 @@ fn consent_counts_from_the_day_it_was_given() {
         &state,
     ));
 }
+
+fn refused_by(outcome: Outcome, rule: &str) {
+    match outcome {
+        Outcome::Rejected { reason } => assert!(
+            reason.to_string().contains(&format!("`{rule}`")),
+            "expected `{rule}` to refuse, got {reason}"
+        ),
+        Outcome::Accepted { .. } => panic!("expected `{rule}` to refuse, but it was admitted"),
+    }
+}
+
+/// The sibling standing in for an absent field goes with its parent: one
+/// pattern retract on the shared field removes both, and an act that
+/// removes only the parent is refused by the rule that ties them.
+#[test]
+fn a_sibling_for_an_absent_field_goes_with_its_parent() {
+    let (_, source) = sheet_blocks()
+        .into_iter()
+        .find(|(_, s)| s.contains("program optional_field\n"))
+        .expect("the optional-field block");
+    let forgetful = format!(
+        "{source}\ntransformation cancel_allocations_only(line):\n    retract Allocation(line: line, ..)\n"
+    );
+    let p = parse_program(&forgetful).expect("parses");
+    let state = accepted(act(
+        &p,
+        "allocate",
+        vec![subj("a1"), subj("l1"), dec(2)],
+        &State::default(),
+    ));
+    let state = accepted(act(
+        &p,
+        "allocate",
+        vec![subj("a2"), subj("l1"), dec(3)],
+        &state,
+    ));
+    let state = accepted(act(&p, "ship", vec![subj("a1"), subj("s1")], &state));
+    refused_by(
+        act(&p, "cancel_allocations_only", vec![subj("l1")], &state),
+        "a_shipment_names_a_live_allocation",
+    );
+    let state = accepted(act(&p, "cancel_line", vec![subj("l1")], &state));
+    assert_eq!(state.len(), 0, "the cascade left claims behind");
+}
+
+/// A closure the host lists is held to the tree: a complete one is
+/// admitted, and one missing a parent or an ancestor, or naming a wrong
+/// one, is refused, each by the rule it breaks.
+#[test]
+fn a_host_kept_closure_is_held_to_the_tree() {
+    use morpholog_test_support::coll;
+    let (_, source) = sheet_blocks()
+        .into_iter()
+        .find(|(_, s)| s.contains("program variant_tree\n"))
+        .expect("the variant-tree block");
+    let p = parse_program(&format!(
+        "{source}\ntransformation record_parent_only(part, parent):\n    admit VariantOf(part, parent)\n"
+    ))
+    .expect("parses");
+    let record = |part: &str, parent: &str, ancestors: &[&str], state: &State| {
+        act(
+            &p,
+            "record_variant",
+            vec![
+                subj(part),
+                subj(parent),
+                coll(ancestors.iter().map(|a| subj(a)).collect()),
+            ],
+            state,
+        )
+    };
+    refused_by(
+        act(
+            &p,
+            "record_parent_only",
+            vec![subj("b"), subj("a")],
+            &State::default(),
+        ),
+        "a_variant_descends_from_its_parent",
+    );
+    let state = accepted(record("b", "a", &[], &State::default()));
+    refused_by(record("c", "b", &[], &state), "descent_is_transitive");
+    refused_by(
+        record("c", "b", &["a", "z"], &state),
+        "descent_follows_the_tree",
+    );
+    let state = accepted(record("c", "b", &["a"], &state));
+    accepted(record("d", "c", &["b", "a"], &state));
+}

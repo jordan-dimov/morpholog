@@ -449,6 +449,37 @@ derived TrialBalance(account):
     value balance = sum(d | Journal(_, account, d, _)) - sum(c | Journal(_, account, _, c))
 ```
 
+**A tree the host closes.** Without recursion, a rule that asks whether
+one part descends from another reads a closure the host keeps as claims:
+every ancestor of every part. Three rules hold that closure to the tree,
+so a missing ancestor and a wrong one are each refused by name: each
+parent is in it, it is transitive, and each entry follows the tree.
+
+```morph
+program variant_tree
+
+-- Each part's parent, as the host records it.
+predicate VariantOf(part: Subject, parent: Subject)
+    unique by (part)
+-- Every ancestor of every part, which the host lists.
+predicate DescendsFrom(part: Subject, ancestor: Subject)
+
+invariant a_variant_descends_from_its_parent:
+    VariantOf(p, q) implies DescendsFrom(p, q)
+
+invariant descent_is_transitive:
+    DescendsFrom(a, b) and DescendsFrom(b, c) implies DescendsFrom(a, c)
+
+invariant descent_follows_the_tree:
+    DescendsFrom(a, c) implies VariantOf(a, c) or (VariantOf(a, b) and DescendsFrom(b, c))
+
+transformation record_variant(part, parent, ancestors):
+    admit VariantOf(part, parent)
+    admit DescendsFrom(part, parent)
+    for a in ancestors:
+        admit DescendsFrom(part, a)
+```
+
 ## Three things to know before the second week
 
 **Gate or rule.** A `require` checks the moment of one act against the
@@ -466,7 +497,11 @@ that predicate can conflict with such a read, so when concurrent acts
 retry it is the first place to look. A read of a predicate the act
 also writes is marked, because two copies of that act can conflict even
 on different records. Key it by something the act knows before it runs,
-a parameter or `actor`.
+a parameter or `actor`. A read listed as going through a definition is
+often the definition looking a claim up again by a key the act has just
+found, such as `sum(q | Alloc(a, item, q) and live(a))` where `live`
+reads `Alloc(a, ...)` once more. Pass the fields the act already holds
+to the definition instead, and the read is keyed.
 
 **Many small claims, never a wider one.** A predicate's shape is part of
 every claim ever admitted under it, so a field added later makes every
@@ -497,6 +532,39 @@ transformation quote(order, bid, ask):
 -- Checks the price where a quote exists; it does not require one.
 invariant priced_inside_the_quote:
     Entry(o, _, price) and Quote(o, bid, ask) implies bid <= price <= ask
+```
+
+A sibling also stands in for a field that may be absent, such as the
+shipment an allocation does not have yet. Key it by the field its parent
+is removed by as well as the parent's own key, so one pattern retract
+removes both, and tie it to its parent with a rule, so an act that
+forgets it is refused by name. The fact added later is governed on its
+own, and the claims already admitted keep their shape and meaning.
+
+```morph
+program optional_field
+
+predicate Allocation(alloc: Subject, line: Subject, qty: Decimal)
+    unique by (alloc)
+
+-- The shipment an allocation may not have yet, keyed by the allocation
+-- and by the line an allocation is cancelled by.
+predicate OnShipment(alloc: Subject, line: Subject, shipment: Subject)
+    unique by (alloc)
+
+invariant a_shipment_names_a_live_allocation:
+    OnShipment(a, l, _) implies Allocation(a, l, _)
+
+transformation allocate(alloc, line, qty):
+    admit Allocation(alloc, line, qty)
+
+transformation ship(alloc, shipment):
+    bind the_allocation: Allocation(alloc, line, _)
+    admit OnShipment(alloc, line, shipment)
+
+transformation cancel_line(line):
+    retract Allocation(line: line, ..)
+    retract OnShipment(line: line, ..)
 ```
 
 **A reserved word is not a name.** `value`, `from`, `over` and the rest of
