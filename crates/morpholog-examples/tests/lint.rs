@@ -35,6 +35,7 @@ fn unsupplied_missing(found: &[Lint]) -> Vec<&str> {
             | Lint::CaseWiderThanClaim { .. }
             | Lint::RequireRematch { .. }
             | Lint::LargeGrid { .. }
+            | Lint::WildcardedCallUnderSum { .. }
             | Lint::BindOnlyToRetract { .. } => None,
         })
         .unwrap_or_default()
@@ -60,6 +61,7 @@ fn governing_finding(found: &[Lint]) -> Option<(&str, Vec<&str>)> {
         | Lint::CaseWiderThanClaim { .. }
         | Lint::RequireRematch { .. }
         | Lint::LargeGrid { .. }
+        | Lint::WildcardedCallUnderSum { .. }
         | Lint::BindOnlyToRetract { .. } => None,
     })
 }
@@ -1733,4 +1735,99 @@ transformation drop_pattern(batch):
         }) => assert_eq!(retracted_claims.len(), 2, "a pattern retract removes both"),
         other => panic!("{other:?}"),
     }
+}
+
+const SUM_OVER_CALL: &str = "program sum_over_call
+predicate Alloc(allocation: Subject, item: Subject, q: Decimal)
+predicate Stock(item: Subject, on_hand: Decimal)
+predicate Allocated(item: Subject, q: Decimal)
+define alloc(allocation, item, q):
+    Alloc(allocation, item, q)
+derived Allocated(item):
+    over Stock(item: item, ..)
+    value q = sum(q | alloc(_, item, q))
+transformation allocate(allocation, item, q):
+    require within: sum(x | alloc(_, item, x)) + q <= value Stock(item, _)
+    admit Alloc(allocation, item, q)
+transformation receive(item, on_hand):
+    admit Stock(item, on_hand)
+";
+
+/// A sum over a definition called with `_` collapses claims that differ
+/// only there, and the hint names the rule, the definition and the
+/// parameter, once per call.
+#[test]
+fn a_wildcarded_call_under_a_sum_is_hinted_in_every_rule_that_holds_one() {
+    let found: Vec<(String, String, Vec<String>)> = lints_of(SUM_OVER_CALL)
+        .into_iter()
+        .filter_map(|l| match l {
+            Lint::WildcardedCallUnderSum {
+                owner,
+                definition,
+                parameters,
+            } => Some((owner, definition, parameters)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        found,
+        vec![
+            (
+                "transformation `allocate`".to_string(),
+                "alloc".to_string(),
+                vec!["allocation".to_string()]
+            ),
+            (
+                "derived `Allocated`".to_string(),
+                "alloc".to_string(),
+                vec!["allocation".to_string()]
+            ),
+        ],
+        "transformations first, then derived claims, as the walk goes"
+    );
+    let shown = lints_of(SUM_OVER_CALL)[0].to_string();
+    assert!(
+        shown.contains("called with `_` for `allocation`") && shown.contains("count as one"),
+        "{shown}"
+    );
+}
+
+/// Naming the argument counts each claim; a wildcard in a claim pattern
+/// under a sum collapses nothing; a wildcarded call outside a sum is a
+/// truth test. None of these is hinted.
+#[test]
+fn the_wildcarded_call_hint_stays_silent_where_nothing_collapses() {
+    let named = SUM_OVER_CALL
+        .replace("sum(q | alloc(_, item, q))", "sum(q | alloc(a, item, q))")
+        .replace("sum(x | alloc(_, item, x))", "sum(x | alloc(a, item, x))");
+    assert!(
+        !lints_of(&named)
+            .iter()
+            .any(|l| matches!(l, Lint::WildcardedCallUnderSum { .. })),
+        "a named argument counts each claim"
+    );
+    let pattern = SUM_OVER_CALL
+        .replace("sum(q | alloc(_, item, q))", "sum(q | Alloc(_, item, q))")
+        .replace("sum(x | alloc(_, item, x))", "sum(x | Alloc(_, item, x))");
+    assert!(
+        !lints_of(&pattern)
+            .iter()
+            .any(|l| matches!(l, Lint::WildcardedCallUnderSum { .. })),
+        "a wildcard in a claim pattern collapses nothing"
+    );
+    let truth = "program truth
+predicate Alloc(allocation: Subject, item: Subject, q: Decimal)
+predicate Out(item: Subject)
+define alloc(allocation, item, q):
+    Alloc(allocation, item, q)
+transformation mark(item):
+    require alloc(_, item, _)
+    admit Out(item)
+";
+    assert!(
+        !lints_of(truth)
+            .iter()
+            .any(|l| matches!(l, Lint::WildcardedCallUnderSum { .. })),
+        "a call outside a sum is a truth test"
+    );
 }

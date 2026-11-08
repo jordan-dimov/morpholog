@@ -193,6 +193,20 @@ impl SourceMap {
             Lint::SharedWriter { transformation, .. } => {
                 self.decl_span(DeclKind::Transformation, transformation)
             }
+            // On the rule that holds the sum.
+            Lint::WildcardedCallUnderSum { owner, .. } => {
+                let (kind, name) = owner.rsplit_once('`')?.0.rsplit_once('`')?;
+                let kind = if kind.contains("transformation") {
+                    DeclKind::Transformation
+                } else if kind.contains("invariant") {
+                    DeclKind::Invariant
+                } else if kind.contains("derived") {
+                    DeclKind::DerivedClaim
+                } else {
+                    DeclKind::Definition
+                };
+                self.decl_span(kind, name)
+            }
             // On the transformation whose gate and step set the grid's size.
             Lint::LargeGrid { transformation, .. } => {
                 self.decl_span(DeclKind::Transformation, transformation)

@@ -484,6 +484,8 @@ transformation record_variant(part, parent, ancestors):
         admit DescendsFrom(part, a)
 ```
 
+A call yields each distinct projection of its named arguments once. So a `sum` over a call with `_` for an argument counts claims that differ only there as one: `sum(q | alloc(_, item, q))` counts two allocations of the same quantity on one item once. Name the argument when each claim must count; `check` hints when it sees the wildcard under a sum.
+
 ## Three things to know before the second week
 
 **Gate or rule.** A `require` checks the moment of one act against the

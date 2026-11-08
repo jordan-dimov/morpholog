@@ -47,6 +47,18 @@ pub fn client_refuses_name(name: &str) -> bool {
 /// One lint finding. See the module doc for the error-vs-lint line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Lint {
+    /// A `sum` whose body calls a definition with `_` for a parameter.
+    /// A call yields each distinct projection of its named arguments
+    /// once, so claims that differ only at the wildcarded position count
+    /// as one, and the sum undercounts them. A hint, because collapsing
+    /// them can be what the author means; otherwise name the argument.
+    /// `owner` is the rule the sum sits in, as "transformation `name`".
+    WildcardedCallUnderSum {
+        owner: String,
+        definition: String,
+        parameters: Vec<String>,
+    },
+
     /// An invariant whose antecedent positively references an
     /// append-only predicate and whose consequent positively requires a
     /// current-pointer predicate. Retracting the pointer would make
@@ -253,6 +265,20 @@ pub fn shared_writer_lints(this: &Program, other: &Program) -> Vec<Lint> {
 impl std::fmt::Display for Lint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Lint::WildcardedCallUnderSum {
+                owner,
+                definition,
+                parameters,
+            } => {
+                let named: Vec<String> = parameters.iter().map(|p| format!("`{p}`")).collect();
+                write!(
+                    f,
+                    "{owner} sums over `{definition}` called with `_` for {}: a call counts each \
+                     distinct projection of its named arguments once, so claims that differ only \
+                     there count as one. Name the argument when each claim must count",
+                    named.join(" and ")
+                )
+            }
             Lint::LargeGrid {
                 transformation,
                 bound,
@@ -568,6 +594,7 @@ pub fn lints(prepared: &PreparedProgram) -> Vec<Lint> {
             );
         }
     }
+    wildcarded_call_findings(program, &definitions, &mut out);
     for t in &program.transformations {
         large_grid_findings(t, &mut out);
     }
@@ -617,6 +644,79 @@ fn large_grid_findings(t: &crate::ir::Transformation, out: &mut Vec<Lint>) {
                     bound: bound.to_string(),
                     step: step.to_string(),
                     periods,
+                });
+            }
+        });
+    }
+}
+
+/// Every sum in the programme whose body calls a definition with a
+/// wildcard argument, once per call and owner, with the parameters the
+/// wildcards stand for.
+fn wildcarded_call_findings(
+    program: &Program,
+    definitions: &crate::definitions::DefinitionTable<'_>,
+    out: &mut Vec<Lint>,
+) {
+    fn sum_body<'a>(owner: &str, node: fold::Node<'a>, out: &mut Vec<(String, &'a Prop)>) {
+        if let fold::Node::Value(ValueExpr::Sum { body, .. }) = node {
+            out.push((owner.to_string(), body));
+        }
+    }
+    let mut seen: BTreeSet<(String, String, Vec<String>)> = BTreeSet::new();
+    let mut sum_bodies: Vec<(String, &Prop)> = Vec::new();
+    for t in &program.transformations {
+        let owner = format!("transformation `{}`", t.name);
+        for stmt in &t.body {
+            fold::walk_stmt(stmt, &mut |node| sum_body(&owner, node, &mut sum_bodies));
+        }
+    }
+    for inv in &program.invariants {
+        let owner = format!("invariant `{}`", inv.name);
+        fold::walk_prop(&inv.body, &mut |node| {
+            sum_body(&owner, node, &mut sum_bodies)
+        });
+    }
+    for d in &program.derived_claims {
+        let owner = format!("derived `{}`", d.predicate);
+        fold::walk_prop(&d.domain, &mut |node| {
+            sum_body(&owner, node, &mut sum_bodies)
+        });
+        for value in &d.values {
+            fold::walk_value(&value.expr, &mut |node| {
+                sum_body(&owner, node, &mut sum_bodies)
+            });
+        }
+    }
+    for def in &program.definitions {
+        let owner = format!("definition `{}`", def.name);
+        fold::walk_prop(&def.body, &mut |node| {
+            sum_body(&owner, node, &mut sum_bodies)
+        });
+    }
+    for (owner, body) in sum_bodies {
+        fold::walk_prop(body, &mut |node| {
+            let fold::Node::Prop(Prop::Defined { name, args }) = node else {
+                return;
+            };
+            let Some(def) = definitions.get(name) else {
+                return;
+            };
+            let parameters: Vec<String> = def
+                .parameters
+                .iter()
+                .zip(args)
+                .filter(|(_, arg)| matches!(arg, Term::Wildcard))
+                .map(|(param, _)| param.to_string())
+                .collect();
+            if parameters.is_empty() {
+                return;
+            }
+            if seen.insert((owner.clone(), name.to_string(), parameters.clone())) {
+                out.push(Lint::WildcardedCallUnderSum {
+                    owner: owner.clone(),
+                    definition: name.to_string(),
+                    parameters,
                 });
             }
         });

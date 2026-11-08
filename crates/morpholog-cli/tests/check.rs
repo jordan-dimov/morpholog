@@ -1405,3 +1405,43 @@ fn check_json_reports_the_cases_beside_the_route() {
         "got: {payload}"
     );
 }
+
+/// The undercount hint carets the rule that holds the sum and names the
+/// wildcarded parameter; `--strict` makes it an error.
+#[test]
+fn a_wildcarded_call_under_a_sum_is_hinted_at_its_rule() {
+    let f = temp_morph(
+        "program collapse
+
+predicate Alloc(allocation: Subject, item: Subject, q: Decimal)
+predicate Stock(item: Subject, on_hand: Decimal)
+
+define alloc(allocation, item, q):
+    Alloc(allocation, item, q)
+
+transformation allocate(allocation, item, q):
+    require within: sum(x | alloc(_, item, x)) + q <= value Stock(item, _)
+    admit Alloc(allocation, item, q)
+",
+    );
+    let out = Command::new(bin())
+        .arg("check")
+        .arg(f.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("hint:")
+            && stderr.contains("called with `_` for `allocation`")
+            && stderr.contains(":9:1"),
+        "got: {stderr}"
+    );
+    let strict = Command::new(bin())
+        .arg("check")
+        .arg(f.path())
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert!(!strict.status.success(), "--strict promotes it");
+}
