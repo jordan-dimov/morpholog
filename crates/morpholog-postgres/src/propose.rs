@@ -885,6 +885,12 @@ pub(crate) async fn load_state(
         return Ok(State::default());
     }
     let (sql, binds) = load_sql(scope)?;
+    if binds.len() > PG_BIND_LIMIT {
+        return Err(PgError::InvalidState(format!(
+            "the load would bind {} parameters, more than PostgreSQL accepts in one statement",
+            binds.len()
+        )));
+    }
     // Safe: the structure is rendered from the programme with the
     // predicate names quoted; every proposed value is a bound parameter.
     let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
@@ -1014,6 +1020,19 @@ fn seek_all(
     Ok(conjuncts.join(" AND "))
 }
 
+/// The most parameters PostgreSQL binds in one statement (the count is a
+/// 16-bit field of the protocol).
+pub(crate) const PG_BIND_LIMIT: usize = 65_535;
+
+/// The parameters one key binds in the loader's statement.
+fn parameters_of(key: &Key) -> usize {
+    match key {
+        Key::Value(_) => 1,
+        Key::OneOf(values) => values.len(),
+        Key::Field { of, .. } => of.iter().map(|(_, key)| parameters_of(key)).sum(),
+    }
+}
+
 /// What a loaded state must serve. `Body`: the compiled route, where the
 /// claims table serves the checks and reports the effective delta.
 /// `BodyAndInvariants`: the interpreter, which evaluates invariants and
@@ -1086,6 +1105,59 @@ impl LoadScope {
     pub(crate) fn union(&mut self, other: LoadScope) {
         for (predicate, filter) in other.filters {
             self.add(predicate, filter);
+        }
+    }
+
+    /// The parameters the loader's statement for this scope binds.
+    pub(crate) fn parameters(&self) -> usize {
+        self.filters
+            .values()
+            .map(|filter| match filter {
+                LoadFilter::Whole => 0,
+                LoadFilter::Keyed(patterns) => patterns
+                    .iter()
+                    .flatten()
+                    .map(|(_, key)| parameters_of(key))
+                    .sum(),
+            })
+            .sum()
+    }
+
+    /// Within what one statement can bind: while over the limit, the
+    /// largest element key goes, the first of equals in predicate and
+    /// pattern order, its pattern keeping its other coordinates and
+    /// reading whole when none remain. Each step loads a superset, so the
+    /// projection stays one the kernel decides the same over.
+    pub(crate) fn within_parameter_budget(&mut self) {
+        while self.parameters() > PG_BIND_LIMIT {
+            let mut largest: Option<(PredicateName, usize, usize, usize)> = None;
+            for (predicate, filter) in &self.filters {
+                let LoadFilter::Keyed(patterns) = filter else {
+                    continue;
+                };
+                for (p, pattern) in patterns.iter().enumerate() {
+                    for (c, (_, key)) in pattern.iter().enumerate() {
+                        if let Key::OneOf(values) = key
+                            && largest
+                                .as_ref()
+                                .is_none_or(|(_, _, _, n)| values.len() > *n)
+                        {
+                            largest = Some((predicate.clone(), p, c, values.len()));
+                        }
+                    }
+                }
+            }
+            let Some((predicate, p, c, _)) = largest else {
+                return;
+            };
+            if let Some(filter) = self.filters.get_mut(&predicate)
+                && let LoadFilter::Keyed(patterns) = filter
+            {
+                patterns[p].remove(c);
+                if patterns[p].is_empty() {
+                    *filter = LoadFilter::Whole;
+                }
+            }
         }
     }
 
@@ -1191,6 +1263,7 @@ pub(crate) fn compute_load_scope(
     for predicate in referenced {
         scope.add(predicate, LoadFilter::Whole);
     }
+    scope.within_parameter_budget();
     scope
 }
 

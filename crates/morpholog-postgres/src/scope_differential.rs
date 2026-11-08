@@ -1427,3 +1427,224 @@ fn a_nested_loop_reusing_the_name_reads_its_own_collection() {
     assert!(shown.starts_with("staged:"), "{shown}");
     assert_eq!(projected.claims_for("Stock").count(), 1);
 }
+
+/// A scope with every kind of key: what the plan says it binds is what
+/// the loader binds.
+#[test]
+fn the_parameter_count_is_the_loader_s_bind_count() {
+    use crate::propose::{LoadFilter, load_sql};
+    use morpholog_core::Key;
+    use morpholog_test_support::{dec, subj};
+    let mut scope = LoadScope::default();
+    scope.filters.insert("W".into(), LoadFilter::Whole);
+    scope.filters.insert(
+        "K".into(),
+        LoadFilter::Keyed(vec![
+            vec![(0, Key::Value(subj("a"))), (1, Key::Value(dec(1)))],
+            vec![(
+                0,
+                Key::Field {
+                    predicate: "P".into(),
+                    position: 1,
+                    of: vec![
+                        (0, Key::Value(subj("b"))),
+                        (
+                            1,
+                            Key::Field {
+                                predicate: "Q".into(),
+                                position: 0,
+                                of: vec![(0, Key::OneOf(vec![subj("c"), subj("d"), subj("e")]))],
+                            },
+                        ),
+                    ],
+                },
+            )],
+            vec![(0, Key::OneOf(vec![subj("f"), subj("g")]))],
+        ]),
+    );
+    let (_, binds) = load_sql(&scope).unwrap();
+    assert_eq!(scope.parameters(), binds.len());
+    assert_eq!(binds.len(), 2 + 1 + 3 + 2);
+}
+
+/// At the limit nothing changes; one over, the largest element key goes,
+/// the first of equals, its pattern keeping its other coordinate; a
+/// pattern left with none reads whole.
+#[test]
+fn the_budget_widens_the_largest_element_key_first_and_only_past_the_limit() {
+    use crate::propose::{LoadFilter, PG_BIND_LIMIT};
+    use morpholog_core::Key;
+    use morpholog_test_support::subj;
+    let elements = |n: usize| Key::OneOf((0..n).map(|i| subj(&format!("e{i}"))).collect());
+    let big = PG_BIND_LIMIT - 3;
+    let at_limit = || {
+        let mut scope = LoadScope::default();
+        scope.filters.insert(
+            "A".into(),
+            LoadFilter::Keyed(vec![vec![(0, Key::Value(subj("a"))), (1, elements(2))]]),
+        );
+        scope.filters.insert(
+            "B".into(),
+            LoadFilter::Keyed(vec![vec![(0, elements(big))]]),
+        );
+        scope
+    };
+    let mut scope = at_limit();
+    assert_eq!(scope.parameters(), PG_BIND_LIMIT);
+    scope.within_parameter_budget();
+    assert_eq!(scope, at_limit(), "at the limit nothing is widened");
+
+    let mut scope = at_limit();
+    scope.filters.insert(
+        "C".into(),
+        LoadFilter::Keyed(vec![vec![(0, Key::Value(subj("c")))]]),
+    );
+    assert_eq!(scope.parameters(), PG_BIND_LIMIT + 1);
+    scope.within_parameter_budget();
+    assert_eq!(
+        scope.filters[&"B".into()],
+        LoadFilter::Whole,
+        "the largest element key goes, and its pattern had nothing else"
+    );
+    assert_eq!(
+        scope.filters[&"A".into()],
+        LoadFilter::Keyed(vec![vec![(0, Key::Value(subj("a"))), (1, elements(2))]]),
+        "the small key stays"
+    );
+    assert!(scope.parameters() <= PG_BIND_LIMIT);
+
+    // Equals: the first in predicate order goes, and the pattern keeps
+    // its value coordinate.
+    let mut scope = LoadScope::default();
+    for name in ["X", "Y"] {
+        scope.filters.insert(
+            name.into(),
+            LoadFilter::Keyed(vec![vec![
+                (0, Key::Value(subj("k"))),
+                (1, elements(big / 2 + 2)),
+            ]]),
+        );
+    }
+    assert!(scope.parameters() > PG_BIND_LIMIT);
+    scope.within_parameter_budget();
+    assert_eq!(
+        scope.filters[&"X".into()],
+        LoadFilter::Keyed(vec![vec![(0, Key::Value(subj("k")))]])
+    );
+    assert_eq!(
+        scope.filters[&"Y".into()],
+        LoadFilter::Keyed(vec![vec![
+            (0, Key::Value(subj("k"))),
+            (1, elements(big / 2 + 2))
+        ]])
+    );
+}
+
+/// Seventy loops over seventy collections of a thousand elements bind
+/// seventy thousand parameters before the budget. After it the load fits
+/// one statement, admits every row the unwidened plan admitted, and the
+/// act decides the same over the projection as over the whole state,
+/// including the refusal an omitted row would hide.
+#[test]
+fn a_load_past_the_limit_widens_conservatively_and_decides_alike() {
+    use crate::propose::{LoadFilter, PG_BIND_LIMIT};
+    use morpholog_core::{Key, ReadPlan};
+    use morpholog_test_support::{claim_instance, coll, subj};
+    let n = 70;
+    let mut source = String::from("program wide\n");
+    for k in 0..n {
+        source.push_str(&format!("predicate P{k}(o: Subject)\n"));
+    }
+    source.push_str("predicate Out(t: Subject)\n");
+    let params: Vec<String> = (0..n).map(|k| format!("c{k}")).collect();
+    source.push_str(&format!(
+        "transformation check(t, {}):\n",
+        params.join(", ")
+    ));
+    for k in 0..n {
+        source.push_str(&format!("    for o in c{k}:\n        require P{k}(o)\n"));
+    }
+    source.push_str("    admit Out(t)\n");
+    let program = morpholog_surface::parse_program(&source).expect("parses");
+    let t = &program.transformations[0];
+    let prepared = morpholog_test_support::prepare(&program);
+
+    // Each collection names a thousand items; the state holds a row for
+    // each of them under its predicate, except one row under P69 for the
+    // last element, which the gate then refuses on.
+    let elements: Vec<morpholog_core::EvalValue> =
+        (0..1000).map(|i| subj(&format!("i{i}"))).collect();
+    let mut full = Vec::new();
+    for k in 0..n {
+        for (i, e) in elements.iter().enumerate() {
+            if k == n - 1 && i == 999 {
+                continue;
+            }
+            full.push(claim_instance(&format!("P{k}"), std::slice::from_ref(e)));
+        }
+    }
+    let full = State::from_claims(full);
+    let mut args = vec![subj("t")];
+    args.extend((0..n).map(|_| coll(elements.clone())));
+    let transition = morpholog_core::Transition {
+        transformation_name: t.name.clone(),
+        args,
+        actor: morpholog_test_support::test_actor(),
+        decided_at: None,
+    };
+
+    // The plan before the budget: every read keyed by its elements.
+    let plan = ReadPlan::of(t, &program.definitions);
+    let mut unwidened = LoadScope::default();
+    for (predicate, filter) in &plan.reads {
+        let patterns = filter.resolve(t, &transition).expect("every read is keyed");
+        unwidened
+            .filters
+            .insert(predicate.clone(), LoadFilter::Keyed(patterns));
+    }
+    assert_eq!(unwidened.parameters(), n * 1000);
+
+    let scope = compute_load_scope(
+        t,
+        Some(&transition),
+        &program.invariants,
+        &program.definitions,
+        Reads::Body,
+    );
+    assert!(
+        scope.parameters() <= PG_BIND_LIMIT,
+        "{}",
+        scope.parameters()
+    );
+    let whole: Vec<String> = scope
+        .filters
+        .iter()
+        .filter(|(_, f)| **f == LoadFilter::Whole)
+        .map(|(p, _)| p.to_string())
+        .collect();
+    assert_eq!(
+        whole,
+        ["P0", "P1", "P10", "P11", "P12"],
+        "the first five of equals in name order, whole"
+    );
+    assert!(matches!(
+        &scope.filters[&"P5".into()],
+        LoadFilter::Keyed(patterns) if matches!(&patterns[0][0].1, Key::OneOf(v) if v.len() == 1000)
+    ));
+
+    for claim in full.claims().iter() {
+        if unwidened.admits(claim, &full) {
+            assert!(scope.admits(claim, &full), "widening dropped {claim:?}");
+        }
+    }
+    let projected = project(&full, &scope);
+    let on_full = prepared
+        .stage_delta(&transition, &full, &mut same_subjects())
+        .map(|staged| staged.expect("declared"));
+    let on_projected = prepared
+        .stage_delta(&transition, &projected, &mut same_subjects())
+        .map(|staged| staged.expect("declared"));
+    let shown = staged_observable(&on_full);
+    assert!(shown.starts_with("rejected:"), "{shown}");
+    assert_eq!(shown, staged_observable(&on_projected));
+}

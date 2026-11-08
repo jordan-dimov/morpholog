@@ -660,3 +660,30 @@ async fn the_same_merges_conflict_under_whole_reads() {
     );
     assert!(relation_locks > 0);
 }
+
+/// A scope the budget cannot widen, value keys alone past the limit,
+/// is refused before any statement is sent.
+#[tokio::test]
+async fn a_load_the_budget_cannot_fit_is_refused_explicitly() {
+    use crate::propose::{LoadFilter, PG_BIND_LIMIT};
+    use morpholog_core::Key;
+    let pool = test_pool().await;
+    let mut scope = LoadScope::default();
+    scope.filters.insert(
+        "V".into(),
+        LoadFilter::Keyed(
+            (0..=PG_BIND_LIMIT)
+                .map(|i| vec![(0, Key::Value(subj(&format!("v{i}"))))])
+                .collect(),
+        ),
+    );
+    scope.within_parameter_budget();
+    assert!(scope.parameters() > PG_BIND_LIMIT, "nothing to widen");
+    let mut tx = pool.begin().await.unwrap();
+    let refused = load_state(&mut tx, &scope).await;
+    tx.rollback().await.unwrap();
+    assert!(
+        matches!(&refused, Err(PgError::InvalidState(m)) if m.contains("more than PostgreSQL accepts")),
+        "{refused:?}"
+    );
+}
