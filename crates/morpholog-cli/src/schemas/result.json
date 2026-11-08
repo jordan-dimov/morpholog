@@ -2406,6 +2406,47 @@
           }
         }
       ]
+    },
+    "view_surface": {
+      "description": "What `generate views --describe` writes: the generated view surface, for a host that builds its read models from it instead of restating them. `model_hash` is what every row of the deployed catalogue must carry; `format` moves when this description's shape changes, apart from the programme.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "programme", "model_hash", "schema", "catalog", "seal_table", "views"],
+      "properties": {
+        "format": { "const": 1 },
+        "programme": { "type": "string" },
+        "model_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "schema": { "type": "string" },
+        "catalog": { "type": "string" },
+        "seal_table": { "type": "string" },
+        "views": { "type": "array", "items": { "$ref": "#/$defs/view_description" } }
+      }
+    },
+    "view_description": {
+      "description": "One generated view: its predicate, name and kind, its columns in the view's order, and `identity`, the field sets the programme declares unique (each `unique by` clause of a base predicate, the key fields of a derived one), as declared and possibly empty. Whether one serves as a key is the consumer's decision.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predicate", "view", "kind", "columns", "identity"],
+      "properties": {
+        "predicate": { "type": "string" },
+        "view": { "type": "string" },
+        "kind": { "enum": ["base", "derived"] },
+        "columns": { "type": "array", "items": { "$ref": "#/$defs/view_column" } },
+        "identity": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } }
+      }
+    },
+    "view_column": {
+      "description": "One column in the view's order. The generator's metadata columns carry no Morpholog kind or position; a field carries its kind as `schema` spells kinds and its declared position. `sql_type` is the PostgreSQL type the view casts to.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "role", "sql_type"],
+      "properties": {
+        "name": { "type": "string" },
+        "role": { "enum": ["metadata", "field"] },
+        "kind": { "type": "string" },
+        "sql_type": { "enum": ["text", "numeric", "date", "timestamptz", "interval", "boolean", "jsonb", "uuid"] },
+        "position": { "type": "integer", "minimum": 0 }
+      }
     }
   }
 }

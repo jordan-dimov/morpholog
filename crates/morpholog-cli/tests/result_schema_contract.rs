@@ -3813,3 +3813,34 @@ fn the_manual_schema_intent_ledger_holds() {
         broken.join("\n")
     );
 }
+
+/// The committed description of the trade-lifecycle views validates
+/// against its definition: the one golden `generate views --describe`
+/// and the Python client's reader both answer to.
+#[test]
+fn the_view_surface_golden_validates_against_its_def() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/10_trade_lifecycle/trade_lifecycle_views.json");
+    let surface: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let schema = result_schema();
+    let defs = schema.get("$defs").unwrap();
+    validate(
+        &surface,
+        defs.get("view_surface").unwrap(),
+        defs,
+        "view_surface",
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let views = surface["views"].as_array().unwrap();
+    assert!(
+        views.iter().any(|v| v["kind"] == "derived"),
+        "a derived view is pinned too"
+    );
+    assert!(
+        views
+            .iter()
+            .any(|v| v["identity"].as_array().is_some_and(|i| !i.is_empty())),
+        "an identity is pinned"
+    );
+}

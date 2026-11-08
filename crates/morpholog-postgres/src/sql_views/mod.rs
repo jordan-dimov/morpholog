@@ -32,12 +32,14 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 
-use morpholog_core::{PredicateArgKind, PredicateDecl, ValidatedProgram};
+use morpholog_core::{Discipline, PredicateArgKind, PredicateDecl, ValidatedProgram};
+use serde::Serialize;
 
 use crate::sql_quote::{quote_ident, quote_literal};
 
-/// The rendered script plus how many views of each kind it emits,
-/// excluding the catalogue.
+/// The rendered script, how many views of each kind it emits excluding
+/// the catalogue, and the description of the surface it creates, read
+/// off the same column lists the SQL was rendered from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedViews {
     pub sql: String,
@@ -45,6 +47,55 @@ pub struct RenderedViews {
     pub base_view_count: usize,
     /// Views over the `morpholog_read` cache (one per derived head).
     pub derived_view_count: usize,
+    pub surface: ViewSurface,
+}
+
+/// The format of [`ViewSurface`] as written. Moves when the description's
+/// shape changes, apart from the model hash, which moves with the
+/// programme.
+pub const VIEW_SURFACE_FORMAT: u32 = 1;
+
+/// What `generate views` creates, for a consumer that builds its own
+/// models from it: the programme and model hash the deployed catalogue
+/// must carry, the schema, the catalogue and seal names, and every view
+/// with its columns in order and the identity the programme guarantees.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ViewSurface {
+    pub format: u32,
+    pub programme: String,
+    pub model_hash: String,
+    pub schema: String,
+    pub catalog: String,
+    pub seal_table: String,
+    pub views: Vec<ViewDescription>,
+}
+
+/// One generated view. `identity` lists the field sets the programme
+/// declares unique (`unique by` clauses for a base predicate, the key
+/// fields for a derived one), as declared: whether one serves as a key
+/// is the consumer's decision, and a view may have none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ViewDescription {
+    pub predicate: String,
+    pub view: String,
+    pub kind: String,
+    pub columns: Vec<ColumnDescription>,
+    pub identity: Vec<Vec<String>>,
+}
+
+/// One column, in the view's order: the generator's metadata columns
+/// first, then the declared fields. A field carries its Morpholog kind
+/// as `schema` spells kinds and its declared position; the SQL type is
+/// the one the view casts to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ColumnDescription {
+    pub name: String,
+    pub role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    pub sql_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<usize>,
 }
 
 /// One reason a programme cannot be rendered as views. All are collected,
@@ -124,11 +175,13 @@ pub(crate) const CATALOG_VIEW: &str = "_morpholog_catalog";
 /// part of the surface.
 pub const VIEW_DEFS_TABLE: &str = "_morpholog_view_defs";
 
-/// The SQL `SELECT` expression and the kind note for one declared
-/// argument position. The expression is over the CTE-bound `arguments`
-/// JSONB array; `kind_comment` becomes a persistent `COMMENT ON COLUMN`.
+/// The SQL `SELECT` expression, the type it yields and the kind note for
+/// one declared argument position. The expression is over the CTE-bound
+/// `arguments` JSONB array; `kind_comment` becomes a persistent
+/// `COMMENT ON COLUMN`; `sql_type` is what the description reports.
 struct ColumnSql {
     expr: String,
+    sql_type: &'static str,
     kind_comment: String,
 }
 
@@ -139,22 +192,30 @@ struct ColumnSql {
 /// `Collection` and `Any` fall back to plain `jsonb` (the Python client
 /// refuses them, but a read projection can carry them).
 fn column_sql(kind: &PredicateArgKind, i: usize) -> ColumnSql {
-    let col = |expr: String, kind_comment: String| ColumnSql { expr, kind_comment };
+    let col = |expr: String, sql_type: &'static str, kind_comment: String| ColumnSql {
+        expr,
+        sql_type,
+        kind_comment,
+    };
     match kind {
         PredicateArgKind::Subject => col(
             format!("arguments -> {i} ->> 'value'"),
+            "text",
             "Morpholog kind Subject".to_string(),
         ),
         PredicateArgKind::Decimal => col(
             format!("(arguments -> {i} ->> 'value')::numeric"),
+            "numeric",
             "Morpholog kind Decimal".to_string(),
         ),
         PredicateArgKind::Date => col(
             format!("(arguments -> {i} ->> 'value')::date"),
+            "date",
             "Morpholog kind Date".to_string(),
         ),
         PredicateArgKind::Timestamp => col(
             format!("(arguments -> {i} ->> 'value')::timestamptz"),
+            "timestamptz",
             "Morpholog kind Timestamp; PostgreSQL microsecond precision \
              (exact source in _morpholog_arguments)"
                 .to_string(),
@@ -169,30 +230,36 @@ fn column_sql(kind: &PredicateArgKind, i: usize) -> ColumnSql {
                  THEN -((substring(arguments -> {i} ->> 'value' FROM 2))::interval) \
                  ELSE (arguments -> {i} ->> 'value')::interval END"
             ),
+            "interval",
             "Morpholog kind Duration; PostgreSQL microsecond precision \
              (exact source in _morpholog_arguments)"
                 .to_string(),
         ),
         PredicateArgKind::Bool => col(
             format!("(arguments -> {i} ->> 'value')::boolean"),
+            "boolean",
             "Morpholog kind Bool".to_string(),
         ),
         PredicateArgKind::Quantity(unit) => col(
             format!("(arguments -> {i} -> 'value' ->> 'amount')::numeric"),
+            "numeric",
             format!("Morpholog kind Decimal[{unit}]; amount in {unit}"),
         ),
         PredicateArgKind::Collection => col(
             format!("arguments -> {i} -> 'value'"),
+            "jsonb",
             "Morpholog kind Collection (jsonb array of tagged values)".to_string(),
         ),
         // Validation refuses this kind in declarations, so no column asks
         // for it; plain jsonb is the safe fallback.
         PredicateArgKind::CalendarSpan => col(
             format!("arguments -> {i}"),
+            "jsonb",
             "Morpholog kind CalendarSpan (expression-only; never admitted)".to_string(),
         ),
         PredicateArgKind::Any => col(
             format!("arguments -> {i}"),
+            "jsonb",
             "Morpholog kind Any (the whole tagged {type,value} object)".to_string(),
         ),
     }
@@ -330,11 +397,38 @@ pub fn render_views(
         return Err(refusals);
     }
 
-    let sql = render(program.name.as_str(), schema, model_hash, &base, &derived);
+    // A derived view's identity is the derived claim's key fields.
+    let derived_keys: BTreeMap<&str, Vec<String>> = program
+        .derived_claims
+        .iter()
+        .map(|d| {
+            (
+                d.predicate.as_str(),
+                d.keys.iter().map(|k| k.as_str().to_string()).collect(),
+            )
+        })
+        .collect();
+    let (sql, views) = render(
+        program.name.as_str(),
+        schema,
+        model_hash,
+        &base,
+        &derived,
+        &derived_keys,
+    );
     Ok(RenderedViews {
         sql,
         base_view_count: base.len(),
         derived_view_count: derived.len(),
+        surface: ViewSurface {
+            format: VIEW_SURFACE_FORMAT,
+            programme: program.name.to_string(),
+            model_hash: model_hash.to_string(),
+            schema: schema.to_string(),
+            catalog: CATALOG_VIEW.to_string(),
+            seal_table: VIEW_DEFS_TABLE.to_string(),
+            views,
+        },
     })
 }
 
@@ -390,15 +484,18 @@ fn sweep(schema: &str, base: &[&PredicateDecl], derived: &[&PredicateDecl]) -> V
     refusals
 }
 
-/// Render the complete atomic script. Assumes the sweep has passed.
+/// Render the complete atomic script and each view's description.
+/// Assumes the sweep has passed.
 fn render(
     program: &str,
     schema: &str,
     model_hash: &str,
     base: &[&PredicateDecl],
     derived: &[&PredicateDecl],
-) -> String {
+    derived_keys: &BTreeMap<&str, Vec<String>>,
+) -> (String, Vec<ViewDescription>) {
     let mut out = String::new();
+    let mut views = Vec::with_capacity(base.len() + derived.len());
     let _ = writeln!(
         out,
         "-- Generated by `morpholog generate views` - do not edit."
@@ -413,17 +510,44 @@ fn render(
         out.push_str("\n-- no predicates: this programme declares no claim shapes.\n");
     }
     for predicate in base {
-        render_view(&mut out, schema, model_hash, predicate, ViewKind::Base);
+        let identity = predicate
+            .disciplines
+            .iter()
+            .filter_map(|d| match d {
+                Discipline::UniqueBy { fields } => Some(fields.clone()),
+                _ => None,
+            })
+            .collect();
+        views.push(render_view(
+            &mut out,
+            schema,
+            model_hash,
+            predicate,
+            ViewKind::Base,
+            identity,
+        ));
     }
     for predicate in derived {
-        render_view(&mut out, schema, model_hash, predicate, ViewKind::Derived);
+        let identity = derived_keys
+            .get(predicate.name.as_str())
+            .cloned()
+            .map(|keys| vec![keys])
+            .unwrap_or_default();
+        views.push(render_view(
+            &mut out,
+            schema,
+            model_hash,
+            predicate,
+            ViewKind::Derived,
+            identity,
+        ));
     }
 
     render_catalog(&mut out, program, schema, model_hash, base, derived);
     render_seal(&mut out, schema, base, derived);
 
     out.push_str("\nCOMMIT;\n");
-    out
+    (out, views)
 }
 
 /// Render the seal: in the same transaction, read each view's definition
@@ -470,14 +594,16 @@ fn render_seal(
 }
 
 /// Render one predicate's view block: the read-only view, then its
-/// `COMMENT ON VIEW` / `COMMENT ON COLUMN` metadata.
+/// `COMMENT ON VIEW` / `COMMENT ON COLUMN` metadata. Returns the view's
+/// description, read off the same column list.
 fn render_view(
     out: &mut String,
     schema: &str,
     model_hash: &str,
     predicate: &PredicateDecl,
     kind: ViewKind,
-) {
+    identity: Vec<Vec<String>>,
+) -> ViewDescription {
     let name = predicate.name.as_str();
     let view = snake_case(name);
     let qualified = format!("{}.{}", quote_ident(schema), quote_ident(&view));
@@ -485,9 +611,10 @@ fn render_view(
     let _ = writeln!(out, "\n-- View for {} predicate `{name}`.", kind.label());
     let _ = writeln!(out, "CREATE OR REPLACE VIEW {qualified} AS");
 
-    // The CTE binds `arguments` plus the source's metadata columns. The
-    // top-level `WITH` makes the view read-only.
-    let (cte_name, mut selects): (&str, Vec<(String, String)>) = match kind {
+    // The CTE binds `arguments` plus the source's metadata columns, each
+    // with the type the source gives it. The top-level `WITH` makes the
+    // view read-only.
+    let (cte_name, mut selects): (&str, Vec<(String, String, &str)>) = match kind {
         ViewKind::Base => {
             out.push_str("WITH governed_claims AS (\n");
             out.push_str("    SELECT arguments, asserted_in, asserted_at\n");
@@ -497,9 +624,17 @@ fn render_view(
             (
                 "governed_claims",
                 vec![
-                    ("asserted_in".into(), "_morpholog_asserted_in".into()),
-                    ("asserted_at".into(), "_morpholog_asserted_at".into()),
-                    ("arguments".into(), "_morpholog_arguments".into()),
+                    (
+                        "asserted_in".into(),
+                        "_morpholog_asserted_in".into(),
+                        "uuid",
+                    ),
+                    (
+                        "asserted_at".into(),
+                        "_morpholog_asserted_at".into(),
+                        "timestamptz",
+                    ),
+                    ("arguments".into(), "_morpholog_arguments".into(), "jsonb"),
                 ],
             )
         }
@@ -529,17 +664,23 @@ fn render_view(
             (
                 "governed_derived",
                 vec![
-                    ("refreshed_at".into(), "_morpholog_refreshed_at".into()),
-                    ("model_hash".into(), "_morpholog_model_hash".into()),
+                    (
+                        "refreshed_at".into(),
+                        "_morpholog_refreshed_at".into(),
+                        "timestamptz",
+                    ),
+                    ("model_hash".into(), "_morpholog_model_hash".into(), "text"),
                     (
                         "source_snapshot_transition_id".into(),
                         "_morpholog_source_snapshot_transition_id".into(),
+                        "uuid",
                     ),
                     (
                         "source_snapshot_committed_at".into(),
                         "_morpholog_source_snapshot_committed_at".into(),
+                        "timestamptz",
                     ),
-                    ("arguments".into(), "_morpholog_arguments".into()),
+                    ("arguments".into(), "_morpholog_arguments".into(), "jsonb"),
                 ],
             )
         }
@@ -549,19 +690,36 @@ fn render_view(
     // Metadata first, then fields in declaration order, so appending a
     // field stays a compatible CREATE OR REPLACE. `_morpholog_arguments`
     // keeps the exact value, including temporal precision.
+    let mut columns: Vec<ColumnDescription> = selects
+        .iter()
+        .map(|(_, alias, sql_type)| ColumnDescription {
+            name: alias.clone(),
+            role: "metadata".to_string(),
+            kind: None,
+            sql_type: (*sql_type).to_string(),
+            position: None,
+        })
+        .collect();
     let mut column_comments: Vec<(String, String)> = Vec::new();
     for (i, arg) in predicate.args.iter().enumerate() {
         let col = column_sql(&arg.kind, i);
-        selects.push((col.expr, arg.name.clone()));
+        columns.push(ColumnDescription {
+            name: arg.name.clone(),
+            role: "field".to_string(),
+            kind: Some(arg.kind.to_string()),
+            sql_type: col.sql_type.to_string(),
+            position: Some(i),
+        });
+        selects.push((col.expr, arg.name.clone(), col.sql_type));
         column_comments.push((arg.name.clone(), col.kind_comment));
     }
 
     let width = selects
         .iter()
-        .map(|(expr, _)| expr.len())
+        .map(|(expr, _, _)| expr.len())
         .max()
         .unwrap_or(0);
-    for (idx, (expr, alias)) in selects.iter().enumerate() {
+    for (idx, (expr, alias, _)) in selects.iter().enumerate() {
         let comma = if idx + 1 < selects.len() { "," } else { "" };
         let _ = writeln!(
             out,
@@ -592,6 +750,13 @@ fn render_view(
             quote_ident(&field),
             quote_literal(&comment),
         );
+    }
+    ViewDescription {
+        predicate: name.to_string(),
+        view,
+        kind: kind.label().to_string(),
+        columns,
+        identity,
     }
 }
 

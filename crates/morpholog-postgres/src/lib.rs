@@ -11,7 +11,10 @@
 mod sql_views;
 pub mod testing;
 
-pub use sql_views::{RenderedViews, ViewRefusal, render_views};
+pub use sql_views::{
+    ColumnDescription, RenderedViews, VIEW_SURFACE_FORMAT, ViewDescription, ViewRefusal,
+    ViewSurface, render_views,
+};
 
 pub use sqlx::PgPool;
 

@@ -211,3 +211,108 @@ fn invalid_schema_refuses() {
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(stderr.contains("--schema"), "got:\n{stderr}");
 }
+
+fn description_golden() -> PathBuf {
+    repo_root().join("examples/10_trade_lifecycle/trade_lifecycle_views.json")
+}
+
+/// `--describe` writes the description beside the script: the committed
+/// golden, byte for byte, while stdout stays the unchanged script.
+#[test]
+fn describe_writes_the_committed_description_and_leaves_stdout_the_script() {
+    let dir = tempfile::tempdir().unwrap();
+    let described = dir.path().join("views.json");
+    let result = Command::new(bin())
+        .args([
+            "generate",
+            "views",
+            trade_lifecycle().to_str().unwrap(),
+            "--describe",
+            described.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        result.stdout,
+        std::fs::read(golden()).unwrap(),
+        "stdout is the script, unchanged by --describe"
+    );
+    assert_eq!(
+        std::fs::read(&described).unwrap(),
+        std::fs::read(description_golden()).unwrap(),
+        "examples/10_trade_lifecycle/trade_lifecycle_views.json is stale; regenerate with:\n  \
+         morpholog generate views examples/10_trade_lifecycle/trade_lifecycle.morph \
+         --out examples/10_trade_lifecycle/trade_lifecycle_views.sql \
+         --describe examples/10_trade_lifecycle/trade_lifecycle_views.json"
+    );
+    let stderr = String::from_utf8(result.stderr).unwrap();
+    assert!(stderr.contains("described 13 view(s)"), "got: {stderr}");
+}
+
+/// `--out` and `--describe` together write both files; the description
+/// names every view the script creates with the script's model hash.
+#[test]
+fn out_and_describe_together_write_both() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("views.sql");
+    let described = dir.path().join("views.json");
+    let result = Command::new(bin())
+        .args([
+            "generate",
+            "views",
+            trade_lifecycle().to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--describe",
+            described.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    assert!(result.stdout.is_empty(), "nothing on stdout with --out");
+    let sql = std::fs::read_to_string(&out).unwrap();
+    let surface: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&described).unwrap()).unwrap();
+    assert_eq!(surface["format"], 1);
+    let hash = surface["model_hash"].as_str().unwrap();
+    assert!(sql.contains(&format!("-- model hash: {hash}")));
+    for view in surface["views"].as_array().unwrap() {
+        let name = view["view"].as_str().unwrap();
+        assert!(
+            sql.contains(&format!(
+                "CREATE OR REPLACE VIEW \"morpholog_views\".\"{name}\""
+            )),
+            "{name} is described but not created"
+        );
+    }
+    assert!(!dir.path().join("views.json.partial").exists());
+}
+
+/// A refusal writes neither file.
+#[test]
+fn a_refusal_writes_no_description() {
+    let (dir, file) = refusal_fixture(
+        "program bad\npredicate Thing(BadName: Subject)\ntransformation t(x):\n    admit Thing(x)\n",
+    );
+    let out = dir.path().join("views.sql");
+    let described = dir.path().join("views.json");
+    let result = Command::new(bin())
+        .args([
+            "generate",
+            "views",
+            file.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--describe",
+            described.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(!out.exists() && !described.exists());
+}

@@ -1,0 +1,623 @@
+{
+  "format": 1,
+  "programme": "trade_lifecycle",
+  "model_hash": "sha256:7b63dc6b0e8f297af212deede33ac714cda6418f67b0691320a5ae569496dbb5",
+  "schema": "morpholog_views",
+  "catalog": "_morpholog_catalog",
+  "seal_table": "_morpholog_view_defs",
+  "views": [
+    {
+      "predicate": "TradeCaptured",
+      "view": "trade_captured",
+      "kind": "base",
+      "columns": [
+        {
+          "name": "_morpholog_asserted_in",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_asserted_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "trade",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        },
+        {
+          "name": "commodity",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 1
+        },
+        {
+          "name": "direction",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 2
+        }
+      ],
+      "identity": [
+        [
+          "trade"
+        ]
+      ]
+    },
+    {
+      "predicate": "TradeTerms",
+      "view": "trade_terms",
+      "kind": "base",
+      "columns": [
+        {
+          "name": "_morpholog_asserted_in",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_asserted_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "trade",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        },
+        {
+          "name": "version_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 1
+        },
+        {
+          "name": "quantity",
+          "role": "field",
+          "kind": "Decimal",
+          "sql_type": "numeric",
+          "position": 2
+        },
+        {
+          "name": "delivery_period",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 3
+        },
+        {
+          "name": "effective_from",
+          "role": "field",
+          "kind": "Date",
+          "sql_type": "date",
+          "position": 4
+        }
+      ],
+      "identity": [
+        [
+          "version_id"
+        ]
+      ]
+    },
+    {
+      "predicate": "TradeTermsSupersedes",
+      "view": "trade_terms_supersedes",
+      "kind": "base",
+      "columns": [
+        {
+          "name": "_morpholog_asserted_in",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_asserted_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "new_version_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        },
+        {
+          "name": "prior_version_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 1
+        }
+      ],
+      "identity": [
+        [
+          "prior_version_id"
+        ]
+      ]
+    },
+    {
+      "predicate": "CapturedPrice",
+      "view": "captured_price",
+      "kind": "base",
+      "columns": [
+        {
+          "name": "_morpholog_asserted_in",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_asserted_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "trade",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        },
+        {
+          "name": "price",
+          "role": "field",
+          "kind": "Decimal",
+          "sql_type": "numeric",
+          "position": 1
+        }
+      ],
+      "identity": []
+    },
+    {
+      "predicate": "MayConfirm",
+      "view": "may_confirm",
+      "kind": "base",
+      "columns": [
+        {
+          "name": "_morpholog_asserted_in",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_asserted_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "principal",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        },
+        {
+          "name": "commodity",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 1
+        }
+      ],
+      "identity": []
+    },
+    {
+      "predicate": "TradeConfirmed",
+      "view": "trade_confirmed",
+      "kind": "base",
+      "columns": [
+        {
+          "name": "_morpholog_asserted_in",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_asserted_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "trade",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        },
+        {
+          "name": "counterparty",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 1
+        },
+        {
+          "name": "confirmation_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 2
+        },
+        {
+          "name": "confirmed_by",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 3
+        }
+      ],
+      "identity": []
+    },
+    {
+      "predicate": "OfficialPrice",
+      "view": "official_price",
+      "kind": "base",
+      "columns": [
+        {
+          "name": "_morpholog_asserted_in",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_asserted_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "trade",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        },
+        {
+          "name": "price",
+          "role": "field",
+          "kind": "Decimal",
+          "sql_type": "numeric",
+          "position": 1
+        },
+        {
+          "name": "official_price_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 2
+        }
+      ],
+      "identity": [
+        [
+          "official_price_id"
+        ]
+      ]
+    },
+    {
+      "predicate": "CurrentOfficialPrice",
+      "view": "current_official_price",
+      "kind": "base",
+      "columns": [
+        {
+          "name": "_morpholog_asserted_in",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_asserted_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "trade",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        },
+        {
+          "name": "official_price_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 1
+        }
+      ],
+      "identity": []
+    },
+    {
+      "predicate": "OfficialPriceSupersedes",
+      "view": "official_price_supersedes",
+      "kind": "base",
+      "columns": [
+        {
+          "name": "_morpholog_asserted_in",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_asserted_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "new_official_price_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        },
+        {
+          "name": "prior_official_price_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 1
+        }
+      ],
+      "identity": []
+    },
+    {
+      "predicate": "TradeSettled",
+      "view": "trade_settled",
+      "kind": "base",
+      "columns": [
+        {
+          "name": "_morpholog_asserted_in",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_asserted_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "trade",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        },
+        {
+          "name": "settled_qty",
+          "role": "field",
+          "kind": "Decimal",
+          "sql_type": "numeric",
+          "position": 1
+        },
+        {
+          "name": "settlement_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 2
+        },
+        {
+          "name": "official_price_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 3
+        },
+        {
+          "name": "effective_on",
+          "role": "field",
+          "kind": "Date",
+          "sql_type": "date",
+          "position": 4
+        }
+      ],
+      "identity": [
+        [
+          "settlement_id"
+        ]
+      ]
+    },
+    {
+      "predicate": "PositionLimit",
+      "view": "position_limit",
+      "kind": "base",
+      "columns": [
+        {
+          "name": "_morpholog_asserted_in",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_asserted_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "commodity",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        },
+        {
+          "name": "limit",
+          "role": "field",
+          "kind": "Decimal",
+          "sql_type": "numeric",
+          "position": 1
+        }
+      ],
+      "identity": [
+        [
+          "commodity"
+        ]
+      ]
+    },
+    {
+      "predicate": "SettledUnderTerms",
+      "view": "settled_under_terms",
+      "kind": "base",
+      "columns": [
+        {
+          "name": "_morpholog_asserted_in",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_asserted_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "settlement_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        },
+        {
+          "name": "version_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 1
+        }
+      ],
+      "identity": []
+    },
+    {
+      "predicate": "TermsTimeline",
+      "view": "terms_timeline",
+      "kind": "derived",
+      "columns": [
+        {
+          "name": "_morpholog_refreshed_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_model_hash",
+          "role": "metadata",
+          "sql_type": "text"
+        },
+        {
+          "name": "_morpholog_source_snapshot_transition_id",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_source_snapshot_committed_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "trade",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        },
+        {
+          "name": "version_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 1
+        },
+        {
+          "name": "delivery_period",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 2
+        },
+        {
+          "name": "effective_from",
+          "role": "field",
+          "kind": "Date",
+          "sql_type": "date",
+          "position": 3
+        },
+        {
+          "name": "quantity",
+          "role": "field",
+          "kind": "Decimal",
+          "sql_type": "numeric",
+          "position": 4
+        }
+      ],
+      "identity": [
+        [
+          "trade",
+          "version_id",
+          "delivery_period",
+          "effective_from"
+        ]
+      ]
+    }
+  ]
+}

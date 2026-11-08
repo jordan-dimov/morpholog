@@ -478,6 +478,14 @@ pub(crate) struct GenerateViewsArgs {
     /// Write the SQL script to this file instead of stdout.
     #[arg(long)]
     pub(crate) out: Option<PathBuf>,
+
+    /// Also write a description of the generated views to this file, as
+    /// JSON: every view with its columns in order, each column's Morpholog
+    /// kind and PostgreSQL type, the identity the programme declares, and
+    /// the model hash the deployed catalogue must carry. What a host
+    /// builds its read models from instead of restating them.
+    #[arg(long)]
+    pub(crate) describe: Option<PathBuf>,
 }
 
 /// Arguments for `generate python-client`.
