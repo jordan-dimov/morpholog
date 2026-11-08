@@ -451,9 +451,10 @@ derived TrialBalance(account):
 
 **A tree the host closes.** Without recursion, a rule that asks whether
 one part descends from another reads a closure the host keeps as claims:
-every ancestor of every part. Three rules hold that closure to the tree,
-so a missing ancestor and a wrong one are each refused by name: each
-parent is in it, it is transitive, and each entry follows the tree.
+every ancestor of every part. Four rules hold that closure to the tree,
+so a missing ancestor, a wrong one and a cycle are each refused by name:
+each parent is in it, it is transitive, each entry follows the tree, and
+no part descends from itself.
 
 ```morph
 program variant_tree
@@ -472,6 +473,9 @@ invariant descent_is_transitive:
 
 invariant descent_follows_the_tree:
     DescendsFrom(a, c) implies VariantOf(a, c) or (VariantOf(a, b) and DescendsFrom(b, c))
+
+invariant no_part_descends_from_itself:
+    DescendsFrom(a, b) implies a != b
 
 transformation record_variant(part, parent, ancestors):
     admit VariantOf(part, parent)

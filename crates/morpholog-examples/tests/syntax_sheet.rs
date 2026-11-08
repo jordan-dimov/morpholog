@@ -270,8 +270,8 @@ fn a_sibling_for_an_absent_field_goes_with_its_parent() {
 }
 
 /// A closure the host lists is held to the tree: a complete one is
-/// admitted, and one missing a parent or an ancestor, or naming a wrong
-/// one, is refused, each by the rule it breaks.
+/// admitted, and one missing a parent or an ancestor, naming a wrong one,
+/// or closing a cycle, is refused, each by the rule it breaks.
 #[test]
 fn a_host_kept_closure_is_held_to_the_tree() {
     use morpholog_test_support::coll;
@@ -280,7 +280,10 @@ fn a_host_kept_closure_is_held_to_the_tree() {
         .find(|(_, s)| s.contains("program variant_tree\n"))
         .expect("the variant-tree block");
     let p = parse_program(&format!(
-        "{source}\ntransformation record_parent_only(part, parent):\n    admit VariantOf(part, parent)\n"
+        "{source}\ntransformation record_parent_only(part, parent):\n    admit VariantOf(part, parent)\n\
+         transformation record_pair(x, y):\n    admit VariantOf(x, y)\n    admit VariantOf(y, x)\n\
+         \x20   admit DescendsFrom(x, y)\n    admit DescendsFrom(y, x)\n\
+         \x20   admit DescendsFrom(x, x)\n    admit DescendsFrom(y, y)\n"
     ))
     .expect("parses");
     let record = |part: &str, parent: &str, ancestors: &[&str], state: &State| {
@@ -312,4 +315,17 @@ fn a_host_kept_closure_is_held_to_the_tree() {
     );
     let state = accepted(record("c", "b", &["a"], &state));
     accepted(record("d", "c", &["b", "a"], &state));
+    refused_by(
+        record("e", "e", &[], &State::default()),
+        "no_part_descends_from_itself",
+    );
+    refused_by(
+        act(
+            &p,
+            "record_pair",
+            vec![subj("x"), subj("y")],
+            &State::default(),
+        ),
+        "no_part_descends_from_itself",
+    );
 }
