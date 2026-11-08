@@ -195,7 +195,15 @@ fn derived_heads_get_a_derived_view_over_the_cache() {
 fn zero_predicates_is_lawful_empty() {
     // A programme with no claim shapes is lawful-empty, not a refusal:
     // a typed-empty catalogue, no views.
-    let sql = render("empty", "morpholog_views", "sha256:testhash", &[], &[]);
+    let (sql, views) = render(
+        "empty",
+        "morpholog_views",
+        "sha256:testhash",
+        &[],
+        &[],
+        &std::collections::BTreeMap::new(),
+    );
+    assert!(views.is_empty());
     assert!(sql.contains("-- no predicates"));
     assert!(sql.contains("NULL::text AS programme_name"));
     assert!(sql.contains("WHERE false;"));
@@ -335,12 +343,13 @@ fn morpholog_prefixed_view_name_is_refused() {
 fn header_values_cannot_break_out_of_the_comment() {
     // The public API accepts any programme name and hash; a newline must
     // not escape the `--` header comment and inject SQL.
-    let sql = render(
+    let (sql, _) = render(
         "evil\nDROP TABLE x;",
         "morpholog_views",
         "sha256:a\nb",
         &[],
         &[],
+        &std::collections::BTreeMap::new(),
     );
     assert!(
         !sql.contains("\nDROP TABLE x;"),
@@ -348,4 +357,190 @@ fn header_values_cannot_break_out_of_the_comment() {
     );
     assert!(sql.contains("evil\\nDROP TABLE x;"));
     assert!(sql.contains("sha256:a\\nb"));
+}
+
+/// The description is read off the column lists the SQL is rendered
+/// from: metadata columns first with the source's types, then the
+/// fields in declaration order with the kind as `schema` spells it and
+/// the type the view casts to; the identity is each `unique by` clause
+/// for a base predicate and the key fields for a derived one.
+#[test]
+fn the_description_follows_the_rendered_columns() {
+    let rendered = render_ok(
+        "program described
+predicate Position(book: Subject, instrument: Subject, qty: Decimal[MWh], since: Date, at: Timestamp, held: Duration, open: Bool, tags: Collection, raw: Any)
+    unique by (book, instrument)
+    unique by (at)
+predicate Note(id: Subject)
+predicate Exposure(book: Subject, total: Decimal[MWh])
+derived Exposure(book):
+    over Position(book, _, q, _, _, _, _, _, _)
+    value total = sum(q | Position(book, _, q, _, _, _, _, _, _))
+",
+    );
+    let surface = &rendered.surface;
+    assert_eq!(surface.format, VIEW_SURFACE_FORMAT);
+    assert_eq!(surface.programme, "described");
+    assert_eq!(surface.model_hash, "sha256:testhash");
+    assert_eq!(surface.schema, "morpholog_views");
+    assert_eq!(surface.catalog, "_morpholog_catalog");
+    assert_eq!(surface.seal_table, "_morpholog_view_defs");
+    let names: Vec<(&str, &str)> = surface
+        .views
+        .iter()
+        .map(|v| (v.view.as_str(), v.kind.as_str()))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("position", "base"),
+            ("note", "base"),
+            ("exposure", "derived")
+        ]
+    );
+
+    let position = &surface.views[0];
+    assert_eq!(position.predicate, "Position");
+    assert_eq!(
+        position.identity,
+        vec![
+            vec!["book".to_string(), "instrument".to_string()],
+            vec!["at".to_string()]
+        ]
+    );
+    type Shown = (String, String, Option<String>, String, Option<usize>);
+    let shown: Vec<Shown> = position
+        .columns
+        .iter()
+        .map(|c| {
+            (
+                c.name.clone(),
+                c.role.clone(),
+                c.kind.clone(),
+                c.sql_type.clone(),
+                c.position,
+            )
+        })
+        .collect();
+    let meta = |name: &str, ty: &str| {
+        (
+            name.to_string(),
+            "metadata".to_string(),
+            None,
+            ty.to_string(),
+            None,
+        )
+    };
+    let field = |name: &str, kind: &str, ty: &str, i: usize| {
+        (
+            name.to_string(),
+            "field".to_string(),
+            Some(kind.to_string()),
+            ty.to_string(),
+            Some(i),
+        )
+    };
+    assert_eq!(
+        shown,
+        vec![
+            meta("_morpholog_asserted_in", "uuid"),
+            meta("_morpholog_asserted_at", "timestamptz"),
+            meta("_morpholog_arguments", "jsonb"),
+            field("book", "Subject", "text", 0),
+            field("instrument", "Subject", "text", 1),
+            field("qty", "Decimal[MWh]", "numeric", 2),
+            field("since", "Date", "date", 3),
+            field("at", "Timestamp", "timestamptz", 4),
+            field("held", "Duration", "interval", 5),
+            field("open", "Bool", "boolean", 6),
+            field("tags", "Collection", "jsonb", 7),
+            field("raw", "Any", "jsonb", 8),
+        ]
+    );
+    assert!(
+        surface.views[1].identity.is_empty(),
+        "no clause, no identity"
+    );
+
+    let exposure = &surface.views[2];
+    assert_eq!(exposure.identity, vec![vec!["book".to_string()]]);
+    let meta_names: Vec<&str> = exposure
+        .columns
+        .iter()
+        .filter(|c| c.role == "metadata")
+        .map(|c| c.name.as_str())
+        .collect();
+    assert_eq!(
+        meta_names,
+        [
+            "_morpholog_refreshed_at",
+            "_morpholog_model_hash",
+            "_morpholog_source_snapshot_transition_id",
+            "_morpholog_source_snapshot_committed_at",
+            "_morpholog_arguments"
+        ]
+    );
+    // Every SQL column is described, in the SQL's order.
+    for view in &surface.views {
+        let block = rendered
+            .sql
+            .split("CREATE OR REPLACE VIEW")
+            .find(|b| b.contains(&format!("\"{}\" AS", view.view)))
+            .unwrap();
+        let aliases: Vec<&str> = block
+            .lines()
+            .filter_map(|l| {
+                l.trim_end_matches(',')
+                    .rsplit_once(" AS \"")
+                    .map(|(_, a)| a.trim_end_matches('"'))
+            })
+            .collect();
+        let described: Vec<&str> = view.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(aliases, described, "{}", view.view);
+    }
+}
+
+/// Applied to PostgreSQL, every view has the described columns, in the
+/// described order, with the described types: the agreement a consumer
+/// can check itself from `information_schema.columns`.
+#[tokio::test]
+async fn the_applied_views_have_the_described_columns() {
+    let pool = crate::compiled_differential::test_pool().await;
+    crate::testing::reset_database(&pool).await.unwrap();
+    for program in morpholog_examples::all_programs() {
+        let validated = program.validated().unwrap();
+        let hash = format!("sha256:{}", "0".repeat(64));
+        let schema = "described_views";
+        let Ok(rendered) = render_views(&validated, schema, &hash) else {
+            continue;
+        };
+        // Safe: the schema name is this test's constant.
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql(sqlx::AssertSqlSafe(rendered.sql.clone()))
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("{}: applying the views: {e}", program.name));
+        for view in &rendered.surface.views {
+            let rows: Vec<(String, String)> = sqlx::query_as(
+                "SELECT column_name::text, udt_name::text FROM information_schema.columns
+                 WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position",
+            )
+            .bind(schema)
+            .bind(&view.view)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+            let described: Vec<(String, String)> = view
+                .columns
+                .iter()
+                .map(|c| (c.name.clone(), c.sql_type.clone()))
+                .collect();
+            assert_eq!(rows, described, "{}.{}", program.name, view.view);
+        }
+    }
 }

@@ -1567,6 +1567,30 @@ impl core::marker::Unpin for morpholog_postgres::ClaimRead
 impl core::marker::UnsafeUnpin for morpholog_postgres::ClaimRead
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ClaimRead
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ClaimRead
+pub struct morpholog_postgres::ColumnDescription
+pub morpholog_postgres::ColumnDescription::kind: core::option::Option<alloc::string::String>
+pub morpholog_postgres::ColumnDescription::name: alloc::string::String
+pub morpholog_postgres::ColumnDescription::position: core::option::Option<usize>
+pub morpholog_postgres::ColumnDescription::role: alloc::string::String
+pub morpholog_postgres::ColumnDescription::sql_type: alloc::string::String
+impl core::clone::Clone for morpholog_postgres::ColumnDescription
+pub fn morpholog_postgres::ColumnDescription::clone(&self) -> morpholog_postgres::ColumnDescription
+impl core::cmp::Eq for morpholog_postgres::ColumnDescription
+pub fn morpholog_postgres::ColumnDescription::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::ColumnDescription
+pub fn morpholog_postgres::ColumnDescription::eq(&self, &morpholog_postgres::ColumnDescription) -> bool
+impl core::fmt::Debug for morpholog_postgres::ColumnDescription
+pub fn morpholog_postgres::ColumnDescription::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::ColumnDescription
+impl serde_core::ser::Serialize for morpholog_postgres::ColumnDescription
+pub fn morpholog_postgres::ColumnDescription::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::ColumnDescription
+impl core::marker::Send for morpholog_postgres::ColumnDescription
+impl core::marker::Sync for morpholog_postgres::ColumnDescription
+impl core::marker::Unpin for morpholog_postgres::ColumnDescription
+impl core::marker::UnsafeUnpin for morpholog_postgres::ColumnDescription
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ColumnDescription
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ColumnDescription
 pub struct morpholog_postgres::CompensationSpec
 impl morpholog_postgres::CompensationSpec
 pub fn morpholog_postgres::CompensationSpec::new(morpholog_core::prepared::PreparedProgram, morpholog_core::ir::TransformationName, alloc::boxed::Box<(dyn core::ops::function::Fn(&morpholog_postgres::OutboxRow) -> alloc::vec::Vec<morpholog_core::state::EvalValue> + core::marker::Send + core::marker::Sync)>) -> core::result::Result<Self, morpholog_postgres::PgError>
@@ -2366,6 +2390,7 @@ pub struct morpholog_postgres::RenderedViews
 pub morpholog_postgres::RenderedViews::base_view_count: usize
 pub morpholog_postgres::RenderedViews::derived_view_count: usize
 pub morpholog_postgres::RenderedViews::sql: alloc::string::String
+pub morpholog_postgres::RenderedViews::surface: morpholog_postgres::ViewSurface
 impl core::clone::Clone for morpholog_postgres::RenderedViews
 pub fn morpholog_postgres::RenderedViews::clone(&self) -> morpholog_postgres::RenderedViews
 impl core::cmp::Eq for morpholog_postgres::RenderedViews
@@ -2796,6 +2821,56 @@ impl core::marker::Unpin for morpholog_postgres::VerifyReport
 impl core::marker::UnsafeUnpin for morpholog_postgres::VerifyReport
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::VerifyReport
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::VerifyReport
+pub struct morpholog_postgres::ViewDescription
+pub morpholog_postgres::ViewDescription::columns: alloc::vec::Vec<morpholog_postgres::ColumnDescription>
+pub morpholog_postgres::ViewDescription::identity: alloc::vec::Vec<alloc::vec::Vec<alloc::string::String>>
+pub morpholog_postgres::ViewDescription::kind: alloc::string::String
+pub morpholog_postgres::ViewDescription::predicate: alloc::string::String
+pub morpholog_postgres::ViewDescription::view: alloc::string::String
+impl core::clone::Clone for morpholog_postgres::ViewDescription
+pub fn morpholog_postgres::ViewDescription::clone(&self) -> morpholog_postgres::ViewDescription
+impl core::cmp::Eq for morpholog_postgres::ViewDescription
+pub fn morpholog_postgres::ViewDescription::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::ViewDescription
+pub fn morpholog_postgres::ViewDescription::eq(&self, &morpholog_postgres::ViewDescription) -> bool
+impl core::fmt::Debug for morpholog_postgres::ViewDescription
+pub fn morpholog_postgres::ViewDescription::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::ViewDescription
+impl serde_core::ser::Serialize for morpholog_postgres::ViewDescription
+pub fn morpholog_postgres::ViewDescription::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::ViewDescription
+impl core::marker::Send for morpholog_postgres::ViewDescription
+impl core::marker::Sync for morpholog_postgres::ViewDescription
+impl core::marker::Unpin for morpholog_postgres::ViewDescription
+impl core::marker::UnsafeUnpin for morpholog_postgres::ViewDescription
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ViewDescription
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ViewDescription
+pub struct morpholog_postgres::ViewSurface
+pub morpholog_postgres::ViewSurface::catalog: alloc::string::String
+pub morpholog_postgres::ViewSurface::format: u32
+pub morpholog_postgres::ViewSurface::model_hash: alloc::string::String
+pub morpholog_postgres::ViewSurface::programme: alloc::string::String
+pub morpholog_postgres::ViewSurface::schema: alloc::string::String
+pub morpholog_postgres::ViewSurface::seal_table: alloc::string::String
+pub morpholog_postgres::ViewSurface::views: alloc::vec::Vec<morpholog_postgres::ViewDescription>
+impl core::clone::Clone for morpholog_postgres::ViewSurface
+pub fn morpholog_postgres::ViewSurface::clone(&self) -> morpholog_postgres::ViewSurface
+impl core::cmp::Eq for morpholog_postgres::ViewSurface
+pub fn morpholog_postgres::ViewSurface::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::ViewSurface
+pub fn morpholog_postgres::ViewSurface::eq(&self, &morpholog_postgres::ViewSurface) -> bool
+impl core::fmt::Debug for morpholog_postgres::ViewSurface
+pub fn morpholog_postgres::ViewSurface::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::ViewSurface
+impl serde_core::ser::Serialize for morpholog_postgres::ViewSurface
+pub fn morpholog_postgres::ViewSurface::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::ViewSurface
+impl core::marker::Send for morpholog_postgres::ViewSurface
+impl core::marker::Sync for morpholog_postgres::ViewSurface
+impl core::marker::Unpin for morpholog_postgres::ViewSurface
+impl core::marker::UnsafeUnpin for morpholog_postgres::ViewSurface
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ViewSurface
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ViewSurface
 pub struct morpholog_postgres::WindowEvidencePack
 pub morpholog_postgres::WindowEvidencePack::consistency_proof: alloc::vec::Vec<morpholog_postgres::Digest>
 pub morpholog_postgres::WindowEvidencePack::from_checkpoint: morpholog_postgres::Checkpoint
@@ -2933,6 +3008,7 @@ pub const morpholog_postgres::LEGACY_PACK_FORMAT: u32
 pub const morpholog_postgres::MIGRATION_LOCK_KEY: i64
 pub const morpholog_postgres::PACK_FORMAT: u32
 pub const morpholog_postgres::RESTRICTED_PREDICATE: &str
+pub const morpholog_postgres::VIEW_SURFACE_FORMAT: u32
 pub trait morpholog_postgres::Deliverer: core::marker::Send + core::marker::Sync
 pub fn morpholog_postgres::Deliverer::deliver(&self, &morpholog_postgres::OutboxRow) -> impl core::future::future::Future<Output = morpholog_postgres::DeliveryOutcome> + core::marker::Send
 impl morpholog_postgres::Deliverer for morpholog_postgres::testing::AlwaysDelivers

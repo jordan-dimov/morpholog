@@ -4346,3 +4346,144 @@ def _plain(value: object) -> object:
     if isinstance(value, date):
         return value.isoformat()
     raise TypeError(f"{type(value).__name__} is not an envelope value: {value!r}")
+
+
+# ---- The generated view surface (`generate views --describe`) ----
+
+
+@dataclass(frozen=True)
+class ViewColumn:
+    """One column of a generated view, in the view's order. A metadata
+    column carries no Morpholog kind or position; a field carries both."""
+
+    name: str
+    role: str
+    sql_type: str
+    kind: str | None = None
+    position: int | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> ViewColumn:
+        data = _strict(
+            "view_column", payload, {"name", "role", "sql_type"}, {"kind", "position"}
+        )
+        return cls(
+            name=data.text("name"),
+            role=data.member("role", {"metadata", "field"}),
+            sql_type=data.member(
+                "sql_type",
+                {"text", "numeric", "date", "timestamptz", "interval", "boolean", "jsonb", "uuid"},
+            ),
+            kind=data.optional_text("kind"),
+            position=data.optional_integer("position", minimum=0),
+        )
+
+
+@dataclass(frozen=True)
+class ViewDescription:
+    """One generated view. ``identity`` lists the field sets the programme
+    declares unique, as declared and possibly empty; whether one serves as
+    a key is the consumer's decision."""
+
+    predicate: str
+    view: str
+    kind: str
+    columns: list[ViewColumn] = field(default_factory=list)
+    identity: list[list[str]] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, payload: object) -> ViewDescription:
+        data = _strict(
+            "view_description", payload, {"predicate", "view", "kind", "columns", "identity"}
+        )
+        return cls(
+            predicate=data.text("predicate"),
+            view=data.text("view"),
+            kind=data.member("kind", {"base", "derived"}),
+            columns=data.array("columns", ViewColumn.from_json),
+            identity=data.array("identity", lambda item: parse_list(item, _text_item)),
+        )
+
+    def single_key(self) -> str | None:
+        """The one field a consumer may take as the row's identity: the
+        field of the only single-field ``identity`` clause, or ``None``
+        when the view has no clause, several single-field clauses, or only
+        composite ones."""
+        singles = [clause[0] for clause in self.identity if len(clause) == 1]
+        return singles[0] if len(singles) == 1 else None
+
+
+@dataclass(frozen=True)
+class ViewSurface:
+    """What `generate views --describe` wrote: the programme and model
+    hash the deployed catalogue must carry, the schema, the catalogue and
+    seal names, and every view."""
+
+    format: int
+    programme: str
+    model_hash: str
+    schema: str
+    catalog: str
+    seal_table: str
+    views: list[ViewDescription] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, payload: object) -> ViewSurface:
+        data = _strict(
+            "view_surface",
+            payload,
+            {"format", "programme", "model_hash", "schema", "catalog", "seal_table", "views"},
+        )
+        if data.raw("format") != 1:
+            raise EnvelopeError(
+                f"view_surface: format {data.raw('format')!r} is not the 1 this client reads"
+            )
+        return cls(
+            format=1,
+            programme=data.text("programme"),
+            model_hash=_hash(data, "model_hash"),
+            schema=data.text("schema"),
+            catalog=data.text("catalog"),
+            seal_table=data.text("seal_table"),
+            views=data.array("views", ViewDescription.from_json),
+        )
+
+
+def _text_item(value: object) -> str:
+    return _text("identity field", value)
+
+
+def read_view_surface(path: str) -> ViewSurface:
+    """Read a description `generate views --describe` wrote."""
+    with open(path, encoding="utf-8") as handle:
+        return ViewSurface.from_json(json.load(handle))
+
+
+def catalogue_differences(
+    surface: ViewSurface, catalogue_rows: list[tuple[str, str, str, str]]
+) -> list[str]:
+    """Why the deployed catalogue does not match ``surface``, or an empty
+    list when it does. ``catalogue_rows`` are ``(model_hash,
+    predicate_name, view_name, kind)`` read from ``surface.catalog`` in
+    ``surface.schema``. The check is of identity and inventory: the model
+    hash on every row, and the same views of the same kinds. It says
+    nothing about the deployed definitions, which `morpholog audit verify
+    --views-schema` proves against their seal."""
+    differences: list[str] = []
+    hashes = {row[0] for row in catalogue_rows}
+    if not hashes:
+        differences.append(
+            "the catalogue has no rows, so no deployed model hash can be checked "
+            f"against the description's {surface.model_hash}"
+        )
+    elif hashes != {surface.model_hash}:
+        differences.append(
+            f"catalogue model hash {sorted(hashes)} is not the description's {surface.model_hash}"
+        )
+    deployed = {(row[1], row[2], row[3]) for row in catalogue_rows}
+    described = {(v.predicate, v.view, v.kind) for v in surface.views}
+    for predicate, view, kind in sorted(described - deployed):
+        differences.append(f"described view {view} ({kind} {predicate}) is not in the catalogue")
+    for predicate, view, kind in sorted(deployed - described):
+        differences.append(f"catalogue view {view} ({kind} {predicate}) is not described")
+    return differences
