@@ -1571,10 +1571,14 @@ fn a_load_past_the_limit_widens_conservatively_and_decides_alike() {
 
     // Each collection names a thousand items; the state holds a row for
     // each of them under its predicate, except one row under P69 for the
-    // last element, which the gate then refuses on.
+    // last element, which the gate then refuses on. One more row, under
+    // a predicate the budget will read whole, names an item no
+    // collection holds: the widened load must carry it and the act must
+    // not notice it.
     let elements: Vec<morpholog_core::EvalValue> =
         (0..1000).map(|i| subj(&format!("i{i}"))).collect();
-    let mut full = Vec::new();
+    let stranger = claim_instance("P0", &[subj("stranger")]);
+    let mut full = vec![stranger.clone()];
     for k in 0..n {
         for (i, e) in elements.iter().enumerate() {
             if k == n - 1 && i == 999 {
@@ -1637,6 +1641,10 @@ fn a_load_past_the_limit_widens_conservatively_and_decides_alike() {
             assert!(scope.admits(claim, &full), "widening dropped {claim:?}");
         }
     }
+    assert!(
+        !unwidened.admits(&stranger, &full) && scope.admits(&stranger, &full),
+        "the widened read carries a row the keyed read did not"
+    );
     let projected = project(&full, &scope);
     let on_full = prepared
         .stage_delta(&transition, &full, &mut same_subjects())

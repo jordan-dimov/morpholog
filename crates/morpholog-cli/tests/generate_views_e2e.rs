@@ -290,7 +290,37 @@ fn out_and_describe_together_write_both() {
             "{name} is described but not created"
         );
     }
-    assert!(!dir.path().join("views.json.partial").exists());
+    assert_eq!(
+        std::fs::read_dir(dir.path()).unwrap().count(),
+        2,
+        "no sibling left behind"
+    );
+}
+
+/// The same file for both outputs is refused before anything is written.
+#[test]
+fn the_same_path_for_out_and_describe_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let both = dir.path().join("views.out");
+    let result = Command::new(bin())
+        .args([
+            "generate",
+            "views",
+            trade_lifecycle().to_str().unwrap(),
+            "--out",
+            both.to_str().unwrap(),
+            "--describe",
+            both.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("name the same file"),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(!both.exists());
 }
 
 /// A refusal writes neither file.

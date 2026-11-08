@@ -4471,7 +4471,12 @@ def catalogue_differences(
     --views-schema` proves against their seal."""
     differences: list[str] = []
     hashes = {row[0] for row in catalogue_rows}
-    if hashes != {surface.model_hash}:
+    if not hashes:
+        differences.append(
+            "the catalogue has no rows, so no deployed model hash can be checked "
+            f"against the description's {surface.model_hash}"
+        )
+    elif hashes != {surface.model_hash}:
         differences.append(
             f"catalogue model hash {sorted(hashes)} is not the description's {surface.model_hash}"
         )

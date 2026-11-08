@@ -80,3 +80,12 @@ class ComparingWithTheCatalogue(unittest.TestCase):
             envelopes.catalogue_differences(described, extra),
             ["catalogue view ghost (base Ghost) is not described"],
         )
+
+    def test_an_empty_catalogue_cannot_be_verified(self):
+        described = surface()
+        differences = envelopes.catalogue_differences(described, [])
+        self.assertIn("no rows", differences[0])
+        self.assertNotIn("is not the description's", differences[0])
+        self.assertEqual(len(differences), 1 + len(described.views))
+        empty = envelopes.ViewSurface(1, "p", "sha256:" + "0" * 64, "s", "c", "d", [])
+        self.assertEqual(len(envelopes.catalogue_differences(empty, [])), 1)

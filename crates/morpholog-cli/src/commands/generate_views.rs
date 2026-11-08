@@ -19,6 +19,14 @@ use crate::GenerateViewsArgs;
 use crate::commands::{AlreadyReported, parse_or_report, validate_or_report};
 
 pub(crate) fn run(args: &GenerateViewsArgs) -> anyhow::Result<()> {
+    if let (Some(out), Some(describe)) = (&args.out, &args.describe)
+        && out == describe
+    {
+        anyhow::bail!(
+            "--out and --describe name the same file ({}); the script would overwrite the description",
+            out.display()
+        );
+    }
     let parsed = parse_or_report(&args.file)?;
     let validated = validate_or_report(&parsed)?;
     let hash = crate::commands::hash::canonical_hash(&parsed.program);
@@ -66,11 +74,12 @@ pub(crate) fn run(args: &GenerateViewsArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Write to a sibling and rename over `path`, so a reader never sees a
-/// partial file.
+/// Write to a sibling named for this process and rename over `path`, so
+/// a reader never sees a partial file and two generations into one
+/// directory never share a sibling.
 fn write_whole(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
     let mut partial = path.as_os_str().to_owned();
-    partial.push(".partial");
+    partial.push(format!(".partial.{}", std::process::id()));
     let partial = std::path::PathBuf::from(partial);
     std::fs::write(&partial, bytes)?;
     std::fs::rename(&partial, path)?;

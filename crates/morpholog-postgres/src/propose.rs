@@ -1127,7 +1127,10 @@ impl LoadScope {
     /// largest element key goes, the first of equals in predicate and
     /// pattern order, its pattern keeping its other coordinates and
     /// reading whole when none remain. Each step loads a superset, so the
-    /// projection stays one the kernel decides the same over.
+    /// projection stays one the kernel decides the same over. An element
+    /// key nested inside a field key is counted but never dropped; a
+    /// statement still over the limit with none left to drop is refused
+    /// by the loader.
     pub(crate) fn within_parameter_budget(&mut self) {
         while self.parameters() > PG_BIND_LIMIT {
             let mut largest: Option<(PredicateName, usize, usize, usize)> = None;
