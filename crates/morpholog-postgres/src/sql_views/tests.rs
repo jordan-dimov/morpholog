@@ -747,3 +747,67 @@ derived Counted(item):
         "the pseudo-predicate never reaches the SQL: {block}"
     );
 }
+
+/// Switching a deployed surface from the cache to live is a view
+/// recreation, not a replacement: a derived view's columns differ between
+/// the two, and PostgreSQL refuses to replace a view whose columns
+/// change. The live script fails against cached views and applies once
+/// the derived views are dropped; the base views are untouched either
+/// way. The drop is the operator's, documented, never done by the script.
+#[tokio::test]
+async fn switching_a_deployed_surface_to_live_needs_the_derived_views_dropped() {
+    let pool = crate::compiled_differential::test_pool().await;
+    crate::testing::reset_database(&pool).await.unwrap();
+    let program = parse_program(LIVE_SOURCE).unwrap();
+    let validated = program.validated().unwrap();
+    let hash = format!("sha256:{}", "0".repeat(64));
+    let schema = "switching_views";
+    // Safe: the schema name is this test's constant.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "DROP SCHEMA IF EXISTS {schema} CASCADE"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let cached = render_views(&validated, schema, &hash, DerivedSource::Cache).unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(cached.sql))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let live = render_views(&validated, schema, &hash, DerivedSource::Live).unwrap();
+    // On its own connection: the script's `BEGIN` leaves the failed
+    // transaction open, and the pool would hand it on.
+    let mut conn = pool.acquire().await.unwrap();
+    let refused = sqlx::raw_sql(sqlx::AssertSqlSafe(live.sql.clone()))
+        .execute(&mut *conn)
+        .await
+        .expect_err("the live script cannot replace a cached derived view");
+    sqlx::raw_sql("ROLLBACK").execute(&mut *conn).await.unwrap();
+    drop(conn);
+    let message = refused.to_string();
+    assert!(
+        message.contains("cannot drop columns from view")
+            || message.contains("cannot change name of view column"),
+        "{message}"
+    );
+    for view in live.surface.views.iter().filter(|v| v.kind == "derived") {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "DROP VIEW {schema}.{}",
+            quote_ident(&view.view)
+        )))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    sqlx::raw_sql(sqlx::AssertSqlSafe(live.sql))
+        .execute(&pool)
+        .await
+        .expect("after the drop the live script applies");
+    let derived: Vec<(String,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT view_name::text FROM {schema}._morpholog_catalog WHERE kind = 'derived' ORDER BY 1"
+    )))
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(derived.len(), 2);
+}

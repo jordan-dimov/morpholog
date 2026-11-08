@@ -146,8 +146,11 @@ async fn live_rows(
         .unwrap();
     rows.iter()
         .map(|row| {
-            let cells: Vec<String> = (0..head.args.len())
-                .map(|i| normalise(row.try_get::<Option<String>, _>(i).unwrap()))
+            let cells: Vec<String> = head
+                .args
+                .iter()
+                .enumerate()
+                .map(|(i, arg)| normalise(&arg.kind, row.try_get::<Option<String>, _>(i).unwrap()))
                 .collect();
             (
                 cells,
@@ -157,13 +160,17 @@ async fn live_rows(
         .collect()
 }
 
-fn normalise(text: Option<String>) -> String {
-    match text {
-        None => "NULL".to_string(),
-        Some(t) => match t.parse::<rust_decimal::Decimal>() {
-            Ok(d) => d.normalize().to_string(),
-            Err(_) => t,
-        },
+/// A column's text as the kernel's row would print it: a decimal
+/// normalised, by the declared kind, so a subject such as `001` is never
+/// read as a number.
+fn normalise(kind: &morpholog_core::PredicateArgKind, text: Option<String>) -> String {
+    match (kind, text) {
+        (_, None) => "NULL".to_string(),
+        (morpholog_core::PredicateArgKind::Decimal, Some(t)) => t
+            .parse::<rust_decimal::Decimal>()
+            .map(|d| d.normalize().to_string())
+            .unwrap_or(t),
+        (_, Some(t)) => t,
     }
 }
 
@@ -272,6 +279,7 @@ async fn live_views_agree_on_built_edge_states() {
     let state = State::from_claims(vec![
         claim_instance("Part", &[subj("w")]),
         claim_instance("Part", &[subj("bare")]),
+        claim_instance("Part", &[subj("001")]),
         claim_instance("StockItem", &[subj("i1"), subj("w"), dec(10)]),
         claim_instance("SalesLine", &[subj("l1"), subj("o1"), subj("w"), dec(5)]),
         claim_instance("SalesLine", &[subj("l2"), subj("o2"), subj("w"), dec(5)]),

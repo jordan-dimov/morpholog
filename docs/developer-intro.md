@@ -637,9 +637,11 @@ half through a hundred thousand commits). And the alternative costs more:
 Your BI tool and reporting stack speak SQL, not a CLI - so `morpholog generate
 views` hands them SQL: a script of typed views, one per predicate and one per
 declared derived read, over a read-only schema. Base views read live claims; a
-derived view reads a cache the kernel fills, because a derived value (the exact
-decimal, the nanosecond instant) is the kernel's to compute and SQL must never
-become a second evaluator that rounds it differently. The cache is refreshed
+derived view reads a cache the kernel fills by default, because a derived value
+(the exact decimal, the nanosecond instant) is the kernel's to compute; a live
+derived view evaluates in SQL only the fragment the compiled renderer expresses,
+with the kernel's exact arithmetic, held to the kernel by a differential, and
+refuses the rest. The cache is refreshed
 out of band and stamped with the rules' hash, so a stale or mismatched refresh
 reads as empty, never as a wrong number. The view shapes and the refresh
 discipline are in [`embedder-integration.md`](embedder-integration.md).
