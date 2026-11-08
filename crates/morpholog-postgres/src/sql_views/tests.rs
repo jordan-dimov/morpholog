@@ -683,10 +683,10 @@ fn live_derived_views_are_computed_from_their_definitions() {
 #[test]
 fn a_live_derived_claim_outside_the_fragment_refuses_by_name() {
     let source = format!(
-        "{LIVE_SOURCE}predicate Counted(item: Subject, quantity: Decimal)
-derived Counted(item):
+        "{LIVE_SOURCE}predicate OnHand(item: Subject, quantity: Decimal)
+derived OnHand(item):
     over StockItem(item: item, ..)
-    value quantity = sum(q | allocated_to(a, item, q))
+    value quantity = value StockItem(item: item, quantity: _, ..)
 "
     );
     let program = parse_program(&source).unwrap();
@@ -697,11 +697,11 @@ derived Counted(item):
         "sha256:testhash",
         DerivedSource::Live,
     )
-    .expect_err("a binding call under a sum is outside the fragment");
+    .expect_err("a value lookup is outside the fragment");
     assert_eq!(refused.len(), 1);
     assert_eq!(
         refused[0].to_string(),
-        "derived `Counted` cannot be read live: sum outside the compiled fragment: a defined call under a sum that binds a parameter; keep `--derived cache` or respell it"
+        "derived `OnHand` cannot be read live: `value lookup` is outside the compiled fragment; keep `--derived cache` or respell it"
     );
     assert!(
         render_views(
@@ -711,5 +711,39 @@ derived Counted(item):
             DerivedSource::Cache
         )
         .is_ok()
+    );
+}
+
+/// A definition call that binds under a sum renders, in a live view
+/// only, as the distinct projection of its body's branches: the kernel
+/// counts each distinct projection once, and so does the SQL.
+#[test]
+fn a_binding_call_under_a_sum_renders_live_as_a_distinct_projection() {
+    let source = format!(
+        "{LIVE_SOURCE}predicate Counted(item: Subject, quantity: Decimal)
+derived Counted(item):
+    over StockItem(item: item, ..)
+    value quantity = sum(q | allocated_to(a, item, q))
+"
+    );
+    let program = parse_program(&source).unwrap();
+    let validated = program.validated().unwrap();
+    let live = render_views(
+        &validated,
+        "morpholog_views",
+        "sha256:testhash",
+        DerivedSource::Live,
+    )
+    .expect("a binding call renders live");
+    let block = live
+        .sql
+        .split("CREATE OR REPLACE VIEW")
+        .find(|b| b.contains("\"counted\" AS"))
+        .unwrap();
+    assert!(block.contains("LATERAL (SELECT DISTINCT ON ("), "{block}");
+    assert!(block.contains("jsonb_build_array("), "{block}");
+    assert!(
+        !block.contains("_call:"),
+        "the pseudo-predicate never reaches the SQL: {block}"
     );
 }

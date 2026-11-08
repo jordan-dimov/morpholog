@@ -307,7 +307,8 @@ pub(crate) fn column_sql_at(kind: &PredicateArgKind, qualifier: &str, i: usize) 
     }
 }
 
-/// The view a predicate renders to.
+/// The view a predicate renders to, for the derived differential.
+#[cfg(test)]
 pub(crate) fn view_name(predicate: &str) -> String {
     snake_case(predicate)
 }
@@ -458,9 +459,10 @@ pub fn render_views(
             .map(|d| (d.name.as_str(), d))
             .collect();
         for claim in &program.derived_claims {
-            let head = decls
-                .get(claim.predicate.as_str())
-                .expect("a validated derived claim has a declared head");
+            // A validated programme declares every derived head.
+            let Some(head) = decls.get(claim.predicate.as_str()) else {
+                continue;
+            };
             match compile_derived(claim, head, &decls, &defs, model_hash) {
                 Ok(body) => {
                     live.insert(claim.predicate.as_str(), body.select);

@@ -48,6 +48,7 @@ pub(crate) fn compile_derived(
     model_hash: &str,
 ) -> Result<LiveDerived, CompileReason> {
     let mut ctx = Ctx::fresh(decls, defs);
+    ctx.binding_calls = true;
     let domain = nested_scope(render_prop(&derived.domain, Env::new(), &mut ctx)?)?;
     if domain.has_errors() {
         return Err(CompileReason::ComparisonShape {
@@ -178,17 +179,15 @@ pub(crate) fn compile_derived(
         from = from.join(", "),
         where_ = domain.conjunction(),
     );
-    Ok(LiveDerived {
-        select,
-        required: ctx.required,
-    })
+    // A synthetic call table's columns are no predicate's positions.
+    let required = ctx
+        .required
+        .into_iter()
+        .filter(|(predicate, _)| !predicate.as_str().starts_with(super::CALL_TABLE_PREFIX))
+        .collect();
+    Ok(LiveDerived { select, required })
 }
 
 fn quote_ident(name: &str) -> String {
     crate::sql_quote::quote_ident(name)
-}
-
-/// The predicate a derived claim computes, for a refusal's name.
-pub(crate) fn derived_name(derived: &DerivedClaim) -> &PredicateName {
-    &derived.predicate
 }

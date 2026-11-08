@@ -32,12 +32,21 @@ predicate SalesLine(line: Subject, order: Subject, part: Subject, quantity: Deci
 predicate OrderStatus(order: Subject, status: Subject)
 predicate ShipmentShipped(shipment: Subject, shipped_at: Timestamp)
 predicate SalesAllocation(allocation: Subject, line: Subject, shipment: Subject, item: Subject, quantity: Decimal)
+predicate BuildAllocation(allocation: Subject, item: Subject, quantity: Decimal)
+predicate TransferAllocation(allocation: Subject, order: Subject, item: Subject, quantity: Decimal)
+predicate TransferOrderOpen(order: Subject)
 predicate LineAllocated(line: Subject, quantity: Decimal)
 predicate PartSalesAllocated(part: Subject, quantity: Decimal)
+predicate Allocated(item: Subject, quantity: Decimal)
 define order_open(order):
     OrderStatus(order, s) and s in (#pending, #on_hold, #in_progress, #shipped)
 define line_counts(line, shipment):
     SalesLine(line, order, _, _) and order_open(order) and not ShipmentShipped(shipment, _)
+define counted_allocation(allocation, item, quantity):
+    (SalesAllocation(allocation, l, sh, item, quantity) and line_counts(l, sh)) or BuildAllocation(allocation, item, quantity) or (TransferAllocation(allocation, o, item, quantity) and TransferOrderOpen(o))
+derived Allocated(item):
+    over StockItem(item: item, ..)
+    value quantity = sum(q | counted_allocation(a, item, q))
 derived LineAllocated(line):
     over SalesLine(line: line, ..)
     value quantity = sum(q | SalesAllocation(_, line, _, _, q))
@@ -50,6 +59,8 @@ transformation deallocate(allocation):
     retract SalesAllocation(allocation: allocation, ..)
 transformation ship(shipment):
     admit ShipmentShipped(shipment, decided_at)
+transformation build_allocate(allocation, item, quantity):
+    admit BuildAllocation(allocation, item, quantity)
 ";
 
 /// Edge shapes: a key the domain matches several times, two values, a
@@ -284,8 +295,28 @@ async fn live_views_agree_on_built_edge_states() {
             "SalesAllocation",
             &[subj("a3"), subj("l2"), subj("s2"), subj("i1"), dec(7)],
         ),
+        // One allocation id in two families with one quantity: one
+        // projection, counted once by the kernel and by the view; a
+        // transfer allocation on a closed order, not counted.
+        claim_instance("BuildAllocation", &[subj("a1"), subj("i1"), dec(2)]),
+        claim_instance("BuildAllocation", &[subj("b1"), subj("i1"), dec(4)]),
+        claim_instance(
+            "TransferAllocation",
+            &[subj("t1"), subj("to1"), subj("i1"), dec(8)],
+        ),
+        claim_instance(
+            "TransferAllocation",
+            &[subj("t2"), subj("to2"), subj("i1"), dec(16)],
+        ),
+        claim_instance("TransferOrderOpen", &[subj("to1")]),
     ]);
-    assert_eq!(agree(&pool, &spike_v, &state, "spike built").await, 2);
+    assert_eq!(agree(&pool, &spike_v, &state, "spike built").await, 3);
+    let allocated = live_rows(&pool, &spike_v, "Allocated").await;
+    assert_eq!(
+        allocated,
+        vec![(vec!["i1".to_string(), "15.5".to_string()], None)],
+        "2 + 1.5 counted once with the build row sharing a1, + 4 + 8"
+    );
 
     let edges = morpholog_surface::parse_program(EDGES).unwrap();
     let edges_v = edges.validated().unwrap();
@@ -333,6 +364,11 @@ async fn live_views_follow_a_governed_history_commit_by_commit() {
     let derived = apply(&pool, &validated)
         .await
         .expect("the spike shapes render live");
+    assert_eq!(
+        derived.len(),
+        3,
+        "all three of the spike's derived claims render live"
+    );
     crate::testing::reset_database(&pool).await.unwrap();
     seed(
         &pool,
@@ -354,6 +390,7 @@ async fn live_views_follow_a_governed_history_commit_by_commit() {
             "allocate",
             vec![subj("a2"), subj("l1"), subj("s1"), subj("i1"), dec(3)],
         ),
+        ("build_allocate", vec![subj("b1"), subj("i1"), dec(4)]),
         ("deallocate", vec![subj("a1")]),
         ("ship", vec![subj("s1")]),
     ];
@@ -402,7 +439,7 @@ async fn live_views_follow_a_governed_history_commit_by_commit() {
     }
     assert_eq!(
         seen_values,
-        ["2", "5", "3", "0"],
+        ["2", "5", "5", "3", "0"],
         "the figure moved with every commit, with no refresh"
     );
 }
