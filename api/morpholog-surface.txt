@@ -3,6 +3,7 @@ pub mod morpholog_surface::layout
 pub fn morpholog_surface::layout::apply_layout(&str, alloc::vec::Vec<morpholog_surface::lexer::SpannedToken>) -> core::result::Result<alloc::vec::Vec<morpholog_surface::lexer::SpannedToken>, alloc::vec::Vec<morpholog_surface::Diagnostic>>
 pub mod morpholog_surface::lexer
 pub enum morpholog_surface::lexer::Token
+pub morpholog_surface::lexer::Token::BoolLit(bool)
 pub morpholog_surface::lexer::Token::Colon
 pub morpholog_surface::lexer::Token::Comma
 pub morpholog_surface::lexer::Token::DateLit(alloc::string::String)
@@ -61,7 +62,6 @@ pub morpholog_surface::lexer::Token::Pipe
 pub morpholog_surface::lexer::Token::Plus
 pub morpholog_surface::lexer::Token::RBracket
 pub morpholog_surface::lexer::Token::RParen
-pub morpholog_surface::lexer::Token::ReservedBoolLit(bool)
 pub morpholog_surface::lexer::Token::Slash
 pub morpholog_surface::lexer::Token::Star
 pub morpholog_surface::lexer::Token::SubjectLit(alloc::string::String)

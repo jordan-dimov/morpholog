@@ -238,6 +238,7 @@ where
         // Before bare idents, so `duration(...)` is the constructor.
         duration_ctor().map(Term::Literal),
         subject_lit.map(|s| Term::Literal(Value::Subject(s.into()))),
+        select! { Token::BoolLit(b) => Term::Literal(Value::Bool(b)) },
         ident.map(|name| match name.as_str() {
             "actor" => Term::Actor,
             "decided_at" => Term::DecidedAt,
@@ -510,8 +511,48 @@ where
                 Prop::And(props)
             });
 
+        // `x in (a, b, c)`: membership in a list written out, rewritten here to the chain
+        // `(x = a or x = b or x = c)`, so the IR is exactly the chain's. The comma makes the
+        // list: `x in (xs)` is membership in the collection `xs`, and `x in (xs,)` is no list.
+        let list_items = term_parser()
+            .map(ValueExpr::Term)
+            .separated_by(just(Token::Comma))
+            .at_least(2)
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LParen), just(Token::RParen));
+        let list_membership = arith
+            .clone()
+            .then_ignore(just(Token::KwIn))
+            .then(list_items)
+            .map(|(lhs, items)| {
+                Prop::Or(
+                    items
+                        .into_iter()
+                        .map(|item| Prop::Eq(Box::new(lhs.clone()), Box::new(item)))
+                        .collect(),
+                )
+            });
+        let empty_list = arith
+            .clone()
+            .then_ignore(just(Token::KwIn))
+            .then_ignore(just(Token::LParen).then(just(Token::RParen)))
+            .validate(|_, e, emitter| {
+                emitter.emit(Rich::custom(
+                    e.span(),
+                    "`in ()` lists nothing, so it can never hold; name at least two values, `x in (a, b)`",
+                ));
+                Prop::Or(Vec::new())
+            });
+
         // Value comparison first, so `amount <= 100` is not tried as a claim call.
-        let comparison = choice((value_comparison, claim_call, pre_expr, parenthesised_prop));
+        let comparison = choice((
+            list_membership,
+            empty_list,
+            value_comparison,
+            claim_call,
+            pre_expr,
+            parenthesised_prop,
+        ));
 
         // not_expr ::= "not" not_expr | comparison
         let not_expr = recursive(|not_expr| {
@@ -742,6 +783,8 @@ where
         let span_as_value = span_ctor().map(|v| ValueExpr::Term(Term::Literal(v)));
         let subject_as_value =
             subject_lit.map(|s| ValueExpr::Term(Term::Literal(Value::Subject(s.into()))));
+        let bool_as_value =
+            select! { Token::BoolLit(b) => ValueExpr::Term(Term::Literal(Value::Bool(b))) };
         let wildcard_as_value = just(Token::Wildcard).to(ValueExpr::Term(Term::Wildcard));
 
         // A variable, `actor` or `decided_at`. `Foo(args)` is a claim, which only the proposition
@@ -958,6 +1001,7 @@ where
             duration_as_value,
             span_as_value,
             subject_as_value,
+            bool_as_value,
             wildcard_as_value,
             bare_ident,
         ));

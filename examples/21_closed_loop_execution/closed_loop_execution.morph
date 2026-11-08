@@ -155,7 +155,7 @@ transformation place_order(venue, instrument, side, qty, price):
     require VenueDeclared(venue)
     require TradingMandate(actor, instrument, max_qty) and 0 < qty and qty <= max_qty
     require 0 < price
-    require side = #buy or side = #sell
+    require side in (#buy, #sell)
     let order = new Subject()
     admit OrderAuthorised(order, venue, instrument, side, qty, price)
     emit PlaceOrder(order, venue, instrument, side, qty, price)

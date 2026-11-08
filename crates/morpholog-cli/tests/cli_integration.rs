@@ -212,6 +212,62 @@ async fn run_business_rejection_exits_one_with_rejected_receipt_on_stdout() {
     assert!(receipt["reason"].as_str().unwrap_or("").contains("require"));
 }
 
+/// `true` and `false` decide on PostgreSQL as written: a gate comparing a
+/// Bool argument with `true`, and a compiled rule whose pattern names
+/// `true`, each refuse the `false` case and admit the `true` one.
+#[tokio::test(flavor = "current_thread")]
+async fn bool_literals_decide_in_a_gate_and_a_compiled_rule() {
+    reset_db().await;
+    let morph = temp_file(
+        b"program flags
+
+predicate Flag(order: Subject, on: Bool)
+predicate Done(order: Subject)
+
+invariant done_needs_flag:
+    Done(o) implies Flag(o, true)
+
+transformation set(order, on):
+    admit Flag(order, on)
+
+transformation complete(order, allow):
+    require allowed: allow = true
+    admit Done(order)
+",
+    );
+    let path = morph.path().to_str().unwrap();
+    let propose = |transformation: &str, flag: bool| {
+        let args =
+            format!(r#"[{{"type":"subject","value":"o1"}},{{"type":"bool","value":{flag}}}]"#);
+        let (_, stdout, stderr) = run_cli(&[
+            "propose",
+            path,
+            transformation,
+            "--actor",
+            "clerk",
+            "--args",
+            &args,
+        ]);
+        let receipt: Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|_| panic!("receipt JSON; stderr: {stderr}"));
+        (
+            receipt["status"].as_str().unwrap().to_string(),
+            receipt["rule"].as_str().map(str::to_string),
+        )
+    };
+    assert_eq!(propose("set", false), ("committed".into(), None));
+    assert_eq!(
+        propose("complete", false),
+        ("rejected".into(), Some("allowed".into()))
+    );
+    assert_eq!(
+        propose("complete", true),
+        ("rejected".into(), Some("done_needs_flag".into()))
+    );
+    assert_eq!(propose("set", true), ("committed".into(), None));
+    assert_eq!(propose("complete", true), ("committed".into(), None));
+}
+
 // ============================================================
 // `inspect claims` / `inspect audit` / `inspect outbox`
 // ============================================================

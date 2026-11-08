@@ -733,7 +733,7 @@ impl std::fmt::Display for LiteralDecimal {
 /// A literal constant in an IR `Term`, already parsed: the source
 /// frontend and [`crate::ir_builder`] read literal text once, and
 /// nothing downstream reads it again. Unlike the runtime `EvalValue`, it
-/// has no booleans or collections. A literal is a valid value; whether
+/// has no collections. A literal is a valid value; whether
 /// it has a surface spelling is the formatter's concern, and every
 /// value parsed from source does.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -744,6 +744,8 @@ pub enum Value {
     /// A named subject constant (a purpose, status, or authority), so it
     /// need not be passed as a parameter.
     Subject(Subject),
+    /// `true` or `false`, for a field or parameter of kind `Bool`.
+    Bool(bool),
     /// ISO-8601 civil date (`@2026-04-01`). No time of day and no time
     /// zone.
     Date(jiff::civil::Date),

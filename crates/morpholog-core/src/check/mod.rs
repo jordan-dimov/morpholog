@@ -2272,6 +2272,7 @@ fn term_kind(term: &Term) -> InferredKind {
         Term::Actor => InferredKind::Known(PredicateArgKind::Subject),
         Term::DecidedAt => InferredKind::Known(PredicateArgKind::Timestamp),
         Term::Literal(Value::Subject(_)) => InferredKind::Known(PredicateArgKind::Subject),
+        Term::Literal(Value::Bool(_)) => InferredKind::Known(PredicateArgKind::Bool),
         Term::Literal(Value::Decimal(_)) => InferredKind::Known(PredicateArgKind::Decimal),
         Term::Literal(Value::Date(_)) => InferredKind::Known(PredicateArgKind::Date),
         Term::Literal(Value::Timestamp(_)) => InferredKind::Known(PredicateArgKind::Timestamp),

@@ -49,6 +49,7 @@ fn arb_value() -> impl Strategy<Value = Value> {
         "[a-z_]{1,8}".prop_map(|s| Value::Subject(s.into())),
         "-?[0-9]{1,6}".prop_map(|s| Value::decimal(&s).unwrap()),
         Just(Value::date("2026-05-24").unwrap()),
+        any::<bool>().prop_map(Value::Bool),
     ]
 }
 

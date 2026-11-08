@@ -707,13 +707,24 @@ prop_err!(dangling_operator_is_error, "a +");
 // `Foo(x + 1, y)` is not representable: claim args are Terms, not Exprs.
 prop_err!(claim_call_with_arithmetic_arg_is_error, "Foo(x + 1, y)");
 
-/// `true` and `false` are reserved but not parseable, since the IR has no boolean value. They must
-/// fail at parse time, not become an unbound variable at runtime.
+/// `true` and `false` are the Bool literals, in a value and in a claim pattern. A bare one is not
+/// a proposition: `= true` says it.
 #[test]
-fn true_and_false_are_reserved_not_parseable() {
-    for source in ["true", "false", "require true", "Le(true, false)"] {
-        let errs = parse_expression(source).expect_err("bool literals not parseable in v0");
-        assert!(!errs.is_empty());
+fn true_and_false_are_bool_literals() {
+    assert_eq!(
+        parse_value_expr("true").unwrap(),
+        ValueExpr::Term(Term::Literal(Value::Bool(true)))
+    );
+    assert_eq!(
+        parse_value_expr("false").unwrap(),
+        ValueExpr::Term(Term::Literal(Value::Bool(false)))
+    );
+    let Prop::Claim { args, .. } = parse_expression("Flag(x, true)").unwrap() else {
+        panic!("a claim pattern");
+    };
+    assert_eq!(args[1], Term::Literal(Value::Bool(true)));
+    for source in ["true", "require true"] {
+        parse_expression(source).expect_err("a Bool is a value, not a proposition");
     }
 }
 
@@ -785,6 +796,44 @@ fn in_rejects_arithmetic_operand() {
         errs.iter()
             .any(|d| d.message.contains("`in`") && d.message.contains("terms")),
         "expected diagnostic about in-membership term-only restriction; got: {errs:?}"
+    );
+}
+
+/// A list written after `in` is the `or` chain of equalities, as IR, so the two spellings are one
+/// rule. Its left side may be any value, as `=`'s may; an element listed twice stays, as it would
+/// in the chain.
+#[test]
+fn a_written_list_after_in_is_the_chain_of_equalities() {
+    for (list, chain) in [
+        (
+            "s in (#pending, #on_hold)",
+            "(s = #pending or s = #on_hold)",
+        ),
+        ("s in (#a, #b, actor)", "(s = #a or s = #b or s = actor)"),
+        ("s in (#a, #a)", "(s = #a or s = #a)"),
+        ("q + 1 in (1, 2)", "(q + 1 = 1 or q + 1 = 2)"),
+    ] {
+        assert_eq!(
+            parse_expression(list).unwrap(),
+            parse_expression(chain).unwrap(),
+            "`{list}`"
+        );
+    }
+}
+
+/// The comma makes the list. Parentheses alone keep membership in a collection, a trailing comma
+/// makes no list of one, and an empty list is refused by name.
+#[test]
+fn only_a_comma_makes_a_list_after_in() {
+    let collection = Prop::In(Term::Var("s".into()), Term::Var("xs".into()));
+    assert_eq!(parse_expression("s in xs").unwrap(), collection);
+    assert_eq!(parse_expression("s in (xs)").unwrap(), collection);
+    parse_expression("s in (xs,)").expect_err("a trailing comma is no list");
+    let errs = parse_expression("s in ()").expect_err("an empty list");
+    assert!(
+        errs.iter()
+            .any(|d| d.message.contains("`in ()` lists nothing")),
+        "{errs:?}"
     );
 }
 

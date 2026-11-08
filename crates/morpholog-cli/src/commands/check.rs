@@ -9,6 +9,7 @@ use morpholog_cli::envelopes::{
 use morpholog_core::Bounding;
 use morpholog_core::{
     PredicateArgKind, PredicateDecl, PredicateName, PreparedProgram, Program, ReadPlan,
+    predicates_written_by,
 };
 use morpholog_postgres::{CompileReason, InvariantPlan, PgProgram, StoredShape};
 use morpholog_surface::{DeclKind, Diagnostic, SourceMap, Span, parse_program_with_sources};
@@ -661,10 +662,13 @@ fn summary(p: &Program, routes: &[CheckedInvariant], file: &Path) -> String {
 /// against the read, so these are the first places to look when
 /// concurrent proposals retry; a read keyed by something the
 /// transformation knows before it runs (a parameter, `actor`, a literal)
-/// is not listed.
+/// is not listed. A read of a predicate the transformation itself writes
+/// is marked, since two copies of the act can then conflict on unrelated
+/// records.
 fn whole_reads(p: &Program) -> String {
     let mut lines = Vec::new();
     for t in &p.transformations {
+        let written = predicates_written_by(t);
         for read in ReadPlan::whole_reads(t, &p.definitions) {
             let mut at = format!("statement {}", read.statement);
             if let Some(rule) = &read.rule {
@@ -673,6 +677,12 @@ fn whole_reads(p: &Program) -> String {
             if !read.through.is_empty() {
                 let through: Vec<String> = read.through.iter().map(ToString::to_string).collect();
                 at.push_str(&format!(", through {}", through.join(" > ")));
+            }
+            if written.contains(&read.predicate) {
+                at.push_str(&format!(
+                    "; {} also writes {}, so concurrent {} proposals can conflict even on different records",
+                    t.name, read.predicate, t.name
+                ));
             }
             lines.push(format!(
                 "    {} reads {} whole: {at}\n",

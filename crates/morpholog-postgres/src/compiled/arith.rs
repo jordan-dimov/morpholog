@@ -237,7 +237,7 @@ fn literal(value: &Value) -> Result<Dd, CompileReason> {
         Value::Timestamp(_) | Value::Date(_) | Value::Duration(_) | Value::CalendarSpan(_) => {
             Err(time_arithmetic())
         }
-        Value::Subject(_) => Err(CompileReason::UnvalidatedShape {
+        Value::Subject(_) | Value::Bool(_) => Err(CompileReason::UnvalidatedShape {
             detail: "a literal of no decimal kind in arithmetic".to_string(),
         }),
     }

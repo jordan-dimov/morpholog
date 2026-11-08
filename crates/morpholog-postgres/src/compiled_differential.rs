@@ -534,6 +534,20 @@ transformation set_right_flag(x, v):
 transformation set_left_flag(x, v):
     admit LeftFlag(x, v)
 ",
+    // A Bool literal in a pattern and in a comparison: the compiled
+    // filter must match only its own value.
+    "program bool_literals
+predicate Flag(x: Subject, v: Bool)
+predicate Done(x: Subject)
+invariant done_needs_a_true_flag:
+    Done(x) implies Flag(x, true)
+invariant a_false_flag_is_done:
+    Flag(x, v) and v = false implies Done(x)
+transformation set_flag(x, v):
+    admit Flag(x, v)
+transformation finish(x):
+    admit Done(x)
+",
     // Two orderings in one consequent, and an ordering after a join in
     // a consequent: orderings anywhere in a scope, in the shapes the
     // gallery's insurance and laytime rules have.

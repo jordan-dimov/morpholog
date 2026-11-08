@@ -793,6 +793,7 @@ fn format_value(v: &Value) -> String {
         // Each value renders in its one canonical spelling, so two
         // spellings of one value are one programme.
         Value::Decimal(d) => d.to_string(),
+        Value::Bool(b) => b.to_string(),
         // Date literals use the @YYYY-MM-DD sigil.
         Value::Date(d) => format!("@{d}"),
         // Timestamp literals extend the same sigil to a full RFC 3339
