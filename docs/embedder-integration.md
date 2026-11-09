@@ -659,15 +659,23 @@ One row is one operation: `_morpholog_op` is `del` for a claim the act removed a
 
 Replaying a history view from empty, each `ins` adding and each `del` removing, gives the predicate's claims exactly. The view adds no account of its own: it is the record `audit verify` already holds to the claims table. Morpholog supplies the changes; what a "stock movement" or a "shipment" is on a history page stays the host's reading of them.
 
-**Where the history starts.** A database created by `init` on v0.0.17 or later is ordered from its first row, and the view is the whole history. A database migrated across 027 shows its baseline first: one `ins` for each claim the table held at the migration, under the name `morpholog.baseline`, with `_morpholog_asserted_in` naming the earlier transition that admitted the claim (NULL on every other row). The acts before the migration are not decoded.
+**Where the history starts.** A database created by `init` on v0.0.17 or later is ordered from its first row, and the view is the whole history. A database migrated across 027 shows its baseline first: one `ins` for each claim the table held at the migration, under the name `morpholog.baseline`, with `_morpholog_asserted_in` naming the earlier transition that admitted the claim (NULL on every other row). The acts before the migration are not decoded. A baseline row carries the activation's own model hash, not the hash of the programme that admitted the claim, so it cannot say how the claim was declared then; `_morpholog_asserted_in` is where to look for the earlier admission.
 
 **A row written under an earlier declaration.** The log outlives every declaration, so a history view generated from today's programme also reads operations written when the predicate was declared differently. Three columns are there for that:
 
-- `_morpholog_arguments` holds the original tagged arguments on every row, and `_morpholog_model_hash` names the programme that wrote the row. These two are the authority for an old record.
+- `_morpholog_arguments` holds the original tagged arguments on every row, and `_morpholog_model_hash` names the programme that wrote the row (on a baseline row, the activation: see above). These two are the authority for an old record.
 - A field is decoded only where the stored value has the declared kind, a quantity's unit included. Otherwise the field is NULL, and the read still succeeds.
 - `_morpholog_shape_matches` is true when the row has today's number of fields and every one has today's kind. It is a statement about structure, never about meaning: a field renamed from `wholesale_price` to `retail_price` keeps its position and kind, so its old values decode under the new name with the flag true. A predicate the programme no longer declares has no view.
 
 **A read is consistent within its snapshot, and promises nothing more.** Transactions commit out of audit order, so an act still in flight can commit later with a lower order than rows a reader has already seen. This holds for one entity's rows as for the whole log: two acts that admit different claims about the same item do not conflict. A reader that pages incrementally, or assumes nothing can appear before its last-seen row, follows the recipe under "For direct SQL readers" above: read `morpholog.audit_watermark()`, take the snapshot, and page strictly below it.
+
+**Switching history off leaves the views in place.** The script only creates and replaces; it never drops a view, because an application may depend on it. So a schema that once had history views keeps them after a script generated without `--history` is applied. They still answer queries, but the catalogue and the seal no longer name them, and `audit verify --views-schema` reports the named surface intact without looking at them. Nothing checks them from then on, including against a predicate whose declaration later changes. Drop them when you stop generating them. This lists every view in the schema that the catalogue does not name:
+
+```sql
+SELECT table_name FROM information_schema.views
+WHERE table_schema = 'morpholog_views' AND table_name <> '_morpholog_catalog'
+  AND table_name NOT IN (SELECT view_name FROM morpholog_views._morpholog_catalog);
+```
 
 **What a read costs.** A history view unnests the audit log, so a filter on one entity walks every audit row: 170 milliseconds for one key's 798 rows over a log of 200,000 audit rows, linear in the log. The views are not yet an efficient way to browse one entity's history in a large log; that read needs an interface that reaches the entity's rows directly (#749).
 

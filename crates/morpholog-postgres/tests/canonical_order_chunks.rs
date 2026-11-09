@@ -483,6 +483,24 @@ async fn a_history_view_begins_at_the_baseline() {
     .unwrap();
     assert_eq!(legacy_shown, 0, "no legacy row is decoded as an operation");
 
+    // A baseline row carries the activation's own hash, not the hash of
+    // the programme that admitted the claim.
+    let hashes: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT h._morpholog_model_hash, activation.model_hash, admitting.model_hash
+         FROM baseline_history.x_history h
+         JOIN morpholog.audit admitting ON admitting.transition_id = h._morpholog_asserted_in,
+              (SELECT model_hash FROM morpholog.audit
+                WHERE transformation_name = 'morpholog.activate') activation",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(hashes.len(), 3);
+    for (shown, activation, admitting) in hashes {
+        assert_eq!(shown, activation);
+        assert_ne!(shown, admitting);
+    }
+
     let (held, replayed): (i64, i64) = sqlx::query_as(
         "SELECT (SELECT count(*) FROM morpholog.claims WHERE predicate_name = 'X'),
                 (SELECT count(*) FROM baseline_history.x_history h

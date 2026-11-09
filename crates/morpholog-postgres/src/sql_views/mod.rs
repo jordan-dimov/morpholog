@@ -1021,6 +1021,9 @@ fn stored_kind_test(kind: &PredicateArgKind, i: usize) -> Option<String> {
 /// is NULL otherwise; `_morpholog_shape_matches` says whether the whole
 /// row has today's structure, which is not a statement about what its
 /// fields meant; `_morpholog_arguments` is the original on every row.
+/// `_morpholog_model_hash` is the hash of the programme that wrote the
+/// row, which for a baseline row is the activation's, not the admitting
+/// programme's.
 fn render_history_view(
     out: &mut String,
     schema: &str,
