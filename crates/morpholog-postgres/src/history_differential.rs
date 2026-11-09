@@ -481,6 +481,18 @@ transformation tag(item, label, note):
         "the old row: its subject label is no decimal, and it has no note"
     );
     assert!(tags[0].4.contains("\"red\""), "{}", tags[0].4);
+    // What the guard is for: the base view's cast, unguarded, fails the
+    // whole read on that one row.
+    let unguarded = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT (_morpholog_arguments -> 1 ->> 'value')::numeric FROM {SCHEMA}.tag_history"
+    )))
+    .fetch_all(&pool)
+    .await
+    .expect_err("a subject is no numeric");
+    assert!(
+        unguarded.to_string().contains("invalid input syntax"),
+        "{unguarded}"
+    );
     assert_eq!(
         (&tags[1].0, &tags[1].1, &tags[1].2, tags[1].3),
         (
