@@ -983,6 +983,10 @@ pub morpholog_core::Lint::SharedWriter::transformation: alloc::string::String
 pub morpholog_core::Lint::UnsuppliedAntecedent
 pub morpholog_core::Lint::UnsuppliedAntecedent::invariant: alloc::string::String
 pub morpholog_core::Lint::UnsuppliedAntecedent::missing: alloc::vec::Vec<alloc::string::String>
+pub morpholog_core::Lint::WildcardedCallUnderSum
+pub morpholog_core::Lint::WildcardedCallUnderSum::definition: alloc::string::String
+pub morpholog_core::Lint::WildcardedCallUnderSum::owner: alloc::string::String
+pub morpholog_core::Lint::WildcardedCallUnderSum::parameters: alloc::vec::Vec<alloc::string::String>
 impl core::clone::Clone for morpholog_core::Lint
 pub fn morpholog_core::Lint::clone(&self) -> morpholog_core::Lint
 impl core::cmp::Eq for morpholog_core::Lint
