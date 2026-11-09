@@ -1831,3 +1831,133 @@ transformation mark(item):
         "a call outside a sum is a truth test"
     );
 }
+
+const CALLS_IN_SUMS: &str = "program calls_in_sums
+predicate Alloc(allocation: Subject, item: Subject, q: Decimal)
+predicate Perm(grant: Subject, item: Subject, who: Subject)
+predicate Stock(item: Subject, on_hand: Decimal)
+define alloc(allocation, item, q):
+    Alloc(allocation, item, q)
+define permitted(grant, item, who):
+    Perm(grant, item, who)
+transformation filter_after(allocation, item, q):
+    require within: sum(x | Alloc(a, other, x) and permitted(_, other, _)) + q <= value Stock(item, _)
+    admit Alloc(allocation, item, q)
+transformation filter_before(allocation, item, q):
+    require within: sum(x | permitted(_, other, _) and Alloc(a, other, x)) + q <= value Stock(item, _)
+    admit Alloc(allocation, item, q)
+transformation filter_on_a_parameter(allocation, item, q, who):
+    require within: sum(x | Alloc(a, other, x) and permitted(_, other, who)) + q <= value Stock(item, _)
+    admit Alloc(allocation, item, q)
+transformation under_exists(allocation, item, q):
+    require within: sum(x | Alloc(a, item, x) and (exists who: permitted(_, item, who))) + q <= value Stock(item, _)
+    admit Alloc(allocation, item, q)
+transformation source_beside_a_claim(allocation, item, q):
+    require within: sum(x | Stock(item, _) and alloc(_, item, x)) + q <= value Stock(item, _)
+    admit Alloc(allocation, item, q)
+transformation source_beside_a_sibling_sum(allocation, item, q):
+    require within: sum(x | alloc(_, item, x)) + sum(x | Alloc(_, item, x)) + q <= value Stock(item, _)
+    admit Alloc(allocation, item, q)
+transformation two_sources(allocation, item, q):
+    require within: sum(x | alloc(_, other, x) and permitted(_, other, _)) + q <= value Stock(item, _)
+    admit Alloc(allocation, item, q)
+";
+
+/// A wildcarded call is hinted only where it brings a variable into the
+/// sum itself. One whose named arguments are all bound without it - by a
+/// claim pattern beside it, on either side, or by the rule around the
+/// sum - is a yes-or-no test on rows the rest supplies, and so is one
+/// under `exists`.
+#[test]
+fn the_wildcarded_call_hint_follows_what_the_call_binds() {
+    let hinted: Vec<(String, String)> = lints_of(CALLS_IN_SUMS)
+        .into_iter()
+        .filter_map(|l| match l {
+            Lint::WildcardedCallUnderSum {
+                owner, definition, ..
+            } => Some((owner, definition)),
+            _ => None,
+        })
+        .collect();
+    let expected: Vec<(String, String)> = [
+        ("source_beside_a_claim", "alloc"),
+        ("source_beside_a_sibling_sum", "alloc"),
+        ("two_sources", "alloc"),
+        ("two_sources", "permitted"),
+    ]
+    .into_iter()
+    .map(|(t, d)| (format!("transformation `{t}`"), d.to_string()))
+    .collect();
+    assert_eq!(hinted, expected);
+}
+
+/// Why the hint follows what the call binds: over two allocations of 6
+/// and two permissions on one item, the call that brings the quantity in
+/// counts the pair once, and the call that only tests the item leaves
+/// both rows standing.
+#[test]
+fn a_wildcarded_call_collapses_rows_only_where_it_supplies_them() {
+    use morpholog_core::State;
+    use morpholog_test_support::{claim_instance, dec, enumerate_derived, subj};
+    let program = parse_program(
+        "program rows
+
+predicate Alloc(allocation: Subject, item: Subject, q: Decimal)
+predicate Perm(grant: Subject, item: Subject, who: Subject)
+predicate Stock(item: Subject, on_hand: Decimal)
+predicate Source(item: Subject, q: Decimal)
+predicate FilterAfter(item: Subject, q: Decimal)
+predicate FilterBefore(item: Subject, q: Decimal)
+predicate UnderExists(item: Subject, q: Decimal)
+
+define alloc(allocation, item, q):
+    Alloc(allocation, item, q)
+define permitted(grant, item, who):
+    Perm(grant, item, who)
+
+derived Source(item):
+    over Stock(item: item, ..)
+    value q = sum(q | alloc(_, item, q))
+derived FilterAfter(item):
+    over Stock(item: item, ..)
+    value q = sum(q | Alloc(a, item, q) and permitted(_, item, _))
+derived FilterBefore(item):
+    over Stock(item: item, ..)
+    value q = sum(q | permitted(_, item, _) and Alloc(a, item, q))
+derived UnderExists(item):
+    over Stock(item: item, ..)
+    value q = sum(q | Alloc(a, item, q) and (exists who: permitted(_, item, who)))
+
+transformation receive(item, on_hand):
+    admit Stock(item, on_hand)
+",
+    )
+    .expect("parses");
+    let state = State::from_claims(vec![
+        claim_instance("Stock", &[subj("i"), dec(100)]),
+        claim_instance("Alloc", &[subj("a1"), subj("i"), dec(6)]),
+        claim_instance("Alloc", &[subj("a2"), subj("i"), dec(6)]),
+        claim_instance("Perm", &[subj("g1"), subj("i"), subj("w1")]),
+        claim_instance("Perm", &[subj("g2"), subj("i"), subj("w2")]),
+    ]);
+    let figure = |name: &str| {
+        let derived = program
+            .derived_claims
+            .iter()
+            .find(|d| d.predicate.as_str() == name)
+            .unwrap();
+        enumerate_derived(&program, derived, &state).unwrap()
+    };
+    assert_eq!(
+        figure("Source"),
+        vec![claim_instance("Source", &[subj("i"), dec(6)])],
+        "the call supplies the rows, and the pair counts once"
+    );
+    for name in ["FilterAfter", "FilterBefore", "UnderExists"] {
+        assert_eq!(
+            figure(name),
+            vec![claim_instance(name, &[subj("i"), dec(12)])],
+            "{name}: the call only tests, and both allocations count"
+        );
+    }
+}

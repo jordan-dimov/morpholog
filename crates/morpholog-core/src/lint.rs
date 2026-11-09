@@ -47,12 +47,15 @@ pub fn client_refuses_name(name: &str) -> bool {
 /// One lint finding. See the module doc for the error-vs-lint line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Lint {
-    /// A `sum` whose body calls a definition with `_` for a parameter.
-    /// A call yields each distinct projection of its named arguments
-    /// once, so claims that differ only at the wildcarded position count
-    /// as one, and the sum undercounts them. A hint, because collapsing
-    /// them can be what the author means; otherwise name the argument.
-    /// `owner` is the rule the sum sits in, as "transformation `name`".
+    /// A `sum` whose body takes a variable from a definition called with
+    /// `_` for a parameter. A call yields each distinct projection of its
+    /// named arguments once, so claims that differ only at the wildcarded
+    /// position count as one, and the sum can undercount them. A hint,
+    /// because collapsing them can be what the author means; otherwise
+    /// name the argument. Not raised where the call only tests rows the
+    /// rest of the body supplies: every named argument bound elsewhere,
+    /// or the call under `exists`. `owner` is the rule the sum sits in,
+    /// as "transformation `name`".
     WildcardedCallUnderSum {
         owner: String,
         definition: String,
@@ -275,7 +278,8 @@ impl std::fmt::Display for Lint {
                     f,
                     "{owner} sums over `{definition}` called with `_` for {}: a call counts each \
                      distinct projection of its named arguments once, so claims that differ only \
-                     there count as one. Name the argument when each claim must count",
+                     there count as one and the sum can come out too low. Name the argument when \
+                     each claim must count",
                     named.join(" and ")
                 )
             }
@@ -650,57 +654,119 @@ fn large_grid_findings(t: &crate::ir::Transformation, out: &mut Vec<Lint>) {
     }
 }
 
-/// Every sum in the programme whose body calls a definition with a
-/// wildcard argument, once per call and owner, with the parameters the
-/// wildcards stand for.
+/// Every sum in the programme whose body takes a variable from a
+/// definition called with a wildcard argument, once per call and owner,
+/// with the parameters the wildcards stand for.
 fn wildcarded_call_findings(
     program: &Program,
     definitions: &crate::definitions::DefinitionTable<'_>,
     out: &mut Vec<Lint>,
 ) {
-    fn sum_body<'a>(owner: &str, node: fold::Node<'a>, out: &mut Vec<(String, &'a Prop)>) {
-        if let fold::Node::Value(ValueExpr::Sum { body, .. }) = node {
-            out.push((owner.to_string(), body));
-        }
-    }
-    let mut seen: BTreeSet<(String, String, Vec<String>)> = BTreeSet::new();
-    let mut sum_bodies: Vec<(String, &Prop)> = Vec::new();
     for t in &program.transformations {
-        let owner = format!("transformation `{}`", t.name);
+        let mut nodes = Vec::new();
         for stmt in &t.body {
-            fold::walk_stmt(stmt, &mut |node| sum_body(&owner, node, &mut sum_bodies));
+            fold::walk_stmt(stmt, &mut |node| nodes.push(node));
         }
+        let owner = format!("transformation `{}`", t.name);
+        wildcarded_calls_of(&owner, &t.parameters, &nodes, definitions, out);
     }
     for inv in &program.invariants {
+        let mut nodes = Vec::new();
+        fold::walk_prop(&inv.body, &mut |node| nodes.push(node));
         let owner = format!("invariant `{}`", inv.name);
-        fold::walk_prop(&inv.body, &mut |node| {
-            sum_body(&owner, node, &mut sum_bodies)
-        });
+        wildcarded_calls_of(&owner, &[], &nodes, definitions, out);
     }
     for d in &program.derived_claims {
-        let owner = format!("derived `{}`", d.predicate);
-        fold::walk_prop(&d.domain, &mut |node| {
-            sum_body(&owner, node, &mut sum_bodies)
-        });
+        let mut nodes = Vec::new();
+        fold::walk_prop(&d.domain, &mut |node| nodes.push(node));
         for value in &d.values {
-            fold::walk_value(&value.expr, &mut |node| {
-                sum_body(&owner, node, &mut sum_bodies)
-            });
+            fold::walk_value(&value.expr, &mut |node| nodes.push(node));
         }
+        let owner = format!("derived `{}`", d.predicate);
+        wildcarded_calls_of(&owner, &[], &nodes, definitions, out);
     }
     for def in &program.definitions {
+        let mut nodes = Vec::new();
+        fold::walk_prop(&def.body, &mut |node| nodes.push(node));
         let owner = format!("definition `{}`", def.name);
-        fold::walk_prop(&def.body, &mut |node| {
-            sum_body(&owner, node, &mut sum_bodies)
-        });
+        wildcarded_calls_of(&owner, &def.parameters, &nodes, definitions, out);
     }
-    for (owner, body) in sum_bodies {
-        fold::walk_prop(body, &mut |node| {
-            let fold::Node::Prop(Prop::Defined { name, args }) = node else {
-                return;
-            };
+}
+
+/// The findings of one rule, given every node in it and the names it
+/// declares.
+///
+/// A wildcarded call is hinted only where it brings a variable into the
+/// sum: one of its named arguments is bound by nothing else the sum can
+/// see. With every named argument bound elsewhere the call answers yes
+/// or no for a row the rest supplies, and collapses nothing.
+///
+/// "Elsewhere" errs towards silence. It is every claim pattern,
+/// wildcard-free call, `in`, `let` and `for` in the rule, wherever it
+/// stands, except inside another sum this one is not part of, whose
+/// names never reach it.
+fn wildcarded_calls_of<'a>(
+    owner: &str,
+    declared: &'a [Var],
+    nodes: &[fold::Node<'a>],
+    definitions: &crate::definitions::DefinitionTable<'_>,
+    out: &mut Vec<Lint>,
+) {
+    struct Sum<'a> {
+        body: &'a Prop,
+        binds: Vec<&'a Var>,
+        holds: Vec<&'a Prop>,
+    }
+    fn sum_body<'a>(node: fold::Node<'a>) -> Option<&'a Prop> {
+        match node {
+            fold::Node::Value(ValueExpr::Sum { body, .. }) => Some(body),
+            _ => None,
+        }
+    }
+    let sums: Vec<Sum<'a>> = nodes
+        .iter()
+        .filter_map(|node| sum_body(*node))
+        .map(|body| {
+            let mut binds = Vec::new();
+            let mut holds = Vec::new();
+            fold::walk_prop(body, &mut |node| {
+                binding_sites(node, &mut binds);
+                holds.extend(sum_body(node));
+            });
+            Sum { body, binds, holds }
+        })
+        .collect();
+    let mut rule_binds: Vec<&Var> = Vec::new();
+    for node in nodes {
+        binding_sites(*node, &mut rule_binds);
+    }
+    let mut seen: BTreeSet<(&str, Vec<String>)> = BTreeSet::new();
+    for sum in &sums {
+        // Names bound inside a sum stay there, so this one sees only
+        // the sums it sits in. The sites are told apart by address,
+        // since two sums often reuse a name.
+        let hidden: BTreeSet<*const Var> = sums
+            .iter()
+            .filter(|other| {
+                !std::ptr::eq(other.body, sum.body)
+                    && !other.holds.iter().any(|held| std::ptr::eq(*held, sum.body))
+            })
+            .flat_map(|other| other.binds.iter().map(|v| std::ptr::from_ref(*v)))
+            .collect();
+        let bound: BTreeSet<&Var> = declared
+            .iter()
+            .chain(
+                rule_binds
+                    .iter()
+                    .copied()
+                    .filter(|v| !hidden.contains(&std::ptr::from_ref(*v))),
+            )
+            .collect();
+        let mut calls = Vec::new();
+        witness_calls(sum.body, &mut calls);
+        for (name, args) in calls {
             let Some(def) = definitions.get(name) else {
-                return;
+                continue;
             };
             let parameters: Vec<String> = def
                 .parameters
@@ -709,17 +775,75 @@ fn wildcarded_call_findings(
                 .filter(|(_, arg)| matches!(arg, Term::Wildcard))
                 .map(|(param, _)| param.to_string())
                 .collect();
-            if parameters.is_empty() {
-                return;
+            let brings_a_variable = args
+                .iter()
+                .any(|arg| matches!(arg, Term::Var(v) if !bound.contains(v)));
+            if parameters.is_empty() || !brings_a_variable {
+                continue;
             }
-            if seen.insert((owner.clone(), name.to_string(), parameters.clone())) {
+            if seen.insert((name.as_str(), parameters.clone())) {
                 out.push(Lint::WildcardedCallUnderSum {
-                    owner: owner.clone(),
+                    owner: owner.to_string(),
                     definition: name.to_string(),
                     parameters,
                 });
             }
-        });
+        }
+    }
+}
+
+/// The variables `node` binds for what stands beside it. A call with a
+/// wildcard is left out: it is the thing being judged.
+fn binding_sites<'a>(node: fold::Node<'a>, out: &mut Vec<&'a Var>) {
+    let args: &[Term] = match node {
+        fold::Node::Prop(Prop::Claim { args, .. }) => args,
+        fold::Node::Prop(Prop::Defined { args, .. })
+            if !args.iter().any(|arg| matches!(arg, Term::Wildcard)) =>
+        {
+            args
+        }
+        fold::Node::Prop(Prop::In(element, _)) => std::slice::from_ref(element),
+        fold::Node::Stmt(Stmt::Let { name, .. } | Stmt::LetNewSubject { name }) => {
+            out.push(name);
+            return;
+        }
+        fold::Node::Stmt(Stmt::For { binding, .. }) => {
+            out.push(binding);
+            return;
+        }
+        _ => return,
+    };
+    out.extend(args.iter().filter_map(|arg| match arg {
+        Term::Var(v) => Some(v),
+        _ => None,
+    }));
+}
+
+/// The definition calls whose matches become the sum's rows: those
+/// reached through `and`, `or`, `xor` and `pre` alone. A call under
+/// `exists`, `forall`, `not` or an implication only answers yes or no.
+fn witness_calls<'a>(prop: &'a Prop, out: &mut Vec<(&'a DefinitionName, &'a [Term])>) {
+    match prop {
+        Prop::Defined { name, args } => out.push((name, args)),
+        Prop::And(props) | Prop::Or(props) => {
+            for p in props {
+                witness_calls(p, out);
+            }
+        }
+        Prop::Xor(left, right) => {
+            witness_calls(left, out);
+            witness_calls(right, out);
+        }
+        Prop::Pre(inner) => witness_calls(inner, out),
+        Prop::Claim { .. }
+        | Prop::Implies { .. }
+        | Prop::Exists { .. }
+        | Prop::Forall { .. }
+        | Prop::Not(_)
+        | Prop::Eq(..)
+        | Prop::Neq(..)
+        | Prop::Compare { .. }
+        | Prop::In(..) => {}
     }
 }
 

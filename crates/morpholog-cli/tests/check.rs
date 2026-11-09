@@ -1445,3 +1445,41 @@ transformation allocate(allocation, item, q):
         .unwrap();
     assert!(!strict.status.success(), "--strict promotes it");
 }
+
+/// A wildcarded call that only tests rows a claim pattern supplies
+/// collapses nothing, so `--strict` has nothing to refuse.
+#[test]
+fn a_wildcarded_call_that_only_tests_a_row_passes_strict() {
+    let f = temp_morph(
+        "program filter
+
+predicate Alloc(allocation: Subject, item: Subject, q: Decimal)
+predicate Perm(grant: Subject, item: Subject)
+predicate Stock(item: Subject, on_hand: Decimal)
+
+define permitted(grant, item):
+    Perm(grant, item)
+
+transformation allocate(allocation, item, q):
+    require within: sum(x | Alloc(_, item, x) and permitted(_, item)) + q <= value Stock(item, _)
+    admit Alloc(allocation, item, q)
+
+transformation receive(item, on_hand):
+    admit Stock(item, on_hand)
+
+transformation permit(grant, item):
+    admit Perm(grant, item)
+",
+    );
+    let strict = Command::new(bin())
+        .arg("check")
+        .arg(f.path())
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert!(
+        strict.status.success(),
+        "got: {}",
+        String::from_utf8_lossy(&strict.stderr)
+    );
+}
