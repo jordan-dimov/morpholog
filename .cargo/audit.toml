@@ -20,4 +20,10 @@ ignore = [
     # is a lockfile entry that is never compiled. rust_decimal 1.42.1
     # is current; revisit when it moves to rkyv 0.8.
     "RUSTSEC-2026-0235",
+    # C SQLite CVE in libsqlite3-sys 0.37, a lockfile entry through
+    # sqlx-sqlite. We enable sqlx's `postgres` feature and not
+    # `sqlite`: `cargo tree -i libsqlite3-sys` prints nothing, so the
+    # crate is never compiled. sqlx-sqlite 0.9.0 is current and holds
+    # libsqlite3-sys below the fixed 0.39; revisit when sqlx moves.
+    "RUSTSEC-2026-0459",
 ]
