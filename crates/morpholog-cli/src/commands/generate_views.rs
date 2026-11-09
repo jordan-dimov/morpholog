@@ -35,7 +35,7 @@ pub(crate) fn run(args: &GenerateViewsArgs) -> anyhow::Result<()> {
         DerivedSourceArg::Cache => DerivedSource::Cache,
         DerivedSourceArg::Live => DerivedSource::Live,
     };
-    let rendered = match render_views(&validated, &args.schema, &hash, source) {
+    let rendered = match render_views(&validated, &args.schema, &hash, source, args.history) {
         Ok(rendered) => rendered,
         Err(refusals) => {
             for refusal in &refusals {
@@ -49,11 +49,15 @@ pub(crate) fn run(args: &GenerateViewsArgs) -> anyhow::Result<()> {
         }
     };
 
-    let total = rendered.base_view_count + rendered.derived_view_count;
-    let summary = format!(
+    let total =
+        rendered.base_view_count + rendered.derived_view_count + rendered.history_view_count;
+    let mut summary = format!(
         "generated {total} view(s): {} base, {} derived",
         rendered.base_view_count, rendered.derived_view_count
     );
+    if args.history {
+        summary.push_str(&format!(", {} history", rendered.history_view_count));
+    }
     if let Some(path) = &args.describe {
         let mut json = serde_json::to_string_pretty(&rendered.surface)?;
         json.push('\n');

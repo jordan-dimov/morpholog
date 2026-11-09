@@ -29,6 +29,7 @@ async fn apply_views(pool: &PgPool) {
         SCHEMA,
         &canonical_hash(&program),
         morpholog_postgres::DerivedSource::Cache,
+        false,
     )
     .unwrap();
     sqlx::raw_sql(sqlx::AssertSqlSafe(rendered.sql))

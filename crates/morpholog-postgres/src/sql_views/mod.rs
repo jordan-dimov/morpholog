@@ -51,13 +51,17 @@ pub struct RenderedViews {
     pub base_view_count: usize,
     /// Views over the `morpholog_read` cache (one per derived head).
     pub derived_view_count: usize,
+    /// History views over `morpholog.audit` (one per non-derived
+    /// predicate when asked for, else none).
+    pub history_view_count: usize,
     pub surface: ViewSurface,
 }
 
 /// The format of [`ViewSurface`] as written. Moves when the description's
 /// shape changes, apart from the model hash, which moves with the
-/// programme. 2 added `source` on a derived view.
-pub const VIEW_SURFACE_FORMAT: u32 = 2;
+/// programme. 2 added `source` on a derived view; 3 added the `history`
+/// kind.
+pub const VIEW_SURFACE_FORMAT: u32 = 3;
 
 /// Where a derived predicate's view reads from: the `morpholog_read`
 /// cache `refresh derived` fills, or the claims themselves, computed at
@@ -97,8 +101,9 @@ pub struct ViewSurface {
 /// One generated view. `identity` lists the field sets the programme
 /// declares unique (`unique by` clauses for a base predicate, the key
 /// fields for a derived one), as declared: whether one serves as a key
-/// is the consumer's decision, and a view may have none. A derived view
-/// says where it reads from, `live` or `cache`; a base view says nothing.
+/// is the consumer's decision, and a view may have none. A history
+/// view's is the operation's place in the log. A derived view says where
+/// it reads from, `live` or `cache`; the others say nothing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ViewDescription {
     pub predicate: String,
@@ -411,8 +416,9 @@ impl ViewKind {
 }
 
 /// Render the atomic `CREATE VIEW` script for `program` into `schema`: one
-/// typed view per base predicate, one per derived predicate, and the
-/// `_morpholog_catalog` inventory. Pure: identical inputs give
+/// typed view per base predicate, one per derived predicate, with
+/// `history` one more per base predicate over the operations the audit
+/// log records on it, and the `_morpholog_catalog` inventory. Pure: identical inputs give
 /// byte-identical output. On any refusal, returns every finding and
 /// renders nothing.
 pub fn render_views(
@@ -420,6 +426,7 @@ pub fn render_views(
     schema: &str,
     model_hash: &str,
     derived_source: DerivedSource,
+    history: bool,
 ) -> Result<RenderedViews, Vec<ViewRefusal>> {
     let program = program.as_program();
 
@@ -441,7 +448,8 @@ pub fn render_views(
         .filter(|p| derived_heads.contains(p.name.as_str()))
         .collect();
 
-    let mut refusals = sweep(schema, &base, &derived);
+    let with_history: &[&PredicateDecl] = if history { &base } else { &[] };
+    let mut refusals = sweep(schema, &base, &derived, with_history);
 
     // Under `Live`, each derived claim's body as the renderer expresses
     // it; a refusal names the claim. Collected with the sweep's, so the
@@ -495,6 +503,7 @@ pub fn render_views(
         model_hash,
         &base,
         &derived,
+        with_history,
         &derived_keys,
         derived_source,
         &live,
@@ -503,6 +512,7 @@ pub fn render_views(
         sql,
         base_view_count: base.len(),
         derived_view_count: derived.len(),
+        history_view_count: with_history.len(),
         surface: ViewSurface {
             format: VIEW_SURFACE_FORMAT,
             programme: program.name.to_string(),
@@ -518,7 +528,12 @@ pub fn render_views(
 /// Collect every reason the programme cannot be rendered, across base and
 /// derived predicates. They share one schema, so the view-name collision
 /// check spans both.
-fn sweep(schema: &str, base: &[&PredicateDecl], derived: &[&PredicateDecl]) -> Vec<ViewRefusal> {
+fn sweep(
+    schema: &str,
+    base: &[&PredicateDecl],
+    derived: &[&PredicateDecl],
+    history: &[&PredicateDecl],
+) -> Vec<ViewRefusal> {
     let mut refusals = Vec::new();
 
     if !is_safe_lower_ident(schema) || schema.len() > MAX_IDENT_BYTES {
@@ -546,21 +561,37 @@ fn sweep(schema: &str, base: &[&PredicateDecl], derived: &[&PredicateDecl]) -> V
         );
     }
 
+    for predicate in history {
+        let view = history_view_name(predicate.name.as_str());
+        check_identifier(
+            format!(
+                "predicate `{}` (history view name `{view}`)",
+                predicate.name
+            ),
+            &view,
+            &mut refusals,
+        );
+    }
+
     // snake_case is many-to-one, so two distinct predicate names can render
-    // to the same view.
-    let mut by_view: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    // to the same view, and a history view can land on another
+    // predicate's.
+    let mut by_view: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for predicate in &all {
         by_view
             .entry(snake_case(predicate.name.as_str()))
             .or_default()
-            .push(predicate.name.as_str());
+            .push(predicate.name.to_string());
+    }
+    for predicate in history {
+        by_view
+            .entry(history_view_name(predicate.name.as_str()))
+            .or_default()
+            .push(format!("{} (its history)", predicate.name));
     }
     for (generated, sources) in by_view {
         if sources.len() > 1 {
-            refusals.push(ViewRefusal::ViewNameCollision {
-                generated,
-                sources: sources.iter().map(ToString::to_string).collect(),
-            });
+            refusals.push(ViewRefusal::ViewNameCollision { generated, sources });
         }
     }
 
@@ -576,12 +607,13 @@ fn render(
     model_hash: &str,
     base: &[&PredicateDecl],
     derived: &[&PredicateDecl],
+    history: &[&PredicateDecl],
     derived_keys: &BTreeMap<&str, Vec<String>>,
     derived_source: DerivedSource,
     live: &BTreeMap<&str, String>,
 ) -> (String, Vec<ViewDescription>) {
     let mut out = String::new();
-    let mut views = Vec::with_capacity(base.len() + derived.len());
+    let mut views = Vec::with_capacity(base.len() + derived.len() + history.len());
     let _ = writeln!(
         out,
         "-- Generated by `morpholog generate views` - do not edit."
@@ -634,8 +666,14 @@ fn render(
         views.push(description);
     }
 
-    render_catalog(&mut out, program, schema, model_hash, base, derived);
-    render_seal(&mut out, schema, base, derived);
+    for predicate in history {
+        views.push(render_history_view(&mut out, schema, predicate));
+    }
+
+    render_catalog(
+        &mut out, program, schema, model_hash, base, derived, history,
+    );
+    render_seal(&mut out, schema, base, derived, history);
 
     out.push_str("\nCOMMIT;\n");
     (out, views)
@@ -651,12 +689,14 @@ fn render_seal(
     schema: &str,
     base: &[&PredicateDecl],
     derived: &[&PredicateDecl],
+    history: &[&PredicateDecl],
 ) {
     let qualified = format!("{}.{}", quote_ident(schema), quote_ident(VIEW_DEFS_TABLE));
     let names: Vec<String> = base
         .iter()
         .chain(derived.iter())
         .map(|p| snake_case(p.name.as_str()))
+        .chain(history.iter().map(|p| history_view_name(p.name.as_str())))
         .chain(std::iter::once(CATALOG_VIEW.to_string()))
         .collect();
 
@@ -920,9 +960,181 @@ fn render_live_view(
     }
 }
 
+/// The `kind` a history view carries in the catalogue and the
+/// description.
+const HISTORY_KIND: &str = "history";
+
+/// A history view's metadata columns, in order, each with its source
+/// expression and SQL type, apart from the shape flag and the arguments,
+/// which follow them.
+const HISTORY_METADATA: [(&str, &str, &str); 10] = [
+    ("transition_id", "_morpholog_transition_id", "uuid"),
+    ("audit_order", "_morpholog_audit_order", "bigint"),
+    ("act_ordinal", "_morpholog_act_ordinal", "integer"),
+    ("operation", "_morpholog_operation", "bigint"),
+    ("transformation_name", "_morpholog_transformation", "text"),
+    ("actor ->> 'value'", "_morpholog_actor", "text"),
+    ("ordered_at", "_morpholog_ordered_at", "timestamptz"),
+    ("op", "_morpholog_op", "text"),
+    ("asserted_in", "_morpholog_asserted_in", "uuid"),
+    ("model_hash", "_morpholog_model_hash", "text"),
+];
+
+/// The view that holds a predicate's history.
+fn history_view_name(predicate: &str) -> String {
+    format!("{}_history", snake_case(predicate))
+}
+
+/// A SQL test that the stored value at position `i` of `arguments` has
+/// the declared kind, whole: its tag, and for a quantity its unit, since
+/// two units share a tag. `None` for a kind every stored value has.
+///
+/// **No `_` arm**, as in [`column_sql_at`]: a new kind must say what a
+/// stored value of it looks like.
+fn stored_kind_test(kind: &PredicateArgKind, i: usize) -> Option<String> {
+    let tagged = |tag: &str| Some(format!("arguments -> {i} ->> 'type' = '{tag}'"));
+    match kind {
+        PredicateArgKind::Subject => tagged("subject"),
+        PredicateArgKind::Decimal => tagged("decimal"),
+        PredicateArgKind::Date => tagged("date"),
+        PredicateArgKind::Timestamp => tagged("timestamp"),
+        PredicateArgKind::Duration => tagged("duration"),
+        PredicateArgKind::Bool => tagged("bool"),
+        PredicateArgKind::Collection => tagged("collection"),
+        PredicateArgKind::CalendarSpan => tagged("calendarspan"),
+        PredicateArgKind::Quantity(unit) => Some(format!(
+            "arguments -> {i} ->> 'type' = 'quantity' AND arguments -> {i} -> 'value' ->> 'unit' = {}",
+            quote_literal(unit.as_str())
+        )),
+        PredicateArgKind::Any => None,
+    }
+}
+
+/// Render one predicate's history view: a row for each operation a
+/// commit performed on the predicate's claims, in the log's order, from
+/// `morpholog.audit.operations`. A `noop`, an admission that found the
+/// claim present, changed nothing and is left out.
+///
+/// The log outlives every declaration, so a row may hold another arity
+/// or another kind at a position than the predicate declares now. A
+/// field is decoded only where the stored kind is the declared one, and
+/// is NULL otherwise; `_morpholog_shape_matches` says whether the whole
+/// row has today's structure, which is not a statement about what its
+/// fields meant; `_morpholog_arguments` is the original on every row.
+fn render_history_view(
+    out: &mut String,
+    schema: &str,
+    predicate: &PredicateDecl,
+) -> ViewDescription {
+    let name = predicate.name.as_str();
+    let view = history_view_name(name);
+    let qualified = format!("{}.{}", quote_ident(schema), quote_ident(&view));
+
+    let _ = writeln!(out, "\n-- History view for base predicate `{name}`.");
+    let _ = writeln!(out, "CREATE OR REPLACE VIEW {qualified} AS");
+    out.push_str("WITH governed_operations AS (\n");
+    out.push_str(
+        "    SELECT o.op -> 'args' AS arguments, a.transition_id, a.audit_order, a.act_ordinal,\n",
+    );
+    out.push_str("           o.n AS operation, a.transformation_name, a.actor, a.ordered_at,\n");
+    out.push_str(
+        "           o.op ->> 'op' AS op, (o.op ->> 'asserted_in')::uuid AS asserted_in, a.model_hash\n",
+    );
+    out.push_str(
+        "    FROM morpholog.audit a, jsonb_array_elements(a.operations) WITH ORDINALITY AS o(op, n)\n",
+    );
+    let _ = writeln!(
+        out,
+        "    WHERE o.op ->> 'predicate' = {}",
+        quote_literal(name)
+    );
+    out.push_str("      AND o.op ->> 'op' <> 'noop'\n");
+    out.push_str(")\nSELECT\n");
+
+    let mut selects: Vec<(String, String, &str)> = HISTORY_METADATA
+        .iter()
+        .map(|(expr, alias, sql_type)| ((*expr).to_string(), (*alias).to_string(), *sql_type))
+        .collect();
+    let mut shape = format!("jsonb_array_length(arguments) = {}", predicate.args.len());
+    for (i, arg) in predicate.args.iter().enumerate() {
+        if let Some(test) = stored_kind_test(&arg.kind, i) {
+            let _ = write!(shape, " AND {test}");
+        }
+    }
+    selects.push((
+        format!("COALESCE({shape}, false)"),
+        "_morpholog_shape_matches".into(),
+        "boolean",
+    ));
+    selects.push(("arguments".into(), "_morpholog_arguments".into(), "jsonb"));
+
+    let mut columns: Vec<ColumnDescription> = selects
+        .iter()
+        .map(|(_, alias, sql_type)| ColumnDescription {
+            name: alias.clone(),
+            role: "metadata".to_string(),
+            kind: None,
+            sql_type: (*sql_type).to_string(),
+            position: None,
+        })
+        .collect();
+    let mut column_comments: Vec<(String, String)> = Vec::new();
+    for (i, arg) in predicate.args.iter().enumerate() {
+        let col = column_sql(&arg.kind, i);
+        columns.push(ColumnDescription {
+            name: arg.name.clone(),
+            role: "field".to_string(),
+            kind: Some(arg.kind.to_string()),
+            sql_type: col.sql_type.to_string(),
+            position: Some(i),
+        });
+        let expr = match stored_kind_test(&arg.kind, i) {
+            Some(test) => format!("CASE WHEN {test} THEN {} END", col.expr),
+            None => col.expr,
+        };
+        selects.push((expr, arg.name.clone(), col.sql_type));
+        column_comments.push((arg.name.clone(), col.kind_comment));
+    }
+    for (idx, (expr, alias, _)) in selects.iter().enumerate() {
+        let comma = if idx + 1 < selects.len() { "," } else { "" };
+        let _ = writeln!(out, "    {expr} AS {}{comma}", quote_ident(alias));
+    }
+    out.push_str("FROM governed_operations;\n");
+
+    let _ = writeln!(
+        out,
+        "COMMENT ON VIEW {qualified} IS {};",
+        quote_literal(&format!(
+            "Generated by Morpholog; the operations the audit log records on predicate={name}, \
+             in (_morpholog_audit_order, _morpholog_act_ordinal, _morpholog_operation) order; \
+             a field is NULL where the stored kind is not the declared one"
+        ))
+    );
+    for (field, comment) in column_comments {
+        let _ = writeln!(
+            out,
+            "COMMENT ON COLUMN {qualified}.{} IS {};",
+            quote_ident(&field),
+            quote_literal(&comment),
+        );
+    }
+    ViewDescription {
+        predicate: name.to_string(),
+        view,
+        kind: HISTORY_KIND.to_string(),
+        source: None,
+        columns,
+        identity: vec![vec![
+            "_morpholog_transition_id".to_string(),
+            "_morpholog_operation".to_string(),
+        ]],
+    }
+}
+
 /// Render the model catalogue: programme, hash, and each predicate's view
-/// with its `kind` (`base` | `derived`). `VALUES`-backed, so read-only. A
-/// programme with no predicates gets a typed empty catalogue.
+/// with its `kind` (`base` | `derived` | `history`). `VALUES`-backed, so
+/// read-only. A programme with no predicates gets a typed empty
+/// catalogue.
 fn render_catalog(
     out: &mut String,
     program: &str,
@@ -930,16 +1142,23 @@ fn render_catalog(
     model_hash: &str,
     base: &[&PredicateDecl],
     derived: &[&PredicateDecl],
+    history: &[&PredicateDecl],
 ) {
     let qualified = format!("{}.{}", quote_ident(schema), quote_ident(CATALOG_VIEW));
     out.push_str("\n-- Model catalogue: the programme, its model hash, and the views generated.\n");
     let _ = writeln!(out, "CREATE OR REPLACE VIEW {qualified} AS");
 
-    // Base first, then derived, matching the view blocks above.
-    let rows: Vec<(&str, ViewKind)> = base
+    // Base first, then derived, then history, matching the view blocks
+    // above.
+    let rows: Vec<(&str, String, &str)> = base
         .iter()
         .map(|p| (p.name.as_str(), ViewKind::Base))
         .chain(derived.iter().map(|p| (p.name.as_str(), ViewKind::Derived)))
+        .map(|(name, kind)| (name, snake_case(name), kind.label()))
+        .chain(history.iter().map(|p| {
+            let name = p.name.as_str();
+            (name, history_view_name(name), HISTORY_KIND)
+        }))
         .collect();
 
     if rows.is_empty() {
@@ -952,8 +1171,7 @@ fn render_catalog(
         out.push_str("WHERE false;\n");
     } else {
         out.push_str("SELECT * FROM ( VALUES\n");
-        for (idx, (name, kind)) in rows.iter().enumerate() {
-            let view = snake_case(name);
+        for (idx, (name, view, kind)) in rows.iter().enumerate() {
             // Cast the first row's columns so the VALUES list is typed
             // text; later rows infer from it.
             let row = if idx == 0 {
@@ -962,8 +1180,8 @@ fn render_catalog(
                     quote_literal(program),
                     quote_literal(model_hash),
                     quote_literal(name),
-                    quote_literal(&view),
-                    quote_literal(kind.label()),
+                    quote_literal(view),
+                    quote_literal(kind),
                 )
             } else {
                 format!(
@@ -971,8 +1189,8 @@ fn render_catalog(
                     quote_literal(program),
                     quote_literal(model_hash),
                     quote_literal(name),
-                    quote_literal(&view),
-                    quote_literal(kind.label()),
+                    quote_literal(view),
+                    quote_literal(kind),
                 )
             };
             let comma = if idx + 1 < rows.len() { "," } else { "" };

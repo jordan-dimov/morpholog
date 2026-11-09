@@ -380,3 +380,122 @@ async fn the_reserved_names_cannot_land_outside_the_activation() {
         assert!(message.contains("chunks then record"), "{name}: {message}");
     }
 }
+
+/// A history view on a migrated database begins at the baseline: one
+/// insert for each claim the table held at activation, under the
+/// baseline's own name, each naming the legacy transition that admitted
+/// it. The legacy rows themselves are not decoded. Replaying the view
+/// from empty gives the table, and an act after the activation follows.
+#[tokio::test]
+async fn a_history_view_begins_at_the_baseline() {
+    let pool = test_pool().await;
+    common::drain_open_transactions(&pool).await;
+    testing::reset_before_activation(&pool).await.unwrap();
+    let mut admitted = Vec::new();
+    for (i, k) in ["a", "b", "c"].iter().enumerate() {
+        admitted.push(((*k).to_string(), legacy_claim(&pool, k, i as u32).await));
+    }
+    activate_with(&pool, 2, CHUNK_BYTES).await.unwrap();
+
+    let program = morpholog_surface::parse_program(
+        "program x\npredicate X(k: Subject)\ntransformation admit_x(k):\n    admit X(k)\n",
+    )
+    .unwrap();
+    let rendered = morpholog_postgres::render_views(
+        &program.validated().unwrap(),
+        "baseline_history",
+        &format!("sha256:{}", "0".repeat(64)),
+        morpholog_postgres::DerivedSource::Cache,
+        true,
+    )
+    .unwrap();
+    sqlx::raw_sql("DROP SCHEMA IF EXISTS baseline_history CASCADE")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(rendered.sql))
+        .execute(&pool)
+        .await
+        .unwrap();
+    common::expect_committed(
+        common::propose_pg_with_test_actor(
+            &pool,
+            &common::pg_program(program.clone()),
+            &program.transformations[0],
+            vec![subj("d")],
+        )
+        .await
+        .unwrap(),
+    );
+
+    let rows: Vec<(String, i32, String, String, Option<Uuid>, bool)> = sqlx::query_as(
+        "SELECT _morpholog_transformation, _morpholog_act_ordinal, _morpholog_op, k,
+                _morpholog_asserted_in, _morpholog_shape_matches
+         FROM baseline_history.x_history
+         ORDER BY _morpholog_audit_order, _morpholog_act_ordinal, _morpholog_operation",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let mut expected: Vec<(String, i32, String, String, Option<Uuid>, bool)> = Vec::new();
+    // The baseline is in the table's key order, which is not the order
+    // the claims were admitted in; the chunks hold two, then one.
+    let mut by_key: Vec<(String, String, Uuid)> = Vec::new();
+    for (k, by) in &admitted {
+        let hash: (String,) = sqlx::query_as(
+            "SELECT encode(arguments_hash, 'hex') FROM morpholog.claims
+             WHERE predicate_name = 'X' AND arguments -> 0 ->> 'value' = $1",
+        )
+        .bind(k)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        by_key.push((hash.0, k.clone(), *by));
+    }
+    by_key.sort();
+    for (i, (_, k, by)) in by_key.iter().enumerate() {
+        expected.push((
+            "morpholog.baseline".to_string(),
+            i32::try_from(i / 2).unwrap(),
+            "ins".to_string(),
+            k.clone(),
+            Some(*by),
+            true,
+        ));
+    }
+    expected.push((
+        "admit_x".to_string(),
+        0,
+        "ins".to_string(),
+        "d".to_string(),
+        None,
+        true,
+    ));
+    assert_eq!(rows, expected);
+
+    let (legacy_shown,): (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM baseline_history.x_history h
+         WHERE h._morpholog_transition_id = ANY($1)",
+    )
+    .bind(admitted.iter().map(|(_, by)| *by).collect::<Vec<_>>())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(legacy_shown, 0, "no legacy row is decoded as an operation");
+
+    let (held, replayed): (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM morpholog.claims WHERE predicate_name = 'X'),
+                (SELECT count(*) FROM baseline_history.x_history h
+                 JOIN morpholog.claims c ON c.predicate_name = 'X'
+                  AND c.arguments = h._morpholog_arguments
+                 WHERE h._morpholog_op = 'ins')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!((held, replayed), (4, 4), "the inserts are the table");
+    sqlx::raw_sql("DROP SCHEMA baseline_history CASCADE")
+        .execute(&pool)
+        .await
+        .unwrap();
+}

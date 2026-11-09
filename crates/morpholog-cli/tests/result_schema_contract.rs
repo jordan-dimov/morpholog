@@ -3844,3 +3844,27 @@ fn the_view_surface_golden_validates_against_its_def() {
         "an identity is pinned"
     );
 }
+
+/// The committed description of the ledger's views with their history
+/// views validates against the same definition.
+#[test]
+fn the_history_view_surface_golden_validates_against_its_def() {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/views/ledger_history.json");
+    let surface: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let schema = result_schema();
+    let defs = schema.get("$defs").unwrap();
+    validate(
+        &surface,
+        defs.get("view_surface").unwrap(),
+        defs,
+        "view_surface",
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let views = surface["views"].as_array().unwrap();
+    assert!(
+        views.iter().any(|v| v["kind"] == "history"),
+        "a history view is pinned"
+    );
+}

@@ -640,6 +640,37 @@ By default a derived predicate's view reads the `morpholog_read` cache below, as
 
 Where the kernel could not compute a row (a sum past the decimal range, a value of another kind in a sum), the live view does not hide it and does not invent a value: the row's value columns are NULL and `_morpholog_error` names the class of failure, `sum_range`, `sum_kind` or `value`; on every row the kernel computes it is NULL. Read the two together: an empty sum is a zero, a computed value is a value, and a named failure is neither. The cache's refresh fails the whole enumeration in the same case, and `inspect derived` errors.
 
+### History views (`--history`)
+
+```sh
+morpholog generate views x.morph --history | psql -v ON_ERROR_STOP=1 "$DATABASE_URL"
+```
+
+The audit log records every operation a commit performed on the claims table. With `--history` each base predicate gains a second view, `<view>_history`, that shows those operations for the predicate with the base view's field names and kinds:
+
+```sql
+SELECT _morpholog_transformation, _morpholog_actor, _morpholog_ordered_at, _morpholog_op, quantity
+FROM morpholog_views.stock_item_history
+WHERE item = 'i3'
+ORDER BY _morpholog_audit_order, _morpholog_act_ordinal, _morpholog_operation;
+```
+
+One row is one operation: `_morpholog_op` is `del` for a claim the act removed and `ins` for one it added, so a revision reads as a `del` and an `ins` in the same act. An admission that found the claim already present changed nothing and is left out. `(_morpholog_audit_order, _morpholog_act_ordinal, _morpholog_operation)` is the order of effects, and `(_morpholog_transition_id, _morpholog_operation)` is the row's identity, as the description says. The other metadata columns are the act's name, the attested actor, and `_morpholog_ordered_at`, the instant the transaction took its place in the order. That is the log's time, not the time anything happened in the world; a business that needs that time records it as a claim. Without `--history` the generated SQL is unchanged, and a derived predicate has no history view, since the log records no operations on it.
+
+Replaying a history view from empty, each `ins` adding and each `del` removing, gives the predicate's claims exactly. The view adds no account of its own: it is the record `audit verify` already holds to the claims table. Morpholog supplies the changes; what a "stock movement" or a "shipment" is on a history page stays the host's reading of them.
+
+**Where the history starts.** A database created by `init` on v0.0.17 or later is ordered from its first row, and the view is the whole history. A database migrated across 027 shows its baseline first: one `ins` for each claim the table held at the migration, under the name `morpholog.baseline`, with `_morpholog_asserted_in` naming the earlier transition that admitted the claim (NULL on every other row). The acts before the migration are not decoded.
+
+**A row written under an earlier declaration.** The log outlives every declaration, so a history view generated from today's programme also reads operations written when the predicate was declared differently. Three columns are there for that:
+
+- `_morpholog_arguments` holds the original tagged arguments on every row, and `_morpholog_model_hash` names the programme that wrote the row. These two are the authority for an old record.
+- A field is decoded only where the stored value has the declared kind, a quantity's unit included. Otherwise the field is NULL, and the read still succeeds.
+- `_morpholog_shape_matches` is true when the row has today's number of fields and every one has today's kind. It is a statement about structure, never about meaning: a field renamed from `wholesale_price` to `retail_price` keeps its position and kind, so its old values decode under the new name with the flag true. A predicate the programme no longer declares has no view.
+
+**A read is consistent within its snapshot, and promises nothing more.** Transactions commit out of audit order, so an act still in flight can commit later with a lower order than rows a reader has already seen. This holds for one entity's rows as for the whole log: two acts that admit different claims about the same item do not conflict. A reader that pages incrementally, or assumes nothing can appear before its last-seen row, follows the recipe under "For direct SQL readers" above: read `morpholog.audit_watermark()`, take the snapshot, and page strictly below it.
+
+**What a read costs.** A history view unnests the audit log, so a filter on one entity walks every audit row: 170 milliseconds for one key's 798 rows over a log of 200,000 audit rows, linear in the log. The views are not yet an efficient way to browse one entity's history in a large log; that read needs an interface that reaches the entity's rows directly (#749).
+
 ## The derived read model (`refresh derived`)
 
 Base views project admitted claims. Derived claims are *computed* - so rather than recompute them in SQL (which could not bit-match the kernel's exact decimal/time arithmetic), the kernel computes them and writes the exact result into a read model that SQL can project. The cache is the kernel-evaluated option, for every definition and at a stated freshness; the live views above evaluate in SQL only the fragment the compiled renderer expresses, held to the kernel by its differential, and refuse the rest.

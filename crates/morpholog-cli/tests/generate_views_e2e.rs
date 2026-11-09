@@ -278,7 +278,7 @@ fn out_and_describe_together_write_both() {
     let sql = std::fs::read_to_string(&out).unwrap();
     let surface: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&described).unwrap()).unwrap();
-    assert_eq!(surface["format"], 2);
+    assert_eq!(surface["format"], 3);
     let hash = surface["model_hash"].as_str().unwrap();
     assert!(sql.contains(&format!("-- model hash: {hash}")));
     for view in surface["views"].as_array().unwrap() {
@@ -442,4 +442,64 @@ fn derived_live_refuses_a_definition_outside_the_fragment_by_name() {
     );
     assert!(stderr.contains("nothing was written"));
     assert!(!out.exists());
+}
+
+/// `--history` adds a history view per base predicate, catalogued and
+/// sealed with the rest, and the summary counts them: the committed
+/// goldens, byte for byte.
+#[test]
+fn history_writes_the_committed_script_and_description() {
+    let golden = repo_root().join("crates/morpholog-cli/tests/golden/views");
+    let dir = tempfile::tempdir().unwrap();
+    let described = dir.path().join("views.json");
+    let result = Command::new(bin())
+        .args([
+            "generate",
+            "views",
+            repo_root()
+                .join("examples/03_double_entry_ledger/ledger.morph")
+                .to_str()
+                .unwrap(),
+            "--history",
+            "--describe",
+            described.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let regenerate = "regenerate with:\n  morpholog generate views \
+        examples/03_double_entry_ledger/ledger.morph --history \
+        --out crates/morpholog-cli/tests/golden/views/ledger_history.sql \
+        --describe crates/morpholog-cli/tests/golden/views/ledger_history.json";
+    assert_eq!(
+        String::from_utf8(result.stdout).unwrap(),
+        std::fs::read_to_string(golden.join("ledger_history.sql")).unwrap(),
+        "ledger_history.sql is stale; {regenerate}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&described).unwrap(),
+        std::fs::read_to_string(golden.join("ledger_history.json")).unwrap(),
+        "ledger_history.json is stale; {regenerate}"
+    );
+    let stderr = String::from_utf8(result.stderr).unwrap();
+    assert!(
+        stderr.contains("generated 9 view(s): 4 base, 1 derived, 4 history"),
+        "got: {stderr}"
+    );
+}
+
+/// Without `--history` the script is the one generated before the flag
+/// existed, and the summary does not mention history.
+#[test]
+fn without_history_the_script_names_no_history_view() {
+    let result = generate_stdout(&trade_lifecycle(), None);
+    let sql = String::from_utf8(result.stdout).unwrap();
+    assert!(!sql.contains("_history"), "a history view leaked in");
+    assert!(!sql.contains("morpholog.audit"));
+    let stderr = String::from_utf8(result.stderr).unwrap();
+    assert!(!stderr.contains("history"), "got: {stderr}");
 }

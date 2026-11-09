@@ -1,0 +1,590 @@
+{
+  "format": 3,
+  "programme": "double_entry_ledger",
+  "model_hash": "sha256:2d85c30063c50442996e882b0376bcbc6f8088892f826ee9415f3d6b18003fcb",
+  "schema": "morpholog_views",
+  "catalog": "_morpholog_catalog",
+  "seal_table": "_morpholog_view_defs",
+  "views": [
+    {
+      "predicate": "JournalEntry",
+      "view": "journal_entry",
+      "kind": "base",
+      "columns": [
+        {
+          "name": "_morpholog_asserted_in",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_asserted_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "entry_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        },
+        {
+          "name": "posting_date",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 1
+        },
+        {
+          "name": "period",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 2
+        }
+      ],
+      "identity": []
+    },
+    {
+      "predicate": "JournalLine",
+      "view": "journal_line",
+      "kind": "base",
+      "columns": [
+        {
+          "name": "_morpholog_asserted_in",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_asserted_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "entry_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        },
+        {
+          "name": "account",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 1
+        },
+        {
+          "name": "debit_amount",
+          "role": "field",
+          "kind": "Decimal",
+          "sql_type": "numeric",
+          "position": 2
+        },
+        {
+          "name": "credit_amount",
+          "role": "field",
+          "kind": "Decimal",
+          "sql_type": "numeric",
+          "position": 3
+        }
+      ],
+      "identity": []
+    },
+    {
+      "predicate": "PeriodClosed",
+      "view": "period_closed",
+      "kind": "base",
+      "columns": [
+        {
+          "name": "_morpholog_asserted_in",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_asserted_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "period",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        }
+      ],
+      "identity": []
+    },
+    {
+      "predicate": "Supersedes",
+      "view": "supersedes",
+      "kind": "base",
+      "columns": [
+        {
+          "name": "_morpholog_asserted_in",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_asserted_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "new_entry_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        },
+        {
+          "name": "prior_entry_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 1
+        }
+      ],
+      "identity": [
+        [
+          "prior_entry_id"
+        ]
+      ]
+    },
+    {
+      "predicate": "TrialBalanceRow",
+      "view": "trial_balance_row",
+      "kind": "derived",
+      "source": "cache",
+      "columns": [
+        {
+          "name": "_morpholog_refreshed_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_model_hash",
+          "role": "metadata",
+          "sql_type": "text"
+        },
+        {
+          "name": "_morpholog_source_snapshot_transition_id",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_source_snapshot_committed_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "account",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        },
+        {
+          "name": "balance",
+          "role": "field",
+          "kind": "Decimal",
+          "sql_type": "numeric",
+          "position": 1
+        }
+      ],
+      "identity": [
+        [
+          "account"
+        ]
+      ]
+    },
+    {
+      "predicate": "JournalEntry",
+      "view": "journal_entry_history",
+      "kind": "history",
+      "columns": [
+        {
+          "name": "_morpholog_transition_id",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_audit_order",
+          "role": "metadata",
+          "sql_type": "bigint"
+        },
+        {
+          "name": "_morpholog_act_ordinal",
+          "role": "metadata",
+          "sql_type": "integer"
+        },
+        {
+          "name": "_morpholog_operation",
+          "role": "metadata",
+          "sql_type": "bigint"
+        },
+        {
+          "name": "_morpholog_transformation",
+          "role": "metadata",
+          "sql_type": "text"
+        },
+        {
+          "name": "_morpholog_actor",
+          "role": "metadata",
+          "sql_type": "text"
+        },
+        {
+          "name": "_morpholog_ordered_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_op",
+          "role": "metadata",
+          "sql_type": "text"
+        },
+        {
+          "name": "_morpholog_asserted_in",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_model_hash",
+          "role": "metadata",
+          "sql_type": "text"
+        },
+        {
+          "name": "_morpholog_shape_matches",
+          "role": "metadata",
+          "sql_type": "boolean"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "entry_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        },
+        {
+          "name": "posting_date",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 1
+        },
+        {
+          "name": "period",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 2
+        }
+      ],
+      "identity": [
+        [
+          "_morpholog_transition_id",
+          "_morpholog_operation"
+        ]
+      ]
+    },
+    {
+      "predicate": "JournalLine",
+      "view": "journal_line_history",
+      "kind": "history",
+      "columns": [
+        {
+          "name": "_morpholog_transition_id",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_audit_order",
+          "role": "metadata",
+          "sql_type": "bigint"
+        },
+        {
+          "name": "_morpholog_act_ordinal",
+          "role": "metadata",
+          "sql_type": "integer"
+        },
+        {
+          "name": "_morpholog_operation",
+          "role": "metadata",
+          "sql_type": "bigint"
+        },
+        {
+          "name": "_morpholog_transformation",
+          "role": "metadata",
+          "sql_type": "text"
+        },
+        {
+          "name": "_morpholog_actor",
+          "role": "metadata",
+          "sql_type": "text"
+        },
+        {
+          "name": "_morpholog_ordered_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_op",
+          "role": "metadata",
+          "sql_type": "text"
+        },
+        {
+          "name": "_morpholog_asserted_in",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_model_hash",
+          "role": "metadata",
+          "sql_type": "text"
+        },
+        {
+          "name": "_morpholog_shape_matches",
+          "role": "metadata",
+          "sql_type": "boolean"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "entry_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        },
+        {
+          "name": "account",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 1
+        },
+        {
+          "name": "debit_amount",
+          "role": "field",
+          "kind": "Decimal",
+          "sql_type": "numeric",
+          "position": 2
+        },
+        {
+          "name": "credit_amount",
+          "role": "field",
+          "kind": "Decimal",
+          "sql_type": "numeric",
+          "position": 3
+        }
+      ],
+      "identity": [
+        [
+          "_morpholog_transition_id",
+          "_morpholog_operation"
+        ]
+      ]
+    },
+    {
+      "predicate": "PeriodClosed",
+      "view": "period_closed_history",
+      "kind": "history",
+      "columns": [
+        {
+          "name": "_morpholog_transition_id",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_audit_order",
+          "role": "metadata",
+          "sql_type": "bigint"
+        },
+        {
+          "name": "_morpholog_act_ordinal",
+          "role": "metadata",
+          "sql_type": "integer"
+        },
+        {
+          "name": "_morpholog_operation",
+          "role": "metadata",
+          "sql_type": "bigint"
+        },
+        {
+          "name": "_morpholog_transformation",
+          "role": "metadata",
+          "sql_type": "text"
+        },
+        {
+          "name": "_morpholog_actor",
+          "role": "metadata",
+          "sql_type": "text"
+        },
+        {
+          "name": "_morpholog_ordered_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_op",
+          "role": "metadata",
+          "sql_type": "text"
+        },
+        {
+          "name": "_morpholog_asserted_in",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_model_hash",
+          "role": "metadata",
+          "sql_type": "text"
+        },
+        {
+          "name": "_morpholog_shape_matches",
+          "role": "metadata",
+          "sql_type": "boolean"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "period",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        }
+      ],
+      "identity": [
+        [
+          "_morpholog_transition_id",
+          "_morpholog_operation"
+        ]
+      ]
+    },
+    {
+      "predicate": "Supersedes",
+      "view": "supersedes_history",
+      "kind": "history",
+      "columns": [
+        {
+          "name": "_morpholog_transition_id",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_audit_order",
+          "role": "metadata",
+          "sql_type": "bigint"
+        },
+        {
+          "name": "_morpholog_act_ordinal",
+          "role": "metadata",
+          "sql_type": "integer"
+        },
+        {
+          "name": "_morpholog_operation",
+          "role": "metadata",
+          "sql_type": "bigint"
+        },
+        {
+          "name": "_morpholog_transformation",
+          "role": "metadata",
+          "sql_type": "text"
+        },
+        {
+          "name": "_morpholog_actor",
+          "role": "metadata",
+          "sql_type": "text"
+        },
+        {
+          "name": "_morpholog_ordered_at",
+          "role": "metadata",
+          "sql_type": "timestamptz"
+        },
+        {
+          "name": "_morpholog_op",
+          "role": "metadata",
+          "sql_type": "text"
+        },
+        {
+          "name": "_morpholog_asserted_in",
+          "role": "metadata",
+          "sql_type": "uuid"
+        },
+        {
+          "name": "_morpholog_model_hash",
+          "role": "metadata",
+          "sql_type": "text"
+        },
+        {
+          "name": "_morpholog_shape_matches",
+          "role": "metadata",
+          "sql_type": "boolean"
+        },
+        {
+          "name": "_morpholog_arguments",
+          "role": "metadata",
+          "sql_type": "jsonb"
+        },
+        {
+          "name": "new_entry_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 0
+        },
+        {
+          "name": "prior_entry_id",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 1
+        }
+      ],
+      "identity": [
+        [
+          "_morpholog_transition_id",
+          "_morpholog_operation"
+        ]
+      ]
+    }
+  ]
+}

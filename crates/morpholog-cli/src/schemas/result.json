@@ -2408,12 +2408,12 @@
       ]
     },
     "view_surface": {
-      "description": "What `generate views --describe` writes: the generated view surface, for a host that builds its read models from it instead of restating them. `model_hash` is what every row of the deployed catalogue must carry; `format` moves when this description's shape changes, apart from the programme; 2 added `source` on a derived view.",
+      "description": "What `generate views --describe` writes: the generated view surface, for a host that builds its read models from it instead of restating them. `model_hash` is what every row of the deployed catalogue must carry; `format` moves when this description's shape changes, apart from the programme; 2 added `source` on a derived view, 3 the `history` kind.",
       "type": "object",
       "additionalProperties": false,
       "required": ["format", "programme", "model_hash", "schema", "catalog", "seal_table", "views"],
       "properties": {
-        "format": { "const": 2 },
+        "format": { "const": 3 },
         "programme": { "type": "string" },
         "model_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
         "schema": { "type": "string" },
@@ -2423,14 +2423,14 @@
       }
     },
     "view_description": {
-      "description": "One generated view: its predicate, name and kind, its columns in the view's order, and `identity`, the field sets the programme declares unique (each `unique by` clause of a base predicate, the key fields of a derived one), as declared and possibly empty. Whether one serves as a key is the consumer's decision.",
+      "description": "One generated view: its predicate, name and kind, its columns in the view's order, and `identity`, the field sets the programme declares unique (each `unique by` clause of a base predicate, the key fields of a derived one), as declared and possibly empty. Whether one serves as a key is the consumer's decision. A `history` view, generated with `--history`, holds the operations the audit log records on the predicate; its identity is the operation's place in the log.",
       "type": "object",
       "additionalProperties": false,
       "required": ["predicate", "view", "kind", "columns", "identity"],
       "properties": {
         "predicate": { "type": "string" },
         "view": { "type": "string" },
-        "kind": { "enum": ["base", "derived"] },
+        "kind": { "enum": ["base", "derived", "history"] },
         "source": { "enum": ["live", "cache"] },
         "columns": { "type": "array", "items": { "$ref": "#/$defs/view_column" } },
         "identity": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } }
@@ -2445,7 +2445,7 @@
         "name": { "type": "string" },
         "role": { "enum": ["metadata", "field"] },
         "kind": { "type": "string" },
-        "sql_type": { "enum": ["text", "numeric", "date", "timestamptz", "interval", "boolean", "jsonb", "uuid"] },
+        "sql_type": { "enum": ["text", "numeric", "date", "timestamptz", "interval", "boolean", "jsonb", "uuid", "bigint", "integer"] },
         "position": { "type": "integer", "minimum": 0 }
       }
     }
