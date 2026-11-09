@@ -30,6 +30,9 @@ use crate::transact::propose_all_against_pg;
 
 const SCHEMA: &str = "history_views";
 
+/// A `tag_history` row: item, label, note, the shape flag, the original.
+type TagRow = (Option<String>, Option<String>, Option<String>, bool, String);
+
 /// Apply `program`'s views with their history views, and return the
 /// history views' descriptions; `None` where the programme's names
 /// cannot be rendered at all.
@@ -465,15 +468,14 @@ transformation tag(item, label, note):
         "an amount in another unit is not decoded, and the original stays"
     );
 
-    let tags: Vec<(Option<String>, Option<String>, Option<String>, bool, String)> =
-        sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT item, label::text, note, _morpholog_shape_matches,
+    let tags: Vec<TagRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT item, label::text, note, _morpholog_shape_matches,
                     _morpholog_arguments::text
              FROM {SCHEMA}.tag_history ORDER BY _morpholog_audit_order"
-        )))
-        .fetch_all(&pool)
-        .await
-        .unwrap();
+    )))
+    .fetch_all(&pool)
+    .await
+    .unwrap();
     assert_eq!(tags.len(), 2);
     assert_eq!(
         (&tags[0].0, &tags[0].1, &tags[0].2, tags[0].3),
