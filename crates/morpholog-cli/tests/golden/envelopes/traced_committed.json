@@ -22,6 +22,15 @@
           }
         ],
         "predicate": "Seen"
+      },
+      {
+        "args": [
+          {
+            "type": "subject",
+            "value": "note_1"
+          }
+        ],
+        "predicate": "Seen"
       }
     ],
     "emitted_intents": [
@@ -156,6 +165,37 @@
         }
       ],
       "kind": "for"
+    },
+    {
+      "iterations": [
+        {
+          "claim": {
+            "args": [
+              {
+                "type": "subject",
+                "value": "note_1"
+              }
+            ],
+            "predicate": "Note"
+          },
+          "trace": [
+            {
+              "claim": {
+                "args": [
+                  {
+                    "type": "subject",
+                    "value": "note_1"
+                  }
+                ],
+                "predicate": "Seen"
+              },
+              "kind": "assert"
+            }
+          ]
+        }
+      ],
+      "kind": "for_each",
+      "predicate": "Note"
     },
     {
       "expression": "Draft(account)",

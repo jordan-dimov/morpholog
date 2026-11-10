@@ -79,6 +79,7 @@ one act is a margin-call run.
 | say how long a window may be before the record builds a grid over it | [23_delivery_hour_limits](23_delivery_hour_limits/) | `require ends_at - starts_at no_longer_than duration(PT744H)` |
 | mark an append-only claim as recorded in error, without removing it | [24_order_blotter](24_order_blotter/) | an `append only` claim naming another claim's identity, read through a `define` of standing |
 | choose between two changes inside one act, by a condition on the record | [25_stock_allocation](25_stock_allocation/) | `if quantity < on_hand:` with an `else:` block |
+| range over the claims a pattern matches, one pass per claim | [25_stock_allocation](25_stock_allocation/) | `for Allocation(allocation, line, shipment, item, quantity):` |
 | call Morpholog from an application | [etrm_embedder](etrm_embedder/) | the generated Python client |
 
 ## If the thing you want is not here

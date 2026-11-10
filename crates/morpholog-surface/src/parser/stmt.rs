@@ -14,6 +14,7 @@
 //! retract_stmt  ::= "retract" claim_pattern
 //! emit_stmt     ::= "emit" constructive_pattern    -- Intent shares the shape
 //! for_stmt      ::= "for" Ident "in" value_expression ":" Indent statement+ Dedent
+//! for_each_stmt ::= "for" claim_pattern ":" Indent statement+ Dedent
 //! claim_pattern ::= Ident "(" term_list ")"
 //! constructive_pattern ::= Ident "(" (term | "new" "Subject" "(" ")")* ")"
 //! ```
@@ -260,6 +261,33 @@ where
                     .collect::<Vec<Stmt>>(),
             )
             .then_ignore(just(Token::Dedent));
+
+        // for <claim_pattern> : Indent statement+ Dedent
+        //
+        // Told from `for <name> in` by what follows the identifier: a `(` opens a pattern. The
+        // pattern takes what `retract` takes, wildcards and named fields included; a variable
+        // not yet bound binds per matching claim.
+        let for_each_stmt = just(Token::KwFor)
+            .ignore_then(claim_pattern.clone())
+            .validate(move |(predicate, args), e, emitter| {
+                let args = resolve_pattern(
+                    &predicate,
+                    args,
+                    Vocabulary::PredicateOnly,
+                    table,
+                    e.span(),
+                    &mut |span, message| emitter.emit(Rich::custom(span, message)),
+                );
+                (predicate, args)
+            })
+            .then_ignore(just(Token::Colon))
+            .then(block.clone())
+            .map(|((predicate, args), body)| Stmt::ForEach {
+                predicate: predicate.into(),
+                args,
+                body,
+            });
+
         let if_stmt = select! { Token::Ident(s) if s == "if" => () }
             .ignore_then(proposition.clone())
             .then_ignore(just(Token::Colon))
@@ -283,6 +311,7 @@ where
             retract_stmt,
             emit_stmt,
             let_stmt,
+            for_each_stmt,
             for_stmt,
             if_stmt,
         ))

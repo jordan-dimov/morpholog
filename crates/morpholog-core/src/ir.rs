@@ -876,6 +876,16 @@ pub enum Stmt {
         collection: ValueExpr,
         body: Vec<Stmt>,
     },
+    /// Ranges over the pre-state claims matching the pattern, one
+    /// iteration per claim, in the canonical order of their arguments.
+    /// A variable already bound is a key, an unbound one binds per
+    /// claim and a wildcard matches anything; the iteration's bindings
+    /// are scoped to it. Zero matches is zero iterations, not an error.
+    ForEach {
+        predicate: PredicateName,
+        args: Vec<Term>,
+        body: Vec<Stmt>,
+    },
     /// `when` is a yes/no test with `Require`'s rule: any match holds and
     /// nothing exports. The branch taken runs in order, with its own
     /// bindings scoped to it; an absent `else` is an empty `otherwise`.

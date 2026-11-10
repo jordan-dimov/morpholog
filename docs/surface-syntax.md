@@ -85,6 +85,14 @@ transformation flag_all(orders):
         require Order(o, _, _)
         admit Flagged(o)
 
+transformation flag_desk(desk):
+    -- A loop over the claims a pattern matches: one pass per claim, in
+    -- the order of the claims themselves, binding what the pattern
+    -- leaves open for that pass alone. Nothing is passed in.
+    for Mandate(trader, desk, _):
+        for Order(order, trader, _):
+            admit Flagged(order)
+
 transformation place_or_flag(desk, qty):
     -- A test that chooses instead of refusing. The branch taken runs;
     -- the other does not, and a name bound in a branch stays in it.
@@ -113,9 +121,12 @@ or `emit` argument takes it; a fresh subject matches nothing, so a
 
 An `if` tests its condition as a `require` does, keeping nothing it
 matched, and runs one block or the other; the `else:` block may be left
-out. Every statement reads the state as it was when the act began: a claim
-admitted two lines up is not visible to a `require` below it, and both
-branches of an `if` read the same record. The rules
+out. A `for` over a pattern runs its block once per claim the pattern
+matches, as `for o in orders` runs it once per element; a gate inside
+is a condition on every match, and no match is no pass. Every statement
+reads the state as it was when the act began: a claim admitted two lines
+up is not visible to a `require` below it, both branches of an `if` read
+the same record, and so does every pass of a `for`. The rules
 then judge the state the act proposes. `actor` is the identity supplied
 with the proposal; the record can check what it may do against claims,
 and who it really is must be settled at the integration boundary.

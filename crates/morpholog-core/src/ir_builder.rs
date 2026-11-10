@@ -448,6 +448,14 @@ pub fn for_(binding: &str, collection: ValueExpr, body: Vec<Stmt>) -> Stmt {
     }
 }
 
+pub fn for_each(predicate: &str, args: Vec<Term>, body: Vec<Stmt>) -> Stmt {
+    Stmt::ForEach {
+        predicate: predicate.into(),
+        args,
+        body,
+    }
+}
+
 /// `if when: then else: otherwise`; an empty `otherwise` is no `else`.
 pub fn if_(when: Prop, then: Vec<Stmt>, otherwise: Vec<Stmt>) -> Stmt {
     Stmt::If {

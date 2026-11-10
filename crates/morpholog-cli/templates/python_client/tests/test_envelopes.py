@@ -225,6 +225,12 @@ class RunOutcomes(unittest.TestCase):
         self.assertEqual(loop.binding, "item")
         self.assertIsInstance(loop.iterations[0].trace[0], envelopes.AssertStep)
 
+        # A `for` over a pattern carries the claim each iteration ran for.
+        each = next(s for s in traced.trace if isinstance(s, envelopes.ForEachStep))
+        self.assertEqual(each.predicate, "Note")
+        self.assertEqual(each.iterations[0].claim.predicate, "Note")
+        self.assertIsInstance(each.iterations[0].trace[0], envelopes.AssertStep)
+
         # An `if` says which branch ran and carries that branch's steps.
         branch = next(s for s in traced.trace if isinstance(s, envelopes.IfStep))
         self.assertEqual(branch.expression, "Draft(account)")
@@ -265,6 +271,7 @@ class RunOutcomes(unittest.TestCase):
                 "RetractStep",
                 "EmitStep",
                 "ForStep",
+                "ForEachStep",
                 "IfStep",
                 "InvariantCheckStep",
             },

@@ -1132,3 +1132,237 @@ fn if_propagates_a_condition_error_and_nests() {
     assert_eq!(asserted_claims[0].args[0], EvalValue::Subject("s1".into()));
     assert_eq!(source.count(), 1, "one draw along the path taken");
 }
+
+/// A `for` over a pattern runs once per matching claim, in the canonical
+/// order of the claims' arguments, however the state was loaded: the
+/// subject drawn in the second iteration goes to the same claim either
+/// way. A bound variable is a key, an unbound one binds per claim and a
+/// wildcard matches anything without collapsing two claims into one.
+#[test]
+fn for_each_runs_once_per_matching_claim_in_canonical_order_whatever_the_load_order() {
+    use ir_builder::*;
+    let t = transformation(
+        "tag_lines",
+        vec!["order".into()],
+        vec![for_each(
+            "Line",
+            vec![var("line"), var("order"), wildcard()],
+            vec![
+                let_new_subject("tag"),
+                assert_("Tagged", vec![var("line"), var("tag")]),
+            ],
+        )],
+    );
+    let line = |l: &str, o: &str, q: i64| ClaimInstance {
+        predicate: "Line".into(),
+        args: vec![
+            EvalValue::Subject(l.into()),
+            EvalValue::Subject(o.into()),
+            EvalValue::Decimal(Decimal::new(q, 0)),
+        ],
+    };
+    // Two lines on the order, one of them twice over (differing only in
+    // the wildcarded field), and a line on another order.
+    let claims = vec![
+        line("b", "o", 2),
+        line("a", "o", 1),
+        line("c", "other", 5),
+        line("a", "o", 3),
+    ];
+    let mut reversed = claims.clone();
+    reversed.reverse();
+    for state in [State::from_claims(claims), State::from_claims(reversed)] {
+        let transition = trace_transition(&t, vec![EvalValue::Subject("o".into())]);
+        let mut source = vec![
+            Subject::from("s1"),
+            Subject::from("s2"),
+            Subject::from("s3"),
+            Subject::from("s4"),
+        ]
+        .into_iter();
+        let Outcome::Accepted {
+            asserted_claims, ..
+        } = propose(&t, &transition, &state, &[], &[], &mut source).unwrap()
+        else {
+            panic!("expected Accepted");
+        };
+        let tagged: Vec<(EvalValue, EvalValue)> = asserted_claims
+            .iter()
+            .map(|c| (c.args[0].clone(), c.args[1].clone()))
+            .collect();
+        assert_eq!(
+            tagged,
+            vec![
+                (
+                    EvalValue::Subject("a".into()),
+                    EvalValue::Subject("s1".into())
+                ),
+                (
+                    EvalValue::Subject("a".into()),
+                    EvalValue::Subject("s2".into())
+                ),
+                (
+                    EvalValue::Subject("b".into()),
+                    EvalValue::Subject("s3".into())
+                ),
+            ],
+            "a then a then b, one draw each, whatever the load order"
+        );
+        assert_eq!(source.count(), 1, "three iterations drew three subjects");
+    }
+}
+
+/// Zero matches is zero iterations, and a name the body binds is gone
+/// after the loop, as it is after a `for` over a collection.
+#[test]
+fn for_each_with_no_match_runs_nothing_and_its_bindings_do_not_outlive_it() {
+    use ir_builder::*;
+    let run = |body: Vec<Stmt>, state: &State| {
+        let t = transformation("t", vec!["x".into()], body);
+        let transition = trace_transition(&t, vec![EvalValue::Subject("a".into())]);
+        propose(
+            &t,
+            &transition,
+            state,
+            &[],
+            &[],
+            &mut crate::kernel_tests::fresh(),
+        )
+    };
+    let Outcome::Accepted {
+        asserted_claims, ..
+    } = run(
+        vec![
+            for_each(
+                "Flag",
+                vec![var("x"), var("why")],
+                vec![assert_("Seen", vec![var("why")])],
+            ),
+            assert_("After", vec![var("x")]),
+        ],
+        &State::default(),
+    )
+    .unwrap()
+    else {
+        panic!("expected Accepted");
+    };
+    assert_eq!(asserted_claims.len(), 1);
+    assert_eq!(asserted_claims[0].predicate.as_str(), "After");
+
+    let flagged = State::from_claims(vec![ClaimInstance {
+        predicate: "Flag".into(),
+        args: vec![
+            EvalValue::Subject("a".into()),
+            EvalValue::Subject("w".into()),
+        ],
+    }]);
+    let leaky = run(
+        vec![
+            for_each("Flag", vec![var("x"), var("why")], vec![]),
+            assert_("After", vec![var("why")]),
+        ],
+        &flagged,
+    );
+    assert!(
+        matches!(&leaky, Err(EvalError::UnboundVariable(v)) if v == "why"),
+        "a pattern variable is scoped to the loop: {leaky:?}"
+    );
+}
+
+/// Every iteration reads the pre-state: a claim one iteration admits is
+/// not seen by the next. A refusal inside stops the body there, with the
+/// trace listing each iteration's claim and entries up to the refusal.
+#[test]
+fn for_each_reads_the_pre_state_and_a_refusal_inside_is_traced_at_its_claim() {
+    use ir_builder::*;
+    let t = transformation(
+        "mark",
+        vec!["order".into()],
+        vec![for_each(
+            "Line",
+            vec![var("line"), var("order")],
+            vec![
+                require_named("unmarked", not(claim("Marked", vec![var("line")]))),
+                assert_("Marked", vec![var("line")]),
+            ],
+        )],
+    );
+    let line = |l: &str| ClaimInstance {
+        predicate: "Line".into(),
+        args: vec![EvalValue::Subject(l.into()), EvalValue::Subject("o".into())],
+    };
+    let marked = |l: &str| ClaimInstance {
+        predicate: "Marked".into(),
+        args: vec![EvalValue::Subject(l.into())],
+    };
+    let traced = |state: &State| {
+        let transition = trace_transition(&t, vec![EvalValue::Subject("o".into())]);
+        propose_with_trace(
+            crate::propose::Vocabulary::undeclared(),
+            &t,
+            &transition,
+            state,
+            &[],
+            &[],
+            &mut crate::kernel_tests::fresh(),
+        )
+    };
+
+    let TracedProposal::Completed {
+        outcome: Outcome::Accepted {
+            asserted_claims, ..
+        },
+        trace,
+    } = traced(&State::from_claims(vec![line("b"), line("a")]))
+    else {
+        panic!("both lines are unmarked in the pre-state, so both are marked");
+    };
+    assert_eq!(asserted_claims.len(), 2);
+    let [
+        TraceEntry::ForEach {
+            predicate,
+            iterations,
+        },
+    ] = trace.as_slice()
+    else {
+        panic!("one for entry: {trace:?}");
+    };
+    assert_eq!(predicate.as_str(), "Line");
+    assert_eq!(iterations.len(), 2);
+    assert_eq!(iterations[0].claim, line("a"));
+    assert_eq!(iterations[1].claim, line("b"));
+    assert!(matches!(
+        iterations[1].trace.as_slice(),
+        [
+            TraceEntry::Require {
+                outcome: RequireOutcome::Held { .. },
+                ..
+            },
+            TraceEntry::Assert { .. }
+        ]
+    ));
+
+    let TracedProposal::Completed {
+        outcome:
+            Outcome::Rejected {
+                reason: RejectionReason::Require { name, .. },
+            },
+        trace,
+    } = traced(&State::from_claims(vec![line("b"), line("a"), marked("b")]))
+    else {
+        panic!("the marked line refuses the act");
+    };
+    assert_eq!(name.as_ref().map(RuleName::as_str), Some("unmarked"));
+    let [TraceEntry::ForEach { iterations, .. }] = trace.as_slice() else {
+        panic!("one for entry: {trace:?}");
+    };
+    assert_eq!(iterations.len(), 2, "the loop stops at the refusing claim");
+    assert_eq!(iterations[1].claim, line("b"));
+    assert!(matches!(
+        iterations[1].trace.as_slice(),
+        [TraceEntry::Require {
+            outcome: RequireOutcome::Rejected { .. },
+            ..
+        }]
+    ));
+}

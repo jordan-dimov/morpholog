@@ -951,6 +951,7 @@ fn binding_sites<'a>(node: fold::Node<'a>, out: &mut Vec<&'a Var>) {
             out.push(binding);
             return;
         }
+        fold::Node::Stmt(Stmt::ForEach { args, .. }) => args,
         _ => return,
     };
     out.extend(args.iter().filter_map(|arg| match arg {
@@ -1230,7 +1231,7 @@ fn pattern_without(
 /// Every variable a statement names, its `for` body included.
 fn mentions(stmt: &crate::ir::Stmt) -> BTreeSet<&crate::ir::Var> {
     let mut out: BTreeSet<&crate::ir::Var> = named_here(stmt).into_iter().collect();
-    if let crate::ir::Stmt::For { body, .. } = stmt {
+    if let crate::ir::Stmt::For { body, .. } | crate::ir::Stmt::ForEach { body, .. } = stmt {
         for inner in body {
             out.extend(mentions(inner));
         }
@@ -1308,6 +1309,16 @@ impl<'a> Rematch<'a, '_> {
                     self.visit(s, index, &mut inner);
                 }
             }
+            Stmt::ForEach { args, body, .. } => {
+                let mut inner = bound.clone();
+                inner.extend(args.iter().filter_map(|arg| match arg {
+                    Term::Var(v) => Some(v),
+                    _ => None,
+                }));
+                for s in body {
+                    self.visit(s, index, &mut inner);
+                }
+            }
             Stmt::If {
                 then, otherwise, ..
             } => {
@@ -1326,8 +1337,8 @@ impl<'a> Rematch<'a, '_> {
 /// The variables a statement names outside any quantifier binding them
 /// (a `forall` binds its own in its source too) and outside any `sum`,
 /// `max` or `min` body, whose variables are its own; for a `for`, only its
-/// collection, and for an `if`, only its condition, since their bodies are
-/// visited apart.
+/// collection or pattern, and for an `if`, only its condition, since their
+/// bodies are visited apart.
 fn named_here<'a>(stmt: &'a crate::ir::Stmt) -> Vec<&'a crate::ir::Var> {
     use crate::fold::Node;
     let term = |node: Node<'a>| match node {
@@ -1364,6 +1375,11 @@ fn named_here<'a>(stmt: &'a crate::ir::Stmt) -> Vec<&'a crate::ir::Var> {
     match stmt {
         crate::ir::Stmt::For { collection, .. } => {
             crate::fold::walk_value_scoped(collection, &mut take);
+        }
+        crate::ir::Stmt::ForEach { args, .. } => {
+            for arg in args {
+                take(Node::Slot(arg), &[]);
+            }
         }
         crate::ir::Stmt::If { when, .. } => {
             crate::fold::walk_prop_scoped(when, &mut take);

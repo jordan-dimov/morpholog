@@ -983,6 +983,7 @@ fn stmt_exceeds_depth(stmt: &Stmt, budget: usize, depths: &HashMap<DefinitionNam
             value_depth_capped(collection, budget, depths).is_none()
                 || body.iter().any(|s| stmt_exceeds_depth(s, budget, depths))
         }
+        Stmt::ForEach { body, .. } => body.iter().any(|s| stmt_exceeds_depth(s, budget, depths)),
         Stmt::If {
             when,
             then,
@@ -1344,7 +1345,7 @@ fn collect_retract_bans(
                 });
             }
         }
-        Stmt::For { body, .. } => {
+        Stmt::For { body, .. } | Stmt::ForEach { body, .. } => {
             for inner in body {
                 collect_retract_bans(inner, append_only, context, errors);
             }

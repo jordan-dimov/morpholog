@@ -138,6 +138,11 @@ fn resolve_in_stmt(stmt: &mut Stmt, names: &BTreeSet<String>) {
                 resolve_in_stmt(inner, names);
             }
         }
+        Stmt::ForEach { body, .. } => {
+            for inner in body {
+                resolve_in_stmt(inner, names);
+            }
+        }
         Stmt::If {
             when,
             then,

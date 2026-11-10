@@ -21,12 +21,16 @@ program stock_allocation
 --
 -- In most inventory systems that choice is made in application code,
 -- which then has to get every consequence right: the new item, the
--- reduced parent, the lineage, the re-pointed allocation, the line's
--- shipped total. Here the act makes the choice itself, in one place,
--- and the rules below check what it did. Stock is conserved across a
--- split, an allocation never exceeds what is on hand, and a shipped
--- item is no longer in stock. An act that got the split wrong would be
--- refused, whichever branch it took.
+-- reduced parent, the lineage, the re-pointed allocation. And the
+-- application loops: it lists the allocations on the shipment and
+-- calls the shipping code once per allocation, so what shipping a
+-- shipment means is written where no rule can see it. Here the act
+-- ranges over the allocations the record holds for the shipment and
+-- makes the choice itself, in one place, and the rules below check what
+-- it did. Stock is conserved across a split, an allocation never
+-- exceeds what is on hand, and a shipped item is no longer in stock. An
+-- act that got the split wrong would be refused, whichever branch it
+-- took and however many allocations it visited.
 
 -- A part the warehouse stocks and sells.
 predicate Part(part: Subject)
@@ -57,11 +61,6 @@ predicate SalesOrder(order: Subject, customer: Subject)
     unique by (order)
 
 predicate SalesLine(line: Subject, order: Subject, part: Subject, quantity: Decimal)
-    unique by (line)
-
--- How much of a line has been shipped so far. Starts at zero with the
--- line and moves up as allocations ship.
-predicate LineShipped(line: Subject, quantity: Decimal)
     unique by (line)
 
 -- A shipment on an order, and the moment it has gone out.
@@ -116,7 +115,7 @@ invariant a_split_child_holds_what_moved:
 -- Allocations are for a positive quantity, name things that exist, and
 -- the shipment is on the line's own order.
 invariant allocations_are_positive:
-    Allocation(allocation, _, _, _, quantity) implies quantity > 0
+    Allocation(allocation: allocation, quantity: quantity, ..) implies quantity > 0
 
 invariant allocations_name_real_things:
     Allocation(allocation, line, shipment, item, _)
@@ -126,14 +125,12 @@ invariant allocations_name_real_things:
 -- `allocate` act checks the same sum before it admits; the rule checks
 -- it again on the whole record, so a later change cannot slip past.
 invariant allocations_fit_the_stock:
-    StockItem(item, _, on_hand) implies sum(q | Allocation(_, _, _, item, q)) <= on_hand
+    StockItem(item, _, on_hand) implies sum(q | Allocation(item: item, quantity: q, ..)) <= on_hand
 
--- A line is never allocated, or shipped, more than it ordered.
+-- A line is never allocated more than it ordered. What has shipped is
+-- some of what is allocated, so this bounds that too.
 invariant lines_are_not_overallocated:
-    SalesLine(line, _, _, ordered) implies sum(q | Allocation(_, line, _, _, q)) <= ordered
-
-invariant lines_are_not_overshipped:
-    SalesLine(line, _, _, ordered) and LineShipped(line, shipped) implies shipped <= ordered
+    SalesLine(line, _, _, ordered) implies sum(q | Allocation(line: line, quantity: q, ..)) <= ordered
 
 -- An item that went to a customer is not on the shelf.
 invariant shipped_items_leave_stock:
@@ -172,9 +169,8 @@ transformation add_line(line, order, part, quantity):
     require positive: 0 < quantity
     require known_order: SalesOrder(order, _)
     require known_part: Part(part)
-    require new_line: not SalesLine(line, _, _, _)
+    require new_line: not SalesLine(line: line, ..)
     admit SalesLine(line, order, part, quantity)
-    admit LineShipped(line, 0)
 
 transformation open_shipment(shipment, order):
     require known_order: SalesOrder(order, _)
@@ -190,77 +186,83 @@ transformation open_shipment(shipment, order):
 -- "allocated" yet.
 transformation allocate(allocation, line, shipment, item, quantity):
     require positive: 0 < quantity
-    require new_allocation: not Allocation(allocation, _, _, _, _)
+    require new_allocation: not Allocation(allocation: allocation, ..)
     bind SalesLine(line, order, part, ordered)
     bind on_the_order: Shipment(shipment, order)
     require not_yet_shipped: not ShipmentShipped(shipment)
     bind same_part: StockItem(item, part, on_hand)
     require in_stock: InStock(item)
-    require once_per_shipment: not Allocation(_, _, shipment, item, _)
-    let allocated = sum(q | Allocation(_, _, _, item, q))
+    require once_per_shipment: not Allocation(shipment: shipment, item: item, ..)
+    let allocated = sum(q | Allocation(item: item, quantity: q, ..))
     require within_stock: allocated + quantity <= on_hand
-    let line_allocated = sum(q | Allocation(_, line, _, _, q))
+    let line_allocated = sum(q | Allocation(line: line, quantity: q, ..))
     require within_line: line_allocated + quantity <= ordered
     admit Allocation(allocation, line, shipment, item, quantity)
 
--- Change how much an allocation reserves. No gate repeats the stock
--- check: the rules refuse a change that no longer fits. The one gate
--- beyond the shipment's own standing is on the item: once it has gone
--- to the customer the allocation is history, whether or not the
--- shipment has closed.
+-- Change how much an allocation reserves, while its shipment is still
+-- open. No gate repeats the stock check: the rules refuse a change that
+-- no longer fits.
 transformation change_allocation(allocation, quantity):
     require positive: 0 < quantity
     bind Allocation(allocation, line, shipment, item, held)
     require not_yet_shipped: not ShipmentShipped(shipment)
-    require not_already_shipped: not ShippedTo(item, _)
     retract Allocation(allocation, line, shipment, item, held)
     admit Allocation(allocation, line, shipment, item, quantity)
 
--- Hand one allocation's stock to the customer. The act reads the
--- allocation and the item, then chooses: an allocation that takes less
--- than the item splits a child off and ships the child; one that takes
--- the whole item ships the item. Both branches read the record as it
--- was when the act began, and only the branch taken happens. The
--- child's identity is minted inside the branch, so an act that ships
--- the whole item draws no identifier it will not use.
-transformation ship_allocation(allocation):
-    bind Allocation(allocation, line, shipment, item, quantity)
+-- Ship a shipment: hand every allocation on it to the customer and
+-- mark the shipment gone. The act ranges over the allocations the
+-- record holds for the shipment, one pass per allocation, so the caller
+-- names the shipment and nothing else: no list of allocations, and no
+-- gate checking that the list is complete, because there is no list.
+-- Each pass reads the allocation and its item, then chooses: an
+-- allocation that takes less than the item splits a child off and ships
+-- the child; one that takes the whole item ships the item. Every pass
+-- reads the record as it was when the act began, which is safe because
+-- no two allocations on one shipment take the same item. The child's
+-- identity is minted inside the branch, so a pass that ships the whole
+-- item draws no identifier it will not use.
+transformation ship(shipment):
     bind Shipment(shipment, order)
     bind SalesOrder(order, customer)
     require not_yet_shipped: not ShipmentShipped(shipment)
-    require still_in_stock: InStock(item)
-    bind StockItem(item, part, on_hand)
-    bind LineShipped(line, shipped)
-    let now_shipped = shipped + quantity
-    if quantity < on_hand:
-        let child = new Subject()
-        let remainder = on_hand - quantity
-        retract StockItem(item, part, on_hand)
-        admit StockItem(item, part, remainder)
-        admit StockItem(child, part, quantity)
-        admit SplitFrom(child, item, quantity)
-        admit ShippedTo(child, customer)
-        retract Allocation(allocation, line, shipment, item, quantity)
-        admit Allocation(allocation, line, shipment, child, quantity)
-        emit ItemSplit(child, item, quantity)
-        emit ItemShipped(child, customer)
-    else:
-        admit ShippedTo(item, customer)
-        retract InStock(item)
-        emit ItemShipped(item, customer)
-    retract LineShipped(line, shipped)
-    admit LineShipped(line, now_shipped)
-
--- Mark a shipment gone, once every allocation on it has shipped.
-transformation close_shipment(shipment):
-    bind Shipment(shipment, _)
-    require not_yet_shipped: not ShipmentShipped(shipment)
-    require has_allocations: Allocation(_, _, shipment, _, _)
-    require every_item_shipped: not (exists a: Allocation(a, _, shipment, item, _) and not ShippedTo(item, _))
+    require has_allocations: Allocation(shipment: shipment, ..)
+    for Allocation(allocation, line, shipment, item, quantity):
+        require still_in_stock: InStock(item)
+        bind StockItem(item, part, on_hand)
+        if quantity < on_hand:
+            let child = new Subject()
+            let remainder = on_hand - quantity
+            retract StockItem(item, part, on_hand)
+            admit StockItem(item, part, remainder)
+            admit StockItem(child, part, quantity)
+            admit SplitFrom(child, item, quantity)
+            admit ShippedTo(child, customer)
+            retract Allocation(allocation, line, shipment, item, quantity)
+            admit Allocation(allocation, line, shipment, child, quantity)
+            emit ItemSplit(child, item, quantity)
+            emit ItemShipped(child, customer)
+        else:
+            admit ShippedTo(item, customer)
+            retract InStock(item)
+            emit ItemShipped(item, customer)
     admit ShipmentShipped(shipment)
 
+-- Cancel an order: every line goes, with whatever was reserved for it,
+-- and so do the order's shipments. The act ranges over the lines the
+-- record holds for the order, so a line the caller forgot cannot be
+-- left behind. The gate inside the loop is a condition on every line:
+-- one line with stock already shipped refuses the whole cancellation.
+transformation cancel_order(order):
+    require known_order: SalesOrder(order, _)
+    for SalesLine(line, order, _, _):
+        require nothing_shipped: not (exists a: Allocation(a, line, shipment, _, _) and ShipmentShipped(shipment))
+        retract Allocation(line: line, ..)
+        retract SalesLine(line, order, _, _)
+    retract Shipment(_, order)
+    retract SalesOrder(order, _)
+
 -- ============================================================
--- A read
+-- Two reads
 -- ============================================================
 
 -- How much of each item is allocated: the same sum a third time, as a
@@ -270,4 +272,13 @@ predicate Allocated(item: Subject, quantity: Decimal)
 
 derived Allocated(item):
     over StockItem(item: item, ..)
-    value quantity = sum(q | Allocation(_, _, _, item, q))
+    value quantity = sum(q | Allocation(item: item, quantity: q, ..))
+
+-- How much of each line has shipped: what is allocated to it on a
+-- shipment that has gone. The record can say, so nothing keeps a
+-- running figure beside it that an act could get wrong.
+predicate LineShipped(line: Subject, quantity: Decimal)
+
+derived LineShipped(line):
+    over SalesLine(line: line, ..)
+    value quantity = sum(q | Allocation(_, line, shipment, _, q) and ShipmentShipped(shipment))

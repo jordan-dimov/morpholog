@@ -217,6 +217,31 @@ transformation release(item, batches):
         admit Released(item)
 ";
 
+/// A `for` over a claim pattern keyed by a parameter, with a gate that
+/// calls a definition, a mint, a nested `if` and a retraction in its
+/// body, and a named-field pattern with a rest: every walker must read
+/// the pattern as a keyed `bind` and descend the body.
+const FOR_OVER_A_PATTERN: &str = "\
+program for_over_a_pattern
+predicate Line(line: Subject, order: Subject, quantity: Decimal)
+predicate Allocation(allocation: Subject, line: Subject, item: Subject)
+predicate Held(item: Subject)
+predicate Ticket(ticket: Subject, line: Subject)
+predicate Closed(order: Subject)
+define is_held(i):
+    Held(i)
+transformation hold(item):
+    admit Held(item)
+transformation close(order):
+    for Line(line, order, quantity):
+        for Allocation(line: line, item: item, ..):
+            require is_held(item)
+            retract Allocation(_, line, item)
+        if quantity > 0:
+            admit Ticket(new Subject(), line)
+    admit Closed(order)
+";
+
 const UNSUPPLIED_THROUGH_DEFINED: &str = "\
 program unsupplied_through_defined
 predicate Ghost(g: Subject)
@@ -453,6 +478,7 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ("for_with_defined_require", FOR_WITH_DEFINED_REQUIRE),
         ("retract_in_nested_for", RETRACT_IN_NESTED_FOR),
         ("if_across_branches", IF_ACROSS_BRANCHES),
+        ("for_over_a_pattern", FOR_OVER_A_PATTERN),
         ("unsupplied_through_defined", UNSUPPLIED_THROUGH_DEFINED),
         ("let_sugared_define", LET_SUGARED_DEFINE),
         ("round_in_let_sugared_body", ROUND_IN_LET_SUGARED_BODY),
@@ -783,6 +809,27 @@ fn the_statement_read_footprint_descends_the_loop_and_the_call() {
         read.contains(&PredicateName::from("Approved")),
         "the read footprint stops short of the nested require: {read:?}"
     );
+}
+
+#[test]
+fn a_for_over_a_pattern_is_read_keyed_and_what_it_binds_keys_the_body() {
+    // The pattern is keyed by the parameter, and the fields it binds key
+    // the nested pattern, the defined call inside it and the retraction:
+    // nothing in the act reads a predicate whole.
+    use morpholog_core::{ReadFilter, ReadPlan};
+    let program = parsed("for_over_a_pattern", FOR_OVER_A_PATTERN);
+    let close = program.transformation("close").unwrap();
+    assert!(
+        ReadPlan::whole_reads(close, &program.definitions).is_empty(),
+        "every read in the act is keyed"
+    );
+    let plan = ReadPlan::of(close, &program.definitions);
+    for predicate in ["Line", "Allocation", "Held"] {
+        assert!(
+            matches!(plan.reads[&predicate.into()], ReadFilter::Keyed(_)),
+            "{predicate} is read keyed: {plan:?}"
+        );
+    }
 }
 
 #[test]

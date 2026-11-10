@@ -291,6 +291,7 @@ fn collect_gates<'s>(body: &'s [Stmt], out: &mut Vec<(&'static str, &'s Prop, Op
                 out.push(("bind", prop, name.as_ref().map(ToString::to_string)));
             }
             Stmt::For { .. }
+            | Stmt::ForEach { .. }
             | Stmt::If { .. }
             | Stmt::Let { .. }
             | Stmt::LetNewSubject { .. }

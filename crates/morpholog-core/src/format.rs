@@ -427,6 +427,17 @@ fn fmt_stmt(s: &Stmt, depth: usize, ctx: FormatContext) -> String {
                 fmt_block(body, depth + 1, ctx)
             )
         }
+        Stmt::ForEach {
+            predicate,
+            args,
+            body,
+        } => {
+            format!(
+                "{pad}for {}:\n{}",
+                fmt_predicate_call(predicate.as_str(), args, ctx),
+                fmt_block(body, depth + 1, ctx)
+            )
+        }
         Stmt::If {
             when,
             then,

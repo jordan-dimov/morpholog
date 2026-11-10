@@ -472,3 +472,22 @@ fn trace_entry_let_let_new_subject_assert_retract_emit_round_trip() {
         );
     }
 }
+
+#[test]
+fn trace_entry_for_each_with_its_claims_round_trips() {
+    let entry = TraceEntry::ForEach {
+        predicate: "Line".into(),
+        iterations: vec![morpholog_core::ForEachIterationTrace {
+            claim: claim_instance("Line", &[subj("l1"), subj("o")]),
+            trace: vec![TraceEntry::Assert {
+                claim: claim_instance("Seen", &[subj("l1")]),
+            }],
+        }],
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    assert!(json.contains(r#""kind":"for_each""#));
+    assert!(json.contains(r#""predicate":"Line""#));
+    assert!(json.contains(r#""claim":{"#));
+    let parsed: TraceEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, entry);
+}

@@ -1404,6 +1404,12 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 
 **Landed:** `if <prop>:` with an optional `else:`, `Stmt::If`, with `examples/25_stock_allocation/` as the forcing example: one `ship_allocation` act that splits or ships whole. The condition is a `require`-style test that exports nothing; only the branch taken runs, so it alone draws subjects; branch bindings are scoped as a `for` body's are. The trace gains an `if` entry carrying the branch's own entries, and `explain` descends into it. Rejected: branches that export the names both bind, which no act needed; a `when`/`otherwise` spelling, since `if(...)` the value already exists.
 
+### A `for` over the claims a pattern matches
+
+**Forced by:** the InvenTree spike (#723). Shipping a shipment was a host loop over the allocations, picking an act per allocation; cancelling and completing an order took a list from the host and a gate checking the list was complete, four such gates in all. What an act did to a whole shipment or order was written where no rule could see it.
+
+**Landed:** `for Predicate(args):`, `Stmt::ForEach`, with `examples/25_stock_allocation/` as the forcing example: `ship(shipment)` ranges over the shipment's allocations and replaces the per-allocation act, and `cancel_order(order)` ranges over the order's lines with a gate on each. The pattern is a `bind`'s, read keyed by what is known and binding the rest per claim; one pass per matching claim, in the canonical order of the claims' arguments, which the kernel's one value order now gives from beside `EvalValue`; passes scoped as `for`'s are, every pass reading the pre-state. The trace nests the passes with the claim each ran for, pinned in the result schema, the trace golden and the Python client. The example's per-line shipped figure went: the record can say what shipped, so a read says it. Not done: a definition call as a source, a binding that sees the act's staged writes, or a value carried between passes.
+
 ### A predicate's history as a view
 
 **Forced by:** the InvenTree spike (#734). Its stock history page is read from the audit log, with nothing written beside the act, but the read decoded `operations` by position in hand SQL, restating field names and kinds the programme already declares.

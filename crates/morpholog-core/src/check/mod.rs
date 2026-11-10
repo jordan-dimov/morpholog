@@ -1019,6 +1019,19 @@ impl CheckCtx<'_> {
                     self.cells.iterated(over, each);
                 }
             }
+            Stmt::ForEach {
+                predicate,
+                args,
+                body,
+            } => {
+                // The pattern binds as a `bind`'s does, for the body
+                // alone: a clone, so nothing leaks out.
+                let mut scoped = scope.clone();
+                self.check_predicate_ref(predicate.as_str(), args, RefMode::Match, &mut scoped);
+                for inner in body {
+                    self.walk_stmt(inner, &mut scoped);
+                }
+            }
             Stmt::If {
                 when,
                 then,
@@ -2225,7 +2238,12 @@ fn decision_time_misuse(
         fold::Node::Binder(v) if v.as_str() == DECIDED_AT => {
             errors.push(named("a quantifier binder"));
         }
-        fold::Node::Stmt(Stmt::Retract { predicate, args }) if args.contains(&Term::DecidedAt) => {
+        fold::Node::Stmt(
+            Stmt::Retract { predicate, args }
+            | Stmt::ForEach {
+                predicate, args, ..
+            },
+        ) if args.contains(&Term::DecidedAt) => {
             errors.push(matched(predicate));
         }
         fold::Node::Prop(Prop::Claim { predicate, args }) if args.contains(&Term::DecidedAt) => {
@@ -2262,6 +2280,7 @@ fn collect_rule_names<'s>(stmt: &'s Stmt, out: &mut Vec<&'s RuleName>) {
             | Stmt::Assert(_)
             | Stmt::Retract { .. }
             | Stmt::For { .. }
+            | Stmt::ForEach { .. }
             | Stmt::If { .. }
             | Stmt::Emit(_),
         )

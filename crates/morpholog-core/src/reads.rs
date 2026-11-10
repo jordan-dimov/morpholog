@@ -341,6 +341,11 @@ fn rebound_names(stmt: &Stmt, out: &mut BTreeSet<Var>) {
                 rebound_names(inner, out);
             }
         }
+        Stmt::ForEach { body, .. } => {
+            for inner in body {
+                rebound_names(inner, out);
+            }
+        }
         Stmt::If {
             then, otherwise, ..
         } => {
@@ -364,7 +369,7 @@ fn let_names(stmt: &Stmt, out: &mut BTreeSet<Var>) {
         Stmt::Let { name, .. } | Stmt::LetNewSubject { name } => {
             out.insert(name.clone());
         }
-        Stmt::For { body, .. } => {
+        Stmt::For { body, .. } | Stmt::ForEach { body, .. } => {
             for inner in body {
                 let_names(inner, out);
             }
@@ -433,6 +438,21 @@ impl Walker<'_> {
                     .add(coordinates);
             }
             Stmt::Retract { predicate, args } => self.pattern(predicate, args, known),
+            Stmt::ForEach {
+                predicate,
+                args,
+                body,
+            } => {
+                // The pattern is read as a `bind`'s is, and what it binds
+                // is known to the body as a `bind`'s is to its block.
+                self.pattern(predicate, args, known);
+                let mut known = known.clone();
+                self.fields(predicate, args, &mut known);
+                for inner in body {
+                    self.stmt(inner, &known, seen);
+                    self.extend(inner, &mut known);
+                }
+            }
             Stmt::For {
                 binding,
                 collection,
@@ -512,6 +532,12 @@ impl Walker<'_> {
         else {
             return;
         };
+        self.fields(predicate, args, known);
+    }
+
+    /// What a claim pattern with a known coordinate makes known: each
+    /// variable it binds is that row's value at the variable's position.
+    fn fields(&self, predicate: &PredicateName, args: &[Term], known: &mut Env) {
         let of = coordinates(args, known);
         if of.is_empty() {
             return;

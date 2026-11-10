@@ -307,6 +307,12 @@ pub enum TraceEntry {
         binding: Var,
         iterations: Vec<ForIterationTrace>,
     },
+    /// One iteration per claim the pattern matched, each with the claim
+    /// it ran for and its own entries nested.
+    ForEach {
+        predicate: PredicateName,
+        iterations: Vec<ForEachIterationTrace>,
+    },
     /// Which branch ran, with its own entries nested, so a refusal
     /// inside a branch says where it happened.
     If {
@@ -327,6 +333,13 @@ pub enum TraceEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForIterationTrace {
     pub item: EvalValue,
+    pub trace: Vec<TraceEntry>,
+}
+
+/// The trace of one `ForEach` iteration, with the `claim` it ran for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForEachIterationTrace {
+    pub claim: ClaimInstance,
     pub trace: Vec<TraceEntry>,
 }
 
@@ -1157,42 +1170,85 @@ pub(crate) fn execute_stmt(
             let outer = bindings.clone();
             crate::state::tally::binding_copy(outer.len());
             let mut entries: Vec<TraceEntry> = vec![];
-            let result = {
-                let mut sink = if trace.is_on() {
-                    TraceSink::On(&mut entries)
-                } else {
-                    TraceSink::Off
-                };
-                let mut result = Ok(StmtOutcome::Continue);
-                for inner in branch {
-                    match execute_stmt(
-                        vocabulary,
-                        inner,
-                        pre_state,
-                        bindings,
-                        transition,
-                        definitions,
-                        asserted,
-                        retracted,
-                        emitted,
-                        &mut sink,
-                        subjects,
-                    ) {
-                        Ok(StmtOutcome::Continue) => {}
-                        stopped => {
-                            result = stopped;
-                            break;
-                        }
-                    }
-                }
-                result
-            };
+            let result = run_block(
+                vocabulary,
+                branch,
+                pre_state,
+                bindings,
+                transition,
+                definitions,
+                asserted,
+                retracted,
+                emitted,
+                trace.is_on().then_some(&mut entries),
+                subjects,
+            );
             *bindings = outer;
             if trace.is_on() {
                 trace.push(TraceEntry::If {
                     expression: format::format_prop_inline(when),
                     taken,
                     trace: entries,
+                });
+            }
+            result
+        }
+        Stmt::ForEach {
+            predicate,
+            args,
+            body,
+        } => {
+            let ctx = EvalContext::new(pre_state, None, bindings, transition, definitions);
+            let mut claims = matching_claims(predicate, args, &ctx)?;
+            // The order is the claims' own, never the state's: a subject
+            // drawn in the second iteration is the same one on replay.
+            claims.sort_by(|a, b| crate::state::cmp_values(&a.args, &b.args));
+            let outer = bindings.clone();
+            let mut iterations: Vec<ForEachIterationTrace> = vec![];
+            let mut result = Ok(StmtOutcome::Continue);
+            for claim in claims {
+                crate::state::tally::binding_copy(outer.len());
+                bindings.clone_from(&outer);
+                for (term, value) in args.iter().zip(&claim.args) {
+                    if let Term::Var(name) = term
+                        && !outer.contains_key(name)
+                    {
+                        bindings.insert(name.clone(), Bound::from(value.clone()));
+                    }
+                }
+                let mut entries: Vec<TraceEntry> = vec![];
+                let ran = run_block(
+                    vocabulary,
+                    body,
+                    pre_state,
+                    bindings,
+                    transition,
+                    definitions,
+                    asserted,
+                    retracted,
+                    emitted,
+                    trace.is_on().then_some(&mut entries),
+                    subjects,
+                );
+                if trace.is_on() {
+                    iterations.push(ForEachIterationTrace {
+                        claim,
+                        trace: entries,
+                    });
+                }
+                match ran {
+                    Ok(StmtOutcome::Continue) => {}
+                    stopped => {
+                        result = stopped;
+                        break;
+                    }
+                }
+            }
+            *bindings = outer;
+            if trace.is_on() {
+                trace.push(TraceEntry::ForEach {
+                    predicate: predicate.clone(),
+                    iterations,
                 });
             }
             result
@@ -1208,6 +1264,47 @@ pub(crate) fn execute_stmt(
             Ok(StmtOutcome::Continue)
         }
     }
+}
+
+/// Run `block` in order, stopping at the first statement that refuses or
+/// errors. With `entries`, each statement's trace lands there.
+#[allow(clippy::too_many_arguments)]
+fn run_block(
+    vocabulary: Vocabulary<'_>,
+    block: &[Stmt],
+    pre_state: &State,
+    bindings: &mut Bindings,
+    transition: Option<&Transition>,
+    definitions: DefinitionTable<'_>,
+    asserted: &mut Vec<ClaimInstance>,
+    retracted: &mut Vec<ClaimInstance>,
+    emitted: &mut Vec<IntentInstance>,
+    entries: Option<&mut Vec<TraceEntry>>,
+    subjects: &mut dyn SubjectSource,
+) -> Result<StmtOutcome, EvalError> {
+    let mut sink = match entries {
+        Some(entries) => TraceSink::On(entries),
+        None => TraceSink::Off,
+    };
+    for inner in block {
+        match execute_stmt(
+            vocabulary,
+            inner,
+            pre_state,
+            bindings,
+            transition,
+            definitions,
+            asserted,
+            retracted,
+            emitted,
+            &mut sink,
+            subjects,
+        ) {
+            Ok(StmtOutcome::Continue) => {}
+            stopped => return stopped,
+        }
+    }
+    Ok(StmtOutcome::Continue)
 }
 
 pub(crate) fn resolve_claim(

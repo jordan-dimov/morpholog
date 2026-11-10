@@ -134,6 +134,11 @@ fn stamp_stmt(stmt: &mut Stmt, seeds: &Seeds) {
                 stamp_stmt(inner, seeds);
             }
         }
+        Stmt::ForEach { body, .. } => {
+            for inner in body {
+                stamp_stmt(inner, seeds);
+            }
+        }
         Stmt::If {
             when,
             then,

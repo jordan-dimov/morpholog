@@ -178,6 +178,7 @@ pub fn morpholog_core::ir_builder::emit(&str, alloc::vec::Vec<morpholog_core::Te
 pub fn morpholog_core::ir_builder::eq(morpholog_core::ValueExpr, morpholog_core::ValueExpr) -> morpholog_core::Prop
 pub fn morpholog_core::ir_builder::exists(&str, morpholog_core::Prop) -> morpholog_core::Prop
 pub fn morpholog_core::ir_builder::for_(&str, morpholog_core::ValueExpr, alloc::vec::Vec<morpholog_core::Stmt>) -> morpholog_core::Stmt
+pub fn morpholog_core::ir_builder::for_each(&str, alloc::vec::Vec<morpholog_core::Term>, alloc::vec::Vec<morpholog_core::Stmt>) -> morpholog_core::Stmt
 pub fn morpholog_core::ir_builder::forall(&str, morpholog_core::Prop, morpholog_core::Prop) -> morpholog_core::Prop
 pub fn morpholog_core::ir_builder::if_(morpholog_core::Prop, alloc::vec::Vec<morpholog_core::Stmt>, alloc::vec::Vec<morpholog_core::Stmt>) -> morpholog_core::Stmt
 pub fn morpholog_core::ir_builder::implies(morpholog_core::Prop, morpholog_core::Prop) -> morpholog_core::Prop
@@ -1381,6 +1382,10 @@ pub morpholog_core::Stmt::For
 pub morpholog_core::Stmt::For::binding: morpholog_core::Var
 pub morpholog_core::Stmt::For::body: alloc::vec::Vec<morpholog_core::Stmt>
 pub morpholog_core::Stmt::For::collection: morpholog_core::ValueExpr
+pub morpholog_core::Stmt::ForEach
+pub morpholog_core::Stmt::ForEach::args: alloc::vec::Vec<morpholog_core::Term>
+pub morpholog_core::Stmt::ForEach::body: alloc::vec::Vec<morpholog_core::Stmt>
+pub morpholog_core::Stmt::ForEach::predicate: morpholog_core::PredicateName
 pub morpholog_core::Stmt::If
 pub morpholog_core::Stmt::If::otherwise: alloc::vec::Vec<morpholog_core::Stmt>
 pub morpholog_core::Stmt::If::then: alloc::vec::Vec<morpholog_core::Stmt>
@@ -1472,6 +1477,9 @@ pub morpholog_core::TraceEntry::Emit::intent: morpholog_core::IntentInstance
 pub morpholog_core::TraceEntry::For
 pub morpholog_core::TraceEntry::For::binding: morpholog_core::Var
 pub morpholog_core::TraceEntry::For::iterations: alloc::vec::Vec<morpholog_core::ForIterationTrace>
+pub morpholog_core::TraceEntry::ForEach
+pub morpholog_core::TraceEntry::ForEach::iterations: alloc::vec::Vec<morpholog_core::ForEachIterationTrace>
+pub morpholog_core::TraceEntry::ForEach::predicate: morpholog_core::PredicateName
 pub morpholog_core::TraceEntry::If
 pub morpholog_core::TraceEntry::If::expression: alloc::string::String
 pub morpholog_core::TraceEntry::If::taken: bool
@@ -2396,6 +2404,29 @@ impl core::marker::Unpin for morpholog_core::Explanation
 impl core::marker::UnsafeUnpin for morpholog_core::Explanation
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Explanation
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Explanation
+pub struct morpholog_core::ForEachIterationTrace
+pub morpholog_core::ForEachIterationTrace::claim: morpholog_core::ClaimInstance
+pub morpholog_core::ForEachIterationTrace::trace: alloc::vec::Vec<morpholog_core::TraceEntry>
+impl core::clone::Clone for morpholog_core::ForEachIterationTrace
+pub fn morpholog_core::ForEachIterationTrace::clone(&self) -> morpholog_core::ForEachIterationTrace
+impl core::cmp::Eq for morpholog_core::ForEachIterationTrace
+pub fn morpholog_core::ForEachIterationTrace::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_core::ForEachIterationTrace
+pub fn morpholog_core::ForEachIterationTrace::eq(&self, &morpholog_core::ForEachIterationTrace) -> bool
+impl core::fmt::Debug for morpholog_core::ForEachIterationTrace
+pub fn morpholog_core::ForEachIterationTrace::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_core::ForEachIterationTrace
+impl serde_core::ser::Serialize for morpholog_core::ForEachIterationTrace
+pub fn morpholog_core::ForEachIterationTrace::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for morpholog_core::ForEachIterationTrace
+pub fn morpholog_core::ForEachIterationTrace::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for morpholog_core::ForEachIterationTrace
+impl core::marker::Send for morpholog_core::ForEachIterationTrace
+impl core::marker::Sync for morpholog_core::ForEachIterationTrace
+impl core::marker::Unpin for morpholog_core::ForEachIterationTrace
+impl core::marker::UnsafeUnpin for morpholog_core::ForEachIterationTrace
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::ForEachIterationTrace
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::ForEachIterationTrace
 pub struct morpholog_core::ForIterationTrace
 pub morpholog_core::ForIterationTrace::item: morpholog_core::EvalValue
 pub morpholog_core::ForIterationTrace::trace: alloc::vec::Vec<morpholog_core::TraceEntry>

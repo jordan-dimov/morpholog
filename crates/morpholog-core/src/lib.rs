@@ -89,9 +89,9 @@ pub use lint::{
 };
 pub use prepared::PreparedProgram;
 pub use propose::{
-    BindOneOutcome, Compared, ForIterationTrace, Outcome, RejectionReason, RequireOutcome,
-    StagedDelta, SubjectSource, TraceEntry, TracedProposal, Transition, WitnessBinding,
-    finish_staged_delta_with,
+    BindOneOutcome, Compared, ForEachIterationTrace, ForIterationTrace, Outcome, RejectionReason,
+    RequireOutcome, StagedDelta, SubjectSource, TraceEntry, TracedProposal, Transition,
+    WitnessBinding, finish_staged_delta_with,
 };
 #[cfg(any(test, feature = "measure"))]
 #[doc(hidden)]
