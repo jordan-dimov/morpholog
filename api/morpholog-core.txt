@@ -1667,6 +1667,8 @@ pub morpholog_core::ValidationError::DecisionTimeNotAvailable
 pub morpholog_core::ValidationError::DecisionTimeNotAvailable::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::DefinitionCycle
 pub morpholog_core::ValidationError::DefinitionCycle::names: alloc::vec::Vec<alloc::string::String>
+pub morpholog_core::ValidationError::DefinitionKindUnknown
+pub morpholog_core::ValidationError::DefinitionKindUnknown::definition: alloc::string::String
 pub morpholog_core::ValidationError::DefinitionNameCollision
 pub morpholog_core::ValidationError::DefinitionNameCollision::name: alloc::string::String
 pub morpholog_core::ValidationError::DefinitionNameIsBuiltin
