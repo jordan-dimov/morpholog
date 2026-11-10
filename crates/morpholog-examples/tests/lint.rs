@@ -36,6 +36,7 @@ fn unsupplied_missing(found: &[Lint]) -> Vec<&str> {
             | Lint::RequireRematch { .. }
             | Lint::LargeGrid { .. }
             | Lint::WildcardedCallUnderSum { .. }
+            | Lint::OverlappingOrUnderSum { .. }
             | Lint::BindOnlyToRetract { .. } => None,
         })
         .unwrap_or_default()
@@ -62,6 +63,7 @@ fn governing_finding(found: &[Lint]) -> Option<(&str, Vec<&str>)> {
         | Lint::RequireRematch { .. }
         | Lint::LargeGrid { .. }
         | Lint::WildcardedCallUnderSum { .. }
+        | Lint::OverlappingOrUnderSum { .. }
         | Lint::BindOnlyToRetract { .. } => None,
     })
 }
@@ -1960,4 +1962,164 @@ transformation receive(item, on_hand):
             "{name}: the call only tests, and both allocations count"
         );
     }
+}
+
+const ORS_IN_SUMS: &str = "program ors_in_sums
+predicate Amount(x: Subject, q: Decimal)
+predicate Alloc(allocation: Subject, item: Subject, q: Decimal)
+predicate Build(allocation: Subject, item: Subject, q: Decimal)
+predicate Status(item: Subject, s: Subject)
+predicate Stock(item: Subject, on_hand: Decimal)
+predicate Load(item: Subject, w: Decimal[kg])
+define counted(allocation, item, q):
+    Alloc(allocation, item, q) or Build(allocation, item, q)
+transformation overlapping_tests(item, q):
+    require within: sum(x | Amount(item, x) and (x > 0 or x < 10)) + q <= value Stock(item, _)
+    admit Amount(item, q)
+transformation two_families(item, q):
+    require within: sum(x | Alloc(_, item, x) or Build(_, item, x)) + q <= value Stock(item, _)
+    admit Amount(item, q)
+transformation nested(item, q):
+    require within: sum(x | Amount(item, x) and (x > 0 or (x < 10 or x > 100))) + q <= value Stock(item, _)
+    admit Amount(item, q)
+transformation one_of(item, q):
+    require within: sum(x | Alloc(_, i, x) and Status(i, s) and s in (#open, #held)) + q <= value Stock(item, _)
+    admit Amount(item, q)
+transformation one_of_each_branch(item, q):
+    require within: sum(x | Status(i, s) and ((s = #open and Alloc(_, i, x)) or (s = #held and Build(_, i, x)))) + q <= value Stock(item, _)
+    admit Amount(item, q)
+transformation same_literal(item, q):
+    require within: sum(x | Alloc(_, i, x) and Status(i, s) and (s = #open or s = #open)) + q <= value Stock(item, _)
+    admit Amount(item, q)
+transformation two_variables(item, q):
+    require within: sum(x | Alloc(_, i, x) and Status(i, s) and Status(item, t) and (s = #open or t = #held)) + q <= value Stock(item, _)
+    admit Amount(item, q)
+transformation same_number(item, q):
+    require within: sum(x | Amount(item, x) and (x = 5.0 or x = 5.00)) + q <= value Stock(item, _)
+    admit Amount(item, q)
+transformation same_quantity(item, q):
+    require few: sum(1 | Load(item, w) and (w = 5.0 kg or w = 5.00 kg)) <= 10
+    admit Amount(item, q)
+transformation distinct_numbers(item, q):
+    require within: sum(x | Amount(item, x) and (x = 5.0 or x = 6)) + q <= value Stock(item, _)
+    admit Amount(item, q)
+transformation under_exists(item, q):
+    require within: sum(x | Amount(item, x) and (exists s: Status(item, s) and (s = #open or x > 0))) + q <= value Stock(item, _)
+    admit Amount(item, q)
+transformation under_not(item, q):
+    require within: sum(x | Amount(item, x) and not (x > 0 or x < 10)) + q <= value Stock(item, _)
+    admit Amount(item, q)
+transformation through_a_call(item, q):
+    require within: sum(x | counted(a, item, x)) + q <= value Stock(item, _)
+    admit Amount(item, q)
+transformation outside_a_sum(item, q):
+    require open: Status(item, s) and (s = #open or q > 0)
+    admit Amount(item, q)
+";
+
+/// An `or` under a sum is hinted where its branches can hold together,
+/// nested ones included, and named as written; two equalities hold
+/// together when they test one literal twice, two variables, or two
+/// spellings of one number, which the evaluator compares equal. It is silent where the
+/// branches are equalities of one variable against distinct literals,
+/// alone or each inside its branch, where the `or` only answers yes or
+/// no, where it sits inside a definition the sum calls, and outside a
+/// sum.
+#[test]
+fn an_or_under_a_sum_is_hinted_where_its_branches_can_hold_together() {
+    let hinted: Vec<(String, String)> = lints_of(ORS_IN_SUMS)
+        .into_iter()
+        .filter_map(|l| match l {
+            Lint::OverlappingOrUnderSum { owner, disjunction } => Some((owner, disjunction)),
+            _ => None,
+        })
+        .collect();
+    let expected: Vec<(String, String)> = [
+        ("overlapping_tests", "(x > 0) or (x < 10)"),
+        ("two_families", "Alloc(_, item, x) or Build(_, item, x)"),
+        ("nested", "(x > 0) or ((x < 10) or (x > 100))"),
+        ("nested", "(x < 10) or (x > 100)"),
+        ("same_literal", "(s = #open) or (s = #open)"),
+        ("two_variables", "(s = #open) or (t = #held)"),
+        ("same_number", "(x = 5.0) or (x = 5.00)"),
+        ("same_quantity", "(w = 5.0 kg) or (w = 5.00 kg)"),
+    ]
+    .into_iter()
+    .map(|(t, d)| (format!("transformation `{t}`"), d.to_string()))
+    .collect();
+    assert_eq!(hinted, expected);
+    let shown = hinted_text(ORS_IN_SUMS);
+    assert!(
+        shown.contains("sums over `(x > 0) or (x < 10)`") && shown.contains("counts twice"),
+        "{shown}"
+    );
+}
+
+fn hinted_text(source: &str) -> String {
+    lints_of(source)
+        .iter()
+        .find(|l| matches!(l, Lint::OverlappingOrUnderSum { .. }))
+        .map(ToString::to_string)
+        .unwrap_or_default()
+}
+
+/// Why the hint exists, and why the exclusive form is silent: one amount
+/// of 5 under a disjunction both of whose tests it passes sums to 10,
+/// as it does under two spellings of its own value; under equalities
+/// against distinct literals it sums to 5.
+#[test]
+fn an_overlapping_or_counts_a_witness_once_per_holding_branch() {
+    use morpholog_core::State;
+    use morpholog_test_support::{claim_instance, dec, enumerate_derived, subj};
+    let program = parse_program(
+        "program rows
+
+predicate Amount(x: Subject, q: Decimal)
+predicate Status(x: Subject, s: Subject)
+predicate Overlapping(x: Subject, total: Decimal)
+predicate Exclusive(x: Subject, total: Decimal)
+predicate SameNumber(x: Subject, total: Decimal)
+
+derived Overlapping(x):
+    over Amount(x: x, ..)
+    value total = sum(q | Amount(x, q) and (q > 0 or q < 10))
+derived Exclusive(x):
+    over Amount(x: x, ..)
+    value total = sum(q | Amount(x, q) and Status(x, s) and (s = #open or s = #held))
+derived SameNumber(x):
+    over Amount(x: x, ..)
+    value total = sum(q | Amount(x, q) and (q = 5.0 or q = 5.00))
+
+transformation note(x, q):
+    admit Amount(x, q)
+",
+    )
+    .expect("parses");
+    let state = State::from_claims(vec![
+        claim_instance("Amount", &[subj("a"), dec(5)]),
+        claim_instance("Status", &[subj("a"), subj("open")]),
+    ]);
+    let figure = |name: &str| {
+        let derived = program
+            .derived_claims
+            .iter()
+            .find(|d| d.predicate.as_str() == name)
+            .unwrap();
+        enumerate_derived(&program, derived, &state).unwrap()
+    };
+    assert_eq!(
+        figure("Overlapping"),
+        vec![claim_instance("Overlapping", &[subj("a"), dec(10)])],
+        "5 passes both tests and counts twice"
+    );
+    assert_eq!(
+        figure("Exclusive"),
+        vec![claim_instance("Exclusive", &[subj("a"), dec(5)])],
+        "one status holds, and 5 counts once"
+    );
+    assert_eq!(
+        figure("SameNumber"),
+        vec![claim_instance("SameNumber", &[subj("a"), dec(10)])],
+        "5.0 and 5.00 are one number at runtime, and 5 counts twice"
+    );
 }

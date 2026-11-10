@@ -969,6 +969,9 @@ pub morpholog_core::Lint::LargeGrid::bound: alloc::string::String
 pub morpholog_core::Lint::LargeGrid::periods: u128
 pub morpholog_core::Lint::LargeGrid::step: alloc::string::String
 pub morpholog_core::Lint::LargeGrid::transformation: alloc::string::String
+pub morpholog_core::Lint::OverlappingOrUnderSum
+pub morpholog_core::Lint::OverlappingOrUnderSum::disjunction: alloc::string::String
+pub morpholog_core::Lint::OverlappingOrUnderSum::owner: alloc::string::String
 pub morpholog_core::Lint::RequireRematch
 pub morpholog_core::Lint::RequireRematch::again: usize
 pub morpholog_core::Lint::RequireRematch::first: usize

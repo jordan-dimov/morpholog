@@ -484,7 +484,7 @@ transformation record_variant(part, parent, ancestors):
         admit DescendsFrom(part, a)
 ```
 
-A call yields each distinct projection of its named arguments once. So a `sum` over a call with `_` for an argument counts claims that differ only there as one: `sum(q | alloc(_, item, q))` counts two allocations of the same quantity on one item once. Name the argument when each claim must count; `check` hints when a sum takes a variable from such a call. A call that only tests rows a claim pattern supplies collapses nothing and is not hinted: `sum(q | Alloc(a, item, q) and permitted(_, item))` counts every allocation of a permitted item.
+A call yields each distinct projection of its named arguments once. So a `sum` over a call with `_` for an argument counts claims that differ only there as one: `sum(q | alloc(_, item, q))` counts two allocations of the same quantity on one item once. Name the argument when each claim must count; `check` hints when a sum takes a variable from such a call. A call that only tests rows a claim pattern supplies collapses nothing and is not hinted: `sum(q | Alloc(a, item, q) and permitted(_, item))` counts every allocation of a permitted item. The other way round, an `or` keeps every branch's matches, so a sum over `q > 0 or q < 10` counts an amount of 5 twice; `check` hints when a sum holds an `or` whose branches can hold together, and is silent for equalities of one variable against distinct literals, the `in (a, b)` form.
 
 ## Three things to know before the second week
 

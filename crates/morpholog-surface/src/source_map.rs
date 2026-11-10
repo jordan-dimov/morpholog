@@ -194,7 +194,8 @@ impl SourceMap {
                 self.decl_span(DeclKind::Transformation, transformation)
             }
             // On the rule that holds the sum.
-            Lint::WildcardedCallUnderSum { owner, .. } => {
+            Lint::WildcardedCallUnderSum { owner, .. }
+            | Lint::OverlappingOrUnderSum { owner, .. } => {
                 let (kind, name) = owner.rsplit_once('`')?.0.rsplit_once('`')?;
                 let kind = if kind.contains("transformation") {
                     DeclKind::Transformation
