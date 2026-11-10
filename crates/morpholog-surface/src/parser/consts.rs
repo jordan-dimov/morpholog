@@ -381,6 +381,22 @@ fn substitute_stmt(
                 );
             }
         }
+        Stmt::If {
+            when,
+            then,
+            otherwise,
+        } => {
+            substitute_prop(when, errors);
+            for s in then.iter_mut().chain(otherwise) {
+                substitute_stmt(
+                    s,
+                    substitute_prop,
+                    substitute_value,
+                    substitute_terms,
+                    errors,
+                );
+            }
+        }
     }
 }
 
@@ -393,7 +409,8 @@ fn collect_binders_named(prop: &morpholog_core::Prop, out: &mut Vec<(String, &'s
 }
 
 /// Statement-level locals: `let`, `for`, and `new Subject()` bindings,
-/// plus quantifier binders inside statement propositions and values.
+/// plus quantifier binders inside statement propositions and values,
+/// through `for` bodies and `if` branches.
 fn collect_stmt_locals(stmt: &Stmt, out: &mut Vec<(String, &'static str)>) {
     match stmt {
         Stmt::Require { prop: p, .. } | Stmt::BindOne { prop: p, .. } => {
@@ -417,6 +434,16 @@ fn collect_stmt_locals(stmt: &Stmt, out: &mut Vec<(String, &'static str)>) {
             binders_in_value(collection, &mut set);
             out.extend(set.into_iter().map(|n| (n, "quantifier binding")));
             for s in body {
+                collect_stmt_locals(s, out);
+            }
+        }
+        Stmt::If {
+            when,
+            then,
+            otherwise,
+        } => {
+            collect_binders_named(when, out);
+            for s in then.iter().chain(otherwise) {
                 collect_stmt_locals(s, out);
             }
         }

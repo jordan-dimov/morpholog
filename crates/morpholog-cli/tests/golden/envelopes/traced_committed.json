@@ -158,6 +158,21 @@
       "kind": "for"
     },
     {
+      "expression": "Draft(account)",
+      "kind": "if",
+      "taken": true,
+      "trace": [
+        {
+          "kind": "let",
+          "name": "kept",
+          "value": {
+            "type": "subject",
+            "value": "acct_1"
+          }
+        }
+      ]
+    },
+    {
       "intent": {
         "args": [
           {

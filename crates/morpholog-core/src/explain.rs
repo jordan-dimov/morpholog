@@ -363,7 +363,8 @@ fn gate_verdict(
 
 /// Find the trace entry that caused a rejection: a rejecting `Require`, a
 /// no-match `BindOne`, or a failed `InvariantCheck`. Scans from the end,
-/// where the failure was recorded, and into the last iteration of a `For`.
+/// where the failure was recorded, into the last iteration of a `For` and
+/// into the branch an `If` took.
 fn failing_entry(trace: &[TraceEntry]) -> Option<&TraceEntry> {
     for entry in trace.iter().rev() {
         match entry {
@@ -380,6 +381,11 @@ fn failing_entry(trace: &[TraceEntry]) -> Option<&TraceEntry> {
                 if let Some(last) = iterations.last()
                     && let Some(inner) = failing_entry(&last.trace)
                 {
+                    return Some(inner);
+                }
+            }
+            TraceEntry::If { trace, .. } => {
+                if let Some(inner) = failing_entry(trace) {
                     return Some(inner);
                 }
             }

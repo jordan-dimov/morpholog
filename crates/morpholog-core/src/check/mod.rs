@@ -944,6 +944,7 @@ impl CheckCtx<'_> {
     /// - `Assert` / `Retract` / `Emit` consume args (`Use` mode).
     /// - `For` consumes the collection and binds the loop variable
     ///   in a scoped clone.
+    /// - `If` walks its condition in a clone and each branch in a clone.
     fn walk_stmt(&mut self, stmt: &Stmt, scope: &mut Scope) {
         match stmt {
             Stmt::Require { prop, .. } => {
@@ -1016,6 +1017,22 @@ impl CheckCtx<'_> {
                         (scope.kinds.cell(over), scoped.kinds.cell(binding))
                 {
                     self.cells.iterated(over, each);
+                }
+            }
+            Stmt::If {
+                when,
+                then,
+                otherwise,
+            } => {
+                // The condition exports nothing, and each branch binds
+                // for itself alone.
+                let mut condition = scope.clone();
+                self.walk_prop(when, &mut condition);
+                for branch in [then, otherwise] {
+                    let mut scoped = scope.clone();
+                    for inner in branch {
+                        self.walk_stmt(inner, &mut scoped);
+                    }
                 }
             }
             Stmt::Emit(intent) => {
@@ -2245,6 +2262,7 @@ fn collect_rule_names<'s>(stmt: &'s Stmt, out: &mut Vec<&'s RuleName>) {
             | Stmt::Assert(_)
             | Stmt::Retract { .. }
             | Stmt::For { .. }
+            | Stmt::If { .. }
             | Stmt::Emit(_),
         )
         | fold::Node::Prop(_)

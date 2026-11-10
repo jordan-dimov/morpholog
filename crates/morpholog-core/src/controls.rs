@@ -278,8 +278,9 @@ fn authored_implications(program: &Program, defs: DefinitionTable<'_>) -> Vec<In
 }
 
 /// The transformation's top-level `require` and `bind` statements, in
-/// body order. A gate inside a `for` is a per-item condition; listing it
-/// here would show it as gating the whole transformation.
+/// body order. A gate inside a `for` is a per-item condition and one
+/// inside an `if` holds only on its branch; listing either here would
+/// show it as gating the whole transformation.
 fn collect_gates<'s>(body: &'s [Stmt], out: &mut Vec<(&'static str, &'s Prop, Option<String>)>) {
     for stmt in body {
         match stmt {
@@ -290,6 +291,7 @@ fn collect_gates<'s>(body: &'s [Stmt], out: &mut Vec<(&'static str, &'s Prop, Op
                 out.push(("bind", prop, name.as_ref().map(ToString::to_string)));
             }
             Stmt::For { .. }
+            | Stmt::If { .. }
             | Stmt::Let { .. }
             | Stmt::LetNewSubject { .. }
             | Stmt::Assert(_)

@@ -225,6 +225,12 @@ class RunOutcomes(unittest.TestCase):
         self.assertEqual(loop.binding, "item")
         self.assertIsInstance(loop.iterations[0].trace[0], envelopes.AssertStep)
 
+        # An `if` says which branch ran and carries that branch's steps.
+        branch = next(s for s in traced.trace if isinstance(s, envelopes.IfStep))
+        self.assertEqual(branch.expression, "Draft(account)")
+        self.assertTrue(branch.taken)
+        self.assertIsInstance(branch.trace[0], envelopes.LetStep)
+
     def test_every_traced_golden_parses_and_covers_every_arm(self):
         # The client-side mirror of the binary's arm-coverage gate. Parsing
         # only the happy-path trace would leave the parsers for the other
@@ -244,6 +250,7 @@ class RunOutcomes(unittest.TestCase):
                         outcome_types.add(type(outcome).__name__)
                     for it in getattr(step, "iterations", []):
                         walk(it.trace)
+                    walk(getattr(step, "trace", []))
 
             walk(traced.trace)
 
@@ -258,6 +265,7 @@ class RunOutcomes(unittest.TestCase):
                 "RetractStep",
                 "EmitStep",
                 "ForStep",
+                "IfStep",
                 "InvariantCheckStep",
             },
         )

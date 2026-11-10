@@ -179,6 +179,7 @@ pub fn morpholog_core::ir_builder::eq(morpholog_core::ValueExpr, morpholog_core:
 pub fn morpholog_core::ir_builder::exists(&str, morpholog_core::Prop) -> morpholog_core::Prop
 pub fn morpholog_core::ir_builder::for_(&str, morpholog_core::ValueExpr, alloc::vec::Vec<morpholog_core::Stmt>) -> morpholog_core::Stmt
 pub fn morpholog_core::ir_builder::forall(&str, morpholog_core::Prop, morpholog_core::Prop) -> morpholog_core::Prop
+pub fn morpholog_core::ir_builder::if_(morpholog_core::Prop, alloc::vec::Vec<morpholog_core::Stmt>, alloc::vec::Vec<morpholog_core::Stmt>) -> morpholog_core::Stmt
 pub fn morpholog_core::ir_builder::implies(morpholog_core::Prop, morpholog_core::Prop) -> morpholog_core::Prop
 pub fn morpholog_core::ir_builder::in_(morpholog_core::Term, morpholog_core::Term) -> morpholog_core::Prop
 pub fn morpholog_core::ir_builder::invariant(&str, morpholog_core::Prop) -> morpholog_core::Invariant
@@ -1380,6 +1381,10 @@ pub morpholog_core::Stmt::For
 pub morpholog_core::Stmt::For::binding: morpholog_core::Var
 pub morpholog_core::Stmt::For::body: alloc::vec::Vec<morpholog_core::Stmt>
 pub morpholog_core::Stmt::For::collection: morpholog_core::ValueExpr
+pub morpholog_core::Stmt::If
+pub morpholog_core::Stmt::If::otherwise: alloc::vec::Vec<morpholog_core::Stmt>
+pub morpholog_core::Stmt::If::then: alloc::vec::Vec<morpholog_core::Stmt>
+pub morpholog_core::Stmt::If::when: morpholog_core::Prop
 pub morpholog_core::Stmt::Let
 pub morpholog_core::Stmt::Let::name: morpholog_core::Var
 pub morpholog_core::Stmt::Let::value: morpholog_core::ValueExpr
@@ -1467,6 +1472,10 @@ pub morpholog_core::TraceEntry::Emit::intent: morpholog_core::IntentInstance
 pub morpholog_core::TraceEntry::For
 pub morpholog_core::TraceEntry::For::binding: morpholog_core::Var
 pub morpholog_core::TraceEntry::For::iterations: alloc::vec::Vec<morpholog_core::ForIterationTrace>
+pub morpholog_core::TraceEntry::If
+pub morpholog_core::TraceEntry::If::expression: alloc::string::String
+pub morpholog_core::TraceEntry::If::taken: bool
+pub morpholog_core::TraceEntry::If::trace: alloc::vec::Vec<morpholog_core::TraceEntry>
 pub morpholog_core::TraceEntry::InvariantCheck
 pub morpholog_core::TraceEntry::InvariantCheck::expression: alloc::string::String
 pub morpholog_core::TraceEntry::InvariantCheck::held: bool

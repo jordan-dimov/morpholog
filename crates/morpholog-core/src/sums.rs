@@ -134,6 +134,16 @@ fn stamp_stmt(stmt: &mut Stmt, seeds: &Seeds) {
                 stamp_stmt(inner, seeds);
             }
         }
+        Stmt::If {
+            when,
+            then,
+            otherwise,
+        } => {
+            stamp_prop(when, seeds);
+            for inner in then.iter_mut().chain(otherwise) {
+                stamp_stmt(inner, seeds);
+            }
+        }
     }
 }
 

@@ -103,6 +103,7 @@ example_module!(release_governance);
 example_module!(residue_classes);
 example_module!(scoped_charges);
 example_module!(settlement_netting);
+example_module!(stock_allocation);
 example_module!(trade_lifecycle);
 example_module!(verified_revenue {
     pub const BANK_DEBT_SERVICE: &str = "bank_debt_service";

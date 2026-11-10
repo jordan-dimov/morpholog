@@ -105,6 +105,7 @@ fn collect_refs(
             | Stmt::LetNewSubject { .. }
             | Stmt::Assert(_)
             | Stmt::For { .. }
+            | Stmt::If { .. }
             | Stmt::Emit(_) => {}
         },
         Node::Slot(_) | Node::Binder(_) => {}
@@ -168,6 +169,7 @@ pub fn predicates_asserted_by_stmt(stmt: &Stmt, out: &mut BTreeSet<PredicateName
             | Stmt::LetNewSubject { .. }
             | Stmt::Retract { .. }
             | Stmt::For { .. }
+            | Stmt::If { .. }
             | Stmt::Emit(_),
         )
         | Node::Prop(_)
@@ -230,6 +232,7 @@ pub fn predicates_written_by(
                 | Stmt::Let { .. }
                 | Stmt::LetNewSubject { .. }
                 | Stmt::For { .. }
+                | Stmt::If { .. }
                 | Stmt::Emit(_),
             )
             | Node::Prop(_)

@@ -363,6 +363,36 @@ transformation mark_b(x):
         &input,
         &decided,
     );
+
+    // A conditional statement: the branch taken draws a subject, the
+    // other does not, so which branch ran shows in the subjects the
+    // decision used.
+    let program = morpholog_surface::parse_program(
+        "
+program branching
+
+predicate Whole(x: Subject)
+predicate Part(x: Subject, piece: Subject)
+predicate Sent(x: Subject)
+
+transformation send(x):
+    if Whole(x):
+        admit Sent(x)
+    else:
+        admit Part(x, new Subject())
+        admit Sent(x)
+",
+    )
+    .unwrap();
+    let whole = State::from_claims(vec![morpholog_core::ClaimInstance {
+        predicate: "Whole".into(),
+        args: vec![subj("w")],
+    }]);
+    let t = program.transformation("send").unwrap();
+    let (input, decided) = proposal_case(&program, t, vec![subj("w")], &whole);
+    record(out, "fixture/if/then_branch".to_string(), &input, &decided);
+    let (input, decided) = proposal_case(&program, t, vec![subj("w")], &State::default());
+    record(out, "fixture/if/else_branch".to_string(), &input, &decided);
 }
 
 /// Values admitted or emitted into fields of another declared kind,

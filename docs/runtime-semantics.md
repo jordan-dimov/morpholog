@@ -140,6 +140,9 @@ Statement
   assert Claim                   -- IR name; the surface verb is `admit`
   retract Pred(args...)          -- pattern-based; idempotent on zero matches
   for binding in collection: list of Statements  -- iteration; body is scoped
+  if Prop: list of Statements [else: list of Statements]
+                                 -- a yes/no test with `require`'s rule chooses the
+                                    branch; only it runs, and its bindings are scoped
   emit Intent
 
 Intent
@@ -190,6 +193,7 @@ The `.morph` surface verbs map one-to-one onto the IR constructs above. The rena
 |---|---|---|
 | `admit X(args)` | `Stmt::Assert` | Matches the runtime doctrine of "admitted claims". `assert` belongs to test frameworks; `admit` belongs to governed state. |
 | `bind X(args)` | `Stmt::BindOne` | The `_one` suffix is redundant - there is no `bind_many`. `bind` reads as the binding-statement it is. |
+| `if expr:` ... `else:` ... (statement blocks) | `Stmt::If { when, then, otherwise }` | A gate that chooses instead of refusing. The condition is tested as a `require` is and exports nothing, so a branch reads only what the act already had; the branch taken runs and the other does not, which is what makes a `new Subject()` inside a branch draw only when that branch runs. Branch bindings are scoped like a `for` body's, so the statements after the `if` see the same names whichever branch ran. `if` and `else` are contextual, as `if(...)` the value is: a statement starts with a verb, so `if` at statement start can mean nothing else, and no keyword is spent. The `else` is optional and an absent one is an empty block. Forced by a shipment that splits a stock item only when the allocation takes less than the whole (`examples/25_stock_allocation/`): one act where the host had chosen between two. |
 | `require name: expr` / `bind name: X(args)` | `name` on `Stmt::{Require, BindOne}` | An optional stable identifier for a refusing statement. A refusal otherwise quotes the rendered expression, which reads well and identifies nothing - reword the rule and anything holding that text breaks. Optional because a transformation with one gate is already unambiguous, and most gates are one self-evident line; the name earns its place where several rules could each be the one that said no. Unique per transformation, not per programme: two acts legitimately carry the same gate verbatim. The name is contextual, not reserved - `ident :` cannot open a proposition, so no keyword is spent. |
 | `unique by (fields)`, `append only`, `current pointer by (fields)`, `superseded via L`, `effective by (keys) on (date) [partial]` (clauses on a `predicate` declaration) | `Discipline::{UniqueBy, AppendOnly, CurrentPointerBy, SupersededVia, EffectiveBy}` on `PredicateDecl.disciplines` | Claim disciplines (see "Claim disciplines" below). Every clause word is contextual, not reserved - the `before`/`duration` precedent - so all stay usable as variable names. Clauses sit inline after the argument list or on indented continuation lines. |
 | `define name(params): body` / `name(args)` at call sites | `Definition` / `Prop::Defined` | A named, parameterised proposition (see "Definitions: named propositions" below). The call is spelled exactly like a claim reference - a condition should read no differently from the evidence it checks - and resolves by name against the declared definitions, which is why definition and predicate names share one namespace and may not collide. Definition names are snake_case by convention (they name rules, like invariants), predicates CamelCase (they name claim shapes); the convention aids the reader, not the resolver. |
@@ -360,9 +364,9 @@ the clause was written: `unique by` lowers to a generated invariant, so
 refusing it there would name a rule nobody typed, and `append only`
 lowers to nothing at all and would pass unnoticed.
 
-## Statements: the require / bind_one / let / for quartet
+## Statements: the require / bind_one / let / for quartet, and `if`
 
-Four statement classes serve different binding purposes; conflating them is the most common modelling mistake when authoring a transformation.
+Four statement classes serve different binding purposes; conflating them is the most common modelling mistake when authoring a transformation. The conditional statement is a fifth, built from the first: a gate that chooses a branch instead of refusing.
 
 - **`require Prop`** is a **yes/no gate**. It evaluates the `Prop` against the pre-state snapshot; if it admits any match the statement succeeds, otherwise the proposal is rejected. The matches' bindings are **not** propagated back into the active scope: a `require Claim(x, y)` that uses fresh variable names `x` and `y` does not bind them for later statements. The require's only job is admission control.
 
@@ -376,6 +380,8 @@ Four statement classes serve different binding purposes; conflating them is the 
   `bind_one` is not iteration and does not branch. Use `for` for iteration. Use `require` for gates that should not export bindings. Use `let` for value-producing expressions.
 
 - **`let name = ValueExpr`** is the **value-producing binding** primitive. It evaluates the `ValueExpr` to a single value and binds `name` in the active scope for every subsequent statement. Use `let` for `Sum`, `Arith` (arithmetic), `ValueOf` inside value position, and any other expression that computes rather than looks up.
+
+- **`if prop: then else: otherwise`** is the **conditional statement**. The condition is a yes/no test with `require`'s rule: any match holds, and nothing it matched is exported. The branch chosen runs in order; the other does not run at all, so only the branch taken draws subjects, admits, retracts or emits. Both branches read the state as the act began. A name a branch binds (`let`, `bind`, `new Subject()`) is scoped to the branch, as a `for` body's are: the outer bindings come back after it, and `check` refuses a later read of such a name as unbound. The `else` block is optional. It is the statement twin of `if(...)` the value: a gate that chooses instead of refusing.
 
 - **`for binding in collection: body`** is **controlled iteration**. Variables bound inside the body are **scoped to the iteration**: they do not leak across iterations and do not survive the loop. Without this scoping, a residual `bind_one` binding from iteration N would constrain the lookup in iteration N+1; with it, each iteration sees only the outer bindings plus the iteration variable.
 

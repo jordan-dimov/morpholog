@@ -138,6 +138,16 @@ fn resolve_in_stmt(stmt: &mut Stmt, names: &BTreeSet<String>) {
                 resolve_in_stmt(inner, names);
             }
         }
+        Stmt::If {
+            when,
+            then,
+            otherwise,
+        } => {
+            resolve_in_prop(when, names);
+            for inner in then.iter_mut().chain(otherwise) {
+                resolve_in_stmt(inner, names);
+            }
+        }
     }
 }
 
