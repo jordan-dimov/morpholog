@@ -543,6 +543,13 @@ pub enum ValidationError {
         "definition `{name}` collides with predicate `{name}`; the two share the reference namespace in rule bodies, so a reference could mean either - rename one"
     )]
     DefinitionNameCollision { name: String },
+    /// A definition named like a builtin that the surface spells as a
+    /// bare word (`if`, `periods`...): in value position the builtin
+    /// wins, so the definition could never be called there.
+    #[error(
+        "definition `{name}` is named like the builtin `{name}`; in a value `{name}(...)` is the builtin, so rename the definition"
+    )]
+    DefinitionNameIsBuiltin { name: String },
     /// Definitions reference each other in a cycle, so expanding them
     /// would never terminate. `names` holds one cycle's members, sorted.
     #[error(
@@ -575,6 +582,24 @@ pub enum ValidationError {
         "`{name}` names a definition where a predicate is required, in {context}; a definition is a condition - callable in rule bodies, never an `admit`/`retract`/`emit` target or a `value` lookup (hand-built body calls use `ir_builder::defined` or `resolve_defined_calls`)"
     )]
     UnresolvedDefinitionCall {
+        name: String,
+        context: ValidationContext,
+    },
+    /// A definition that names a figure is called where a condition is
+    /// required: a `require`, a `bind`, an `if` test, a rule's body.
+    #[error(
+        "`{name}` names a figure, not a condition, in {context}; compare its value (`{name}(...) <= limit`) or bind it with `let`"
+    )]
+    DefinitionYieldsValue {
+        name: String,
+        context: ValidationContext,
+    },
+    /// A definition that names a condition is called where a value is
+    /// required: a `let`, a comparison operand, a sum target.
+    #[error(
+        "`{name}` names a condition, not a figure, in {context}; call it in a `require`, a `bind` or a rule, or define a figure with `define {name}(...) = (...)`"
+    )]
+    DefinitionYieldsNoValue {
         name: String,
         context: ValidationContext,
     },
@@ -758,7 +783,7 @@ pub(crate) fn structural_errors(p: &Program) -> Result<(), Vec<ValidationError>>
     let mut local_depth_errors: Vec<ValidationError> = p
         .definitions
         .iter()
-        .filter(|d| prop_depth_capped(&d.body, MAX_EXPR_DEPTH, &unexpanded).is_none())
+        .filter(|d| body_depth_capped(&d.body, MAX_EXPR_DEPTH, &unexpanded).is_none())
         .map(|d| ValidationError::NestingTooDeep {
             context: ValidationContext::Definition {
                 name: d.name.to_string(),
@@ -791,7 +816,7 @@ pub(crate) fn structural_errors(p: &Program) -> Result<(), Vec<ValidationError>>
     let mut depth_errors = Vec::new();
     for i in order {
         let def = &p.definitions[i];
-        match prop_depth_capped(&def.body, MAX_EXPR_DEPTH, &definition_depths) {
+        match body_depth_capped(&def.body, MAX_EXPR_DEPTH, &definition_depths) {
             Some(d) => {
                 definition_depths.insert(def.name.clone(), d);
             }
@@ -831,6 +856,18 @@ fn collect_unhashed_errors(p: &Program) -> Vec<ValidationError> {
 /// Nesting depth of `prop` (at least 1), counting a definition call at
 /// its callee's expanded depth, or `None` once it exceeds `budget`. Stops
 /// as soon as the budget runs out, so its own recursion stays bounded.
+/// [`prop_depth_capped`] or [`value_depth_capped`], whichever the body is.
+fn body_depth_capped(
+    body: &crate::ir::DefinitionBody,
+    budget: usize,
+    depths: &HashMap<DefinitionName, usize>,
+) -> Option<usize> {
+    match body {
+        crate::ir::DefinitionBody::Prop(p) => prop_depth_capped(p, budget, depths),
+        crate::ir::DefinitionBody::Value(v) => value_depth_capped(v, budget, depths),
+    }
+}
+
 fn prop_depth_capped(
     prop: &Prop,
     budget: usize,
@@ -891,6 +928,14 @@ fn value_depth_capped(
             },
             ValueExpr::Call { args, .. } => {
                 let mut deepest = 0;
+                for a in args {
+                    deepest = deepest.max(value_depth_capped(a, inner, depths)?);
+                }
+                deepest
+            }
+            // The callee at its expanded depth, under the deepest argument.
+            ValueExpr::Defined { name, args } => {
+                let mut deepest = depths.get(name).copied().unwrap_or(0);
                 for a in args {
                     deepest = deepest.max(value_depth_capped(a, inner, depths)?);
                 }
@@ -1017,6 +1062,10 @@ fn duplicated<'a>(names: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
 /// Name-level declaration checks: duplicate names in each vocabulary,
 /// repeated parameter and argument names, `CalendarSpan` arguments, and
 /// definition-predicate name collisions.
+/// The builtins the surface spells as a bare word rather than a keyword,
+/// so a definition so named would be shadowed in value position.
+const BARE_WORD_BUILTINS: [&str; 4] = ["if", "period_index", "period_start_of", "periods"];
+
 fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     fn duplicate_decls(
@@ -1105,6 +1154,13 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
         .collect();
     collisions.sort_unstable();
     collisions.dedup();
+    for def in &p.definitions {
+        if BARE_WORD_BUILTINS.contains(&def.name.as_str()) {
+            errors.push(ValidationError::DefinitionNameIsBuiltin {
+                name: def.name.to_string(),
+            });
+        }
+    }
     for name in collisions {
         errors.push(ValidationError::DefinitionNameCollision {
             name: name.to_string(),

@@ -595,8 +595,27 @@ pub fn definition(name: &str, parameters: Vec<Var>, body: Prop) -> Definition {
     Definition {
         name: name.into(),
         parameters,
-        body,
+        body: crate::ir::DefinitionBody::Prop(body),
         origin: crate::ir::DefinitionOrigin::Authored,
+    }
+}
+
+/// Build a [`Definition`] that names a figure. Parameters come from
+/// [`params`]; call it with [`defined_value`].
+pub fn value_definition(name: &str, parameters: Vec<Var>, body: ValueExpr) -> Definition {
+    Definition {
+        name: name.into(),
+        parameters,
+        body: crate::ir::DefinitionBody::Value(body),
+        origin: crate::ir::DefinitionOrigin::Authored,
+    }
+}
+
+/// A call to a definition that names a figure, in value position.
+pub fn defined_value(name: &str, args: Vec<ValueExpr>) -> ValueExpr {
+    ValueExpr::Defined {
+        name: name.into(),
+        args,
     }
 }
 

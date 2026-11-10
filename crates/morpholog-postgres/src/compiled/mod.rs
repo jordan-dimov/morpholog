@@ -1164,10 +1164,11 @@ fn diagnostic_level(
         match conjunct {
             Prop::Defined { name, args } => {
                 let (def, frame) = call_frame(name, args, &acc.env, ctx)?;
+                let body = condition_body(def)?;
                 let entry = frame.iter().map(|(p, b)| (p.clone(), b.clone())).collect();
                 descents.insert(
                     k,
-                    diagnostic_level(&conjuncts_of(&def.body), frame, entry, None, ctx)?,
+                    diagnostic_level(&conjuncts_of(body), frame, entry, None, ctx)?,
                 );
             }
             Prop::And(ps) => {
@@ -2768,6 +2769,44 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
 /// A call's definition and the frame its body renders under: each
 /// parameter bound to what its argument is bound to, a wildcard or a
 /// variable not yet bound leaving it free.
+/// The condition a called definition names; a figure here is unvalidated
+/// IR, since the checker refuses a figure called as a condition.
+fn condition_body(def: &Definition) -> Result<&Prop, CompileReason> {
+    def.body
+        .as_prop()
+        .ok_or_else(|| CompileReason::UnvalidatedShape {
+            detail: format!("{} names a figure, not a condition", def.name),
+        })
+}
+
+/// The figure a called definition names, rendered under the frame its
+/// arguments give: every argument must be a term, since an expression
+/// has no column to bind a parameter to.
+fn value_call_frame<'a>(
+    name: &DefinitionName,
+    args: &[ValueExpr],
+    env: &Env,
+    ctx: &Ctx<'a>,
+) -> Result<(&'a ValueExpr, Env), CompileReason> {
+    let terms: Vec<Term> = args
+        .iter()
+        .map(|a| match a {
+            ValueExpr::Term(t) => Ok(t.clone()),
+            _ => Err(CompileReason::Construct {
+                construct: "a figure called with an expression argument",
+            }),
+        })
+        .collect::<Result<_, _>>()?;
+    let (def, frame) = call_frame(name, &terms, env, ctx)?;
+    let body = def
+        .body
+        .as_value()
+        .ok_or_else(|| CompileReason::UnvalidatedShape {
+            detail: format!("{} names a condition, not a figure", def.name),
+        })?;
+    Ok((body, frame))
+}
+
 fn call_frame<'a>(
     name: &DefinitionName,
     args: &[Term],
@@ -2833,8 +2872,9 @@ fn render_defined(
             });
         }
         let (def, frame) = call_frame(name, args, &env, ctx)?;
+        let body = condition_body(def)?;
         let r = nested_scope(outside_consequent(ctx, |ctx| {
-            render_prop(&def.body, frame, ctx)
+            render_prop(body, frame, ctx)
         })?)?;
         return Ok(Rendered {
             where_: vec![r.exists_sql()],
@@ -2844,7 +2884,8 @@ fn render_defined(
         });
     }
     let (def, frame) = call_frame(name, args, &env, ctx)?;
-    let truth = render_prop(&def.body, frame.clone(), ctx)?;
+    let body = condition_body(def)?;
+    let truth = render_prop(body, frame.clone(), ctx)?;
     let mut env = env;
     let mut where_ = truth.where_.clone();
     for (param, arg) in def.parameters.iter().zip(args) {
@@ -2890,7 +2931,7 @@ fn render_defined(
         });
     }
     let probes = if truth.has_errors() {
-        let again = render_prop(&def.body, frame, ctx)?;
+        let again = render_prop(body, frame, ctx)?;
         let mut scope = lift(&again.probes);
         // The kernel reaches a body's raising expression only through the
         // body's joins before it, so the lifted scope sits past those in
@@ -2973,7 +3014,7 @@ fn render_binding_call(
     ctx: &mut Ctx<'_>,
 ) -> Result<Rendered, CompileReason> {
     let (def, frame) = call_frame(name, args, &env, ctx)?;
-    let branches: Vec<&Prop> = match &def.body {
+    let branches: Vec<&Prop> = match condition_body(def)? {
         Prop::Or(branches) => branches.iter().collect(),
         body => vec![body],
     };
@@ -3554,6 +3595,10 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
             })
         }
         ValueExpr::Arith { .. } | ValueExpr::Call { .. } => arith::computed_operand(expr, env, ctx),
+        ValueExpr::Defined { name, args } => {
+            let (body, frame) = value_call_frame(name, args, env, ctx)?;
+            value_sql(body, &frame, ctx)
+        }
         ValueExpr::Extremum { .. } => Err(CompileReason::Construct {
             construct: "extremum",
         }),

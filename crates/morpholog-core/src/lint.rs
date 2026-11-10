@@ -749,7 +749,14 @@ fn rules(program: &Program) -> Vec<(String, &[Var], Vec<fold::Node<'_>>)> {
     }
     for def in &program.definitions {
         let mut nodes = Vec::new();
-        fold::walk_prop(&def.body, &mut |node| nodes.push(node));
+        match &def.body {
+            crate::ir::DefinitionBody::Prop(body) => {
+                fold::walk_prop(body, &mut |node| nodes.push(node));
+            }
+            crate::ir::DefinitionBody::Value(body) => {
+                fold::walk_value(body, &mut |node| nodes.push(node));
+            }
+        }
         rules.push((
             format!("definition `{}`", def.name),
             def.parameters.as_slice(),
@@ -1506,7 +1513,7 @@ fn calls_definition(
         }
         if let Some(def) = definitions.get(&name) {
             let mut inner = BTreeSet::new();
-            crate::definitions::defined_calls_in_prop(&def.body, &mut inner);
+            crate::definitions::defined_calls_in_body(&def.body, &mut inner);
             for call in inner {
                 if reached.insert(call.clone()) {
                     frontier.push(call);
@@ -1691,9 +1698,11 @@ fn collect_implications<'a>(
         // The same definition at another polarity must be expanded again,
         // which `DefinitionTable::enter`'s stack guard allows.
         Prop::Defined { name, args } => definitions.enter(name, seen, |def_, seen| {
-            calls.push((name, args));
-            collect_implications(&def_.body, positive, definitions, seen, calls, out);
-            calls.pop();
+            if let Some(body) = def_.body.as_prop() {
+                calls.push((name, args));
+                collect_implications(body, positive, definitions, seen, calls, out);
+                calls.pop();
+            }
         }),
         Prop::Claim { .. } | Prop::In(_, _) => {}
         Prop::And(props) | Prop::Or(props) => {
@@ -1736,7 +1745,9 @@ fn positive_claims(
             }
         }
         Prop::Defined { name, .. } => definitions.enter(name, seen, |def_, seen| {
-            positive_claims(&def_.body, positive, definitions, seen, out);
+            if let Some(body) = def_.body.as_prop() {
+                positive_claims(body, positive, definitions, seen, out);
+            }
         }),
         Prop::Not(inner) => positive_claims(inner, !positive, definitions, seen, out),
         Prop::Implies { left, right } => {
@@ -1805,6 +1816,17 @@ fn positive_value_claims(
             for a in args {
                 positive_value_claims(a, positive, definitions, seen, out);
             }
+        }
+        // A figure's body requires what it would inline.
+        ValueExpr::Defined { name, args } => {
+            for a in args {
+                positive_value_claims(a, positive, definitions, seen, out);
+            }
+            definitions.enter(name, seen, |def_, seen| {
+                if let Some(body) = def_.body.as_value() {
+                    positive_value_claims(body, positive, definitions, seen, out);
+                }
+            });
         }
         // A sum tolerates zero matches, so it requires nothing.
         ValueExpr::Sum { .. } => {}

@@ -267,7 +267,7 @@ fn a_defined_call_projects_each_witness_once() {
         origin: crate::DefinitionOrigin::Authored,
         name: "sensed".into(),
         parameters: vec![Var::from("s")],
-        body: claim("Reading", vec![var("s"), Term::Wildcard]),
+        body: crate::ir::DefinitionBody::Prop(claim("Reading", vec![var("s"), Term::Wildcard])),
     };
     let p = program("dedup")
         .predicates(vec![
@@ -391,7 +391,7 @@ fn the_missing_claim_diagnosis_descends_a_defined_gate() {
         origin: crate::DefinitionOrigin::Authored,
         name: "is_approved".into(),
         parameters: vec![Var::from("i")],
-        body: claim("Approved", vec![var("i")]),
+        body: crate::ir::DefinitionBody::Prop(claim("Approved", vec![var("i")])),
     }];
 
     let ship = p.transformations[1].clone();
@@ -558,7 +558,7 @@ fn a_repeated_call_variable_must_project_consistently() {
         origin: crate::DefinitionOrigin::Authored,
         name: "pair".into(),
         parameters: vec![Var::from("p"), Var::from("q")],
-        body: claim("Link", vec![var("p"), var("q")]),
+        body: crate::ir::DefinitionBody::Prop(claim("Link", vec![var("p"), var("q")])),
     };
     let p = program("consistency")
         .predicates(vec![predicate("Link").subject("a").subject("b").build()])
@@ -798,7 +798,7 @@ fn defined_by_scan(
         crate::definitions::DefinitionTable::new(&[]),
     );
     let mut out: Vec<crate::state::Bindings> = Vec::new();
-    for m in crate::eval::find_matches(&def.body, &body_ctx).unwrap() {
+    for m in crate::eval::find_matches(def.body.as_prop().unwrap(), &body_ctx).unwrap() {
         let mut extended = ctx.bindings.clone();
         let mut admit = true;
         for (param, arg) in def.parameters.iter().zip(args) {
@@ -844,7 +844,7 @@ proptest::proptest! {
             origin: crate::DefinitionOrigin::Authored,
             name: "f".into(),
             parameters: vec![Var::from("p"), Var::from("q")],
-            body: claim("R", vec![var("p"), var("q"), var("t")]),
+            body: crate::ir::DefinitionBody::Prop(claim("R", vec![var("p"), var("q"), var("t")])),
         };
         let state = State::from_claims(
             rows.iter()

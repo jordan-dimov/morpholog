@@ -77,11 +77,11 @@ pub use explain::{
 pub use guarantees::{Guarantee, guarantees, render_guarantees};
 pub use impact::{Bounding, Impact, ImpactPlan, Widening};
 pub use ir::{
-    ArgDecl, ArithOp, Builtin, Claim, CompareOp, Definition, DefinitionName, DefinitionOrigin,
-    DerivedClaim, DerivedValue, Discipline, ExtremumOp, Intent, IntentDecl, IntentName, Invariant,
-    InvariantName, InvariantOrigin, LiteralDecimal, OrderedDomain, PredicateArgKind, PredicateDecl,
-    PredicateName, Program, Prop, RuleName, Stmt, Subject, SumSeed, Term, Transformation,
-    TransformationName, Unit, Value, ValueExpr, Var,
+    ArgDecl, ArithOp, Builtin, Claim, CompareOp, Definition, DefinitionBody, DefinitionName,
+    DefinitionOrigin, DerivedClaim, DerivedValue, Discipline, ExtremumOp, Intent, IntentDecl,
+    IntentName, Invariant, InvariantName, InvariantOrigin, LiteralDecimal, OrderedDomain,
+    PredicateArgKind, PredicateDecl, PredicateName, Program, Prop, RuleName, Stmt, Subject,
+    SumSeed, Term, Transformation, TransformationName, Unit, Value, ValueExpr, Var,
 };
 pub use lint::{
     Lint, PYTHON_CLIENT_MEMBERS, PYTHON_KEYWORDS, SharedWriterPeer, client_refuses_name, lints,

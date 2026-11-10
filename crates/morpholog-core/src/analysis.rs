@@ -45,6 +45,21 @@ pub(crate) fn prop_refs(
     walk_prop(prop, &mut |n| collect_refs(n, definitions, seen, out));
 }
 
+/// The predicates a definition body references, whichever it names.
+fn body_refs(
+    body: &crate::ir::DefinitionBody,
+    definitions: DefinitionTable<'_>,
+    seen: &mut BTreeSet<DefinitionName>,
+    out: &mut BTreeSet<PredicateName>,
+) {
+    match body {
+        crate::ir::DefinitionBody::Prop(p) => prop_refs(p, definitions, seen, out),
+        crate::ir::DefinitionBody::Value(v) => {
+            walk_value(v, &mut |n| collect_refs(n, definitions, seen, out));
+        }
+    }
+}
+
 /// The predicates one node reads. A call reads whatever its definition's
 /// body reads, transitively: otherwise the body would be evaluated
 /// against claims never loaded. A retraction reads its pattern's
@@ -68,7 +83,7 @@ fn collect_refs(
                 if seen.insert(name.clone())
                     && let Some(def) = definitions.get(name)
                 {
-                    prop_refs(&def.body, definitions, seen, out);
+                    body_refs(&def.body, definitions, seen, out);
                 }
             }
             Prop::In(_, _)
@@ -87,6 +102,13 @@ fn collect_refs(
         Node::Value(value) => match value {
             ValueExpr::ValueOf { predicate, .. } => {
                 out.insert(predicate.clone());
+            }
+            ValueExpr::Defined { name, .. } => {
+                if seen.insert(name.clone())
+                    && let Some(def) = definitions.get(name)
+                {
+                    body_refs(&def.body, definitions, seen, out);
+                }
             }
             ValueExpr::Term(_)
             | ValueExpr::Arith { .. }
@@ -301,7 +323,9 @@ fn undeclared_blockers_inner(
         }
         // A call blocks iff its body does.
         Prop::Defined { name, .. } => definitions.enter(name, seen, |def_, seen| {
-            undeclared_blockers_inner(&def_.body, declared, definitions, seen)
+            def_.body
+                .as_prop()
+                .and_then(|body| undeclared_blockers_inner(body, declared, definitions, seen))
         }),
         // A conjunction is blocked if any conjunct is; only the blocked
         // conjuncts are the cause.
@@ -477,7 +501,9 @@ fn gather_selection_evidence<'a>(
         }
         Prop::Pre(body) => gather_selection_evidence(body, definitions, seen, ev, out),
         Prop::Defined { name, .. } => definitions.enter(name, seen, |def_, seen| {
-            gather_selection_evidence(&def_.body, definitions, seen, ev, out);
+            if let Some(body) = def_.body.as_prop() {
+                gather_selection_evidence(body, definitions, seen, ev, out);
+            }
         }),
         Prop::Not(inner) => {
             if let Prop::Exists { binding, body } = inner.as_ref() {
@@ -535,9 +561,12 @@ pub(crate) fn guaranteed_dated_witnesses(
                 .flat_map(|p| top(p, definitions, seen))
                 .collect(),
             Prop::Forall { body, .. } => top(body, definitions, seen),
-            Prop::Defined { name, .. } => {
-                definitions.enter(name, seen, |def_, seen| top(&def_.body, definitions, seen))
-            }
+            Prop::Defined { name, .. } => definitions.enter(name, seen, |def_, seen| {
+                def_.body
+                    .as_prop()
+                    .map(|body| top(body, definitions, seen))
+                    .unwrap_or_default()
+            }),
             Prop::Claim { .. }
             | Prop::Or(_)
             | Prop::Exists { .. }
@@ -586,7 +615,10 @@ pub(crate) fn guaranteed_dated_witnesses(
                     .collect()
             }
             Prop::Defined { name, .. } => definitions.enter(name, seen, |def_, seen| {
-                algebra(&def_.body, definitions, seen)
+                def_.body
+                    .as_prop()
+                    .map(|body| algebra(body, definitions, seen))
+                    .unwrap_or_default()
             }),
             Prop::Claim { .. }
             | Prop::Not(_)

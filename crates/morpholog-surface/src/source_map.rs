@@ -97,6 +97,8 @@ impl SourceMap {
             | ValidationError::NestingTooDeep { context }
             | ValidationError::UnboundVariable { context, .. }
             | ValidationError::UnresolvedDefinitionCall { context, .. }
+            | ValidationError::DefinitionYieldsValue { context, .. }
+            | ValidationError::DefinitionYieldsNoValue { context, .. }
             | ValidationError::PreNotAvailable { context }
             | ValidationError::CalendarSpanEscapesExpression { context, .. }
             | ValidationError::RetractsAppendOnly { context, .. }
@@ -119,7 +121,8 @@ impl SourceMap {
             ValidationError::UnknownTotalityTarget { invariant, .. } => {
                 self.decl_span(DeclKind::Invariant, invariant)
             }
-            ValidationError::DefinitionNameCollision { name } => {
+            ValidationError::DefinitionNameCollision { name }
+            | ValidationError::DefinitionNameIsBuiltin { name } => {
                 self.decl_span(DeclKind::Definition, name)
             }
             ValidationError::DefinitionCycle { names } => names

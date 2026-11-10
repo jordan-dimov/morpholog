@@ -105,6 +105,7 @@ fn value(v: &ValueExpr) -> &'static [Draws] {
         // An exact total is normalised by stripping trailing zeros.
         ValueExpr::Sum { .. } => &[Children, InternallyBounded],
         ValueExpr::ValueOf { .. } => &[AdmittedState, Children],
+        ValueExpr::Defined { .. } => &[DefinitionBody],
         ValueExpr::Call { builtin, .. } => match builtin {
             Builtin::Abs
             | Builtin::Round
@@ -164,7 +165,10 @@ fn every_construct_names_what_it_ranges_over() {
             walk_prop(&i.body, &mut visit);
         }
         for d in &p.definitions {
-            walk_prop(&d.body, &mut visit);
+            match &d.body {
+                morpholog_core::DefinitionBody::Prop(body) => walk_prop(body, &mut visit),
+                morpholog_core::DefinitionBody::Value(body) => walk_value(body, &mut visit),
+            }
         }
         for d in &p.derived_claims {
             walk_prop(&d.domain, &mut visit);

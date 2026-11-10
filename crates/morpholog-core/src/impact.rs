@@ -18,7 +18,7 @@ use std::fmt;
 
 use crate::analysis::predicates_referenced_by_prop;
 use crate::definitions::DefinitionTable;
-use crate::fold::{Node, mentions_pre, walk_prop};
+use crate::fold::{Node, mentions_pre, walk_prop, walk_value};
 use crate::ir::{
     Definition, DefinitionName, Invariant, PredicateName, Prop, Term, Value, ValueExpr, Var,
 };
@@ -154,7 +154,7 @@ impl ImpactPlan {
                     var_map,
                 });
             }
-            NodeKind::Call(name, _) => {
+            NodeKind::Call(name, _) | NodeKind::ValueCall(name, _) => {
                 widening.get_or_insert_with(|| Widening::UnfollowedCall(name.clone()));
                 calls = true;
             }
@@ -196,7 +196,7 @@ impl ImpactPlan {
         };
         let table = DefinitionTable::new(definitions);
         follow(
-            &inv.body,
+            Body::Prop(&inv.body),
             &frame,
             table,
             &mut BTreeSet::new(),
@@ -357,7 +357,7 @@ enum Traced {
 type Frame = BTreeMap<Var, Traced>;
 
 fn follow(
-    body: &Prop,
+    body: Body<'_>,
     frame: &Frame,
     table: DefinitionTable<'_>,
     seen: &mut BTreeSet<DefinitionName>,
@@ -365,7 +365,7 @@ fn follow(
     antecedent: &HashSet<*const Prop>,
 ) {
     let mut calls = Vec::new();
-    walk_prop(body, &mut |n| {
+    body.walk(&mut |n| {
         let here = match &n {
             Node::Prop(q) => Some(std::ptr::from_ref(*q)),
             _ => None,
@@ -395,6 +395,14 @@ fn follow(
                 let in_antecedent = here.is_some_and(|p| antecedent.contains(&p));
                 calls.push((name.clone(), args.to_vec(), in_antecedent));
             }
+            NodeKind::ValueCall(name, args) => match call_terms(args) {
+                Some(terms) => calls.push((name.clone(), terms, false)),
+                None => {
+                    out.widening
+                        .get_or_insert_with(|| Widening::UnfollowedCall(name.clone()));
+                    out.footprint = None;
+                }
+            },
             NodeKind::Widens(w) => {
                 out.widening.get_or_insert(w);
             }
@@ -417,13 +425,14 @@ fn follow(
                 })
                 .collect();
             // A body called from the antecedent is antecedent whole; one
-            // called elsewhere has its own antecedent, if it is a rule.
-            let inner = if in_antecedent {
-                every_node(&def.body)
-            } else {
-                antecedent_nodes(&def.body)
+            // called elsewhere has its own antecedent, if it is a rule. A
+            // figure's body has none.
+            let inner = match &def.body {
+                crate::ir::DefinitionBody::Prop(body) if in_antecedent => every_node(body),
+                crate::ir::DefinitionBody::Prop(body) => antecedent_nodes(body),
+                crate::ir::DefinitionBody::Value(_) => HashSet::new(),
             };
-            follow(&def.body, &callee, table, seen, out, &inner);
+            follow(Body::of(&def.body), &callee, table, seen, out, &inner);
             true
         });
         // An undeclared or cyclic call contributes nothing to a walker
@@ -440,9 +449,47 @@ fn follow(
 enum NodeKind<'a> {
     Claim(&'a PredicateName, &'a [Term]),
     Call(&'a DefinitionName, &'a [Term]),
+    /// A call to a figure: followed as a condition's call is when every
+    /// argument is a term, since an expression carries no case variable
+    /// into the body.
+    ValueCall(&'a DefinitionName, &'a [ValueExpr]),
     /// A construct the bounding proof does not cover.
     Widens(Widening),
     Inert,
+}
+
+/// A definition body, whichever it names, for the walkers that follow
+/// calls into it.
+#[derive(Clone, Copy)]
+enum Body<'a> {
+    Prop(&'a Prop),
+    Value(&'a ValueExpr),
+}
+
+impl<'a> Body<'a> {
+    fn of(body: &'a crate::ir::DefinitionBody) -> Self {
+        match body {
+            crate::ir::DefinitionBody::Prop(p) => Body::Prop(p),
+            crate::ir::DefinitionBody::Value(v) => Body::Value(v),
+        }
+    }
+
+    fn walk(self, visit: &mut dyn FnMut(Node<'a>)) {
+        match self {
+            Body::Prop(p) => walk_prop(p, visit),
+            Body::Value(v) => walk_value(v, visit),
+        }
+    }
+}
+
+/// The terms a value call carries, when every argument is one.
+fn call_terms(args: &[ValueExpr]) -> Option<Vec<Term>> {
+    args.iter()
+        .map(|a| match a {
+            ValueExpr::Term(t) => Some(t.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Every proposition node inside the top-level antecedent, the one
@@ -472,6 +519,7 @@ fn classify_node<'a>(n: &Node<'a>, antecedent: &HashSet<*const Prop>) -> NodeKin
     match n {
         Node::Prop(Prop::Claim { predicate, args }) => NodeKind::Claim(predicate, args),
         Node::Prop(Prop::Defined { name, args }) => NodeKind::Call(name, args),
+        Node::Value(ValueExpr::Defined { name, args }) => NodeKind::ValueCall(name, args),
         Node::Prop(Prop::Pre(_)) => NodeKind::Widens(Widening::Pre),
         Node::Prop(q @ Prop::Or(_)) => {
             if antecedent.contains(&std::ptr::from_ref(*q)) {
@@ -589,17 +637,16 @@ fn scope_read(
                         Term::Wildcard => {}
                     }
                 }
-                let found = scope_read(
-                    &def.body,
-                    &callee_frame,
-                    &mut callee_bound,
-                    Some(table),
-                    seen,
-                )
-                .and_then(|p| match callee_frame.get(&p) {
-                    Some(Traced::Case(v)) => Some(v.clone()),
-                    _ => None,
-                });
+                let found = def
+                    .body
+                    .as_prop()
+                    .and_then(|body| {
+                        scope_read(body, &callee_frame, &mut callee_bound, Some(table), seen)
+                    })
+                    .and_then(|p| match callee_frame.get(&p) {
+                        Some(Traced::Case(v)) => Some(v.clone()),
+                        _ => None,
+                    });
                 // The caller's variables the body bound through its parameters.
                 let exported: Vec<Var> = def
                     .parameters

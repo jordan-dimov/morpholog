@@ -815,6 +815,10 @@ enum ForallSource {
 
 /// Build the value-expression parser on its own, with its own proposition parser for `sum`
 /// bodies. [`expression_parser`] builds the same grammar inside itself.
+/// The builtins the value grammar matches by name rather than by keyword. A definition call
+/// never takes one of these names, and validation refuses a definition so named.
+const BARE_WORD_BUILTINS: [&str; 4] = ["if", "period_index", "period_start_of", "periods"];
+
 pub(super) fn value_expr_parser<'a, I>(
     table: &'a FieldTable,
 ) -> impl Parser<'a, I, ValueExpr, extra::Err<Rich<'a, Token>>> + Clone
@@ -855,8 +859,26 @@ where
         let wildcard_as_value = just(Token::Wildcard).to(ValueExpr::Term(Term::Wildcard));
         let refused_mint = refused_mint_parser().to(ValueExpr::Term(Term::Wildcard));
 
-        // A variable, `actor` or `decided_at`. `Foo(args)` is a claim, which only the proposition
-        // grammar takes.
+        // `name(args)` in value position: a call to a definition that names a figure. The
+        // builtins spelled as bare words are refused here so a misshapen `if(...)` stays a parse
+        // error; a claim is not a value, so nothing else reads that way. The arguments are values.
+        let defined_call = select! {
+            Token::Ident(s) if !BARE_WORD_BUILTINS.contains(&s.as_str()) => s
+        }
+        .then(
+            value
+                .clone()
+                .separated_by(just(Token::Comma))
+                .allow_trailing()
+                .collect::<Vec<ValueExpr>>()
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
+        .map(|(name, args)| ValueExpr::Defined {
+            name: name.into(),
+            args,
+        });
+
+        // A variable, `actor` or `decided_at`.
         let bare_ident = ident.map(|name| {
             ValueExpr::Term(match name.as_str() {
                 "actor" => Term::Actor,
@@ -1072,6 +1094,7 @@ where
             bool_as_value,
             wildcard_as_value,
             refused_mint,
+            defined_call,
             bare_ident,
         ));
 

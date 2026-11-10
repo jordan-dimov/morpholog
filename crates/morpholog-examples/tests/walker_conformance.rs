@@ -242,6 +242,34 @@ transformation close(order):
     admit Closed(order)
 ";
 
+/// A figure called from a gate, a rule, a derived value and another
+/// figure's body, with a condition's call inside its sum: every walker
+/// must follow the value call into the body as it follows a condition's.
+const FIGURE_ACROSS_POSITIONS: &str = "\
+program figure_across_positions
+predicate Stock(item: Subject, quantity: Decimal)
+predicate Allocation(allocation: Subject, item: Subject, quantity: Decimal)
+predicate Counted(allocation: Subject)
+predicate Allocated(item: Subject, quantity: Decimal)
+define counted(a):
+    Counted(a)
+define allocated(item) = (sum(q | Allocation(a, item, q) and counted(a)))
+define headroom(item, on_hand) = (on_hand - allocated(item))
+invariant fits:
+    Stock(item, on_hand) implies allocated(item) <= on_hand
+transformation receive(item, quantity):
+    admit Stock(item, quantity)
+transformation count(allocation):
+    admit Counted(allocation)
+transformation allocate(allocation, item, quantity):
+    bind Stock(item, on_hand)
+    require fits: quantity <= headroom(item, on_hand)
+    admit Allocation(allocation, item, quantity)
+derived Allocated(item):
+    over Stock(item: item, ..)
+    value quantity = allocated(item)
+";
+
 const UNSUPPLIED_THROUGH_DEFINED: &str = "\
 program unsupplied_through_defined
 predicate Ghost(g: Subject)
@@ -479,6 +507,7 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ("retract_in_nested_for", RETRACT_IN_NESTED_FOR),
         ("if_across_branches", IF_ACROSS_BRANCHES),
         ("for_over_a_pattern", FOR_OVER_A_PATTERN),
+        ("figure_across_positions", FIGURE_ACROSS_POSITIONS),
         ("unsupplied_through_defined", UNSUPPLIED_THROUGH_DEFINED),
         ("let_sugared_define", LET_SUGARED_DEFINE),
         ("round_in_let_sugared_body", ROUND_IN_LET_SUGARED_BODY),
@@ -758,7 +787,7 @@ fn the_chained_comparison_desugars_identically_in_both_contexts() {
     let Prop::And(in_forall) = body.as_ref() else {
         panic!("the chain desugars to a flat And inside the forall: {body:?}");
     };
-    let Prop::And(in_defined) = &program.definitions[0].body else {
+    let Some(Prop::And(in_defined)) = program.definitions[0].body.as_prop() else {
         panic!(
             "the chain composes flat inside the defined body's conjunction: {:?}",
             program.definitions[0].body

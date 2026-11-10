@@ -435,6 +435,99 @@ transformation ticket(order):
         &input,
         &decided,
     );
+
+    // A figure: one value definition read by a gate, a rule and a
+    // derived read, with a nested call and an expression argument. The
+    // gate admits within the figure and refuses beyond it; the rule
+    // refuses an act that skips the gate; the empty sum takes its seed.
+    let program = morpholog_surface::parse_program(
+        "
+program figures
+
+predicate Stock(item: Subject, quantity: Decimal)
+    unique by (item)
+predicate Allocation(allocation: Subject, item: Subject, quantity: Decimal)
+    unique by (allocation)
+predicate Allocated(item: Subject, quantity: Decimal)
+
+define allocated(item) = (sum(q | Allocation(item: item, quantity: q, ..)))
+
+define headroom(item, on_hand) = (on_hand - allocated(item))
+
+invariant fits:
+    Stock(item, on_hand) implies allocated(item) <= on_hand
+
+transformation allocate(allocation, item, quantity):
+    bind Stock(item, on_hand)
+    require fits: quantity <= headroom(item, on_hand * 1)
+    admit Allocation(allocation, item, quantity)
+
+transformation force(allocation, item, quantity):
+    admit Allocation(allocation, item, quantity)
+
+derived Allocated(item):
+    over Stock(item: item, ..)
+    value quantity = allocated(item)
+",
+    )
+    .unwrap();
+    let claim = |predicate: &str, args: Vec<EvalValue>| morpholog_core::ClaimInstance {
+        predicate: predicate.into(),
+        args,
+    };
+    let (stock, reserved) = {
+        use morpholog_test_support::{dec, subj};
+        (
+            claim("Stock", vec![subj("pallet"), dec(10)]),
+            claim("Allocation", vec![subj("a1"), subj("pallet"), dec(4)]),
+        )
+    };
+    let empty = State::from_claims(vec![stock.clone()]);
+    let partly = State::from_claims(vec![stock, reserved]);
+    let allocate = program.transformation("allocate").unwrap();
+    let force = program.transformation("force").unwrap();
+    let args = |a: &str, q: i64| {
+        use morpholog_test_support::{dec, subj};
+        vec![subj(a), subj("pallet"), dec(q)]
+    };
+    for (case, t, args, state) in [
+        (
+            "fixture/figure/gate_within_empty_sum",
+            allocate,
+            args("a1", 10),
+            &empty,
+        ),
+        (
+            "fixture/figure/gate_within",
+            allocate,
+            args("a2", 6),
+            &partly,
+        ),
+        (
+            "fixture/figure/gate_beyond",
+            allocate,
+            args("a2", 7),
+            &partly,
+        ),
+        ("fixture/figure/rule_refuses", force, args("a2", 7), &partly),
+    ] {
+        let (input, decided) = proposal_case(&program, t, args, state);
+        record(out, case.to_string(), &input, &decided);
+    }
+    let input = json!({
+        "derived": morpholog_core::format::canonical_hash(&program),
+        "predicate": "Allocated",
+        "state": claims(&partly),
+    });
+    let result = validated(&program)
+        .enumerate_derived("Allocated", &partly)
+        .map(|rows| json!(rows.expect("the programme derives it")));
+    record(
+        out,
+        "fixture/figure/derived_read".to_string(),
+        &input,
+        &answer(&result),
+    );
 }
 
 /// Values admitted or emitted into fields of another declared kind,

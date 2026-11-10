@@ -32,7 +32,7 @@ fn def(name: &str, parameters: &[&str], body: Prop) -> Definition {
     Definition {
         name: name.into(),
         parameters: params(parameters),
-        body,
+        body: crate::ir::DefinitionBody::Prop(body),
         origin: DefinitionOrigin::default(),
     }
 }

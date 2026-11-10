@@ -293,7 +293,7 @@ fn in_force_define(decl: &PredicateDecl, keys: &[String], on: &str) -> Option<De
         origin: crate::ir::DefinitionOrigin::Discipline,
         name: name.into(),
         parameters,
-        body: Prop::And(vec![
+        body: crate::ir::DefinitionBody::Prop(Prop::And(vec![
             Prop::Claim {
                 predicate: decl.name.clone(),
                 args: outer,
@@ -305,7 +305,7 @@ fn in_force_define(decl: &PredicateDecl, keys: &[String], on: &str) -> Option<De
                 right: var(&as_of),
             },
             no_later,
-        ]),
+        ])),
     })
 }
 

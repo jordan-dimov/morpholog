@@ -601,7 +601,9 @@ impl Walker<'_> {
                             known_term(arg, known).map(|term| (param.clone(), term))
                         })
                         .collect();
-                    self.prop(&def.body, &inner, seen);
+                    if let Some(body) = def.body.as_prop() {
+                        self.prop(body, &inner, seen);
+                    }
                 });
                 if let Some(trace) = self.trace.as_deref_mut() {
                     trace.through.pop();
@@ -689,6 +691,36 @@ impl Walker<'_> {
             ValueExpr::Call { args, .. } => {
                 for a in args {
                     self.value(a, known, seen);
+                }
+            }
+            // The body's reads are followed under what the arguments are
+            // known as, as a condition's are.
+            ValueExpr::Defined { name, args } => {
+                for a in args {
+                    self.value(a, known, seen);
+                }
+                let definitions = self.definitions;
+                if let Some(trace) = self.trace.as_deref_mut() {
+                    trace.through.push(name.clone());
+                }
+                definitions.enter(name, seen, |def, seen| {
+                    let inner: Env = def
+                        .parameters
+                        .iter()
+                        .zip(args)
+                        .filter_map(|(param, arg)| match arg {
+                            ValueExpr::Term(term) => {
+                                known_term(term, known).map(|t| (param.clone(), t))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    if let Some(body) = def.body.as_value() {
+                        self.value(body, &inner, seen);
+                    }
+                });
+                if let Some(trace) = self.trace.as_deref_mut() {
+                    trace.through.pop();
                 }
             }
             ValueExpr::Term(_) => {}

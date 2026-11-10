@@ -471,10 +471,21 @@ fn print_ir(program: &Program) -> anyhow::Result<()> {
         .definitions
         .iter()
         .map(|d| {
+            let (names, body) = match &d.body {
+                morpholog_core::DefinitionBody::Prop(body) => (
+                    "condition",
+                    morpholog_core::format::format_prop_source(program, body),
+                ),
+                morpholog_core::DefinitionBody::Value(body) => (
+                    "figure",
+                    morpholog_core::format::format_value_source(program, body),
+                ),
+            };
             serde_json::json!({
                 "name": &d.name,
                 "parameters": &d.parameters,
-                "body": morpholog_core::format::format_prop_source(program, &d.body),
+                "names": names,
+                "body": body,
             })
         })
         .collect();

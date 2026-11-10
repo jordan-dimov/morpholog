@@ -121,11 +121,18 @@ invariant allocations_name_real_things:
     Allocation(allocation, line, shipment, item, _)
     implies SalesLine(line, order, _, _) and Shipment(shipment, order) and StockItem(item, _, _)
 
+-- How much of an item is reserved: one figure, defined once, read by
+-- the `allocate` gate, by the rule below and by the `Allocated` view.
+-- The warehouse systems this is modelled on keep several copies of this
+-- sum in application code, and they disagree; here there is one.
+define allocated(item) = (sum(q | Allocation(item: item, quantity: q, ..)))
+
 -- What is allocated against an item never exceeds what it holds. The
--- `allocate` act checks the same sum before it admits; the rule checks
--- it again on the whole record, so a later change cannot slip past.
+-- `allocate` act checks the same figure before it admits; the rule
+-- checks it again on the whole record, so a later change cannot slip
+-- past.
 invariant allocations_fit_the_stock:
-    StockItem(item, _, on_hand) implies sum(q | Allocation(item: item, quantity: q, ..)) <= on_hand
+    StockItem(item, _, on_hand) implies allocated(item) <= on_hand
 
 -- A line is never allocated more than it ordered. What has shipped is
 -- some of what is allocated, so this bounds that too.
@@ -181,9 +188,7 @@ transformation open_shipment(shipment, order):
 -- checking: binding `order` from the line and then looking the shipment
 -- up with it says the shipment is on the line's order; binding `part`
 -- from the line and then looking the item up with it says the item is
--- of the line's part. The sums are written out here and again in the
--- rules above, which is the price of having no shared definition of
--- "allocated" yet.
+-- of the line's part.
 transformation allocate(allocation, line, shipment, item, quantity):
     require positive: 0 < quantity
     require new_allocation: not Allocation(allocation: allocation, ..)
@@ -193,8 +198,7 @@ transformation allocate(allocation, line, shipment, item, quantity):
     bind same_part: StockItem(item, part, on_hand)
     require in_stock: InStock(item)
     require once_per_shipment: not Allocation(shipment: shipment, item: item, ..)
-    let allocated = sum(q | Allocation(item: item, quantity: q, ..))
-    require within_stock: allocated + quantity <= on_hand
+    require within_stock: allocated(item) + quantity <= on_hand
     let line_allocated = sum(q | Allocation(line: line, quantity: q, ..))
     require within_line: line_allocated + quantity <= ordered
     admit Allocation(allocation, line, shipment, item, quantity)
@@ -265,14 +269,13 @@ transformation cancel_order(order):
 -- Two reads
 -- ============================================================
 
--- How much of each item is allocated: the same sum a third time, as a
--- view. The three copies are deliberate; a definition that yields a
--- value would make them one.
+-- How much of each item is allocated, as a view: the figure above,
+-- read per item.
 predicate Allocated(item: Subject, quantity: Decimal)
 
 derived Allocated(item):
     over StockItem(item: item, ..)
-    value quantity = sum(q | Allocation(item: item, quantity: q, ..))
+    value quantity = allocated(item)
 
 -- How much of each line has shipped: what is allocated to it on a
 -- shipment that has gone. The record can say, so nothing keeps a
