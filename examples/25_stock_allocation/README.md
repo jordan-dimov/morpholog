@@ -40,11 +40,12 @@ that got any branch wrong would be refused, not stored.
 | `allocations_fit_the_stock` | Allocations against an item never exceed what it holds. |
 | `lines_are_not_overallocated`, `lines_are_not_overshipped` | A line is never allocated or shipped more than it ordered. |
 | `shipped_items_leave_stock` | A shipped item is not in stock. |
+| `shipped_allocations_are_settled` | An allocation whose item has shipped reserves exactly what the item holds. |
 
 | Act | Does |
 |---|---|
 | `allocate` | Reserves part of an item for a line, on a shipment, within the stock and the line. |
-| `change_allocation` | Changes the quantity; the rules refuse a change that no longer fits. |
+| `change_allocation` | Changes the quantity while the item is on the shelf; the rules refuse a change that no longer fits. |
 | `ship_allocation` | Splits the item or ships it whole, by the condition in the act. |
 | `close_shipment` | Marks the shipment gone once every allocation on it has shipped. |
 
@@ -68,8 +69,8 @@ The tests walk a receipt, an order, an allocation and a shipment
 through both branches, read the figures back after a split, and try
 the changes the rules refuse: an allocation beyond the stock, a change
 that would overflow it, a second allocation of one item on one
-shipment, shipping twice, and closing a shipment with stock still on
-the shelf.
+shipment, shipping twice, changing an allocation whose item has
+shipped, and closing a shipment with stock still on the shelf.
 
 ## What it deliberately does not cover
 

@@ -5,14 +5,18 @@
 //! item and draws no subject; the trace says which branch ran; and the
 //! rules refuse an allocation beyond the line, a change that would
 //! overflow it, a second allocation of one item on one shipment, shipping
-//! twice, and closing a shipment with stock still on the shelf.
+//! twice, changing an allocation whose item has shipped, and closing a
+//! shipment with stock still on the shelf.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
 use std::sync::OnceLock;
 
-use common::{Example, dec, has_claim, propose_with_trace, refused_by, subj, subjects};
+use common::{
+    Example, claim_instance, dec, eval_invariant, has_claim, propose_with_trace, refused_by, subj,
+    subjects,
+};
 use morpholog_core::{EvalValue, Outcome, State, TraceEntry, TracedProposal, Transition};
 use morpholog_examples::stock_allocation;
 
@@ -72,8 +76,8 @@ fn quantity_of(state: &State, item: &EvalValue) -> EvalValue {
 }
 
 /// Ship the one allocation with a trace, drawing from `fresh`, and
-/// return the state after it, which branch ran, and that branch's
-/// entries.
+/// return the state that same execution produced, which branch ran,
+/// and that branch's entries.
 fn ship_traced(state: &State, fresh: [&str; 1]) -> (State, bool, Vec<TraceEntry>) {
     let transition = Transition {
         transformation_name: "ship_allocation".into(),
@@ -88,9 +92,11 @@ fn ship_traced(state: &State, fresh: [&str; 1]) -> (State, bool, Vec<TraceEntry>
         &mut subjects(fresh),
     );
     let TracedProposal::Completed {
-        outcome: Outcome::Accepted { .. },
+        outcome: Outcome::Accepted {
+            candidate_state, ..
+        },
         trace,
-    } = &traced
+    } = traced
     else {
         panic!("shipping should be admitted: {traced:?}");
     };
@@ -102,12 +108,7 @@ fn ship_traced(state: &State, fresh: [&str; 1]) -> (State, bool, Vec<TraceEntry>
         })
         .collect();
     assert_eq!(branches.len(), 1, "one if in the act: {trace:?}");
-    let after = ex().must_accept(
-        &stock_allocation::ship_allocation(),
-        vec![subj("alloc")],
-        state.clone(),
-    );
-    (after, branches[0].0, branches[0].1.clone())
+    (candidate_state, branches[0].0, branches[0].1.clone())
 }
 
 #[test]
@@ -122,14 +123,15 @@ fn an_allocation_that_takes_part_of_the_item_splits_it_and_conserves_stock() {
         "the child is minted inside the branch: {branch:?}"
     );
 
-    // The lineage names the child; the figures read back conserve the
-    // ten that arrived.
+    // The lineage names the child the trace drew; the figures read back
+    // conserve the ten that arrived.
     let lineage = after
         .claims_for("SplitFrom")
         .next()
         .expect("the split is recorded")
         .clone();
     let child = lineage.args[0].clone();
+    assert_eq!(child, subj("child"));
     assert_eq!(lineage.args[1], subj("pallet"));
     assert_eq!(lineage.args[2], dec(3));
     assert_eq!(quantity_of(&after, &subj("pallet")), dec(7));
@@ -242,6 +244,16 @@ fn the_rules_refuse_what_the_acts_may_not_do() {
         ),
         "still_in_stock",
     );
+    // Changing an allocation whose stock has gone to the customer, with
+    // the shipment still open.
+    refused_by(
+        &ex().must_reject(
+            &stock_allocation::change_allocation(),
+            vec![subj("alloc"), dec(2)],
+            &shipped,
+        ),
+        "not_already_shipped",
+    );
     let closed = ex().must_accept(
         &stock_allocation::close_shipment(),
         vec![subj("shipment")],
@@ -288,4 +300,39 @@ fn a_change_within_the_stock_is_admitted_and_the_read_shows_it() {
     let rows = morpholog_test_support::enumerate_derived(&program, allocated, &changed).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].args, vec![subj("pallet"), dec(5)]);
+}
+
+/// No act can move a shipped allocation's figure off what its item holds,
+/// so the rule is asked directly: the record a split leaves satisfies it,
+/// and the same record with the allocation changed breaks it.
+#[test]
+fn a_shipped_allocation_may_not_drift_from_what_its_item_holds() {
+    let state = allocated(stocked(10, 8), 3);
+    let (shipped, _, _) = ship_traced(&state, ["child"]);
+    let program = stock_allocation::program();
+    let rule = stock_allocation::shipped_allocations_are_settled();
+    assert!(eval_invariant(&program, &rule, &shipped, None).unwrap());
+
+    let allocation = |quantity: i64| {
+        claim_instance(
+            "Allocation",
+            &[
+                subj("alloc"),
+                subj("line"),
+                subj("shipment"),
+                subj("child"),
+                dec(quantity),
+            ],
+        )
+    };
+    let mut drifted = shipped.claims().to_vec();
+    let at = drifted
+        .iter()
+        .position(|c| *c == allocation(3))
+        .expect("the allocation names the child");
+    drifted[at] = allocation(2);
+    assert!(
+        !eval_invariant(&program, &rule, &State::from_claims(drifted), None).unwrap(),
+        "an allocation of 2 against a shipped child of 3 breaks the rule"
+    );
 }

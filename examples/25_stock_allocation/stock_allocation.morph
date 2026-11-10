@@ -139,6 +139,15 @@ invariant lines_are_not_overshipped:
 invariant shipped_items_leave_stock:
     ShippedTo(item, _) implies not InStock(item)
 
+-- Once an allocation's item has gone to the customer, the allocation is
+-- the record of what went: it reserves exactly what the item holds. A
+-- split leaves the child holding what moved; a whole shipment leaves
+-- the item holding what was allocated. Either way the figure may not
+-- drift afterwards.
+invariant shipped_allocations_are_settled:
+    Allocation(allocation, _, _, item, quantity)
+    implies not ShippedTo(item, _) or StockItem(item, _, quantity)
+
 -- ============================================================
 -- The acts
 -- ============================================================
@@ -195,11 +204,15 @@ transformation allocate(allocation, line, shipment, item, quantity):
     admit Allocation(allocation, line, shipment, item, quantity)
 
 -- Change how much an allocation reserves. No gate repeats the stock
--- check: the rules refuse a change that no longer fits.
+-- check: the rules refuse a change that no longer fits. The one gate
+-- beyond the shipment's own standing is on the item: once it has gone
+-- to the customer the allocation is history, whether or not the
+-- shipment has closed.
 transformation change_allocation(allocation, quantity):
     require positive: 0 < quantity
     bind Allocation(allocation, line, shipment, item, held)
     require not_yet_shipped: not ShipmentShipped(shipment)
+    require not_already_shipped: not ShippedTo(item, _)
     retract Allocation(allocation, line, shipment, item, held)
     admit Allocation(allocation, line, shipment, item, quantity)
 
