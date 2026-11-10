@@ -393,6 +393,48 @@ transformation send(x):
     record(out, "fixture/if/then_branch".to_string(), &input, &decided);
     let (input, decided) = proposal_case(&program, t, vec![subj("w")], &State::default());
     record(out, "fixture/if/else_branch".to_string(), &input, &decided);
+
+    // A for over a pattern: one iteration per matching claim in the
+    // canonical order of the claims, a subject drawn in each, so the
+    // order the claims are visited in shows in the subjects the decision
+    // used; and zero matches is zero iterations.
+    let program = morpholog_surface::parse_program(
+        "
+program ranging
+
+predicate Line(line: Subject, order: Subject, quantity: Decimal)
+predicate Ticket(ticket: Subject, line: Subject, quantity: Decimal)
+
+transformation ticket(order):
+    for Line(line, order, quantity):
+        admit Ticket(new Subject(), line, quantity)
+",
+    )
+    .unwrap();
+    let line = |l: &str, q: &str| {
+        use morpholog_test_support::{dec_str, subj};
+        morpholog_core::ClaimInstance {
+            predicate: "Line".into(),
+            args: vec![subj(l), subj("o"), dec_str(q)],
+        }
+    };
+    let lines = State::from_claims(vec![line("b", "2"), line("a", "1"), line("a", "10")]);
+    let t = program.transformation("ticket").unwrap();
+    let order = vec![EvalValue::Subject(Subject::from("o"))];
+    let (input, decided) = proposal_case(&program, t, order.clone(), &lines);
+    record(
+        out,
+        "fixture/for_each/one_draw_per_claim".to_string(),
+        &input,
+        &decided,
+    );
+    let (input, decided) = proposal_case(&program, t, order, &State::default());
+    record(
+        out,
+        "fixture/for_each/no_match".to_string(),
+        &input,
+        &decided,
+    );
 }
 
 /// Values admitted or emitted into fields of another declared kind,

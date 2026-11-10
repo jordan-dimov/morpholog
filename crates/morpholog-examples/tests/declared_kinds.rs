@@ -280,6 +280,11 @@ fn staged_values(trace: &[TraceEntry]) -> Vec<(String, Vec<EvalValue>)> {
                     out.extend(staged_values(&iteration.trace));
                 }
             }
+            TraceEntry::ForEach { iterations, .. } => {
+                for iteration in iterations {
+                    out.extend(staged_values(&iteration.trace));
+                }
+            }
             TraceEntry::If { trace, .. } => out.extend(staged_values(trace)),
             _ => {}
         }

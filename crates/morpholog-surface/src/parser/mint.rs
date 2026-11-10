@@ -91,6 +91,15 @@ fn name_in(stmt: Stmt, names: &mut Names) -> Vec<Stmt> {
             collection,
             body: name_block(body, names),
         },
+        Stmt::ForEach {
+            predicate,
+            args,
+            body,
+        } => Stmt::ForEach {
+            predicate,
+            args,
+            body: name_block(body, names),
+        },
         Stmt::If {
             when,
             then,

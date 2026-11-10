@@ -78,6 +78,82 @@ impl From<&crate::ir::Value> for EvalValue {
     }
 }
 
+/// The one canonical order on values: variants by a fixed rank, then the
+/// natural order within a variant (decimals numerically, so scale never
+/// splits equal values; collections element by element, shorter first on
+/// a shared prefix). `EvalValue` itself stays unordered, since no business
+/// order is implied: this is for a deterministic order of claims and key
+/// tuples, the same on every platform and under every load order.
+pub(crate) fn cmp_value(a: &EvalValue, b: &EvalValue) -> std::cmp::Ordering {
+    fn rank(v: &EvalValue) -> u8 {
+        match v {
+            EvalValue::Decimal(_) => 0,
+            EvalValue::Subject(_) => 1,
+            EvalValue::Bool(_) => 2,
+            EvalValue::Collection(_) => 3,
+            EvalValue::Date(_) => 4,
+            EvalValue::Timestamp(_) => 5,
+            EvalValue::Duration(_) => 6,
+            EvalValue::Quantity { .. } => 7,
+            EvalValue::CalendarSpan(_) => 8,
+        }
+    }
+    match (a, b) {
+        (EvalValue::Decimal(a), EvalValue::Decimal(b)) => a.cmp(b),
+        (EvalValue::Subject(a), EvalValue::Subject(b)) => a.as_str().cmp(b.as_str()),
+        (EvalValue::Bool(a), EvalValue::Bool(b)) => a.cmp(b),
+        (EvalValue::Date(a), EvalValue::Date(b)) => a.cmp(b),
+        (EvalValue::Timestamp(a), EvalValue::Timestamp(b)) => a.cmp(b),
+        (EvalValue::Duration(a), EvalValue::Duration(b)) => a.cmp(b),
+        // Unit first, then amount: amounts in different units never
+        // compare.
+        (
+            EvalValue::Quantity { amount: a, unit: u },
+            EvalValue::Quantity { amount: b, unit: v },
+        ) => u.cmp(v).then_with(|| a.cmp(b)),
+        (EvalValue::CalendarSpan(a), EvalValue::CalendarSpan(b)) => {
+            (a.months, a.days).cmp(&(b.months, b.days))
+        }
+        (EvalValue::Collection(a), EvalValue::Collection(b)) => cmp_values(a, b),
+        (l, r) => rank(l).cmp(&rank(r)),
+    }
+}
+
+/// [`cmp_value`] over tuples, element by element, shorter first on a
+/// shared prefix.
+pub(crate) fn cmp_values(a: &[EvalValue], b: &[EvalValue]) -> std::cmp::Ordering {
+    for (l, r) in a.iter().zip(b) {
+        let ord = cmp_value(l, r);
+        if ord != std::cmp::Ordering::Equal {
+            return ord;
+        }
+    }
+    a.len().cmp(&b.len())
+}
+
+/// A value under [`cmp_value`], for the ordered collections.
+#[derive(Clone)]
+pub(crate) struct EvalValueOrd(pub(crate) EvalValue);
+
+impl PartialEq for EvalValueOrd {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+impl Eq for EvalValueOrd {}
+
+impl PartialOrd for EvalValueOrd {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for EvalValueOrd {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        cmp_value(&self.0, &other.0)
+    }
+}
+
 impl EvalValue {
     /// Does this value carry a calendar span, directly or inside a
     /// collection? Every storage and wire boundary refuses such a value.

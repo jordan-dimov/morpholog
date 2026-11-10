@@ -52,6 +52,11 @@ fn drawn_in_trace(entries: &[TraceEntry], out: &mut Vec<String>) {
                     drawn_in_trace(&iteration.trace, out);
                 }
             }
+            TraceEntry::ForEach { iterations, .. } => {
+                for iteration in iterations {
+                    drawn_in_trace(&iteration.trace, out);
+                }
+            }
             TraceEntry::If { trace, .. } => drawn_in_trace(trace, out),
             _ => {}
         }

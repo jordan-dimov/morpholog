@@ -69,7 +69,7 @@ fn agreeing_verdict(
 /// Whether the transformation loops, at top level or inside a branch.
 fn contains_for(body: &[Stmt]) -> bool {
     body.iter().any(|s| match s {
-        Stmt::For { .. } => true,
+        Stmt::For { .. } | Stmt::ForEach { .. } => true,
         Stmt::If {
             then, otherwise, ..
         } => contains_for(then) || contains_for(otherwise),
@@ -84,6 +84,12 @@ fn count_for_entries(entries: &[TraceEntry]) -> usize {
         .iter()
         .map(|e| match e {
             TraceEntry::For { iterations, .. } => {
+                1 + iterations
+                    .iter()
+                    .map(|i| count_for_entries(&i.trace))
+                    .sum::<usize>()
+            }
+            TraceEntry::ForEach { iterations, .. } => {
                 1 + iterations
                     .iter()
                     .map(|i| count_for_entries(&i.trace))

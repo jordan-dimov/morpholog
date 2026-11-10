@@ -363,6 +363,23 @@ fn substitute_stmt(
             let describe = format!("`{predicate}`");
             substitute_terms(args, &describe, errors);
         }
+        Stmt::ForEach {
+            predicate,
+            args,
+            body,
+        } => {
+            let describe = format!("`{predicate}`");
+            substitute_terms(args, &describe, errors);
+            for s in body {
+                substitute_stmt(
+                    s,
+                    substitute_prop,
+                    substitute_value,
+                    substitute_terms,
+                    errors,
+                );
+            }
+        }
         Stmt::Emit(intent) => {
             let describe = format!("`{}`", intent.name);
             substitute_terms(&mut intent.args, &describe, errors);
@@ -409,8 +426,9 @@ fn collect_binders_named(prop: &morpholog_core::Prop, out: &mut Vec<(String, &'s
 }
 
 /// Statement-level locals: `let`, `for`, and `new Subject()` bindings,
-/// plus quantifier binders inside statement propositions and values,
-/// through `for` bodies and `if` branches.
+/// the variables a `for` pattern binds, plus quantifier binders inside
+/// statement propositions and values, through `for` bodies and `if`
+/// branches.
 fn collect_stmt_locals(stmt: &Stmt, out: &mut Vec<(String, &'static str)>) {
     match stmt {
         Stmt::Require { prop: p, .. } | Stmt::BindOne { prop: p, .. } => {
@@ -424,6 +442,15 @@ fn collect_stmt_locals(stmt: &Stmt, out: &mut Vec<(String, &'static str)>) {
         }
         Stmt::LetNewSubject { name } => out.push((name.to_string(), "statement binding")),
         Stmt::Assert(_) | Stmt::Retract { .. } | Stmt::Emit(_) => {}
+        Stmt::ForEach { args, body, .. } => {
+            out.extend(args.iter().filter_map(|arg| match arg {
+                Term::Var(v) => Some((v.to_string(), "statement binding")),
+                _ => None,
+            }));
+            for s in body {
+                collect_stmt_locals(s, out);
+            }
+        }
         Stmt::For {
             binding,
             collection,

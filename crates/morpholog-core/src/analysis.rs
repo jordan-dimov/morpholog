@@ -96,7 +96,7 @@ fn collect_refs(
             | ValueExpr::Call { .. } => {}
         },
         Node::Stmt(stmt) => match stmt {
-            Stmt::Retract { predicate, .. } => {
+            Stmt::Retract { predicate, .. } | Stmt::ForEach { predicate, .. } => {
                 out.insert(predicate.clone());
             }
             Stmt::Require { .. }
@@ -169,6 +169,7 @@ pub fn predicates_asserted_by_stmt(stmt: &Stmt, out: &mut BTreeSet<PredicateName
             | Stmt::LetNewSubject { .. }
             | Stmt::Retract { .. }
             | Stmt::For { .. }
+            | Stmt::ForEach { .. }
             | Stmt::If { .. }
             | Stmt::Emit(_),
         )
@@ -232,6 +233,7 @@ pub fn predicates_written_by(
                 | Stmt::Let { .. }
                 | Stmt::LetNewSubject { .. }
                 | Stmt::For { .. }
+                | Stmt::ForEach { .. }
                 | Stmt::If { .. }
                 | Stmt::Emit(_),
             )

@@ -425,6 +425,15 @@
         "trace": { "type": "array", "items": { "$ref": "#/$defs/trace_entry" } }
       }
     },
+    "for_each_iteration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim", "trace"],
+      "properties": {
+        "claim": { "$ref": "#/$defs/claim_instance" },
+        "trace": { "type": "array", "items": { "$ref": "#/$defs/trace_entry" } }
+      }
+    },
     "trace_entry": {
       "oneOf": [
         {
@@ -505,6 +514,16 @@
             "kind": { "const": "for" },
             "binding": { "type": "string" },
             "iterations": { "type": "array", "items": { "$ref": "#/$defs/for_iteration" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "predicate", "iterations"],
+          "properties": {
+            "kind": { "const": "for_each" },
+            "predicate": { "type": "string" },
+            "iterations": { "type": "array", "items": { "$ref": "#/$defs/for_each_iteration" } }
           }
         },
         {

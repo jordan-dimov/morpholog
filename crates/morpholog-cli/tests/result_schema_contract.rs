@@ -344,7 +344,8 @@ fn named_gate_program() -> morpholog_core::Program {
 /// cover each arm of the union.
 fn traced_program() -> morpholog_core::Program {
     use morpholog_core::ir_builder::{
-        bind_one_named, emit, for_, if_, let_, let_new_subject, require_named, retract, term,
+        bind_one_named, emit, for_, for_each, if_, let_, let_new_subject, require_named, retract,
+        term,
     };
     program("traced")
         .predicates(vec![
@@ -386,6 +387,11 @@ fn traced_program() -> morpholog_core::Program {
                         "item",
                         term(var("items")),
                         vec![assert_("Seen", vec![var("item")])],
+                    ),
+                    for_each(
+                        "Note",
+                        vec![var("note")],
+                        vec![assert_("Seen", vec![var("note")])],
                     ),
                     if_(
                         claim("Draft", vec![var("account")]),
@@ -538,6 +544,11 @@ fn pin_fresh_subjects(trace: &mut [morpholog_core::TraceEntry]) {
                     pin_fresh_subjects(&mut it.trace);
                 }
             }
+            TraceEntry::ForEach { iterations, .. } => {
+                for it in iterations.iter_mut() {
+                    pin_fresh_subjects(&mut it.trace);
+                }
+            }
             TraceEntry::If { trace, .. } => pin_fresh_subjects(trace),
             _ => {}
         }
@@ -553,6 +564,10 @@ fn account_state(extra: &[&str]) -> State {
         ClaimInstance {
             predicate: "Draft".into(),
             args: vec![EvalValue::Subject(Subject::from("acct_1"))],
+        },
+        ClaimInstance {
+            predicate: "Note".into(),
+            args: vec![EvalValue::Subject(Subject::from("note_1"))],
         },
     ];
     for p in extra {

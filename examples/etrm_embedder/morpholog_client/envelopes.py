@@ -764,6 +764,37 @@ class ForStep:
 
 
 @dataclass(frozen=True)
+class ForEachIteration:
+    claim: ClaimInstance
+    trace: list[TraceStep]
+
+    @classmethod
+    def from_json(cls, payload: object) -> ForEachIteration:
+        data = _strict("for each iteration", payload, {"claim", "trace"})
+        return cls(
+            claim=data.nested("claim", ClaimInstance.from_json),
+            trace=data.array("trace", parse_trace_step),
+        )
+
+
+@dataclass(frozen=True)
+class ForEachStep:
+    """A `for` over the claims a pattern matches: one iteration per claim."""
+
+    predicate: str
+    iterations: list[ForEachIteration]
+
+    @classmethod
+    def from_json(cls, payload: object) -> ForEachStep:
+        data = _strict("for each step", payload, {"kind", "predicate", "iterations"})
+        data.constant("kind", "for_each")
+        return cls(
+            predicate=data.text("predicate"),
+            iterations=data.array("iterations", ForEachIteration.from_json),
+        )
+
+
+@dataclass(frozen=True)
 class IfStep:
     expression: str
     taken: bool
@@ -804,6 +835,7 @@ TraceStep = (
     | RetractStep
     | EmitStep
     | ForStep
+    | ForEachStep
     | IfStep
     | InvariantCheckStep
 )
@@ -821,6 +853,7 @@ def parse_trace_step(payload: object) -> TraceStep:
         "retract": RetractStep.from_json,
         "emit": EmitStep.from_json,
         "for": ForStep.from_json,
+        "for_each": ForEachStep.from_json,
         "if": IfStep.from_json,
         "invariant_check": InvariantCheckStep.from_json,
     }

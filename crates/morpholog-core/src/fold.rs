@@ -81,6 +81,12 @@ fn stmt_scoped<'a>(
         Stmt::Assert(claim) => slots(&claim.args, visit, scope),
         Stmt::Retract { args, .. } => slots(args, visit, scope),
         Stmt::Emit(intent) => slots(&intent.args, visit, scope),
+        Stmt::ForEach { args, body, .. } => {
+            slots(args, visit, scope);
+            for s in body {
+                stmt_scoped(s, visit, scope);
+            }
+        }
         Stmt::For {
             collection, body, ..
         } => {

@@ -11,7 +11,7 @@ use crate::definitions::DefinitionTable;
 use crate::eval::{EvalContext, EvalError, Failure, eval_value, find_failure, find_matches};
 use crate::ir::{Definition, DerivedClaim, Invariant, Prop, Var};
 use crate::propose::WitnessBinding;
-use crate::state::{Bindings, Bound, ClaimInstance, EvalValue, State, StateRef};
+use crate::state::{Bindings, Bound, ClaimInstance, EvalValue, EvalValueOrd, State, StateRef};
 
 /// Evaluate an invariant against a state. Returns true if the invariant
 /// holds, false if it fails.
@@ -340,80 +340,4 @@ pub(crate) fn enumerate_derived(
         });
     }
     Ok(out)
-}
-/// A total, `Eq`-consistent order on `EvalValue`, used only to dedupe and
-/// sort key tuples in [`enumerate_derived`]. `EvalValue` itself stays
-/// unordered.
-///
-/// Different variants order by a fixed but arbitrary rank. Within a
-/// variant, values use their natural order (decimals numerically, not as
-/// strings). Collections compare element by element, shorter first on a
-/// shared prefix.
-///
-/// The only promise about output order is that it is deterministic.
-/// Callers wanting a business order sort the result themselves.
-#[derive(Clone)]
-struct EvalValueOrd(EvalValue);
-
-impl PartialEq for EvalValueOrd {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
-impl Eq for EvalValueOrd {}
-
-impl PartialOrd for EvalValueOrd {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for EvalValueOrd {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        use std::cmp::Ordering;
-
-        /// Variant discriminant for cross-variant comparisons.
-        /// Order is arbitrary but stable.
-        fn discriminant(v: &EvalValue) -> u8 {
-            match v {
-                EvalValue::Decimal(_) => 0,
-                EvalValue::Subject(_) => 1,
-                EvalValue::Bool(_) => 2,
-                EvalValue::Collection(_) => 3,
-                EvalValue::Date(_) => 4,
-                EvalValue::Timestamp(_) => 5,
-                EvalValue::Duration(_) => 6,
-                EvalValue::Quantity { .. } => 7,
-                EvalValue::CalendarSpan(_) => 8,
-            }
-        }
-
-        match (&self.0, &other.0) {
-            (EvalValue::Decimal(a), EvalValue::Decimal(b)) => a.cmp(b),
-            (EvalValue::Subject(a), EvalValue::Subject(b)) => a.as_str().cmp(b.as_str()),
-            (EvalValue::Bool(a), EvalValue::Bool(b)) => a.cmp(b),
-            (EvalValue::Date(a), EvalValue::Date(b)) => a.cmp(b),
-            (EvalValue::Timestamp(a), EvalValue::Timestamp(b)) => a.cmp(b),
-            (EvalValue::Duration(a), EvalValue::Duration(b)) => a.cmp(b),
-            // Unit first, then amount: amounts in different units never
-            // compare.
-            (
-                EvalValue::Quantity { amount: a, unit: u },
-                EvalValue::Quantity { amount: b, unit: v },
-            ) => u.cmp(v).then_with(|| a.cmp(b)),
-            (EvalValue::CalendarSpan(a), EvalValue::CalendarSpan(b)) => {
-                (a.months, a.days).cmp(&(b.months, b.days))
-            }
-            (EvalValue::Collection(a), EvalValue::Collection(b)) => {
-                for (l, r) in a.iter().zip(b.iter()) {
-                    let ord = EvalValueOrd(l.clone()).cmp(&EvalValueOrd(r.clone()));
-                    if ord != Ordering::Equal {
-                        return ord;
-                    }
-                }
-                a.len().cmp(&b.len())
-            }
-            (l, r) => discriminant(l).cmp(&discriminant(r)),
-        }
-    }
 }

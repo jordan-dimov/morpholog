@@ -57,6 +57,7 @@ fn stmt(s: &Stmt) -> &'static [Draws] {
         Stmt::Assert(_) | Stmt::Emit(_) => &[],
         Stmt::Retract { .. } => &[AdmittedState],
         Stmt::For { .. } => &[MaterialisedCollection, Children],
+        Stmt::ForEach { .. } => &[AdmittedState, Children],
         Stmt::If { .. } => &[Children],
     }
 }
