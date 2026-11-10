@@ -17,10 +17,12 @@ mod common;
 use std::sync::OnceLock;
 
 use common::{
-    Example, claim_instance, dec, eval_invariant, has_claim, propose_with_trace, refused_by, subj,
-    subjects,
+    Example, claim_instance, dec, eval_invariant, explain, has_claim, propose_with_trace,
+    refused_by, subj, subjects,
 };
-use morpholog_core::{EvalValue, Outcome, State, TraceEntry, TracedProposal, Transition};
+use morpholog_core::{
+    EvalValue, Outcome, Rejection, State, TraceEntry, TracedProposal, Transition, Verdict,
+};
 use morpholog_examples::stock_allocation;
 
 fn ex() -> &'static Example {
@@ -291,6 +293,27 @@ fn cancelling_an_order_takes_every_line_and_allocation_with_it() {
             &shipped,
         ),
         "nothing_shipped",
+    );
+    // And the explanation finds that gate inside the loop.
+    let transition = Transition {
+        transformation_name: "cancel_order".into(),
+        args: vec![subj("order")],
+        actor: "clerk".into(),
+        decided_at: None,
+    };
+    let explanation = explain(
+        &stock_allocation::program(),
+        &transition,
+        &shipped,
+        &mut subjects([]),
+    );
+    assert!(
+        matches!(
+            &explanation.verdict,
+            Verdict::Rejected(Rejection::Gate(g)) if g.rule.as_deref() == Some("nothing_shipped")
+        ),
+        "{:?}",
+        explanation.verdict
     );
 }
 
