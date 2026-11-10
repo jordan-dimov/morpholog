@@ -62,6 +62,20 @@ pub enum Lint {
         parameters: Vec<String>,
     },
 
+    /// A `sum` whose body holds an `or` whose branches can hold together.
+    /// A disjunction keeps every branch's matches, so a row that
+    /// satisfies two branches counts twice and the sum can come out too
+    /// high. A hint, because counting per branch can be what the author
+    /// means. Silent where the branches cannot hold together by
+    /// construction (equalities of one variable against distinct
+    /// literals, the `in (a, b)` form, each branch carrying one), and
+    /// where the `or` only answers yes or no (under `exists`, `not`, a
+    /// `forall` or an implication) or sits inside a definition the sum
+    /// calls, whose distinct projection collapses it. `owner` as in
+    /// [`Lint::WildcardedCallUnderSum`]; `disjunction` is the `or` as
+    /// written.
+    OverlappingOrUnderSum { owner: String, disjunction: String },
+
     /// An invariant whose antecedent positively references an
     /// append-only predicate and whose consequent positively requires a
     /// current-pointer predicate. Retracting the pointer would make
@@ -283,6 +297,13 @@ impl std::fmt::Display for Lint {
                     named.join(" and ")
                 )
             }
+            Lint::OverlappingOrUnderSum { owner, disjunction } => write!(
+                f,
+                "{owner} sums over `{disjunction}`, an `or` whose branches can hold together: a \
+                 disjunction keeps every branch's matches, so a row that satisfies two branches \
+                 counts twice and the sum can come out too high. Make the branches exclusive, or \
+                 test the `or` under `exists` when any branch holding is what counts"
+            ),
             Lint::LargeGrid {
                 transformation,
                 bound,
@@ -599,6 +620,7 @@ pub fn lints(prepared: &PreparedProgram) -> Vec<Lint> {
         }
     }
     wildcarded_call_findings(program, &definitions, &mut out);
+    overlapping_or_findings(program, &mut out);
     for t in &program.transformations {
         large_grid_findings(t, &mut out);
     }
@@ -662,19 +684,58 @@ fn wildcarded_call_findings(
     definitions: &crate::definitions::DefinitionTable<'_>,
     out: &mut Vec<Lint>,
 ) {
+    for (owner, declared, nodes) in rules(program) {
+        wildcarded_calls_of(&owner, declared, &nodes, definitions, out);
+    }
+}
+
+/// Every sum in the programme whose body holds an `or` whose branches
+/// can hold together, once per `or` and owner.
+fn overlapping_or_findings(program: &Program, out: &mut Vec<Lint>) {
+    let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
+    for (owner, _, nodes) in rules(program) {
+        for node in nodes {
+            let fold::Node::Value(ValueExpr::Sum { body, .. }) = node else {
+                continue;
+            };
+            let mut ors = Vec::new();
+            witness_ors(body, &mut ors);
+            for branches in ors {
+                if exclusive_literal_branches(branches) {
+                    continue;
+                }
+                let disjunction = crate::format::format_prop_inline(&Prop::Or(branches.to_vec()));
+                if seen.insert((owner.clone(), disjunction.clone())) {
+                    out.push(Lint::OverlappingOrUnderSum {
+                        owner: owner.clone(),
+                        disjunction,
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// The rules a sum can sit in, each as "transformation `name`" style
+/// owner, the names it declares, and every node under it: every
+/// transformation, invariant, derived claim and definition.
+fn rules(program: &Program) -> Vec<(String, &[Var], Vec<fold::Node<'_>>)> {
+    let mut rules = Vec::new();
     for t in &program.transformations {
         let mut nodes = Vec::new();
         for stmt in &t.body {
             fold::walk_stmt(stmt, &mut |node| nodes.push(node));
         }
-        let owner = format!("transformation `{}`", t.name);
-        wildcarded_calls_of(&owner, &t.parameters, &nodes, definitions, out);
+        rules.push((
+            format!("transformation `{}`", t.name),
+            t.parameters.as_slice(),
+            nodes,
+        ));
     }
     for inv in &program.invariants {
         let mut nodes = Vec::new();
         fold::walk_prop(&inv.body, &mut |node| nodes.push(node));
-        let owner = format!("invariant `{}`", inv.name);
-        wildcarded_calls_of(&owner, &[], &nodes, definitions, out);
+        rules.push((format!("invariant `{}`", inv.name), &[][..], nodes));
     }
     for d in &program.derived_claims {
         let mut nodes = Vec::new();
@@ -682,15 +743,89 @@ fn wildcarded_call_findings(
         for value in &d.values {
             fold::walk_value(&value.expr, &mut |node| nodes.push(node));
         }
-        let owner = format!("derived `{}`", d.predicate);
-        wildcarded_calls_of(&owner, &[], &nodes, definitions, out);
+        rules.push((format!("derived `{}`", d.predicate), &[][..], nodes));
     }
     for def in &program.definitions {
         let mut nodes = Vec::new();
         fold::walk_prop(&def.body, &mut |node| nodes.push(node));
-        let owner = format!("definition `{}`", def.name);
-        wildcarded_calls_of(&owner, &def.parameters, &nodes, definitions, out);
+        rules.push((
+            format!("definition `{}`", def.name),
+            def.parameters.as_slice(),
+            nodes,
+        ));
     }
+    rules
+}
+
+/// The disjunctions whose matches become the sum's rows: those reached
+/// through `and`, `or`, `xor` and `pre` alone, nested ones included.
+/// An `or` under `exists`, `forall`, `not` or an implication only
+/// answers yes or no; one inside a definition the sum calls is the
+/// definition's, and its distinct projection collapses the repeats.
+fn witness_ors<'a>(prop: &'a Prop, out: &mut Vec<&'a [Prop]>) {
+    match prop {
+        Prop::Or(props) => {
+            out.push(props);
+            for p in props {
+                witness_ors(p, out);
+            }
+        }
+        Prop::And(props) => {
+            for p in props {
+                witness_ors(p, out);
+            }
+        }
+        Prop::Xor(left, right) => {
+            witness_ors(left, out);
+            witness_ors(right, out);
+        }
+        Prop::Pre(inner) => witness_ors(inner, out),
+        Prop::Claim { .. }
+        | Prop::Defined { .. }
+        | Prop::Implies { .. }
+        | Prop::Exists { .. }
+        | Prop::Forall { .. }
+        | Prop::Not(_)
+        | Prop::Eq(..)
+        | Prop::Neq(..)
+        | Prop::Compare { .. }
+        | Prop::In(..) => {}
+    }
+}
+
+/// Whether the branches cannot hold together by construction: each one
+/// is, or conjoins, an equality of one and the same variable against a
+/// literal, and the literals are pairwise distinct. The shape `x in (a,
+/// b)` desugars to, and the one a status-dependent sum writes.
+fn exclusive_literal_branches(branches: &[Prop]) -> bool {
+    fn literal_equality(prop: &Prop) -> Option<(&Var, &Value)> {
+        match prop {
+            Prop::Eq(left, right) => match (&**left, &**right) {
+                (ValueExpr::Term(Term::Var(v)), ValueExpr::Term(Term::Literal(l)))
+                | (ValueExpr::Term(Term::Literal(l)), ValueExpr::Term(Term::Var(v))) => {
+                    Some((v, l))
+                }
+                _ => None,
+            },
+            Prop::And(props) => props.iter().find_map(literal_equality),
+            _ => None,
+        }
+    }
+    let mut tested: Vec<(&Var, &Value)> = Vec::with_capacity(branches.len());
+    for branch in branches {
+        let Some(found) = literal_equality(branch) else {
+            return false;
+        };
+        tested.push(found);
+    }
+    let Some((first, _)) = tested.first() else {
+        return false;
+    };
+    tested.iter().all(|(v, _)| v == first)
+        && tested
+            .iter()
+            .enumerate()
+            .all(|(i, (_, l))| tested[..i].iter().all(|(_, other)| other != l))
 }
 
 /// The findings of one rule, given every node in it and the names it

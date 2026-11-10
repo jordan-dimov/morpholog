@@ -1483,3 +1483,40 @@ transformation permit(grant, item):
         String::from_utf8_lossy(&strict.stderr)
     );
 }
+
+/// The overcount hint carets the rule that holds the sum and names the
+/// `or`; `--strict` makes it an error.
+#[test]
+fn an_overlapping_or_under_a_sum_is_hinted_at_its_rule() {
+    let f = temp_morph(
+        "program overcount
+
+predicate Amount(x: Subject, q: Decimal)
+predicate Cap(x: Subject, most: Decimal)
+
+transformation note(x, q):
+    require within: sum(a | Amount(x, a) and (a > 0 or a < 10)) + q <= value Cap(x, _)
+    admit Amount(x, q)
+",
+    );
+    let out = Command::new(bin())
+        .arg("check")
+        .arg(f.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("hint:")
+            && stderr.contains("sums over `(a > 0) or (a < 10)`")
+            && stderr.contains(":6:1"),
+        "got: {stderr}"
+    );
+    let strict = Command::new(bin())
+        .arg("check")
+        .arg(f.path())
+        .arg("--strict")
+        .output()
+        .unwrap();
+    assert!(!strict.status.success(), "--strict promotes it");
+}
