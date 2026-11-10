@@ -617,7 +617,9 @@ where
         .map_with(|((name, parameters), body), e| {
             let span: SimpleSpan = e.span();
             let (body, stmt_spans): (Vec<_>, Vec<_>) =
-                super::mint::name_the_mints(body).into_iter().unzip();
+                super::mint::name_the_mints(&parameters, body)
+                    .into_iter()
+                    .unzip();
             TopLevelDecl::Transformation(
                 Transformation {
                     name: name.into(),

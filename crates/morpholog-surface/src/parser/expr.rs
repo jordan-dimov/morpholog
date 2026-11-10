@@ -223,22 +223,32 @@ where
 }
 
 /// A term: the only thing claim-call arguments and `in` operands accept. Variables, `actor`,
-/// wildcards, and literals. `new Subject()` is refused here by name: it mints only in an
-/// `admit` or `emit` argument ([`constructive_term_parser`]).
+/// wildcards, and literals. `new Subject()` is refused here by name, as it is in a value: it
+/// mints only in an `admit` or `emit` argument ([`constructive_term_parser`]).
 pub(super) fn term_parser<'a, I>() -> impl Parser<'a, I, Term, extra::Err<Rich<'a, Token>>> + Clone
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
-    let refused_mint = mint_parser().validate(|(), e, emitter| {
+    choice((
+        refused_mint_parser().to(Term::Wildcard),
+        plain_term_parser(),
+    ))
+}
+
+/// `new Subject()` where a subject is read: refused by name, in one diagnostic, and parsed on
+/// as a wildcard so nothing else is reported for it.
+fn refused_mint_parser<'a, I>() -> impl Parser<'a, I, (), extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    mint_parser().validate(|(), e, emitter| {
         emitter.emit(Rich::custom(
             e.span(),
             "`new Subject()` mints a subject only where one is written down, in an `admit` or \
              `emit` argument; a fresh subject matches nothing, so name it first with \
              `let name = new Subject()` where a read needs it",
         ));
-        Term::Wildcard
-    });
-    choice((refused_mint, plain_term_parser()))
+    })
 }
 
 /// A term in a constructive slot, an `admit` or `emit` argument: every term, and
@@ -843,6 +853,7 @@ where
         let bool_as_value =
             select! { Token::BoolLit(b) => ValueExpr::Term(Term::Literal(Value::Bool(b))) };
         let wildcard_as_value = just(Token::Wildcard).to(ValueExpr::Term(Term::Wildcard));
+        let refused_mint = refused_mint_parser().to(ValueExpr::Term(Term::Wildcard));
 
         // A variable, `actor` or `decided_at`. `Foo(args)` is a claim, which only the proposition
         // grammar takes.
@@ -1060,6 +1071,7 @@ where
             subject_as_value,
             bool_as_value,
             wildcard_as_value,
+            refused_mint,
             bare_ident,
         ));
 

@@ -10,17 +10,22 @@ use std::collections::BTreeSet;
 use morpholog_core::{Stmt, Term, Var};
 
 use super::expr::MINT;
-use super::walk::vars_in_stmt;
+use super::walk::{names_in_stmt, vars_in_stmt};
 
 /// Name every placeholder in `body`, a transformation's top-level statements with their
-/// spans. A `let` inserted before a statement carries that statement's span.
-pub(super) fn name_the_mints<S: Clone>(body: Vec<(Stmt, S)>) -> Vec<(Stmt, S)> {
+/// spans. A `let` inserted before a statement carries that statement's span. A generated name
+/// is one the transformation has nowhere: not a parameter, not a name a `let` or `for`
+/// introduces, not a binder, not a variable it reads.
+pub(super) fn name_the_mints<S: Clone>(
+    parameters: &[String],
+    body: Vec<(Stmt, S)>,
+) -> Vec<(Stmt, S)> {
     if !body.iter().any(|(stmt, _)| holds_a_mint(stmt)) {
         return body;
     }
-    let mut taken = BTreeSet::new();
+    let mut taken: BTreeSet<String> = parameters.iter().cloned().collect();
     for (stmt, _) in &body {
-        vars_in_stmt(stmt, &mut taken);
+        names_in_stmt(stmt, &mut taken);
     }
     let mut names = Names { taken, next: 1 };
     let mut out = Vec::with_capacity(body.len());

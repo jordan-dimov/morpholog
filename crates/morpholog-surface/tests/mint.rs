@@ -70,6 +70,39 @@ fn the_names_count_on_across_the_body_and_skip_a_taken_one() {
 }
 
 #[test]
+fn a_generated_name_skips_one_the_transformation_has_anywhere() {
+    // A parameter nothing reads.
+    assert_equivalent(
+        "transformation make(part, _subject_1):\n    admit Item(new Subject(), part)\n",
+        "transformation make(part, _subject_1):\n    let _subject_2 = new Subject()\n    admit Item(_subject_2, part)\n",
+    );
+    // A `let` destination nothing reads.
+    assert_equivalent(
+        "transformation make(part):\n    let _subject_1 = 42\n    admit Item(new Subject(), part)\n",
+        "transformation make(part):\n    let _subject_1 = 42\n    let _subject_2 = new Subject()\n    admit Item(_subject_2, part)\n",
+    );
+    // A `for` binder nothing reads, taken outside the body as well as inside it.
+    assert_equivalent(
+        "transformation make(part, parts):\n    for _subject_1 in parts:\n        admit Item(new Subject(), part)\n    admit Item(new Subject(), part)\n",
+        "transformation make(part, parts):\n    for _subject_1 in parts:\n        let _subject_2 = new Subject()\n        admit Item(_subject_2, part)\n    let _subject_3 = new Subject()\n    admit Item(_subject_3, part)\n",
+    );
+    // A quantifier binder nothing reads.
+    assert_equivalent(
+        "transformation make(part):\n    require exists _subject_1: Item(_, part)\n    admit Item(new Subject(), part)\n",
+        "transformation make(part):\n    require exists _subject_1: Item(_, part)\n    let _subject_2 = new Subject()\n    admit Item(_subject_2, part)\n",
+    );
+}
+
+#[test]
+fn mints_in_named_arguments_draw_in_slot_order_not_written_order() {
+    // `Child` declares `child` before `parent`, so the child slot's mint is the first draw.
+    assert_equivalent(
+        "transformation split(part):\n    admit Child(parent: new Subject(), child: new Subject())\n",
+        "transformation split(part):\n    let _subject_1 = new Subject()\n    let _subject_2 = new Subject()\n    admit Child(_subject_1, _subject_2)\n",
+    );
+}
+
+#[test]
 fn a_mint_inside_a_for_body_is_a_let_inside_the_body() {
     assert_equivalent(
         "transformation make_all(parts):\n    for p in parts:\n        admit Item(new Subject(), p)\n",
@@ -105,6 +138,8 @@ fn a_mint_where_a_subject_is_read_is_refused_by_name() {
         "transformation take(part):\n    retract Item(new Subject(), part)\n",
         "transformation take(part):\n    require Item(new Subject(), part)\n    admit Item(part, part)\n",
         "transformation take(part):\n    require exists i: Item(i, new Subject())\n    admit Item(part, part)\n",
+        "transformation take(part):\n    require part = new Subject()\n    admit Item(part, part)\n",
+        "transformation take(part):\n    let same = (new Subject())\n    admit Item(part, part)\n",
         "invariant parented: forall c in Child(c, _): Item(new Subject(), c)\n",
     ] {
         refusal_containing(source, "mints a subject only where one is written down");
