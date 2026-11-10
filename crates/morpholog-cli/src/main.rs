@@ -1301,7 +1301,9 @@ pub(crate) enum Inspect {
     ///
     /// The control matrix: every transformation's `require` and
     /// `bind` preconditions with the predicates each consults, beside
-    /// the invariant guarantees. The view an auditor reads, and the
+    /// the invariant guarantees. A gate under a `for` or an `if` is
+    /// not listed: it holds per item, or on its branch, not before
+    /// the whole action. The view an auditor reads, and the
     /// table a compliance mapping cites rule by rule. Static: no
     /// database, no state. Prose by default; `--json` for the
     /// structured form.

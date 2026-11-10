@@ -307,6 +307,13 @@ pub enum TraceEntry {
         binding: Var,
         iterations: Vec<ForIterationTrace>,
     },
+    /// Which branch ran, with its own entries nested, so a refusal
+    /// inside a branch says where it happened.
+    If {
+        expression: String,
+        taken: bool,
+        trace: Vec<TraceEntry>,
+    },
     /// One invariant check and whether it `held`. A failure also yields
     /// `Outcome::Rejected` in the surrounding `TracedProposal`.
     InvariantCheck {
@@ -1136,6 +1143,59 @@ pub(crate) fn execute_stmt(
                 *bindings = outer;
                 Ok(StmtOutcome::Continue)
             }
+        }
+        Stmt::If {
+            when,
+            then,
+            otherwise,
+        } => {
+            let ctx = EvalContext::new(pre_state, None, bindings, transition, definitions);
+            let taken = !find_matches(when, &ctx)?.is_empty();
+            let branch = if taken { then } else { otherwise };
+            // The branch binds for itself alone: the outer bindings come
+            // back whatever it did.
+            let outer = bindings.clone();
+            crate::state::tally::binding_copy(outer.len());
+            let mut entries: Vec<TraceEntry> = vec![];
+            let result = {
+                let mut sink = if trace.is_on() {
+                    TraceSink::On(&mut entries)
+                } else {
+                    TraceSink::Off
+                };
+                let mut result = Ok(StmtOutcome::Continue);
+                for inner in branch {
+                    match execute_stmt(
+                        vocabulary,
+                        inner,
+                        pre_state,
+                        bindings,
+                        transition,
+                        definitions,
+                        asserted,
+                        retracted,
+                        emitted,
+                        &mut sink,
+                        subjects,
+                    ) {
+                        Ok(StmtOutcome::Continue) => {}
+                        stopped => {
+                            result = stopped;
+                            break;
+                        }
+                    }
+                }
+                result
+            };
+            *bindings = outer;
+            if trace.is_on() {
+                trace.push(TraceEntry::If {
+                    expression: format::format_prop_inline(when),
+                    taken,
+                    trace: entries,
+                });
+            }
+            result
         }
         Stmt::Emit(intent) => {
             let instance = resolve_intent(vocabulary, intent, bindings, transition)?;

@@ -868,3 +868,267 @@ fn a_transition_naming_another_transformation_is_an_error() {
         "{err:?}"
     );
 }
+
+// Stmt::If: a yes/no test that chooses a branch instead of refusing.
+
+/// The branch the condition selects runs; the other does not, and only
+/// the branch taken draws a subject.
+#[test]
+fn if_runs_the_branch_its_condition_selects_and_draws_only_there() {
+    use ir_builder::*;
+    let t = transformation(
+        "choose",
+        vec!["x".into()],
+        vec![if_(
+            claim("Flag", vec![var("x")]),
+            vec![
+                let_new_subject("fresh"),
+                assert_("Then", vec![var("x"), var("fresh")]),
+            ],
+            vec![assert_("Else", vec![var("x")])],
+        )],
+    );
+    let flagged = State::from_claims(vec![ClaimInstance {
+        predicate: "Flag".into(),
+        args: vec![EvalValue::Subject("a".into())],
+    }]);
+    let subjects_for = |state: &State| {
+        let transition = trace_transition(&t, vec![EvalValue::Subject("a".into())]);
+        let mut source = vec![Subject::from("s1"), Subject::from("s2")].into_iter();
+        let outcome = propose(&t, &transition, state, &[], &[], &mut source).unwrap();
+        (outcome, source.count())
+    };
+    let (taken, left) = subjects_for(&flagged);
+    let Outcome::Accepted {
+        asserted_claims, ..
+    } = taken
+    else {
+        panic!("expected Accepted");
+    };
+    assert_eq!(asserted_claims.len(), 1);
+    assert_eq!(asserted_claims[0].predicate.as_str(), "Then");
+    assert_eq!(
+        asserted_claims[0].args[1],
+        EvalValue::Subject("s1".into()),
+        "the then branch drew the first subject"
+    );
+    assert_eq!(left, 1, "one draw, in the branch taken");
+
+    let (not_taken, left) = subjects_for(&State::default());
+    let Outcome::Accepted {
+        asserted_claims, ..
+    } = not_taken
+    else {
+        panic!("expected Accepted");
+    };
+    assert_eq!(asserted_claims[0].predicate.as_str(), "Else");
+    assert_eq!(left, 2, "the branch not taken drew nothing");
+}
+
+/// An `if` with no `else` and a false condition does nothing, and a
+/// name a branch binds is gone after it: the next statement reads it as
+/// unbound.
+#[test]
+fn if_without_else_is_a_no_op_and_a_branch_binding_does_not_outlive_it() {
+    use ir_builder::*;
+    let silent = transformation(
+        "silent",
+        vec!["x".into()],
+        vec![
+            if_(
+                claim("Flag", vec![var("x")]),
+                vec![assert_("Then", vec![var("x")])],
+                vec![],
+            ),
+            assert_("After", vec![var("x")]),
+        ],
+    );
+    let run_with_a = |t: &Transformation, state: &State| {
+        let transition = trace_transition(t, vec![EvalValue::Subject("a".into())]);
+        propose(
+            t,
+            &transition,
+            state,
+            &[],
+            &[],
+            &mut crate::kernel_tests::fresh(),
+        )
+    };
+    let Outcome::Accepted {
+        asserted_claims, ..
+    } = run_with_a(&silent, &State::default()).unwrap()
+    else {
+        panic!("expected Accepted");
+    };
+    assert_eq!(asserted_claims.len(), 1);
+    assert_eq!(asserted_claims[0].predicate.as_str(), "After");
+
+    let leaky = transformation(
+        "leaky",
+        vec!["x".into()],
+        vec![
+            if_(
+                claim("Flag", vec![var("x")]),
+                vec![let_("inside", term(var("x")))],
+                vec![],
+            ),
+            assert_("After", vec![var("inside")]),
+        ],
+    );
+    let flagged = State::from_claims(vec![ClaimInstance {
+        predicate: "Flag".into(),
+        args: vec![EvalValue::Subject("a".into())],
+    }]);
+    assert!(
+        matches!(run_with_a(&leaky, &flagged), Err(EvalError::UnboundVariable(v)) if v == "inside"),
+        "a branch binding is scoped to its branch"
+    );
+}
+
+/// A refusal or an error inside a branch stops the body there, with the
+/// trace nested under the `if` entry and the outer bindings restored.
+#[test]
+fn propose_with_trace_nests_a_branch_and_records_which_was_taken() {
+    use ir_builder::*;
+    let t = transformation(
+        "gated",
+        vec!["x".into()],
+        vec![
+            if_(
+                claim("Flag", vec![var("x")]),
+                vec![
+                    let_("inside", term(var("x"))),
+                    require_named("never", claim("Missing", vec![var("inside")])),
+                    assert_("Then", vec![var("x")]),
+                ],
+                vec![],
+            ),
+            assert_("After", vec![var("x")]),
+        ],
+    );
+    let flagged = State::from_claims(vec![ClaimInstance {
+        predicate: "Flag".into(),
+        args: vec![EvalValue::Subject("a".into())],
+    }]);
+    let transition = trace_transition(&t, vec![EvalValue::Subject("a".into())]);
+    let TracedProposal::Completed { outcome, trace } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
+        &t,
+        &transition,
+        &flagged,
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
+        panic!("expected Completed");
+    };
+    assert!(
+        matches!(&outcome, Outcome::Rejected { reason: RejectionReason::Require { name: Some(n), .. } } if n.as_str() == "never"),
+        "the gate inside the branch refused: {outcome:?}"
+    );
+    assert_eq!(trace.len(), 1, "the body stopped at the if: {trace:?}");
+    let TraceEntry::If {
+        expression,
+        taken,
+        trace: inner,
+    } = &trace[0]
+    else {
+        panic!("expected If, got {:?}", trace[0]);
+    };
+    assert_eq!(expression, "Flag(x)");
+    assert!(taken);
+    assert_eq!(inner.len(), 2, "the let and the refusing gate: {inner:?}");
+    assert!(matches!(&inner[0], TraceEntry::Let { name, .. } if name.as_str() == "inside"));
+    assert!(matches!(
+        &inner[1],
+        TraceEntry::Require {
+            outcome: RequireOutcome::Rejected { .. },
+            ..
+        }
+    ));
+
+    // The else path on an empty state: taken is false and the trace
+    // holds the branch's one statement.
+    let t = transformation(
+        "either",
+        vec!["x".into()],
+        vec![if_(
+            claim("Flag", vec![var("x")]),
+            vec![assert_("Then", vec![var("x")])],
+            vec![assert_("Else", vec![var("x")])],
+        )],
+    );
+    let transition = trace_transition(&t, vec![EvalValue::Subject("a".into())]);
+    let TracedProposal::Completed { trace, .. } = propose_with_trace(
+        crate::propose::Vocabulary::undeclared(),
+        &t,
+        &transition,
+        &State::default(),
+        &[],
+        &[],
+        &mut crate::kernel_tests::fresh(),
+    ) else {
+        panic!("expected Completed");
+    };
+    let TraceEntry::If {
+        taken,
+        trace: inner,
+        ..
+    } = &trace[0]
+    else {
+        panic!("expected If, got {:?}", trace[0]);
+    };
+    assert!(!taken);
+    assert!(
+        matches!(&inner[0], TraceEntry::Assert { claim } if claim.predicate.as_str() == "Else")
+    );
+}
+
+/// A condition that cannot be evaluated is the body's error, as a
+/// `require`'s would be, and a nested `if` draws only along the path
+/// taken.
+#[test]
+fn if_propagates_a_condition_error_and_nests() {
+    use ir_builder::*;
+    let erring = single_stmt_transformation(
+        "erring",
+        vec![if_(
+            eq(term(var("unbound")), term(dec("0"))),
+            vec![],
+            vec![],
+        )],
+    );
+    assert!(matches!(
+        run(&erring, &State::default()),
+        Err(EvalError::UnboundVariable(v)) if v == "unbound"
+    ));
+
+    let nested = transformation(
+        "nested",
+        vec!["x".into()],
+        vec![if_(
+            claim("Flag", vec![var("x")]),
+            vec![if_(
+                claim("Inner", vec![var("x")]),
+                vec![let_new_subject("a"), assert_("Deep", vec![var("a")])],
+                vec![let_new_subject("b"), assert_("Shallow", vec![var("b")])],
+            )],
+            vec![],
+        )],
+    );
+    let state = State::from_claims(vec![ClaimInstance {
+        predicate: "Flag".into(),
+        args: vec![EvalValue::Subject("a".into())],
+    }]);
+    let transition = trace_transition(&nested, vec![EvalValue::Subject("a".into())]);
+    let mut source = vec![Subject::from("s1"), Subject::from("s2")].into_iter();
+    let Outcome::Accepted {
+        asserted_claims, ..
+    } = propose(&nested, &transition, &state, &[], &[], &mut source).unwrap()
+    else {
+        panic!("expected Accepted");
+    };
+    assert_eq!(asserted_claims[0].predicate.as_str(), "Shallow");
+    assert_eq!(asserted_claims[0].args[0], EvalValue::Subject("s1".into()));
+    assert_eq!(source.count(), 1, "one draw along the path taken");
+}

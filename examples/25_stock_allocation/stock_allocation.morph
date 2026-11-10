@@ -1,0 +1,273 @@
+program stock_allocation
+
+-- ============================================================
+-- Stock allocation: a warehouse whose record decides the split
+-- ============================================================
+--
+-- A warehouse holds stock: items, each of one part, each with a
+-- quantity. A customer orders parts, line by line. Before anything
+-- leaves the building, stock is allocated to a line: this item, this
+-- much of it, on this shipment. When the shipment goes out, each
+-- allocated item is handed to the customer.
+--
+-- One question makes this harder than it looks. An allocation may take
+-- less than the whole item. A pallet of two hundred bolts is allocated
+-- thirty; the thirty go to the customer and the pallet stays, lighter.
+-- The item has to split: a child item is created holding what leaves,
+-- the parent keeps the rest, and the allocation is re-pointed at the
+-- child so the record says which item the customer received. An
+-- allocation that takes the whole item splits nothing: the item itself
+-- goes.
+--
+-- In most inventory systems that choice is made in application code,
+-- which then has to get every consequence right: the new item, the
+-- reduced parent, the lineage, the re-pointed allocation, the line's
+-- shipped total. Here the act makes the choice itself, in one place,
+-- and the rules below check what it did. Stock is conserved across a
+-- split, an allocation never exceeds what is on hand, and a shipped
+-- item is no longer in stock. An act that got the split wrong would be
+-- refused, whichever branch it took.
+
+-- A part the warehouse stocks and sells.
+predicate Part(part: Subject)
+
+-- An item of stock: one part, some quantity of it. The quantity changes
+-- as the item is split, so this is not append only.
+predicate StockItem(item: Subject, part: Subject, quantity: Decimal)
+    unique by (item)
+
+-- What an item held when it arrived. Never changes: the conservation
+-- rule below measures every later split against it.
+predicate Received(item: Subject, quantity: Decimal)
+    unique by (item)
+    append only
+
+-- An item that is still on the shelf. Shipping the whole item takes
+-- this away; a child split off for a customer never gets it.
+predicate InStock(item: Subject)
+
+-- The lineage of a split: this child came off that parent, carrying
+-- this quantity. Recorded once and kept.
+predicate SplitFrom(child: Subject, parent: Subject, quantity: Decimal)
+    unique by (child)
+    append only
+
+-- A customer's order, and its lines: a part and how many.
+predicate SalesOrder(order: Subject, customer: Subject)
+    unique by (order)
+
+predicate SalesLine(line: Subject, order: Subject, part: Subject, quantity: Decimal)
+    unique by (line)
+
+-- How much of a line has been shipped so far. Starts at zero with the
+-- line and moves up as allocations ship.
+predicate LineShipped(line: Subject, quantity: Decimal)
+    unique by (line)
+
+-- A shipment on an order, and the moment it has gone out.
+predicate Shipment(shipment: Subject, order: Subject)
+    unique by (shipment)
+
+predicate ShipmentShipped(shipment: Subject)
+    append only
+
+-- Stock reserved for a line: this item, this quantity, on this
+-- shipment. Re-pointed at the child when the item splits.
+predicate Allocation(allocation: Subject, line: Subject, shipment: Subject, item: Subject, quantity: Decimal)
+    unique by (allocation)
+
+-- An item handed to a customer. Once shipped, always shipped.
+predicate ShippedTo(item: Subject, customer: Subject)
+    unique by (item)
+    append only
+
+-- What the outside world hears: a split happened, an item went out.
+intent ItemSplit(child: Subject, parent: Subject, quantity: Decimal)
+intent ItemShipped(item: Subject, customer: Subject)
+
+-- ============================================================
+-- The rules
+-- ============================================================
+--
+-- A rule here is a statement about the whole record that no act may
+-- break. The acts below are written to respect them, but the rules are
+-- what the runtime checks, so a mistake in an act is refused rather
+-- than stored.
+
+-- Nothing on the shelf holds less than nothing.
+invariant stock_is_never_negative:
+    StockItem(item, _, quantity) implies quantity >= 0
+
+-- Every split is accounted for: what an item holds now, plus everything
+-- ever split off it, is what arrived. This is the rule that makes a
+-- split safe to automate. The arrival record is the case; the item's
+-- present figure is read in the consequent, so the rule is re-judged
+-- for that item whenever its figure moves.
+invariant stock_is_conserved:
+    Received(item, received)
+    implies StockItem(item, _, held) and held + sum(moved | SplitFrom(_, item, moved)) = received
+
+-- A child holds exactly what the lineage says moved, and is of its
+-- parent's part.
+invariant a_split_child_holds_what_moved:
+    SplitFrom(child, parent, moved)
+    implies StockItem(child, part, moved) and StockItem(parent, part, _)
+
+-- Allocations are for a positive quantity, name things that exist, and
+-- the shipment is on the line's own order.
+invariant allocations_are_positive:
+    Allocation(allocation, _, _, _, quantity) implies quantity > 0
+
+invariant allocations_name_real_things:
+    Allocation(allocation, line, shipment, item, _)
+    implies SalesLine(line, order, _, _) and Shipment(shipment, order) and StockItem(item, _, _)
+
+-- What is allocated against an item never exceeds what it holds. The
+-- `allocate` act checks the same sum before it admits; the rule checks
+-- it again on the whole record, so a later change cannot slip past.
+invariant allocations_fit_the_stock:
+    StockItem(item, _, on_hand) implies sum(q | Allocation(_, _, _, item, q)) <= on_hand
+
+-- A line is never allocated, or shipped, more than it ordered.
+invariant lines_are_not_overallocated:
+    SalesLine(line, _, _, ordered) implies sum(q | Allocation(_, line, _, _, q)) <= ordered
+
+invariant lines_are_not_overshipped:
+    SalesLine(line, _, _, ordered) and LineShipped(line, shipped) implies shipped <= ordered
+
+-- An item that went to a customer is not on the shelf.
+invariant shipped_items_leave_stock:
+    ShippedTo(item, _) implies not InStock(item)
+
+-- Once an allocation's item has gone to the customer, the allocation is
+-- the record of what went: it reserves exactly what the item holds. A
+-- split leaves the child holding what moved; a whole shipment leaves
+-- the item holding what was allocated. Either way the figure may not
+-- drift afterwards.
+invariant shipped_allocations_are_settled:
+    Allocation(allocation, _, _, item, quantity)
+    implies not ShippedTo(item, _) or StockItem(item, _, quantity)
+
+-- ============================================================
+-- The acts
+-- ============================================================
+
+transformation add_part(part):
+    require new_part: not Part(part)
+    admit Part(part)
+
+transformation receive(item, part, quantity):
+    require positive: 0 < quantity
+    require known_part: Part(part)
+    require new_item: not StockItem(item, _, _)
+    admit StockItem(item, part, quantity)
+    admit Received(item, quantity)
+    admit InStock(item)
+
+transformation place_order(order, customer):
+    require new_order: not SalesOrder(order, _)
+    admit SalesOrder(order, customer)
+
+transformation add_line(line, order, part, quantity):
+    require positive: 0 < quantity
+    require known_order: SalesOrder(order, _)
+    require known_part: Part(part)
+    require new_line: not SalesLine(line, _, _, _)
+    admit SalesLine(line, order, part, quantity)
+    admit LineShipped(line, 0)
+
+transformation open_shipment(shipment, order):
+    require known_order: SalesOrder(order, _)
+    require new_shipment: not Shipment(shipment, _)
+    admit Shipment(shipment, order)
+
+-- Reserve some of an item for a line, on a shipment. The lookups do the
+-- checking: binding `order` from the line and then looking the shipment
+-- up with it says the shipment is on the line's order; binding `part`
+-- from the line and then looking the item up with it says the item is
+-- of the line's part. The sums are written out here and again in the
+-- rules above, which is the price of having no shared definition of
+-- "allocated" yet.
+transformation allocate(allocation, line, shipment, item, quantity):
+    require positive: 0 < quantity
+    require new_allocation: not Allocation(allocation, _, _, _, _)
+    bind SalesLine(line, order, part, ordered)
+    bind on_the_order: Shipment(shipment, order)
+    require not_yet_shipped: not ShipmentShipped(shipment)
+    bind same_part: StockItem(item, part, on_hand)
+    require in_stock: InStock(item)
+    require once_per_shipment: not Allocation(_, _, shipment, item, _)
+    let allocated = sum(q | Allocation(_, _, _, item, q))
+    require within_stock: allocated + quantity <= on_hand
+    let line_allocated = sum(q | Allocation(_, line, _, _, q))
+    require within_line: line_allocated + quantity <= ordered
+    admit Allocation(allocation, line, shipment, item, quantity)
+
+-- Change how much an allocation reserves. No gate repeats the stock
+-- check: the rules refuse a change that no longer fits. The one gate
+-- beyond the shipment's own standing is on the item: once it has gone
+-- to the customer the allocation is history, whether or not the
+-- shipment has closed.
+transformation change_allocation(allocation, quantity):
+    require positive: 0 < quantity
+    bind Allocation(allocation, line, shipment, item, held)
+    require not_yet_shipped: not ShipmentShipped(shipment)
+    require not_already_shipped: not ShippedTo(item, _)
+    retract Allocation(allocation, line, shipment, item, held)
+    admit Allocation(allocation, line, shipment, item, quantity)
+
+-- Hand one allocation's stock to the customer. The act reads the
+-- allocation and the item, then chooses: an allocation that takes less
+-- than the item splits a child off and ships the child; one that takes
+-- the whole item ships the item. Both branches read the record as it
+-- was when the act began, and only the branch taken happens. The
+-- child's identity is minted inside the branch, so an act that ships
+-- the whole item draws no identifier it will not use.
+transformation ship_allocation(allocation):
+    bind Allocation(allocation, line, shipment, item, quantity)
+    bind Shipment(shipment, order)
+    bind SalesOrder(order, customer)
+    require not_yet_shipped: not ShipmentShipped(shipment)
+    require still_in_stock: InStock(item)
+    bind StockItem(item, part, on_hand)
+    bind LineShipped(line, shipped)
+    let now_shipped = shipped + quantity
+    if quantity < on_hand:
+        let child = new Subject()
+        let remainder = on_hand - quantity
+        retract StockItem(item, part, on_hand)
+        admit StockItem(item, part, remainder)
+        admit StockItem(child, part, quantity)
+        admit SplitFrom(child, item, quantity)
+        admit ShippedTo(child, customer)
+        retract Allocation(allocation, line, shipment, item, quantity)
+        admit Allocation(allocation, line, shipment, child, quantity)
+        emit ItemSplit(child, item, quantity)
+        emit ItemShipped(child, customer)
+    else:
+        admit ShippedTo(item, customer)
+        retract InStock(item)
+        emit ItemShipped(item, customer)
+    retract LineShipped(line, shipped)
+    admit LineShipped(line, now_shipped)
+
+-- Mark a shipment gone, once every allocation on it has shipped.
+transformation close_shipment(shipment):
+    bind Shipment(shipment, _)
+    require not_yet_shipped: not ShipmentShipped(shipment)
+    require has_allocations: Allocation(_, _, shipment, _, _)
+    require every_item_shipped: not (exists a: Allocation(a, _, shipment, item, _) and not ShippedTo(item, _))
+    admit ShipmentShipped(shipment)
+
+-- ============================================================
+-- A read
+-- ============================================================
+
+-- How much of each item is allocated: the same sum a third time, as a
+-- view. The three copies are deliberate; a definition that yields a
+-- value would make them one.
+predicate Allocated(item: Subject, quantity: Decimal)
+
+derived Allocated(item):
+    over StockItem(item: item, ..)
+    value quantity = sum(q | Allocation(_, _, _, item, q))

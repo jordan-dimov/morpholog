@@ -409,6 +409,23 @@ fn trace_entry_for_with_per_iteration_items_round_trips() {
 }
 
 #[test]
+fn trace_entry_if_with_the_branch_taken_round_trips() {
+    let entry = TraceEntry::If {
+        expression: "Draft(account)".to_string(),
+        taken: false,
+        trace: vec![TraceEntry::Assert {
+            claim: claim_instance("Seen", &[subj("r")]),
+        }],
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    assert!(json.contains(r#""kind":"if""#));
+    assert!(json.contains(r#""taken":false"#));
+    assert!(json.contains(r#""kind":"assert""#));
+    let parsed: TraceEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, entry);
+}
+
+#[test]
 fn trace_entry_invariant_check_round_trips() {
     let entry = TraceEntry::InvariantCheck {
         name: "balanced_posted_entry".into(),

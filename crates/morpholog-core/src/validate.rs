@@ -964,7 +964,7 @@ fn collect_depth_errors(
 }
 
 /// True if `stmt` nests deeper than `budget` levels, counting both its
-/// expressions and nested `for` statements.
+/// expressions and nested `for` and `if` statements.
 fn stmt_exceeds_depth(stmt: &Stmt, budget: usize, depths: &HashMap<DefinitionName, usize>) -> bool {
     let Some(budget) = budget.checked_sub(1) else {
         return true;
@@ -982,6 +982,17 @@ fn stmt_exceeds_depth(stmt: &Stmt, budget: usize, depths: &HashMap<DefinitionNam
         } => {
             value_depth_capped(collection, budget, depths).is_none()
                 || body.iter().any(|s| stmt_exceeds_depth(s, budget, depths))
+        }
+        Stmt::If {
+            when,
+            then,
+            otherwise,
+        } => {
+            prop_depth_capped(when, budget, depths).is_none()
+                || then
+                    .iter()
+                    .chain(otherwise)
+                    .any(|s| stmt_exceeds_depth(s, budget, depths))
         }
     }
 }
@@ -1335,6 +1346,13 @@ fn collect_retract_bans(
         }
         Stmt::For { body, .. } => {
             for inner in body {
+                collect_retract_bans(inner, append_only, context, errors);
+            }
+        }
+        Stmt::If {
+            then, otherwise, ..
+        } => {
+            for inner in then.iter().chain(otherwise) {
                 collect_retract_bans(inner, append_only, context, errors);
             }
         }

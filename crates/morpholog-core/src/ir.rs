@@ -876,6 +876,14 @@ pub enum Stmt {
         collection: ValueExpr,
         body: Vec<Stmt>,
     },
+    /// `when` is a yes/no test with `Require`'s rule: any match holds and
+    /// nothing exports. The branch taken runs in order, with its own
+    /// bindings scoped to it; an absent `else` is an empty `otherwise`.
+    If {
+        when: Prop,
+        then: Vec<Stmt>,
+        otherwise: Vec<Stmt>,
+    },
     Emit(Intent),
 }
 

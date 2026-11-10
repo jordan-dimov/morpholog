@@ -448,6 +448,15 @@ pub fn for_(binding: &str, collection: ValueExpr, body: Vec<Stmt>) -> Stmt {
     }
 }
 
+/// `if when: then else: otherwise`; an empty `otherwise` is no `else`.
+pub fn if_(when: Prop, then: Vec<Stmt>, otherwise: Vec<Stmt>) -> Stmt {
+    Stmt::If {
+        when,
+        then,
+        otherwise,
+    }
+}
+
 // ============================================================
 // Parameter-list sugar
 // ============================================================

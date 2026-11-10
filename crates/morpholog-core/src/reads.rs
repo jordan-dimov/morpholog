@@ -341,6 +341,13 @@ fn rebound_names(stmt: &Stmt, out: &mut BTreeSet<Var>) {
                 rebound_names(inner, out);
             }
         }
+        Stmt::If {
+            then, otherwise, ..
+        } => {
+            for inner in then.iter().chain(otherwise) {
+                rebound_names(inner, out);
+            }
+        }
         Stmt::Require { .. }
         | Stmt::BindOne { .. }
         | Stmt::Assert(_)
@@ -359,6 +366,13 @@ fn let_names(stmt: &Stmt, out: &mut BTreeSet<Var>) {
         }
         Stmt::For { body, .. } => {
             for inner in body {
+                let_names(inner, out);
+            }
+        }
+        Stmt::If {
+            then, otherwise, ..
+        } => {
+            for inner in then.iter().chain(otherwise) {
                 let_names(inner, out);
             }
         }
@@ -433,6 +447,20 @@ impl Walker<'_> {
                 for inner in body {
                     self.stmt(inner, &known, seen);
                     self.extend(inner, &mut known);
+                }
+            }
+            Stmt::If {
+                when,
+                then,
+                otherwise,
+            } => {
+                self.prop(when, known, seen);
+                for branch in [then, otherwise] {
+                    let mut known = known.clone();
+                    for inner in branch {
+                        self.stmt(inner, &known, seen);
+                        self.extend(inner, &mut known);
+                    }
                 }
             }
         }

@@ -764,6 +764,23 @@ class ForStep:
 
 
 @dataclass(frozen=True)
+class IfStep:
+    expression: str
+    taken: bool
+    trace: list[TraceStep]
+
+    @classmethod
+    def from_json(cls, payload: object) -> IfStep:
+        data = _strict("if step", payload, {"kind", "expression", "taken", "trace"})
+        data.constant("kind", "if")
+        return cls(
+            expression=data.text("expression"),
+            taken=data.flag("taken"),
+            trace=data.array("trace", parse_trace_step),
+        )
+
+
+@dataclass(frozen=True)
 class InvariantCheckStep:
     name: str
     expression: str
@@ -787,6 +804,7 @@ TraceStep = (
     | RetractStep
     | EmitStep
     | ForStep
+    | IfStep
     | InvariantCheckStep
 )
 
@@ -803,6 +821,7 @@ def parse_trace_step(payload: object) -> TraceStep:
         "retract": RetractStep.from_json,
         "emit": EmitStep.from_json,
         "for": ForStep.from_json,
+        "if": IfStep.from_json,
         "invariant_check": InvariantCheckStep.from_json,
     }
     parse = by_kind.get(kind) if isinstance(kind, str) else None

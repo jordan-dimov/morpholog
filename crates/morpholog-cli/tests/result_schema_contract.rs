@@ -344,7 +344,7 @@ fn named_gate_program() -> morpholog_core::Program {
 /// cover each arm of the union.
 fn traced_program() -> morpholog_core::Program {
     use morpholog_core::ir_builder::{
-        bind_one_named, emit, for_, let_, let_new_subject, require_named, retract, term,
+        bind_one_named, emit, for_, if_, let_, let_new_subject, require_named, retract, term,
     };
     program("traced")
         .predicates(vec![
@@ -386,6 +386,11 @@ fn traced_program() -> morpholog_core::Program {
                         "item",
                         term(var("items")),
                         vec![assert_("Seen", vec![var("item")])],
+                    ),
+                    if_(
+                        claim("Draft", vec![var("account")]),
+                        vec![let_("kept", term(var("copy")))],
+                        vec![assert_("Seen", vec![var("receipt")])],
                     ),
                     emit("Notified", vec![var("account")]),
                 ],
@@ -533,6 +538,7 @@ fn pin_fresh_subjects(trace: &mut [morpholog_core::TraceEntry]) {
                     pin_fresh_subjects(&mut it.trace);
                 }
             }
+            TraceEntry::If { trace, .. } => pin_fresh_subjects(trace),
             _ => {}
         }
     }
@@ -3067,7 +3073,8 @@ fn every_trace_arm_appears_in_a_golden() {
         "anti-vacuity: the arms must be read, not silently empty"
     );
 
-    // What the goldens actually contain, descending through `for` bodies.
+    // What the goldens actually contain, descending through `for` bodies
+    // and `if` branches.
     let mut seen_kinds = std::collections::BTreeSet::new();
     let mut seen_statuses = std::collections::BTreeSet::new();
     fn walk(
@@ -3092,6 +3099,9 @@ fn every_trace_arm_appears_in_a_golden() {
                         walk(sub, kinds, statuses);
                     }
                 }
+            }
+            if let Some(sub) = e.get("trace").and_then(|t| t.as_array()) {
+                walk(sub, kinds, statuses);
             }
         }
     }

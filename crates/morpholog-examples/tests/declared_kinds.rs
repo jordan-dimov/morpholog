@@ -265,8 +265,8 @@ fn the_traced_run_and_explain_meet_the_same_error() {
     }
 }
 
-/// The name and values of every admit and emit a trace shows, loops
-/// included.
+/// The name and values of every admit and emit a trace shows, loops and
+/// branches included.
 fn staged_values(trace: &[TraceEntry]) -> Vec<(String, Vec<EvalValue>)> {
     let mut out = vec![];
     for entry in trace {
@@ -280,6 +280,7 @@ fn staged_values(trace: &[TraceEntry]) -> Vec<(String, Vec<EvalValue>)> {
                     out.extend(staged_values(&iteration.trace));
                 }
             }
+            TraceEntry::If { trace, .. } => out.extend(staged_values(trace)),
             _ => {}
         }
     }

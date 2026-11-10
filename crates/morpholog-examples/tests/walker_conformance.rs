@@ -194,6 +194,29 @@ transformation release_all(batches, items):
             retract Held(item)
 ";
 
+/// An `if` whose condition calls a definition, with a gate, a mint, a
+/// nested loop and a retraction inside its branches: every walker must
+/// descend into both branches and the condition.
+const IF_ACROSS_BRANCHES: &str = "\
+program if_across_branches
+predicate Held(item: Subject)
+predicate Ticket(ticket: Subject, item: Subject)
+predicate Batch(batch: Subject)
+predicate Released(item: Subject)
+define is_held(i):
+    Held(i)
+transformation hold(item):
+    admit Held(item)
+transformation release(item, batches):
+    if is_held(item):
+        require Batch(_)
+        retract Held(item)
+        for batch in batches:
+            admit Ticket(new Subject(), item)
+    else:
+        admit Released(item)
+";
+
 const UNSUPPLIED_THROUGH_DEFINED: &str = "\
 program unsupplied_through_defined
 predicate Ghost(g: Subject)
@@ -429,6 +452,7 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ("valueof_sum_default", VALUEOF_SUM_DEFAULT),
         ("for_with_defined_require", FOR_WITH_DEFINED_REQUIRE),
         ("retract_in_nested_for", RETRACT_IN_NESTED_FOR),
+        ("if_across_branches", IF_ACROSS_BRANCHES),
         ("unsupplied_through_defined", UNSUPPLIED_THROUGH_DEFINED),
         ("let_sugared_define", LET_SUGARED_DEFINE),
         ("round_in_let_sugared_body", ROUND_IN_LET_SUGARED_BODY),

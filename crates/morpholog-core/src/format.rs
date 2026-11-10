@@ -421,16 +421,39 @@ fn fmt_stmt(s: &Stmt, depth: usize, ctx: FormatContext) -> String {
             collection,
             body,
         } => {
-            let mut out = format!("{pad}for {binding} in {}:\n", fmt_value(collection, ctx));
-            for (i, inner) in body.iter().enumerate() {
-                out.push_str(&fmt_stmt(inner, depth + 1, ctx));
-                if i + 1 < body.len() {
-                    out.push('\n');
-                }
+            format!(
+                "{pad}for {binding} in {}:\n{}",
+                fmt_value(collection, ctx),
+                fmt_block(body, depth + 1, ctx)
+            )
+        }
+        Stmt::If {
+            when,
+            then,
+            otherwise,
+        } => {
+            let mut out = format!(
+                "{pad}if {}:\n{}",
+                fmt_prop(when, ctx),
+                fmt_block(then, depth + 1, ctx)
+            );
+            if !otherwise.is_empty() {
+                out.push_str(&format!(
+                    "\n{pad}else:\n{}",
+                    fmt_block(otherwise, depth + 1, ctx)
+                ));
             }
             out
         }
     }
+}
+
+/// An indented statement block, one statement per line.
+fn fmt_block(body: &[Stmt], depth: usize, ctx: FormatContext) -> String {
+    body.iter()
+        .map(|inner| fmt_stmt(inner, depth, ctx))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 // ============================================================

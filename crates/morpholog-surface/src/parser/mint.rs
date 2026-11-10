@@ -61,7 +61,8 @@ fn holds_a_mint(stmt: &Stmt) -> bool {
     vars.contains(MINT)
 }
 
-/// One statement, with its placeholders named: the lets it needs, then itself.
+/// One statement, with its placeholders named: the lets it needs, then itself. A `for` body
+/// and an `if` branch are named in place, since a let belongs where its statement runs.
 fn name_in(stmt: Stmt, names: &mut Names) -> Vec<Stmt> {
     let is_mint = |term: &Term| matches!(term, Term::Var(v) if v.as_str() == MINT);
     let mut name_args = |args: &mut Vec<Term>, lets: &mut Vec<Stmt>| {
@@ -88,13 +89,25 @@ fn name_in(stmt: Stmt, names: &mut Names) -> Vec<Stmt> {
         } => Stmt::For {
             binding,
             collection,
-            body: body
-                .into_iter()
-                .flat_map(|inner| name_in(inner, names))
-                .collect(),
+            body: name_block(body, names),
+        },
+        Stmt::If {
+            when,
+            then,
+            otherwise,
+        } => Stmt::If {
+            when,
+            then: name_block(then, names),
+            otherwise: name_block(otherwise, names),
         },
         other => other,
     };
     lets.push(stmt);
     lets
+}
+
+fn name_block(body: Vec<Stmt>, names: &mut Names) -> Vec<Stmt> {
+    body.into_iter()
+        .flat_map(|inner| name_in(inner, names))
+        .collect()
 }

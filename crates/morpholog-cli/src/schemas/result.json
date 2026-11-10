@@ -510,6 +510,17 @@
         {
           "type": "object",
           "additionalProperties": false,
+          "required": ["kind", "expression", "taken", "trace"],
+          "properties": {
+            "kind": { "const": "if" },
+            "expression": { "type": "string" },
+            "taken": { "type": "boolean" },
+            "trace": { "type": "array", "items": { "$ref": "#/$defs/trace_entry" } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
           "required": ["kind", "name", "expression", "held"],
           "properties": {
             "kind": { "const": "invariant_check" },

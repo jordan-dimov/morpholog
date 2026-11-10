@@ -66,15 +66,19 @@ fn agreeing_verdict(
     agrees.ok_or_else(|| format!("{outcome:?} explained as {:?}", explanation.verdict))
 }
 
-/// Whether the transformation loops. `for` is the only statement
-/// with a nested body, so any nested loop's outermost ancestor is
-/// itself a top-level `for` - a flat scan is total.
+/// Whether the transformation loops, at top level or inside a branch.
 fn contains_for(body: &[Stmt]) -> bool {
-    body.iter().any(|s| matches!(s, Stmt::For { .. }))
+    body.iter().any(|s| match s {
+        Stmt::For { .. } => true,
+        Stmt::If {
+            then, otherwise, ..
+        } => contains_for(then) || contains_for(otherwise),
+        _ => false,
+    })
 }
 
-/// Count `For` trace entries, descending into iteration traces so a
-/// nested loop still registers.
+/// Count `For` trace entries, descending into iteration traces and
+/// branches so a nested loop still registers.
 fn count_for_entries(entries: &[TraceEntry]) -> usize {
     entries
         .iter()
@@ -85,6 +89,7 @@ fn count_for_entries(entries: &[TraceEntry]) -> usize {
                     .map(|i| count_for_entries(&i.trace))
                     .sum::<usize>()
             }
+            TraceEntry::If { trace, .. } => count_for_entries(trace),
             _ => 0,
         })
         .sum()

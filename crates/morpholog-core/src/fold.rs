@@ -89,6 +89,16 @@ fn stmt_scoped<'a>(
                 stmt_scoped(s, visit, scope);
             }
         }
+        Stmt::If {
+            when,
+            then,
+            otherwise,
+        } => {
+            prop_scoped(when, visit, scope);
+            for s in then.iter().chain(otherwise) {
+                stmt_scoped(s, visit, scope);
+            }
+        }
     }
 }
 

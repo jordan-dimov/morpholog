@@ -1308,6 +1308,16 @@ impl<'a> Rematch<'a, '_> {
                     self.visit(s, index, &mut inner);
                 }
             }
+            Stmt::If {
+                then, otherwise, ..
+            } => {
+                for branch in [then, otherwise] {
+                    let mut inner = bound.clone();
+                    for s in branch {
+                        self.visit(s, index, &mut inner);
+                    }
+                }
+            }
             Stmt::Assert(_) | Stmt::Retract { .. } | Stmt::Emit(_) => {}
         }
     }
@@ -1316,7 +1326,8 @@ impl<'a> Rematch<'a, '_> {
 /// The variables a statement names outside any quantifier binding them
 /// (a `forall` binds its own in its source too) and outside any `sum`,
 /// `max` or `min` body, whose variables are its own; for a `for`, only its
-/// collection, since its body is visited apart.
+/// collection, and for an `if`, only its condition, since their bodies are
+/// visited apart.
 fn named_here<'a>(stmt: &'a crate::ir::Stmt) -> Vec<&'a crate::ir::Var> {
     use crate::fold::Node;
     let term = |node: Node<'a>| match node {
@@ -1353,6 +1364,9 @@ fn named_here<'a>(stmt: &'a crate::ir::Stmt) -> Vec<&'a crate::ir::Var> {
     match stmt {
         crate::ir::Stmt::For { collection, .. } => {
             crate::fold::walk_value_scoped(collection, &mut take);
+        }
+        crate::ir::Stmt::If { when, .. } => {
+            crate::fold::walk_prop_scoped(when, &mut take);
         }
         other => crate::fold::walk_stmt_scoped(other, &mut take),
     }

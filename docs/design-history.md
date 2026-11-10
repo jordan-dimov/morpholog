@@ -1398,6 +1398,12 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 
 **Landed:** `x in (a, b, ...)`, rewritten by the parser to the `or` chain of equalities, so the kernel, the compiled checks and the analyses see nothing new and a rule that switches keeps its hash. The two gallery sites switched, and the canonical-identity golden moved only their source digests. A list needs two values, so `x in (xs)` is still membership in a collection. A `const` naming a list is not in this change.
 
+### A conditional statement
+
+**Forced by:** the InvenTree spike (#725). Shipping an allocation splits the stock item only when the allocation takes less than the whole, so the programme had two acts and the host picked one per allocation. The record could not make a choice an act depends on.
+
+**Landed:** `if <prop>:` with an optional `else:`, `Stmt::If`, with `examples/25_stock_allocation/` as the forcing example: one `ship_allocation` act that splits or ships whole. The condition is a `require`-style test that exports nothing; only the branch taken runs, so it alone draws subjects; branch bindings are scoped as a `for` body's are. The trace gains an `if` entry carrying the branch's own entries, and `explain` descends into it. Rejected: branches that export the names both bind, which no act needed; a `when`/`otherwise` spelling, since `if(...)` the value already exists.
+
 ### A predicate's history as a view
 
 **Forced by:** the InvenTree spike (#734). Its stock history page is read from the audit log, with nothing written beside the act, but the read decoded `operations` by position in hand SQL, restating field names and kinds the programme already declares.

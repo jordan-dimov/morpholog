@@ -29,6 +29,8 @@
 //! - `retract Foo(args)` -> `Stmt::Retract { predicate, args }`
 //! - `emit Foo(args)`    -> `Stmt::Emit(Intent { name, args })`
 //!
+//! `if <proposition>:` with an optional `else:` is `Stmt::If`, both blocks indented.
+//!
 //! `bind` accepts only a claim pattern although the IR's `Stmt::BindOne` could hold any `Prop`:
 //! the surface allows only what authors meaningfully write.
 
@@ -245,6 +247,35 @@ where
                 body,
             });
 
+        // if <proposition> : Indent statement+ Dedent [else : Indent statement+ Dedent]
+        //
+        // `if` and `else` are contextual, as `if(...)` the value is: a statement starts with a
+        // verb, so `if` at statement start is this and nowhere else.
+        let block = just(Token::Indent)
+            .ignore_then(
+                statement
+                    .clone()
+                    .repeated()
+                    .at_least(1)
+                    .collect::<Vec<Stmt>>(),
+            )
+            .then_ignore(just(Token::Dedent));
+        let if_stmt = select! { Token::Ident(s) if s == "if" => () }
+            .ignore_then(proposition.clone())
+            .then_ignore(just(Token::Colon))
+            .then(block.clone())
+            .then(
+                select! { Token::Ident(s) if s == "else" => () }
+                    .ignore_then(just(Token::Colon))
+                    .ignore_then(block)
+                    .or_not(),
+            )
+            .map(|((when, then), otherwise)| Stmt::If {
+                when,
+                then,
+                otherwise: otherwise.unwrap_or_default(),
+            });
+
         choice((
             require_stmt,
             bind_stmt,
@@ -253,6 +284,7 @@ where
             emit_stmt,
             let_stmt,
             for_stmt,
+            if_stmt,
         ))
     })
 }
