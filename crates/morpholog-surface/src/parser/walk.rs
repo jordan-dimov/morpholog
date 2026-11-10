@@ -34,6 +34,21 @@ pub(super) fn vars_in_term(term: &Term, out: &mut BTreeSet<String>) {
     var_into(&Node::Slot(term), out);
 }
 
+/// Every name a statement uses: the variables it reads, the names its `let`s and `for`s
+/// introduce, and every quantifier binder inside it.
+pub(super) fn names_in_stmt(stmt: &Stmt, out: &mut BTreeSet<String>) {
+    walk_stmt(stmt, &mut |n| {
+        var_into(&n, out);
+        binder_into(&n, out);
+        if let Node::Stmt(
+            Stmt::Let { name, .. } | Stmt::LetNewSubject { name } | Stmt::For { binding: name, .. },
+        ) = n
+        {
+            out.insert(name.to_string());
+        }
+    });
+}
+
 fn var_into(node: &Node<'_>, out: &mut BTreeSet<String>) {
     if let Some((v, _)) = read_var(node) {
         out.insert(v.to_string());

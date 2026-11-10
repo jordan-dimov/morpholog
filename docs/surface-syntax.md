@@ -97,6 +97,12 @@ transformation withdraw_mandate(trader, desk):
     retract Mandate(trader: trader, desk: desk, ..)
 ```
 
+A subject that is only written down can be minted where it is used:
+`admit Order(new Subject(), actor, half)` is the two lines above in one,
+and reads as them, with a name of the parser's choosing. Only an `admit`
+or `emit` argument takes it; a fresh subject matches nothing, so a
+`bind`, `retract` or `require` names one with `let` first.
+
 Every statement reads the state as it was when the act began: a claim
 admitted two lines up is not visible to a `require` below it. The rules
 then judge the state the act proposes. `actor` is the identity supplied

@@ -23,6 +23,7 @@ mod consts;
 mod expr;
 mod field_table;
 mod lets;
+mod mint;
 mod program;
 mod stmt;
 mod walk;

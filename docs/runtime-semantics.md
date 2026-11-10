@@ -134,7 +134,9 @@ Statement
   require Prop                   -- yes/no gate; does not export bindings
   bind_one Prop                  -- unique lookup; replaces bindings with match
   let name = ValueExpr           -- value-producing binding
-  let name = new Subject()       -- draws a fresh subject from the caller's source
+  let name = new Subject()       -- draws a fresh subject from the caller's source;
+                                    `admit P(new Subject(), ..)` and `emit I(new Subject())`
+                                    are parsed as this let, of a generated name, then the statement
   assert Claim                   -- IR name; the surface verb is `admit`
   retract Pred(args...)          -- pattern-based; idempotent on zero matches
   for binding in collection: list of Statements  -- iteration; body is scoped

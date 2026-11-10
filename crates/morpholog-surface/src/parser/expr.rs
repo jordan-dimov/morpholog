@@ -8,8 +8,8 @@
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
 use morpholog_core::{
-    ArithOp, Builtin, CompareOp, ExtremumOp, OrderedDomain, Prop, SumSeed, Term, Unit, Value,
-    ValueExpr,
+    ArithOp, Builtin, CompareOp, ExtremumOp, OrderedDomain, PredicateArgKind, Prop, SumSeed, Term,
+    Unit, Value, ValueExpr, Var,
 };
 
 use super::field_table::{FieldTable, Vocabulary, resolve_named, resolve_named_value};
@@ -223,8 +223,64 @@ where
 }
 
 /// A term: the only thing claim-call arguments and `in` operands accept. Variables, `actor`,
-/// wildcards, and literals.
+/// wildcards, and literals. `new Subject()` is refused here by name, as it is in a value: it
+/// mints only in an `admit` or `emit` argument ([`constructive_term_parser`]).
 pub(super) fn term_parser<'a, I>() -> impl Parser<'a, I, Term, extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    choice((
+        refused_mint_parser().to(Term::Wildcard),
+        plain_term_parser(),
+    ))
+}
+
+/// `new Subject()` where a subject is read: refused by name, in one diagnostic, and parsed on
+/// as a wildcard so nothing else is reported for it.
+fn refused_mint_parser<'a, I>() -> impl Parser<'a, I, (), extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    mint_parser().validate(|(), e, emitter| {
+        emitter.emit(Rich::custom(
+            e.span(),
+            "`new Subject()` mints a subject only where one is written down, in an `admit` or \
+             `emit` argument; a fresh subject matches nothing, so name it first with \
+             `let name = new Subject()` where a read needs it",
+        ));
+    })
+}
+
+/// A term in a constructive slot, an `admit` or `emit` argument: every term, and
+/// `new Subject()`, which becomes the [`MINT`] placeholder for the naming pass to turn into a
+/// `let` of a generated name before the statement.
+pub(super) fn constructive_term_parser<'a, I>()
+-> impl Parser<'a, I, Term, extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    choice((
+        mint_parser().to(Term::Var(Var::from(MINT))),
+        plain_term_parser(),
+    ))
+}
+
+/// The placeholder variable an inline `new Subject()` parses to. No identifier can spell it, so
+/// it reaches nothing but the naming pass.
+pub(super) const MINT: &str = "\0new Subject()";
+
+/// `new Subject()` as tokens. `Subject` lexes as a kind keyword, not an identifier.
+fn mint_parser<'a, I>() -> impl Parser<'a, I, (), extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
+    just(Token::KwNew)
+        .ignore_then(select! { Token::Kind(PredicateArgKind::Subject) => () })
+        .then_ignore(just(Token::LParen))
+        .then_ignore(just(Token::RParen))
+}
+
+fn plain_term_parser<'a, I>() -> impl Parser<'a, I, Term, extra::Err<Rich<'a, Token>>> + Clone
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
@@ -273,14 +329,25 @@ pub(super) fn pattern_args_parser<'a, I>()
 where
     I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
 {
+    pattern_args_over(term_parser())
+}
+
+/// [`pattern_args_parser`] with the given term parser in each slot, so a constructive
+/// statement can take [`constructive_term_parser`].
+pub(super) fn pattern_args_over<'a, I>(
+    term: impl Parser<'a, I, Term, extra::Err<Rich<'a, Token>>> + Clone,
+) -> impl Parser<'a, I, PatternArgs, extra::Err<Rich<'a, Token>>> + Clone
+where
+    I: ValueInput<'a, Token = Token, Span = SimpleSpan>,
+{
     let ident = select! { Token::Ident(s) => s };
     let named_entry = ident
         .map_with(|name, e| (e.span(), name))
         .then_ignore(just(Token::Colon))
-        .then(term_parser())
+        .then(term.clone())
         .map(|((span, name), term)| PatternItem::Named(span, name, term));
     let rest = just(Token::DotDot).map_with(|_, e| PatternItem::Rest(e.span()));
-    choice((named_entry, rest, term_parser().map(PatternItem::Pos)))
+    choice((named_entry, rest, term.map(PatternItem::Pos)))
         .separated_by(just(Token::Comma))
         .allow_trailing()
         .collect::<Vec<PatternItem>>()
@@ -786,6 +853,7 @@ where
         let bool_as_value =
             select! { Token::BoolLit(b) => ValueExpr::Term(Term::Literal(Value::Bool(b))) };
         let wildcard_as_value = just(Token::Wildcard).to(ValueExpr::Term(Term::Wildcard));
+        let refused_mint = refused_mint_parser().to(ValueExpr::Term(Term::Wildcard));
 
         // A variable, `actor` or `decided_at`. `Foo(args)` is a claim, which only the proposition
         // grammar takes.
@@ -1003,6 +1071,7 @@ where
             subject_as_value,
             bool_as_value,
             wildcard_as_value,
+            refused_mint,
             bare_ident,
         ));
 
