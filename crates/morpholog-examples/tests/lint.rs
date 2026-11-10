@@ -1987,6 +1987,12 @@ transformation one_of(item, q):
 transformation one_of_each_branch(item, q):
     require within: sum(x | Status(i, s) and ((s = #open and Alloc(_, i, x)) or (s = #held and Build(_, i, x)))) + q <= value Stock(item, _)
     admit Amount(item, q)
+transformation same_literal(item, q):
+    require within: sum(x | Alloc(_, i, x) and Status(i, s) and (s = #open or s = #open)) + q <= value Stock(item, _)
+    admit Amount(item, q)
+transformation two_variables(item, q):
+    require within: sum(x | Alloc(_, i, x) and Status(i, s) and Status(item, t) and (s = #open or t = #held)) + q <= value Stock(item, _)
+    admit Amount(item, q)
 transformation under_exists(item, q):
     require within: sum(x | Amount(item, x) and (exists s: Status(item, s) and (s = #open or x > 0))) + q <= value Stock(item, _)
     admit Amount(item, q)
@@ -2002,7 +2008,8 @@ transformation outside_a_sum(item, q):
 ";
 
 /// An `or` under a sum is hinted where its branches can hold together,
-/// nested ones included, and named as written. It is silent where the
+/// nested ones included, and named as written; two equalities hold
+/// together when they test one literal twice or two variables. It is silent where the
 /// branches are equalities of one variable against distinct literals,
 /// alone or each inside its branch, where the `or` only answers yes or
 /// no, where it sits inside a definition the sum calls, and outside a
@@ -2021,6 +2028,8 @@ fn an_or_under_a_sum_is_hinted_where_its_branches_can_hold_together() {
         ("two_families", "Alloc(_, item, x) or Build(_, item, x)"),
         ("nested", "(x > 0) or ((x < 10) or (x > 100))"),
         ("nested", "(x < 10) or (x > 100)"),
+        ("same_literal", "(s = #open) or (s = #open)"),
+        ("two_variables", "(s = #open) or (t = #held)"),
     ]
     .into_iter()
     .map(|(t, d)| (format!("transformation `{t}`"), d.to_string()))
