@@ -1352,7 +1352,7 @@ fn for_each_reads_the_pre_state_and_a_refusal_inside_is_traced_at_its_claim() {
     else {
         panic!("the marked line refuses the act");
     };
-    assert_eq!(name.as_ref().map(|n| n.as_str()), Some("unmarked"));
+    assert_eq!(name.as_ref().map(RuleName::as_str), Some("unmarked"));
     let [TraceEntry::ForEach { iterations, .. }] = trace.as_slice() else {
         panic!("one for entry: {trace:?}");
     };
