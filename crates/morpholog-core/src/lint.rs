@@ -15,6 +15,7 @@ use crate::ir::{
     Term, Value, ValueExpr, Var,
 };
 use crate::prepared::PreparedProgram;
+use crate::state::EvalValue;
 
 /// Python's hard keywords (3.12 floor). A declared name among them cannot
 /// be a dataclass field of the generated client, and renaming it there
@@ -64,8 +65,8 @@ pub enum Lint {
 
     /// A `sum` whose body holds an `or` whose branches can hold together.
     /// A disjunction keeps every branch's matches, so a row that
-    /// satisfies two branches counts twice and the sum can come out too
-    /// high. A hint, because counting per branch can be what the author
+    /// satisfies two branches counts twice, and the total is not the one
+    /// the rows hold. A hint, because counting per branch can be what the author
     /// means. Silent where the branches cannot hold together by
     /// construction (equalities of one variable against distinct
     /// literals, the `in (a, b)` form, each branch carrying one), and
@@ -301,7 +302,8 @@ impl std::fmt::Display for Lint {
                 f,
                 "{owner} sums over `{disjunction}`, an `or` whose branches can hold together: a \
                  disjunction keeps every branch's matches, so a row that satisfies two branches \
-                 counts twice and the sum can come out too high. Make the branches exclusive, or \
+                 counts twice and the total is not the one the rows hold. Make the branches \
+                 exclusive, or \
                  test the `or` under `exists` when any branch holding is what counts"
             ),
             Lint::LargeGrid {
@@ -795,8 +797,10 @@ fn witness_ors<'a>(prop: &'a Prop, out: &mut Vec<&'a [Prop]>) {
 
 /// Whether the branches cannot hold together by construction: each one
 /// is, or conjoins, an equality of one and the same variable against a
-/// literal, and the literals are pairwise distinct. The shape `x in (a,
-/// b)` desugars to, and the one a status-dependent sum writes.
+/// literal, and the literals are pairwise distinct as the evaluator
+/// compares them, so `5.0` and `5.00` are one literal here as they are
+/// one number at runtime. The shape `x in (a, b)` desugars to, and the
+/// one a status-dependent sum writes.
 fn exclusive_literal_branches(branches: &[Prop]) -> bool {
     fn literal_equality(prop: &Prop) -> Option<(&Var, &Value)> {
         match prop {
@@ -822,10 +826,11 @@ fn exclusive_literal_branches(branches: &[Prop]) -> bool {
         return false;
     };
     tested.iter().all(|(v, _)| v == first)
-        && tested
-            .iter()
-            .enumerate()
-            .all(|(i, (_, l))| tested[..i].iter().all(|(_, other)| other != l))
+        && tested.iter().enumerate().all(|(i, (_, l))| {
+            tested[..i]
+                .iter()
+                .all(|(_, other)| EvalValue::from(*other) != EvalValue::from(*l))
+        })
 }
 
 /// The findings of one rule, given every node in it and the names it

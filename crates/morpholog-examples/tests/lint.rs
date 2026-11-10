@@ -1970,6 +1970,7 @@ predicate Alloc(allocation: Subject, item: Subject, q: Decimal)
 predicate Build(allocation: Subject, item: Subject, q: Decimal)
 predicate Status(item: Subject, s: Subject)
 predicate Stock(item: Subject, on_hand: Decimal)
+predicate Load(item: Subject, w: Decimal[kg])
 define counted(allocation, item, q):
     Alloc(allocation, item, q) or Build(allocation, item, q)
 transformation overlapping_tests(item, q):
@@ -1993,6 +1994,15 @@ transformation same_literal(item, q):
 transformation two_variables(item, q):
     require within: sum(x | Alloc(_, i, x) and Status(i, s) and Status(item, t) and (s = #open or t = #held)) + q <= value Stock(item, _)
     admit Amount(item, q)
+transformation same_number(item, q):
+    require within: sum(x | Amount(item, x) and (x = 5.0 or x = 5.00)) + q <= value Stock(item, _)
+    admit Amount(item, q)
+transformation same_quantity(item, q):
+    require few: sum(1 | Load(item, w) and (w = 5.0 kg or w = 5.00 kg)) <= 10
+    admit Amount(item, q)
+transformation distinct_numbers(item, q):
+    require within: sum(x | Amount(item, x) and (x = 5.0 or x = 6)) + q <= value Stock(item, _)
+    admit Amount(item, q)
 transformation under_exists(item, q):
     require within: sum(x | Amount(item, x) and (exists s: Status(item, s) and (s = #open or x > 0))) + q <= value Stock(item, _)
     admit Amount(item, q)
@@ -2009,7 +2019,8 @@ transformation outside_a_sum(item, q):
 
 /// An `or` under a sum is hinted where its branches can hold together,
 /// nested ones included, and named as written; two equalities hold
-/// together when they test one literal twice or two variables. It is silent where the
+/// together when they test one literal twice, two variables, or two
+/// spellings of one number, which the evaluator compares equal. It is silent where the
 /// branches are equalities of one variable against distinct literals,
 /// alone or each inside its branch, where the `or` only answers yes or
 /// no, where it sits inside a definition the sum calls, and outside a
@@ -2030,6 +2041,8 @@ fn an_or_under_a_sum_is_hinted_where_its_branches_can_hold_together() {
         ("nested", "(x < 10) or (x > 100)"),
         ("same_literal", "(s = #open) or (s = #open)"),
         ("two_variables", "(s = #open) or (t = #held)"),
+        ("same_number", "(x = 5.0) or (x = 5.00)"),
+        ("same_quantity", "(w = 5.0 kg) or (w = 5.00 kg)"),
     ]
     .into_iter()
     .map(|(t, d)| (format!("transformation `{t}`"), d.to_string()))
@@ -2051,8 +2064,9 @@ fn hinted_text(source: &str) -> String {
 }
 
 /// Why the hint exists, and why the exclusive form is silent: one amount
-/// of 5 under a disjunction both of whose tests it passes sums to 10;
-/// under equalities against distinct literals it sums to 5.
+/// of 5 under a disjunction both of whose tests it passes sums to 10,
+/// as it does under two spellings of its own value; under equalities
+/// against distinct literals it sums to 5.
 #[test]
 fn an_overlapping_or_counts_a_witness_once_per_holding_branch() {
     use morpholog_core::State;
@@ -2064,6 +2078,7 @@ predicate Amount(x: Subject, q: Decimal)
 predicate Status(x: Subject, s: Subject)
 predicate Overlapping(x: Subject, total: Decimal)
 predicate Exclusive(x: Subject, total: Decimal)
+predicate SameNumber(x: Subject, total: Decimal)
 
 derived Overlapping(x):
     over Amount(x: x, ..)
@@ -2071,6 +2086,9 @@ derived Overlapping(x):
 derived Exclusive(x):
     over Amount(x: x, ..)
     value total = sum(q | Amount(x, q) and Status(x, s) and (s = #open or s = #held))
+derived SameNumber(x):
+    over Amount(x: x, ..)
+    value total = sum(q | Amount(x, q) and (q = 5.0 or q = 5.00))
 
 transformation note(x, q):
     admit Amount(x, q)
@@ -2098,5 +2116,10 @@ transformation note(x, q):
         figure("Exclusive"),
         vec![claim_instance("Exclusive", &[subj("a"), dec(5)])],
         "one status holds, and 5 counts once"
+    );
+    assert_eq!(
+        figure("SameNumber"),
+        vec![claim_instance("SameNumber", &[subj("a"), dec(10)])],
+        "5.0 and 5.00 are one number at runtime, and 5 counts twice"
     );
 }
