@@ -8,12 +8,16 @@ mod common;
 
 use common::all_programs;
 use morpholog_core::fold::{Node, walk_prop};
-use morpholog_core::{ImpactPlan, Prop};
+use morpholog_core::{ImpactPlan, Prop, ValueExpr};
 
+/// Whether the rule calls a condition or a figure anywhere in its body.
 fn calls_a_definition(body: &Prop) -> bool {
     let mut found = false;
     walk_prop(body, &mut |n| {
-        if matches!(n, Node::Prop(Prop::Defined { .. })) {
+        if matches!(
+            n,
+            Node::Prop(Prop::Defined { .. }) | Node::Value(ValueExpr::Defined { .. })
+        ) {
             found = true;
         }
     });

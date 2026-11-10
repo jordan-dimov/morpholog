@@ -183,6 +183,12 @@ fn render(
             within_budget(&rendered.iter().collect::<Vec<_>>())?;
             call(*builtin, &rendered)
         }
+        // The body under the frame its arguments give, as the kernel
+        // evaluates it.
+        ValueExpr::Defined { name, args } => {
+            let (body, frame) = super::value_call_frame(name, args, env, ctx)?;
+            render(body, &frame, ctx, sums)
+        }
         ValueExpr::Extremum { .. } => Err(CompileReason::Construct {
             construct: "extremum",
         }),

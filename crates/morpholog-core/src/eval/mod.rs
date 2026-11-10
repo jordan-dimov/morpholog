@@ -341,9 +341,10 @@ pub fn eval_value_over(
             }
             ValueExpr::Call { args, .. } => args.iter().all(|a| sums_in_order(a, out)),
             ValueExpr::Term(_) => true,
-            ValueExpr::ValueOf { .. } | ValueExpr::Cond { .. } | ValueExpr::Extremum { .. } => {
-                false
-            }
+            ValueExpr::ValueOf { .. }
+            | ValueExpr::Cond { .. }
+            | ValueExpr::Extremum { .. }
+            | ValueExpr::Defined { .. } => false,
         }
     }
     let mut nodes: Vec<*const ValueExpr> = Vec::new();
@@ -523,8 +524,13 @@ fn find_defined_matches(
         .definitions
         .get(name)
         .ok_or_else(|| EvalError::UnknownDefinition(name.to_string()))?;
+    let Some(body) = def.body.as_prop() else {
+        return Err(EvalError::TypeMismatch(format!(
+            "definition {name} names a figure, not a condition; compare its value"
+        )));
+    };
     let frame = definition_call_frame(def, args, ctx)?;
-    let body_matches = find_matches(&def.body, &ctx.enter_definition(&frame))?;
+    let body_matches = find_matches(body, &ctx.enter_definition(&frame))?;
 
     // Every match extends the same bindings with the same argument
     // variables, so two matches are equal exactly when those variables
@@ -1165,6 +1171,32 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                 values.push(eval_value(a, ctx)?);
             }
             eval_builtin(*builtin, &values)
+        }
+        // The arguments evaluate where the call stands, left to right;
+        // the body evaluates under them alone, with no pre-state and no
+        // actor, so the call means one thing wherever it is evaluated.
+        ValueExpr::Defined { name, args } => {
+            let def = ctx
+                .definitions
+                .get(name)
+                .ok_or_else(|| EvalError::UnknownDefinition(name.to_string()))?;
+            let Some(body) = def.body.as_value() else {
+                return Err(EvalError::TypeMismatch(format!(
+                    "definition {name} names a condition, not a figure; call it as one"
+                )));
+            };
+            if args.len() != def.parameters.len() {
+                return Err(EvalError::TypeMismatch(format!(
+                    "definition {name} takes {} argument(s) but the call passes {}",
+                    def.parameters.len(),
+                    args.len()
+                )));
+            }
+            let mut frame = Bindings::new();
+            for (param, arg) in def.parameters.iter().zip(args) {
+                frame.insert(param.clone(), Bound::from(eval_value(arg, ctx)?));
+            }
+            eval_value(body, &ctx.enter_definition(&frame))
         }
         ValueExpr::Cond {
             when,
@@ -2113,10 +2145,11 @@ pub(crate) fn find_failure(prop: &Prop, ctx: &EvalContext<'_>) -> Option<Failure
         // part, with parameter names rather than values.
         Prop::Defined { name, args } => {
             let def = ctx.definitions.get(name)?;
+            let body = def.body.as_prop()?;
             let frame = definition_call_frame(def, args, ctx).ok()?;
             let body_ctx = ctx.enter_definition(&frame);
-            let inner = find_failure(&def.body, &body_ctx)
-                .unwrap_or_else(|| Failure::here(&def.body, &body_ctx));
+            let inner =
+                find_failure(body, &body_ctx).unwrap_or_else(|| Failure::here(body, &body_ctx));
             Some(Failure {
                 rendered: format!(
                     "inside {}: {}",
@@ -2188,10 +2221,13 @@ pub(crate) fn unsatisfied_positive_claims(
             let Some(def) = ctx.definitions.get(name) else {
                 return vec![];
             };
+            let Some(body) = def.body.as_prop() else {
+                return vec![];
+            };
             let Ok(frame) = definition_call_frame(def, args, ctx) else {
                 return vec![];
             };
-            unsatisfied_positive_claims(&def.body, &ctx.enter_definition(&frame))
+            unsatisfied_positive_claims(body, &ctx.enter_definition(&frame))
         }
         Prop::And(conjuncts) => {
             let mut current: Vec<Bindings> = vec![ctx.bindings.clone()];

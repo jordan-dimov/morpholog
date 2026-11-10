@@ -546,7 +546,11 @@ where
         .collect::<Vec<String>>();
     let definition_decl = just(Token::KwDefine)
         .ignore_then(ident)
-        .then(definition_param_list.delimited_by(just(Token::LParen), just(Token::RParen)))
+        .then(
+            definition_param_list
+                .clone()
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
         .then_ignore(just(Token::Colon))
         .then(body_with_lets)
         .validate(|((name, parameters), (bindings, body)), e, emitter| {
@@ -564,10 +568,33 @@ where
                     origin: morpholog_core::DefinitionOrigin::Authored,
                     name: name.into(),
                     parameters: parameters.into_iter().map(Var::from).collect(),
-                    body,
+                    body: morpholog_core::DefinitionBody::Prop(body),
                 },
                 span.start()..span.end(),
                 let_names,
+            )
+        });
+
+    // value_definition_decl ::= "define" Ident "(" param-list ")" "=" "(" value_expression ")"
+    //
+    // A named figure with parameters. The `=` is the `let`'s and the `const`'s: a name for a
+    // value, where `:` names a condition. Parenthesised for the same reasons as a `const`.
+    let value_definition_decl = just(Token::KwDefine)
+        .ignore_then(ident)
+        .then(definition_param_list.delimited_by(just(Token::LParen), just(Token::RParen)))
+        .then_ignore(just(Token::Eq))
+        .then(value_expr_parser(table).delimited_by(just(Token::LParen), just(Token::RParen)))
+        .map_with(|((name, parameters), body), e| {
+            let span: SimpleSpan = e.span();
+            TopLevelDecl::Definition(
+                Definition {
+                    origin: morpholog_core::DefinitionOrigin::Authored,
+                    name: name.into(),
+                    parameters: parameters.into_iter().map(Var::from).collect(),
+                    body: morpholog_core::DefinitionBody::Value(body),
+                },
+                span.start()..span.end(),
+                Vec::new(),
             )
         });
 
@@ -673,6 +700,7 @@ where
     let top_level_decl = choice((
         predicate_decl,
         intent_decl,
+        value_definition_decl,
         definition_decl,
         invariant_decl,
         transformation_decl,

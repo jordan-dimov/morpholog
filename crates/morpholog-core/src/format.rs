@@ -309,9 +309,21 @@ pub(crate) fn format_intent_decl(decl: &crate::IntentDecl) -> String {
 pub(crate) fn format_definition(def: &Definition, ctx: FormatContext) -> String {
     let params: Vec<String> = def.parameters.iter().map(ToString::to_string).collect();
     let mut out = String::new();
-    out.push_str(&format!("define {}({}):\n", def.name, params.join(", ")));
-    out.push_str(&indent(1));
-    out.push_str(&fmt_prop(&def.body, ctx));
+    match &def.body {
+        crate::ir::DefinitionBody::Prop(body) => {
+            out.push_str(&format!("define {}({}):\n", def.name, params.join(", ")));
+            out.push_str(&indent(1));
+            out.push_str(&fmt_prop(body, ctx));
+        }
+        crate::ir::DefinitionBody::Value(body) => {
+            out.push_str(&format!(
+                "define {}({}) = ({})",
+                def.name,
+                params.join(", "),
+                fmt_value(body, ctx)
+            ));
+        }
+    }
     out.push('\n');
     out
 }
@@ -688,6 +700,13 @@ fn fmt_value(e: &ValueExpr, ctx: FormatContext) -> String {
         ValueExpr::Call { builtin, args } => format!(
             "{}({})",
             builtin.name(),
+            args.iter()
+                .map(|a| fmt_value(a, ctx))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        ValueExpr::Defined { name, args } => format!(
+            "{name}({})",
             args.iter()
                 .map(|a| fmt_value(a, ctx))
                 .collect::<Vec<_>>()

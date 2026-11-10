@@ -31,7 +31,10 @@ pub fn lower_sum_seeds(program: &mut Program) {
     // rebuilds a node, only writes a seed field in place, so each address
     // still names the node the checker saw.
     for def in &mut program.definitions {
-        stamp_prop(&mut def.body, &seeds);
+        match &mut def.body {
+            crate::ir::DefinitionBody::Prop(p) => stamp_prop(p, &seeds),
+            crate::ir::DefinitionBody::Value(v) => stamp_value(v, &seeds),
+        }
     }
     for inv in &mut program.invariants {
         stamp_prop(&mut inv.body, &seeds);
@@ -113,7 +116,7 @@ fn stamp_value(expr: &mut ValueExpr, seeds: &Seeds) {
             stamp_value(then, seeds);
             stamp_value(otherwise, seeds);
         }
-        ValueExpr::Call { args, .. } => {
+        ValueExpr::Call { args, .. } | ValueExpr::Defined { args, .. } => {
             for a in args {
                 stamp_value(a, seeds);
             }
@@ -178,7 +181,7 @@ mod tests {
                 origin: crate::ir::DefinitionOrigin::Authored,
                 name: format!("d{i}").into(),
                 parameters: vec![Var::from("x")],
-                body,
+                body: crate::ir::DefinitionBody::Prop(body),
             });
         }
         let body = Prop::Compare {
@@ -315,7 +318,8 @@ mod tests {
         let mut p = chained(3);
         // Close the chain: the last definition calls the first.
         let last = p.definitions.len() - 1;
-        p.definitions[last].body = defined("d0", vec![Term::Var(Var::from("x"))]);
+        p.definitions[last].body =
+            crate::ir::DefinitionBody::Prop(defined("d0", vec![Term::Var(Var::from("x"))]));
         lower_sum_seeds(&mut p);
         assert_eq!(seed_of(&p), SumSeed::Decimal);
     }
@@ -368,7 +372,7 @@ mod tests {
                     origin: crate::ir::DefinitionOrigin::Authored,
                     name: "d0".into(),
                     parameters: vec![Var::from("x")],
-                    body: p_x(),
+                    body: crate::ir::DefinitionBody::Prop(p_x()),
                 }])
                 .invariants(vec![invariant("capped", inv_body)])
                 .build();

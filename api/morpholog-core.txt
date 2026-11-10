@@ -170,6 +170,7 @@ pub fn morpholog_core::ir_builder::date(&str) -> morpholog_core::Term
 pub fn morpholog_core::ir_builder::date_le(morpholog_core::ValueExpr, morpholog_core::ValueExpr) -> morpholog_core::Prop
 pub fn morpholog_core::ir_builder::dec(&str) -> morpholog_core::Term
 pub fn morpholog_core::ir_builder::defined(&str, alloc::vec::Vec<morpholog_core::Term>) -> morpholog_core::Prop
+pub fn morpholog_core::ir_builder::defined_value(&str, alloc::vec::Vec<morpholog_core::ValueExpr>) -> morpholog_core::ValueExpr
 pub fn morpholog_core::ir_builder::definition(&str, alloc::vec::Vec<morpholog_core::Var>, morpholog_core::Prop) -> morpholog_core::Definition
 pub fn morpholog_core::ir_builder::div(morpholog_core::ValueExpr, morpholog_core::ValueExpr) -> morpholog_core::ValueExpr
 pub fn morpholog_core::ir_builder::duration(&str) -> morpholog_core::Term
@@ -215,6 +216,7 @@ pub fn morpholog_core::ir_builder::term(morpholog_core::Term) -> morpholog_core:
 pub fn morpholog_core::ir_builder::timestamp(&str) -> morpholog_core::Term
 pub fn morpholog_core::ir_builder::timestamp_le(morpholog_core::ValueExpr, morpholog_core::ValueExpr) -> morpholog_core::Prop
 pub fn morpholog_core::ir_builder::transformation(&str, alloc::vec::Vec<morpholog_core::Var>, alloc::vec::Vec<morpholog_core::Stmt>) -> morpholog_core::Transformation
+pub fn morpholog_core::ir_builder::value_definition(&str, alloc::vec::Vec<morpholog_core::Var>, morpholog_core::ValueExpr) -> morpholog_core::Definition
 pub fn morpholog_core::ir_builder::value_of(&str, alloc::vec::Vec<morpholog_core::Term>) -> morpholog_core::ValueExpr
 pub fn morpholog_core::ir_builder::value_of_extracting(&str, alloc::vec::Vec<morpholog_core::Term>, usize) -> morpholog_core::ValueExpr
 pub fn morpholog_core::ir_builder::value_of_with_default(&str, alloc::vec::Vec<morpholog_core::Term>, morpholog_core::ValueExpr) -> morpholog_core::ValueExpr
@@ -650,6 +652,28 @@ impl core::marker::Unpin for morpholog_core::Decided
 impl core::marker::UnsafeUnpin for morpholog_core::Decided
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Decided
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Decided
+pub enum morpholog_core::DefinitionBody
+pub morpholog_core::DefinitionBody::Prop(morpholog_core::Prop)
+pub morpholog_core::DefinitionBody::Value(morpholog_core::ValueExpr)
+impl morpholog_core::DefinitionBody
+pub fn morpholog_core::DefinitionBody::as_prop(&self) -> core::option::Option<&morpholog_core::Prop>
+pub fn morpholog_core::DefinitionBody::as_value(&self) -> core::option::Option<&morpholog_core::ValueExpr>
+impl core::clone::Clone for morpholog_core::DefinitionBody
+pub fn morpholog_core::DefinitionBody::clone(&self) -> morpholog_core::DefinitionBody
+impl core::cmp::Eq for morpholog_core::DefinitionBody
+pub fn morpholog_core::DefinitionBody::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_core::DefinitionBody
+pub fn morpholog_core::DefinitionBody::eq(&self, &morpholog_core::DefinitionBody) -> bool
+impl core::fmt::Debug for morpholog_core::DefinitionBody
+pub fn morpholog_core::DefinitionBody::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_core::DefinitionBody
+impl core::marker::Freeze for morpholog_core::DefinitionBody
+impl core::marker::Send for morpholog_core::DefinitionBody
+impl core::marker::Sync for morpholog_core::DefinitionBody
+impl core::marker::Unpin for morpholog_core::DefinitionBody
+impl core::marker::UnsafeUnpin for morpholog_core::DefinitionBody
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::DefinitionBody
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::DefinitionBody
 pub enum morpholog_core::DefinitionOrigin
 pub morpholog_core::DefinitionOrigin::Authored
 pub morpholog_core::DefinitionOrigin::Discipline
@@ -1643,8 +1667,18 @@ pub morpholog_core::ValidationError::DecisionTimeNotAvailable
 pub morpholog_core::ValidationError::DecisionTimeNotAvailable::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::DefinitionCycle
 pub morpholog_core::ValidationError::DefinitionCycle::names: alloc::vec::Vec<alloc::string::String>
+pub morpholog_core::ValidationError::DefinitionKindUnknown
+pub morpholog_core::ValidationError::DefinitionKindUnknown::definition: alloc::string::String
 pub morpholog_core::ValidationError::DefinitionNameCollision
 pub morpholog_core::ValidationError::DefinitionNameCollision::name: alloc::string::String
+pub morpholog_core::ValidationError::DefinitionNameIsBuiltin
+pub morpholog_core::ValidationError::DefinitionNameIsBuiltin::name: alloc::string::String
+pub morpholog_core::ValidationError::DefinitionYieldsNoValue
+pub morpholog_core::ValidationError::DefinitionYieldsNoValue::context: morpholog_core::ValidationContext
+pub morpholog_core::ValidationError::DefinitionYieldsNoValue::name: alloc::string::String
+pub morpholog_core::ValidationError::DefinitionYieldsValue
+pub morpholog_core::ValidationError::DefinitionYieldsValue::context: morpholog_core::ValidationContext
+pub morpholog_core::ValidationError::DefinitionYieldsValue::name: alloc::string::String
 pub morpholog_core::ValidationError::DerivedInRule
 pub morpholog_core::ValidationError::DerivedInRule::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::DerivedInRule::predicate: alloc::string::String
@@ -1841,6 +1875,9 @@ pub morpholog_core::ValueExpr::Cond
 pub morpholog_core::ValueExpr::Cond::otherwise: alloc::boxed::Box<morpholog_core::ValueExpr>
 pub morpholog_core::ValueExpr::Cond::then: alloc::boxed::Box<morpholog_core::ValueExpr>
 pub morpholog_core::ValueExpr::Cond::when: alloc::boxed::Box<morpholog_core::Prop>
+pub morpholog_core::ValueExpr::Defined
+pub morpholog_core::ValueExpr::Defined::args: alloc::vec::Vec<morpholog_core::ValueExpr>
+pub morpholog_core::ValueExpr::Defined::name: morpholog_core::DefinitionName
 pub morpholog_core::ValueExpr::Extremum
 pub morpholog_core::ValueExpr::Extremum::body: alloc::boxed::Box<morpholog_core::Prop>
 pub morpholog_core::ValueExpr::Extremum::op: morpholog_core::ExtremumOp
@@ -2214,7 +2251,7 @@ impl<'p> core::marker::UnsafeUnpin for morpholog_core::CoverageTracker<'p>
 impl<'p> core::panic::unwind_safe::RefUnwindSafe for morpholog_core::CoverageTracker<'p>
 impl<'p> core::panic::unwind_safe::UnwindSafe for morpholog_core::CoverageTracker<'p>
 pub struct morpholog_core::Definition
-pub morpholog_core::Definition::body: morpholog_core::Prop
+pub morpholog_core::Definition::body: morpholog_core::DefinitionBody
 pub morpholog_core::Definition::name: morpholog_core::DefinitionName
 pub morpholog_core::Definition::origin: morpholog_core::DefinitionOrigin
 pub morpholog_core::Definition::parameters: alloc::vec::Vec<morpholog_core::Var>

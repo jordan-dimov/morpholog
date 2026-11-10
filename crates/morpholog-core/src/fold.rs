@@ -197,7 +197,7 @@ fn value_scoped<'a>(
             value_scoped(then, visit, scope);
             value_scoped(otherwise, visit, scope);
         }
-        ValueExpr::Call { args, .. } => {
+        ValueExpr::Call { args, .. } | ValueExpr::Defined { args, .. } => {
             for a in args {
                 value_scoped(a, visit, scope);
             }

@@ -274,6 +274,7 @@ fn substitutable_term(value: &ValueExpr) -> Option<Term> {
         | ValueExpr::Extremum { .. }
         | ValueExpr::ValueOf { .. }
         | ValueExpr::Call { .. }
+        | ValueExpr::Defined { .. }
         | ValueExpr::Cond { .. } => None,
     }
 }
@@ -420,7 +421,7 @@ pub(super) fn substitute_in_value(
             }
         }
         // Builtin arguments are value positions, so any value can go in.
-        ValueExpr::Call { args, .. } => {
+        ValueExpr::Call { args, .. } | ValueExpr::Defined { args, .. } => {
             for a in args {
                 substitute_in_value(a, name, value, binding, errors);
             }

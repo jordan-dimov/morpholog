@@ -32,8 +32,9 @@
 //!
 //! `if <proposition>:` with an optional `else:` is `Stmt::If`, both blocks indented.
 //!
-//! `bind` accepts only a claim pattern although the IR's `Stmt::BindOne` could hold any `Prop`:
-//! the surface allows only what authors meaningfully write.
+//! `bind` accepts only a claim-shaped pattern although the IR's `Stmt::BindOne` could hold any
+//! `Prop`: the surface allows only what authors meaningfully write. The name resolves against the
+//! predicates and then the definitions, so a `bind` of a condition exports its arguments.
 
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;

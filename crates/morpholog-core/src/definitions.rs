@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::fold::{Node, walk_prop};
+use crate::fold::{Node, walk_prop, walk_value};
 use crate::ir::{Definition, DefinitionName, Program, Prop, Stmt, ValueExpr};
 
 /// Turn every `Prop::Claim` whose name is a declared definition into the
@@ -32,7 +32,10 @@ pub fn resolve_defined_calls(program: &mut Program) {
         return;
     }
     for def in &mut program.definitions {
-        resolve_in_prop(&mut def.body, &names);
+        match &mut def.body {
+            crate::ir::DefinitionBody::Prop(p) => resolve_in_prop(p, &names),
+            crate::ir::DefinitionBody::Value(v) => resolve_in_value(v, &names),
+        }
     }
     for inv in &mut program.invariants {
         resolve_in_prop(&mut inv.body, &names);
@@ -115,7 +118,7 @@ fn resolve_in_value(value: &mut ValueExpr, names: &BTreeSet<String>) {
             resolve_in_value(then, names);
             resolve_in_value(otherwise, names);
         }
-        ValueExpr::Call { args, .. } => {
+        ValueExpr::Call { args, .. } | ValueExpr::Defined { args, .. } => {
             for a in args {
                 resolve_in_value(a, names);
             }
@@ -205,11 +208,32 @@ impl<'a> DefinitionTable<'a> {
 /// Collect the definitions a proposition calls directly (not
 /// transitively), including inside value positions such as `Sum` bodies.
 pub(crate) fn defined_calls_in_prop(prop: &Prop, out: &mut BTreeSet<DefinitionName>) {
-    walk_prop(prop, &mut |n| {
-        if let Node::Prop(Prop::Defined { name, .. }) = n {
+    walk_prop(prop, &mut |n| defined_call_into(&n, out));
+}
+
+/// The value companion of [`defined_calls_in_prop`].
+pub(crate) fn defined_calls_in_value(value: &ValueExpr, out: &mut BTreeSet<DefinitionName>) {
+    walk_value(value, &mut |n| defined_call_into(&n, out));
+}
+
+/// The calls a definition body makes directly, whichever it names.
+pub(crate) fn defined_calls_in_body(
+    body: &crate::ir::DefinitionBody,
+    out: &mut BTreeSet<DefinitionName>,
+) {
+    match body {
+        crate::ir::DefinitionBody::Prop(p) => defined_calls_in_prop(p, out),
+        crate::ir::DefinitionBody::Value(v) => defined_calls_in_value(v, out),
+    }
+}
+
+fn defined_call_into(node: &Node<'_>, out: &mut BTreeSet<DefinitionName>) {
+    match node {
+        Node::Prop(Prop::Defined { name, .. }) | Node::Value(ValueExpr::Defined { name, .. }) => {
             out.insert(name.clone());
         }
-    });
+        _ => {}
+    }
 }
 
 /// Order definitions so each one comes after the definitions it calls.
@@ -227,7 +251,7 @@ pub(crate) fn definition_topo_order(definitions: &[Definition]) -> Result<Vec<us
         .iter()
         .map(|d| {
             let mut names = BTreeSet::new();
-            defined_calls_in_prop(&d.body, &mut names);
+            defined_calls_in_body(&d.body, &mut names);
             names
                 .iter()
                 .filter_map(|n| position.get(n.as_str()).copied())

@@ -381,6 +381,14 @@ pub enum ValueExpr {
         builtin: Builtin,
         args: Vec<ValueExpr>,
     },
+    /// A call to a definition that names a figure: the arguments are
+    /// evaluated where the call stands, bound to the parameters in a
+    /// fresh frame, and the body evaluated under that frame alone. One
+    /// value wherever it is evaluated: a gate, a rule, a derived read.
+    Defined {
+        name: DefinitionName,
+        args: Vec<ValueExpr>,
+    },
 }
 
 impl From<Term> for ValueExpr {
@@ -932,11 +940,41 @@ pub struct Transformation {
 pub struct Definition {
     pub name: DefinitionName,
     pub parameters: Vec<Var>,
-    pub body: Prop,
+    pub body: DefinitionBody,
     /// Whether this was written or generated from a discipline. The
     /// formatter omits generated ones, and lowering uses it to tell whether
     /// it already ran; a name alone cannot tell them apart.
     pub origin: DefinitionOrigin,
+}
+
+/// What a definition names: a condition, called as a [`Prop::Defined`]
+/// and answering with its matches, or a figure, called as a
+/// [`ValueExpr::Defined`] and answering with one value. A value body's
+/// parameters are inputs only: every call supplies them, and the body
+/// evaluates under them alone, with no pre-state and no actor, as a
+/// condition's body does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DefinitionBody {
+    Prop(Prop),
+    Value(ValueExpr),
+}
+
+impl DefinitionBody {
+    /// The condition this body names, if it names one.
+    pub fn as_prop(&self) -> Option<&Prop> {
+        match self {
+            DefinitionBody::Prop(p) => Some(p),
+            DefinitionBody::Value(_) => None,
+        }
+    }
+
+    /// The figure this body names, if it names one.
+    pub fn as_value(&self) -> Option<&ValueExpr> {
+        match self {
+            DefinitionBody::Value(v) => Some(v),
+            DefinitionBody::Prop(_) => None,
+        }
+    }
 }
 
 /// Where a [`Definition`] came from - the definition-sort analogue of

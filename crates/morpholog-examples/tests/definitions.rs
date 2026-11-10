@@ -556,3 +556,305 @@ fn inspect_controls_lists_predicates_consulted_through_definitions() {
         );
     }
 }
+
+// ============================================================
+// A definition that names a figure: one value, read by a gate, a rule
+// and a derived read; and what is refused.
+// ============================================================
+
+const STOCK: &str = r#"
+program stock
+
+predicate StockItem(item: Subject, quantity: Decimal)
+    unique by (item)
+predicate Allocation(allocation: Subject, item: Subject, quantity: Decimal)
+    unique by (allocation)
+predicate Allocated(item: Subject, quantity: Decimal)
+
+define allocated(item) = (sum(q | Allocation(item: item, quantity: q, ..)))
+
+define headroom(item, on_hand) = (on_hand - allocated(item))
+
+invariant allocations_fit_the_stock:
+    StockItem(item, on_hand) implies allocated(item) <= on_hand
+
+transformation receive(item, quantity):
+    admit StockItem(item, quantity)
+
+transformation allocate(allocation, item, quantity):
+    bind StockItem(item, on_hand)
+    require within_stock: quantity <= headroom(item, on_hand)
+    admit Allocation(allocation, item, quantity)
+
+transformation force(allocation, item, quantity):
+    admit Allocation(allocation, item, quantity)
+
+derived Allocated(item):
+    over StockItem(item: item, ..)
+    value quantity = allocated(item)
+"#;
+
+fn stocked() -> (Program, State) {
+    let p = parsed(STOCK);
+    let state = must_accept(
+        p.transformation("receive").unwrap(),
+        vec![subj("pallet"), dec(10)],
+        State::default(),
+        &p,
+    );
+    let state = must_accept(
+        p.transformation("allocate").unwrap(),
+        vec![subj("a1"), subj("pallet"), dec(4)],
+        state,
+        &p,
+    );
+    (p, state)
+}
+
+/// The same figure decides the gate, the rule and the read: with four
+/// of ten reserved, a gate for six admits and one for seven refuses,
+/// the rule refuses an act that skips the gate, and the read shows the
+/// figure.
+#[test]
+fn a_figure_is_read_by_a_gate_a_rule_and_a_derived_read() {
+    let (p, state) = stocked();
+    let allocate = p.transformation("allocate").unwrap();
+    let within = must_accept(
+        allocate,
+        vec![subj("a2"), subj("pallet"), dec(6)],
+        state.clone(),
+        &p,
+    );
+    assert!(has_claim(
+        &within,
+        "Allocation",
+        &[subj("a2"), subj("pallet"), dec(6)]
+    ));
+    assert!(matches!(
+        must_reject(allocate, vec![subj("a3"), subj("pallet"), dec(7)], &state, &p),
+        morpholog_core::RejectionReason::Require { name: Some(name), .. } if name.as_str() == "within_stock"
+    ));
+    assert!(matches!(
+        must_reject(
+            p.transformation("force").unwrap(),
+            vec![subj("a3"), subj("pallet"), dec(7)],
+            &state,
+            &p
+        ),
+        morpholog_core::RejectionReason::Invariant { name, .. } if name.as_str() == "allocations_fit_the_stock"
+    ));
+    let derived = p
+        .derived_claims
+        .iter()
+        .find(|d| d.predicate.as_str() == "Allocated")
+        .unwrap();
+    let rows = morpholog_test_support::enumerate_derived(&p, derived, &within).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].args, vec![subj("pallet"), dec(10)]);
+}
+
+/// The rule over the figure is judged per item: the plan follows the
+/// call into the sum, which keys on the item the case names.
+#[test]
+fn a_rule_over_a_figure_stays_bound_to_its_case() {
+    use morpholog_core::{Bounding, ImpactPlan};
+    let p = parsed(STOCK);
+    let inv = p
+        .invariants
+        .iter()
+        .find(|i| i.name.as_str() == "allocations_fit_the_stock")
+        .unwrap();
+    assert!(
+        matches!(
+            ImpactPlan::with_definitions(inv, &p.definitions).bounding(),
+            Bounding::Bound
+        ),
+        "the call is followed into the sum"
+    );
+}
+
+/// An argument that is an expression carries no case into the body,
+/// so the rule is checked whole, and `check -v` says which call.
+#[test]
+fn a_figure_called_with_an_expression_widens_the_rule() {
+    use morpholog_core::{Bounding, ImpactPlan, Widening};
+    let p = parsed(&STOCK.replace(
+        "StockItem(item, on_hand) implies allocated(item) <= on_hand",
+        "StockItem(item, on_hand) implies headroom(item, on_hand + 0) >= 0",
+    ));
+    let inv = p
+        .invariants
+        .iter()
+        .find(|i| i.name.as_str() == "allocations_fit_the_stock")
+        .unwrap();
+    assert!(matches!(
+        ImpactPlan::with_definitions(inv, &p.definitions).bounding(),
+        Bounding::Whole(Widening::UnfollowedCall(name)) if name.as_str() == "headroom"
+    ));
+}
+
+/// A figure is not a condition and a condition is not a figure: each
+/// called as the other is refused by name, with the context.
+#[test]
+fn a_figure_and_a_condition_called_as_each_other_are_refused() {
+    let as_condition = validation_errors(&STOCK.replace(
+        "    require within_stock: quantity <= headroom(item, on_hand)\n",
+        "    require within_stock: allocated(item)\n",
+    ));
+    assert!(
+        as_condition
+            .iter()
+            .any(|e| matches!(e, ValidationError::DefinitionYieldsValue { name, .. } if name == "allocated")),
+        "{as_condition:?}"
+    );
+    let as_figure = validation_errors(
+        &CLUB.replace("    bind sponsored_by_member(newcomer, club, sponsor)\n    admit Admitted(newcomer, sponsor)\n",
+        "    let sponsor = member_in_good_standing(newcomer, club)\n    admit Admitted(newcomer, sponsor)\n"),
+    );
+    assert!(
+        as_figure
+            .iter()
+            .any(|e| matches!(e, ValidationError::DefinitionYieldsNoValue { name, .. } if name == "member_in_good_standing")),
+        "{as_figure:?}"
+    );
+}
+
+/// What a figure's body may not do: read the actor, read `pre`, leave a
+/// parameter unused, call itself round a cycle, take a builtin's name;
+/// and what a call may not do: pass the wrong number or kind of
+/// arguments, or name a figure nothing defines.
+#[test]
+fn what_a_figure_refuses_is_refused_by_name() {
+    let refused = |body: &str, call: &str, wanted: &dyn Fn(&ValidationError) -> bool| {
+        let source = STOCK
+            .replace(
+                "define headroom(item, on_hand) = (on_hand - allocated(item))",
+                body,
+            )
+            .replace("quantity <= headroom(item, on_hand)", call);
+        let errors = validation_errors(&source);
+        assert!(errors.iter().any(wanted), "{source}\n{errors:?}");
+    };
+    refused(
+        "define headroom(item, on_hand) = (on_hand - allocated(actor))",
+        "quantity <= headroom(item, on_hand)",
+        &|e| matches!(e, ValidationError::ActorNotAvailable { .. }),
+    );
+    refused(
+        "define headroom(item, on_hand) = (on_hand - sum(q | pre(Allocation(_, item, q))))",
+        "quantity <= headroom(item, on_hand)",
+        &|e| matches!(e, ValidationError::PreNotAvailable { .. }),
+    );
+    refused(
+        "define headroom(item, on_hand) = (allocated(item))",
+        "quantity <= headroom(item, on_hand)",
+        &|e| matches!(e, ValidationError::ParameterNotReferenced { parameter, .. } if parameter == "on_hand"),
+    );
+    refused(
+        "define headroom(item, on_hand) = (on_hand - headroom(item, on_hand))",
+        "quantity <= headroom(item, on_hand)",
+        &|e| matches!(e, ValidationError::DefinitionCycle { names } if names == &["headroom"]),
+    );
+    refused(
+        "define periods(item, on_hand) = (on_hand - allocated(item))",
+        "quantity <= on_hand",
+        &|e| matches!(e, ValidationError::DefinitionNameIsBuiltin { name } if name == "periods"),
+    );
+    refused(
+        "define headroom(item, on_hand) = (if(StockItem(item, _), on_hand, on_hand))",
+        "quantity <= headroom(item, on_hand)",
+        &|e| matches!(e, ValidationError::DefinitionKindUnknown { definition } if definition == "headroom"),
+    );
+    refused(
+        "define headroom(item, on_hand) = (on_hand - allocated(item))",
+        "quantity <= headroom(item)",
+        &|e| matches!(e, ValidationError::ArityMismatch { name, expected: 2, actual: 1, .. } if name == "headroom"),
+    );
+    refused(
+        "define headroom(item, on_hand) = (on_hand - allocated(item))",
+        "quantity <= headroom(item, item)",
+        &|e| {
+            matches!(
+                e,
+                ValidationError::VariableKindConflict { .. }
+                    | ValidationError::OperandKindMismatch { .. }
+                    | ValidationError::ArgKindMismatch { .. }
+            )
+        },
+    );
+    refused(
+        "define headroom(item, on_hand) = (on_hand - allocated(item))",
+        "quantity <= room(item, on_hand)",
+        &|e| matches!(e, ValidationError::Undeclared { name, .. } if name == "room"),
+    );
+}
+
+// ============================================================
+// The pricing scope an embedder wanted written once (#299): a condition
+// that binds its scope by equality exports nothing, so the scope is a
+// figure, read by the act with `let`.
+// ============================================================
+
+const PRICING: &str = r#"
+program pricing
+
+predicate Charge(charge: Subject, rate_unit: Subject, vat_policy: Subject, price_scope: Subject)
+    unique by (charge)
+predicate Priced(charge: Subject, scope: Subject)
+    unique by (charge)
+
+define price_scope_of(charge, meter) = (if(Charge(charge: charge, price_scope: #book, ..), #book, meter))
+
+transformation declare(charge, rate_unit, vat_policy, price_scope):
+    admit Charge(charge, rate_unit, vat_policy, price_scope)
+
+transformation price(charge, meter):
+    bind Charge(charge: charge, ..)
+    let scope = price_scope_of(charge, meter)
+    admit Priced(charge, scope)
+"#;
+
+#[test]
+fn the_pricing_scope_is_one_figure_read_by_the_act() {
+    let p = parsed(PRICING);
+    let declare = p.transformation("declare").unwrap();
+    let price = p.transformation("price").unwrap();
+    let mut state = State::default();
+    for (charge, scope) in [("c_book", "book"), ("c_meter", "meter")] {
+        state = must_accept(
+            declare,
+            vec![subj(charge), subj("kwh"), subj("standard"), subj(scope)],
+            state,
+            &p,
+        );
+    }
+    let state = must_accept(price, vec![subj("c_book"), subj("m7")], state, &p);
+    assert!(has_claim(&state, "Priced", &[subj("c_book"), subj("book")]));
+    let state = must_accept(price, vec![subj("c_meter"), subj("m7")], state, &p);
+    assert!(has_claim(&state, "Priced", &[subj("c_meter"), subj("m7")]));
+}
+
+/// The issue's own condition, bound: `scope = #book` binds nothing, so
+/// the `bind` cannot export `scope` and the checker says so. A `bind`
+/// exports what a body binds through a claim pattern, as the club's
+/// sponsor shows above.
+#[test]
+fn a_condition_that_fixes_its_scope_by_equality_exports_nothing() {
+    let errors = validation_errors(
+        &PRICING
+            .replace(
+                "define price_scope_of(charge, meter) = (if(Charge(charge: charge, price_scope: #book, ..), #book, meter))",
+                "define price_scope_of(charge, meter, scope):\n    (Charge(charge: charge, price_scope: #book, ..) and scope = #book)\n    or (Charge(charge: charge, price_scope: #meter, ..) and scope = meter)",
+            )
+            .replace(
+                "    let scope = price_scope_of(charge, meter)\n",
+                "    bind the_scope: price_scope_of(charge, meter, scope)\n",
+            ),
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValidationError::UnboundVariable { variable, .. } if variable == "scope")),
+        "{errors:?}"
+    );
+}

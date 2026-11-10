@@ -198,6 +198,7 @@ The `.morph` surface verbs map one-to-one onto the IR constructs above. The rena
 | `require name: expr` / `bind name: X(args)` | `name` on `Stmt::{Require, BindOne}` | An optional stable identifier for a refusing statement. A refusal otherwise quotes the rendered expression, which reads well and identifies nothing - reword the rule and anything holding that text breaks. Optional because a transformation with one gate is already unambiguous, and most gates are one self-evident line; the name earns its place where several rules could each be the one that said no. Unique per transformation, not per programme: two acts legitimately carry the same gate verbatim. The name is contextual, not reserved - `ident :` cannot open a proposition, so no keyword is spent. |
 | `unique by (fields)`, `append only`, `current pointer by (fields)`, `superseded via L`, `effective by (keys) on (date) [partial]` (clauses on a `predicate` declaration) | `Discipline::{UniqueBy, AppendOnly, CurrentPointerBy, SupersededVia, EffectiveBy}` on `PredicateDecl.disciplines` | Claim disciplines (see "Claim disciplines" below). Every clause word is contextual, not reserved - the `before`/`duration` precedent - so all stay usable as variable names. Clauses sit inline after the argument list or on indented continuation lines. |
 | `define name(params): body` / `name(args)` at call sites | `Definition` / `Prop::Defined` | A named, parameterised proposition (see "Definitions: named propositions" below). The call is spelled exactly like a claim reference - a condition should read no differently from the evidence it checks - and resolves by name against the declared definitions, which is why definition and predicate names share one namespace and may not collide. Definition names are snake_case by convention (they name rules, like invariants), predicates CamelCase (they name claim shapes); the convention aids the reader, not the resolver. |
+| `define name(params) = (value)` / `name(args)` in value position | `Definition` with a `DefinitionBody::Value` / `ValueExpr::Defined { name, args }` | A named, parameterised figure, beside the named condition. The `=` is the `let`'s and the `const`'s: a name for a value, where `:` names a condition. The arguments are values, evaluated where the call stands and bound to the parameters in a fresh frame; the body evaluates under that frame alone, with no `actor`, no `decided_at` and no `pre`. Called wherever a value stands, never in a pattern or an `admit`. |
 | `actor` (no parens) | `Term::Actor` | A special variable bound by transition context, not a function. Parens would suggest function-call semantics it does not have. |
 | `decided_at` (no parens) | `Term::DecidedAt` | The instant the decision is made at, given by the runtime like the actor. Not `now()`: the value is fixed for the whole decision and recorded, and parens would suggest a clock read it is not. Not `committed_on`: it is neither the commit nor a day. |
 | `<=` `<` `>=` `>` (infix) | `Prop::Compare { op, domain: Decimal }` | Business mathematics reads with infix comparators. The operator is first-class - `amount > limit` renders and round-trips as written, never as `not (amount <= limit)` - while the ordered domain is a field, not a per-operator variant. The decimal domain admits two flavours: bare decimals, and unit-tagged quantities of the SAME unit (a `Decimal[U]` IS a decimal, under a contract label the comparison must respect - `Decimal[USD]` against `Decimal[t]` is refused by name). The domain is carried explicitly, so there is no operator overloading by operand kind. |
@@ -430,19 +431,25 @@ Decision times are not in log order. Two concurrent transactions can commit in t
 
 **The actor is asserted, not authenticated.** A `Transition` carries the actor as an `EvalValue::Subject`, and the runtime gates that asserted actor against whatever authority claims a `require` consults. It does **not** verify that the caller *is* that subject - authentication is the deployment's job, performed before `propose` is reached (the boundary that mints a `Transition` is where a session, token, or signature is checked). A `require` is the wrong place to reintroduce that: it has no host functions and no I/O, so cryptographic verification cannot and should not live inside one. Morpholog answers "is this actor permitted to do this, given admitted state?"; it trusts that the actor identity handed to it has already been established.
 
-## Definitions: named propositions
+## Definitions: named conditions and named figures
 
-A `Definition` is a named, parameterised `Prop`, declared with `define
-name(params): body` and called from invariant bodies, `require`/`bind`
-gates, derived-claim domains, `Sum` bodies, and other definitions. It is
+A `Definition` names a condition or a figure. A condition is a named,
+parameterised `Prop`, declared with `define name(params): body` and
+called from invariant bodies, `require`/`bind` gates, derived-claim
+domains, `Sum` bodies, and other definitions. A figure is a named,
+parameterised `ValueExpr`, declared with `define name(params) = (body)`
+and called wherever a value stands: a `let`, a comparison, a sum
+target, a derived `value` clause, another definition's body. Either is
 body grammar, not a third first-class construct: a definition never
 changes state and carries no standing of its own - it gives a recurring
-condition the name the business uses for it, so a validity window, a
-lifecycle phase, or a statutory requirement is written once and read
-everywhere by name. The call is spelled exactly like a claim reference;
-the parser resolves it against the declared definitions once the whole
-programme is collected, which is why a definition name may never
-collide with a predicate name.
+condition, or a recurring quantity, the name the business uses for it,
+so a validity window, a lifecycle phase, a statutory requirement or an
+allocated total is written once and read everywhere by name. A
+condition's call is spelled exactly like a claim reference; the parser
+resolves it against the declared definitions once the whole programme
+is collected, which is why a definition name may never collide with a
+predicate name. A figure's call is spelled like a builtin's, and a
+definition may not take a builtin's bare-word name.
 
 **Evaluation is relational substitution with projection.** A call
 builds a frame carrying only the parameters: a ground argument (a
@@ -470,13 +477,32 @@ by the body, so it is either dead weight or a guaranteed runtime error.
 Parameter names are duplicate-free: each is one binding slot in the
 call frame.
 
-**Definitions are proposition-valued only.** A call answers "does this
-condition hold?" and hands values out solely by binding its arguments -
-the trade lifecycle's `trade_terms_in_force_on(trade: trade, as_of: d, quantity: qty, ..)` returns the
-governing quantity *through* `qty`. `value Pred(args)` reads claims,
-never definitions, and a definition can never be an `admit` / `retract`
-/ `emit` target; naming one in any of those positions is a dedicated
-category error, not an undeclared-predicate report.
+**A condition answers with its matches; a figure answers with one
+value.** A condition's call answers "does this condition hold?" and
+hands values out solely by binding its arguments - the trade
+lifecycle's `trade_terms_in_force_on(trade: trade, as_of: d, quantity: qty, ..)` returns the
+governing quantity *through* `qty`, and a `bind` of such a call exports
+them to the statements after it. A figure's call is evaluated: the
+arguments are evaluated where the call stands, bound to the parameters
+in a fresh frame, and the body evaluated under that frame alone, so
+`allocated(item)` is the same figure in a gate, a rule, a derived read,
+the interpreted route, the compiled route and a live view. A figure's
+parameters are inputs only: every call supplies each one, and the body
+may only use it. A figure's kind is its body's, inferred once at the
+declaration; a body whose kind the checker cannot read (a bare
+parameter, an expression over parameters nothing types) is refused
+rather than left for each call to guess. A figure called where a
+condition is required, or a condition where a figure is, is refused by
+name. A `const` may not call a figure, since the body may read the
+record. `value Pred(args)`
+reads claims, never definitions, and a definition can never be an
+`admit` / `retract` / `emit` target; naming one in any of those
+positions is a dedicated category error, not an undeclared-predicate
+report. A rule over a figure is bounded as the inlined body would be:
+the plan follows the call into the body under the call's frame when
+every argument is a term, so a sum keyed on the case variable keeps
+the rule bound; an expression argument carries no case into the body
+and the rule is checked whole, named by `check -v`.
 
 **Bodies are context-free.** `actor` and `pre(...)` inside a definition
 body are validation errors, so a definition means the same thing in a

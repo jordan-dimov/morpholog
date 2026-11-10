@@ -73,7 +73,14 @@ pub(crate) fn apply(consts: Vec<LetBinding>, targets: ConstTargets<'_>) -> Vec<(
         for p in &d.parameters {
             locals.push((p.to_string(), "parameter"));
         }
-        collect_binders_named(&d.body, &mut locals);
+        match &d.body {
+            morpholog_core::DefinitionBody::Prop(body) => collect_binders_named(body, &mut locals),
+            morpholog_core::DefinitionBody::Value(body) => {
+                let mut set = BTreeSet::new();
+                super::walk::binders_in_value(body, &mut set);
+                locals.extend(set.into_iter().map(|n| (n, "quantifier binding")));
+            }
+        }
     }
     for (i, _) in targets.invariants.iter() {
         collect_binders_named(&i.body, &mut locals);
@@ -168,9 +175,16 @@ pub(crate) fn apply(consts: Vec<LetBinding>, targets: ConstTargets<'_>) -> Vec<(
     // turn a binding into a filter, changing a rule from far away. Slots that do not bind, such
     // as `admit` arguments or `value` lookup keys, are ordinary uses.
     for (d, span) in targets.definitions.iter() {
-        walk_prop(&d.body, &mut |n| {
-            refuse_pattern_node(&n, &const_names, span, &mut errors)
-        });
+        match &d.body {
+            morpholog_core::DefinitionBody::Prop(body) => walk_prop(body, &mut |n| {
+                refuse_pattern_node(&n, &const_names, span, &mut errors)
+            }),
+            morpholog_core::DefinitionBody::Value(body) => {
+                morpholog_core::fold::walk_value(body, &mut |n| {
+                    refuse_pattern_node(&n, &const_names, span, &mut errors)
+                })
+            }
+        }
     }
     for (i, span) in targets.invariants.iter() {
         walk_prop(&i.body, &mut |n| {
@@ -201,7 +215,12 @@ pub(crate) fn apply(consts: Vec<LetBinding>, targets: ConstTargets<'_>) -> Vec<(
     // A const is used if a body uses it or a later used const does.
     let mut live_names: BTreeSet<String> = BTreeSet::new();
     for (d, _) in targets.definitions.iter() {
-        vars_in_prop(&d.body, &mut live_names);
+        match &d.body {
+            morpholog_core::DefinitionBody::Prop(body) => vars_in_prop(body, &mut live_names),
+            morpholog_core::DefinitionBody::Value(body) => {
+                super::walk::vars_in_value(body, &mut live_names)
+            }
+        }
     }
     for (i, _) in targets.invariants.iter() {
         vars_in_prop(&i.body, &mut live_names);
@@ -319,7 +338,10 @@ pub(crate) fn apply(consts: Vec<LetBinding>, targets: ConstTargets<'_>) -> Vec<(
     };
 
     for (d, _) in targets.definitions.iter_mut() {
-        substitute_prop(&mut d.body, &mut errors);
+        match &mut d.body {
+            morpholog_core::DefinitionBody::Prop(body) => substitute_prop(body, &mut errors),
+            morpholog_core::DefinitionBody::Value(body) => substitute_value(body, &mut errors),
+        }
     }
     for (i, _) in targets.invariants.iter_mut() {
         substitute_prop(&mut i.body, &mut errors);
@@ -539,6 +561,15 @@ fn refuse_open_initialiser(
                     walk(a, c, const_names, errors);
                 }
             }
+            // A figure's body may read the record, whatever its arguments.
+            ValueExpr::Defined { name, .. } => errors.push((
+                c.span.clone(),
+                format!(
+                    "const `{}` calls `{name}`, a figure, whose body may read the \
+                     record - a const holds a value the record cannot change",
+                    c.name
+                ),
+            )),
             ValueExpr::Cond { .. } => errors.push((
                 c.span.clone(),
                 format!(

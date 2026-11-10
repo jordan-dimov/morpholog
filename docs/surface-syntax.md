@@ -451,6 +451,11 @@ predicate Journal(entry: Subject, account: Subject, debit: Decimal, credit: Deci
 define consented_on(participant, day):
     Consent(participant, form, given_on) and given_on on_or_before day and Form(form, from, to) and from on_or_before day and day on_or_before to
 
+-- One figure, named once, read wherever a value stands: `=` names a
+-- value as `let` does, where `:` names a condition. Every parameter is
+-- an input.
+define balance_of(account) = (sum(d | Journal(_, account, d, _)) - sum(c | Journal(_, account, _, c)))
+
 transformation issue_form(form, valid_from, valid_to):
     admit Form(form, valid_from, valid_to)
 
@@ -462,6 +467,7 @@ transformation enrol(participant, on):
     admit Enrolled(participant, on)
 
 transformation post(entry, account, debit, credit):
+    require in_credit: balance_of(account) + debit - credit >= 0
     admit Journal(entry, account, debit, credit)
 
 invariant every_enrolment_was_consented:
@@ -474,8 +480,16 @@ predicate TrialBalance(account: Subject, balance: Decimal)
 
 derived TrialBalance(account):
     over Journal(account: account, ..)
-    value balance = sum(d | Journal(_, account, d, _)) - sum(c | Journal(_, account, _, c))
+    value balance = balance_of(account)
 ```
+
+A `bind` may name a condition as well as a claim: `bind
+consented_on(p, day)` refuses when no form covers the day, and a
+condition whose body binds one of its parameters through a claim
+pattern hands that value to the statements after the `bind`, as a
+claim's fields are handed on. A parameter fixed by `=` is an input, not
+a result; a value chosen by a condition is a figure, `if(...)` in its
+body.
 
 **A tree the host closes.** Without recursion, a rule that asks whether
 one part descends from another reads a closure the host keeps as claims:

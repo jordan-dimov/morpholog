@@ -340,6 +340,9 @@ struct DefinitionSig {
     param_kinds: Vec<InferredKind>,
     param_observed: Vec<BTreeSet<PredicateArgKind>>,
     generator: Vec<bool>,
+    /// The kind of the figure a value body yields; `None` for a
+    /// condition.
+    result: Option<InferredKind>,
 }
 
 /// What one checker run found.
@@ -414,12 +417,12 @@ pub(crate) fn check_program(program: &Program) -> Checked {
         // Bodies are context-free: no `actor` (pass it as a call
         // argument) and no `pre(...)` (wrap the call instead), so a
         // definition means the same thing in a gate as in an invariant.
-        if prop_mentions(&def.body, Term::Actor) {
+        if body_mentions(&def.body, Term::Actor) {
             let context = cx.context.clone();
             cx.errors
                 .push(ValidationError::ActorNotAvailable { context });
         }
-        if prop_mentions(&def.body, Term::DecidedAt) {
+        if body_mentions(&def.body, Term::DecidedAt) {
             let context = cx.context.clone();
             cx.errors
                 .push(ValidationError::DecisionTimeNotAvailable { context });
@@ -430,21 +433,26 @@ pub(crate) fn check_program(program: &Program) -> Checked {
                 what: "a parameter".into(),
             });
         }
-        if fold::mentions_pre(&def.body) {
+        if body_mentions_pre(&def.body) {
             let context = cx.context.clone();
             cx.errors.push(ValidationError::PreNotAvailable { context });
         }
         // Probe walk: which parameters does the body bind? Parameters
-        // start unbound and the probe's errors are discarded.
-        let mut probe = Scope::new();
-        let kept = std::mem::take(&mut cx.errors);
-        cx.walk_prop(&def.body, &mut probe);
-        cx.errors = kept;
-        let generator: Vec<bool> = def
-            .parameters
-            .iter()
-            .map(|p| probe.bound.is_bound(p))
-            .collect();
+        // start unbound and the probe's errors are discarded. A figure's
+        // parameters are inputs only, so none is a generator.
+        let generator: Vec<bool> = match &def.body {
+            crate::ir::DefinitionBody::Prop(body) => {
+                let mut probe = Scope::new();
+                let kept = std::mem::take(&mut cx.errors);
+                cx.walk_prop(body, &mut probe);
+                cx.errors = kept;
+                def.parameters
+                    .iter()
+                    .map(|p| probe.bound.is_bound(p))
+                    .collect()
+            }
+            crate::ir::DefinitionBody::Value(_) => vec![false; def.parameters.len()],
+        };
         // Real walk: parameters arrive bound and untyped, like
         // transformation parameters, so kinds refine on use.
         let mut scope = Scope::new();
@@ -454,9 +462,23 @@ pub(crate) fn check_program(program: &Program) -> Checked {
                 .kinds
                 .observe(param, InferredKind::UnknownOrAny, &mut cx.cells);
         }
-        cx.walk_prop(&def.body, &mut scope);
+        let result = match &def.body {
+            crate::ir::DefinitionBody::Prop(body) => {
+                cx.walk_prop(body, &mut scope);
+                None
+            }
+            crate::ir::DefinitionBody::Value(body) => {
+                let kind = cx.infer_value(body, &mut scope);
+                if matches!(kind, InferredKind::UnknownOrAny) {
+                    cx.errors.push(ValidationError::DefinitionKindUnknown {
+                        definition: def.name.to_string(),
+                    });
+                }
+                Some(kind)
+            }
+        };
         for param in &def.parameters {
-            if !occurs_in_prop(param, &def.body) {
+            if !occurs_in_body(param, &def.body) {
                 cx.errors.push(ValidationError::ParameterNotReferenced {
                     definition: def.name.to_string(),
                     parameter: param.to_string(),
@@ -485,6 +507,7 @@ pub(crate) fn check_program(program: &Program) -> Checked {
                 param_kinds,
                 param_observed,
                 generator,
+                result,
             },
         );
     }
@@ -1237,7 +1260,8 @@ impl CheckCtx<'_> {
             | ValueExpr::Sum { .. }
             | ValueExpr::Extremum { .. }
             | ValueExpr::ValueOf { default: None, .. }
-            | ValueExpr::Call { .. } => {}
+            | ValueExpr::Call { .. }
+            | ValueExpr::Defined { .. } => {}
         }
     }
 
@@ -1651,7 +1675,79 @@ impl CheckCtx<'_> {
                 }
                 self.infer_builtin(*builtin, args, scope)
             }
+            ValueExpr::Defined { name, args } => {
+                self.infer_defined_value(name.as_str(), args, scope)
+            }
         }
+    }
+
+    /// A call to a figure: every argument is an input, used as the body
+    /// used the parameter, and the call has the body's kind.
+    fn infer_defined_value(
+        &mut self,
+        name: &str,
+        args: &[ValueExpr],
+        scope: &mut Scope,
+    ) -> InferredKind {
+        let Some(def) = self.definitions.get(name).copied() else {
+            self.report(|context| ValidationError::Undeclared {
+                vocabulary: VocabularyKind::Definition,
+                name: name.into(),
+                context,
+            });
+            for a in args {
+                let _ = self.infer_value(a, scope);
+            }
+            return InferredKind::UnknownOrAny;
+        };
+        if def.body.as_value().is_none() {
+            self.report(|context| ValidationError::DefinitionYieldsNoValue {
+                name: name.into(),
+                context,
+            });
+            for a in args {
+                let _ = self.infer_value(a, scope);
+            }
+            return InferredKind::UnknownOrAny;
+        }
+        if def.parameters.len() != args.len() {
+            self.report(|context| ValidationError::ArityMismatch {
+                vocabulary: VocabularyKind::Definition,
+                name: name.into(),
+                expected: def.parameters.len(),
+                actual: args.len(),
+                context,
+            });
+        }
+        // Absent only for cyclic IR, which `validate_program` rejects
+        // first.
+        let Some(sig) = self.definition_sigs.get(name) else {
+            return InferredKind::UnknownOrAny;
+        };
+        let param_kinds = sig.param_kinds.clone();
+        let param_observed = sig.param_observed.clone();
+        let result = sig.result.clone();
+        let n = args.len().min(param_kinds.len());
+        for (position, arg) in args.iter().take(n).enumerate() {
+            let expected = param_kinds[position].clone();
+            match (arg, expected) {
+                (ValueExpr::Term(Term::Var(var_name)), expected) => {
+                    self.use_var(scope, var_name);
+                    self.observe_or_report(scope, var_name, expected);
+                    let cell = scope.kinds.slot_mut(var_name, &mut self.cells).cell;
+                    for kind in &param_observed[position] {
+                        self.cells.record(cell, kind.clone());
+                    }
+                }
+                (arg, InferredKind::Known(kind)) => {
+                    self.check_operand_kind(arg, kind, "a call", scope);
+                }
+                (arg, InferredKind::UnknownOrAny) => {
+                    let _ = self.infer_value(arg, scope);
+                }
+            }
+        }
+        result.unwrap_or(InferredKind::UnknownOrAny)
     }
 
     /// The static rules of each builtin: what its arguments must be,
@@ -1918,6 +2014,13 @@ impl CheckCtx<'_> {
             });
             return;
         };
+        if def.body.as_prop().is_none() {
+            self.report(|context| ValidationError::DefinitionYieldsValue {
+                name: name.into(),
+                context,
+            });
+            return;
+        }
         if def.parameters.len() != args.len() {
             self.report(|context| ValidationError::ArityMismatch {
                 vocabulary: VocabularyKind::Definition,
@@ -2299,6 +2402,39 @@ fn occurs_in_prop(name: &Var, prop: &Prop) -> bool {
         prop,
         &|t, binders| matches!(t, Term::Var(v) if v == name && !binders.contains(&v)),
     )
+}
+
+/// [`occurs_in_prop`] over either body.
+fn occurs_in_body(name: &Var, body: &crate::ir::DefinitionBody) -> bool {
+    match body {
+        crate::ir::DefinitionBody::Prop(p) => occurs_in_prop(name, p),
+        crate::ir::DefinitionBody::Value(v) => fold::any_term_in_value(
+            v,
+            &|t, binders| matches!(t, Term::Var(x) if x == name && !binders.contains(&x)),
+        ),
+    }
+}
+
+/// [`prop_mentions`] over either body.
+fn body_mentions(body: &crate::ir::DefinitionBody, term: Term) -> bool {
+    match body {
+        crate::ir::DefinitionBody::Prop(p) => prop_mentions(p, term),
+        crate::ir::DefinitionBody::Value(v) => value_mentions(v, term),
+    }
+}
+
+/// Whether either body reads `pre(...)` anywhere.
+fn body_mentions_pre(body: &crate::ir::DefinitionBody) -> bool {
+    match body {
+        crate::ir::DefinitionBody::Prop(p) => fold::mentions_pre(p),
+        crate::ir::DefinitionBody::Value(v) => {
+            let mut hit = false;
+            fold::walk_value(v, &mut |n| {
+                hit |= matches!(n, fold::Node::Prop(Prop::Pre(_)));
+            });
+            hit
+        }
+    }
 }
 
 /// Inherent kind of a `Term`. Variables are `UnknownOrAny` here;

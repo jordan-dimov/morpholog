@@ -307,10 +307,10 @@ fn fuzz_definition() -> Definition {
         origin: morpholog_core::DefinitionOrigin::Authored,
         name: "fuzz_defined".into(),
         parameters: vec![Var::from("fx"), Var::from("fy")],
-        body: Prop::Claim {
+        body: morpholog_core::DefinitionBody::Prop(Prop::Claim {
             predicate: "FuzzInner".into(),
             args: vec![Term::Var(Var::from("fx")), Term::Var(Var::from("fy"))],
-        },
+        }),
     }
 }
 

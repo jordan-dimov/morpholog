@@ -6,8 +6,9 @@ item splits: a child is created holding what leaves, the parent keeps
 the rest, the lineage is recorded, and the allocation is re-pointed at
 the child. An allocation that takes the whole item ships the item.
 
-This is the worked example for the conditional statement and for a
-`for` over the claims a pattern matches. Shipping is one act, `ship`,
+This is the worked example for the conditional statement, for a `for`
+over the claims a pattern matches, and for a definition that names a
+figure. Shipping is one act, `ship`,
 that ranges over the allocations the record holds for the shipment,
 `for Allocation(allocation, line, shipment, item, quantity):`, and in
 each pass chooses by a condition on the record: `if quantity <
@@ -52,10 +53,12 @@ that got any branch wrong would be refused, not stored.
 | `ship` | For every allocation on the shipment, splits the item or ships it whole, by the condition in the act; then marks the shipment gone. |
 | `cancel_order` | For every line on the order, removes the line and its allocations; refused if any line has stock already shipped. |
 
-`Allocated(item)` and `LineShipped(line)` are reads: how much of each
-item is allocated, and how much of each line has shipped. The second
-used to be a figure kept beside the record and moved by the shipping
-act; the record can say, so it is read instead.
+`allocated(item)` is one figure, defined once: how much of an item is
+reserved. The `allocate` gate reads it, the `allocations_fit_the_stock`
+rule reads it, and the `Allocated(item)` view reads it. `LineShipped(line)`
+is a view too: how much of each line has shipped. It used to be a figure
+kept beside the record and moved by the shipping act; the record can
+say, so it is read instead.
 
 ## What left the application
 
@@ -83,10 +86,6 @@ stock already shipped.
 
 ## What it deliberately does not cover
 
-- The same sum, how much of an item is allocated, is written three
-  times: in the `allocate` gate, in the `allocations_fit_the_stock`
-  rule and in the `Allocated` read. A definition that yields a value
-  would make them one.
 - A line's part must be the item's part exactly. Variants of a part, a
   tree under it, would need a recursive definition of descent.
 - Two allocations on one shipment may not take the same stock item.
