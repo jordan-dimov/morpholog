@@ -494,6 +494,15 @@ pub(crate) struct GenerateViewsArgs {
     #[arg(long, value_enum, default_value_t = DerivedSourceArg::Cache)]
     pub(crate) derived: DerivedSourceArg,
 
+    /// Also generate, for each base predicate, a `<view>_history` view:
+    /// a row for every operation the audit log records on the
+    /// predicate's claims, in the log's order, with the same field names
+    /// and kinds. A read walks the audit log, and is consistent within
+    /// its snapshot only: an incremental reader pages below
+    /// `morpholog.audit_watermark()`.
+    #[arg(long)]
+    pub(crate) history: bool,
+
     /// Also write a description of the generated views to this file, as
     /// JSON: every view with its columns in order, each column's Morpholog
     /// kind and PostgreSQL type, the identity the programme declares, and

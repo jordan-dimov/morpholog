@@ -2413,6 +2413,7 @@ impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::RejectionState
 pub struct morpholog_postgres::RenderedViews
 pub morpholog_postgres::RenderedViews::base_view_count: usize
 pub morpholog_postgres::RenderedViews::derived_view_count: usize
+pub morpholog_postgres::RenderedViews::history_view_count: usize
 pub morpholog_postgres::RenderedViews::sql: alloc::string::String
 pub morpholog_postgres::RenderedViews::surface: morpholog_postgres::ViewSurface
 impl core::clone::Clone for morpholog_postgres::RenderedViews
@@ -3132,7 +3133,7 @@ pub fn morpholog_postgres::rehearse_recorded(&morpholog_core::prepared::Prepared
 pub async fn morpholog_postgres::release_outbox_claim(&sqlx_postgres::PgPool, uuid::Uuid, &str) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub fn morpholog_postgres::render_public_key(&ed25519_dalek::verifying::VerifyingKey) -> alloc::string::String
 pub fn morpholog_postgres::render_signature(&ed25519::Signature) -> alloc::string::String
-pub fn morpholog_postgres::render_views(&morpholog_core::validate::ValidatedProgram<'_>, &str, &str, morpholog_postgres::DerivedSource) -> core::result::Result<morpholog_postgres::RenderedViews, alloc::vec::Vec<morpholog_postgres::ViewRefusal>>
+pub fn morpholog_postgres::render_views(&morpholog_core::validate::ValidatedProgram<'_>, &str, &str, morpholog_postgres::DerivedSource, bool) -> core::result::Result<morpholog_postgres::RenderedViews, alloc::vec::Vec<morpholog_postgres::ViewRefusal>>
 pub fn morpholog_postgres::reproduce(&morpholog_core::validate::ValidatedProgram<'_>, &morpholog_postgres::ParsedReceipt, &morpholog_postgres::EvidencePack) -> (morpholog_postgres::CheckpointMatch, morpholog_postgres::Evaluation)
 pub async fn morpholog_postgres::require_can_provision_least_privilege(&sqlx_postgres::PgPool, &morpholog_postgres::DeploymentRoles) -> core::result::Result<(), morpholog_postgres::PgError>
 pub async fn morpholog_postgres::require_current_schema(&sqlx_postgres::PgPool) -> core::result::Result<(), morpholog_postgres::PgError>

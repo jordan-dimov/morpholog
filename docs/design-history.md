@@ -1397,3 +1397,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** the InvenTree spike (#729). An open order was one of four statuses, written `s = #pending or s = #on_hold or s = #in_progress or s = #shipped`; the gallery wrote the same chain two-way twice.
 
 **Landed:** `x in (a, b, ...)`, rewritten by the parser to the `or` chain of equalities, so the kernel, the compiled checks and the analyses see nothing new and a rule that switches keeps its hash. The two gallery sites switched, and the canonical-identity golden moved only their source digests. A list needs two values, so `x in (xs)` is still membership in a collection. A `const` naming a list is not in this change.
+
+### A predicate's history as a view
+
+**Forced by:** the InvenTree spike (#734). Its stock history page is read from the audit log, with nothing written beside the act, but the read decoded `operations` by position in hand SQL, restating field names and kinds the programme already declares.
+
+**Landed:** `generate views --history`, default off, gives each base predicate a `<view>_history` over the operations the log records on it, with the base view's fields. An admission that changed nothing is left out, and a migrated database shows its baseline as rows of their own. The log outlives every declaration, so a field is decoded only where the stored kind is the declared one, unit included, and a flag says whether the row has today's structure, which is not a claim about what its fields meant. A read is consistent within its snapshot only; review rejected a per-entity guarantee, since two acts on one item need not conflict. A read walks the log, and the fast per-entity read is its own question (#749). The description moved to format 3.

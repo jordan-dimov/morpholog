@@ -39,6 +39,8 @@ mod derived;
 mod derived_differential;
 mod error;
 mod history;
+#[cfg(test)]
+mod history_differential;
 mod indexes;
 mod keys;
 #[cfg(test)]

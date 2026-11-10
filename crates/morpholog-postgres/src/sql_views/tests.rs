@@ -24,6 +24,7 @@ fn render_ok(src: &str) -> RenderedViews {
         "morpholog_views",
         "sha256:testhash",
         DerivedSource::Cache,
+        false,
     )
     .expect("renders")
 }
@@ -31,7 +32,14 @@ fn render_ok(src: &str) -> RenderedViews {
 fn refusals(src: &str, schema: &str) -> Vec<ViewRefusal> {
     let program = parse_program(src).expect("fixture parses");
     let validated = program.validated().expect("fixture validates");
-    render_views(&validated, schema, "sha256:testhash", DerivedSource::Cache).expect_err("refuses")
+    render_views(
+        &validated,
+        schema,
+        "sha256:testhash",
+        DerivedSource::Cache,
+        false,
+    )
+    .expect_err("refuses")
 }
 
 // ---- snake_case (pinned, acronym-aware) ----
@@ -181,6 +189,7 @@ fn derived_heads_get_a_derived_view_over_the_cache() {
         "morpholog_views",
         "sha256:x",
         DerivedSource::Cache,
+        false,
     )
     .expect("renders");
     assert!(r.base_view_count >= 1 && r.derived_view_count >= 1);
@@ -211,6 +220,7 @@ fn zero_predicates_is_lawful_empty() {
         "empty",
         "morpholog_views",
         "sha256:testhash",
+        &[],
         &[],
         &[],
         &std::collections::BTreeMap::new(),
@@ -251,7 +261,7 @@ fn morpholog_prefixed_field_is_refused() {
             ("_morpholog_x", PredicateArgKind::Decimal),
         ],
     );
-    let found = sweep("morpholog_views", &[&p], &[]);
+    let found = sweep("morpholog_views", &[&p], &[], &[]);
     assert!(found.iter().any(|r| matches!(
         r,
         ViewRefusal::ReservedPrefix { name, .. } if name == "_morpholog_x"
@@ -262,7 +272,7 @@ fn morpholog_prefixed_field_is_refused() {
 fn over_long_identifier_is_refused() {
     let long = "a".repeat(64);
     let p = decl("P", &[(long.as_str(), PredicateArgKind::Decimal)]);
-    let found = sweep("morpholog_views", &[&p], &[]);
+    let found = sweep("morpholog_views", &[&p], &[], &[]);
     assert!(
         found
             .iter()
@@ -346,7 +356,7 @@ fn morpholog_prefixed_view_name_is_refused() {
     // `_morpholog_catalog`. Exercised via the sweep, since the grammar may
     // not allow the name.
     let p = decl("_morphologThing", &[("id", PredicateArgKind::Subject)]);
-    let found = sweep("morpholog_views", &[&p], &[]);
+    let found = sweep("morpholog_views", &[&p], &[], &[]);
     assert!(found.iter().any(|r| matches!(
         r,
         ViewRefusal::ReservedPrefix { name, .. } if name == "_morpholog_thing"
@@ -361,6 +371,7 @@ fn header_values_cannot_break_out_of_the_comment() {
         "evil\nDROP TABLE x;",
         "morpholog_views",
         "sha256:a\nb",
+        &[],
         &[],
         &[],
         &std::collections::BTreeMap::new(),
@@ -516,18 +527,166 @@ derived Exposure(book):
     }
 }
 
+fn render_with_history(src: &str) -> Result<RenderedViews, Vec<ViewRefusal>> {
+    let program = parse_program(src).expect("fixture parses");
+    let validated = program.validated().expect("fixture validates");
+    render_views(
+        &validated,
+        "morpholog_views",
+        "sha256:testhash",
+        DerivedSource::Cache,
+        true,
+    )
+}
+
+/// Asking for history changes nothing above it: the script without it is
+/// the script with it, minus the history views and their catalogue and
+/// seal rows. A base predicate gains a history view; a derived one, on
+/// which the log records nothing, does not.
+#[test]
+fn history_adds_views_and_leaves_the_others_as_they_were() {
+    let src = "program ledger\n\
+        predicate Entry(account: Subject, amount: Decimal)\n\
+        predicate Total(account: Subject, total: Decimal)\n\
+        derived Total(account):\n    over Entry(account: account, ..)\n    value total = sum(a | Entry(account, a))\n\
+        transformation post(account, amount):\n    admit Entry(account, amount)\n";
+    let plain = render_ok(src);
+    let with = render_with_history(src).unwrap();
+    assert_eq!((plain.history_view_count, with.history_view_count), (0, 1));
+    assert!(!plain.sql.contains("_history") && !plain.sql.contains("morpholog.audit"));
+
+    let block = "\n-- History view for base predicate `Entry`.";
+    let start = with.sql.find(block).expect("the history view is rendered");
+    let end = with.sql.find("\n-- Model catalogue").unwrap();
+    let without_view = format!("{}{}", &with.sql[..start], &with.sql[end..]);
+    let stripped: String = without_view
+        .lines()
+        .filter(|l| !l.contains("entry_history"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    // The catalogue and seal rows before the removed ones lose their
+    // trailing comma in the plain script.
+    let normalise = |s: &str| s.replace("),\n) AS", ")\n) AS");
+    assert_eq!(
+        normalise(&stripped).replace("'derived'),", "'derived')"),
+        normalise(&plain.sql)
+    );
+    assert!(!with.sql.contains("total_history"));
+
+    let described: Vec<(&str, &str)> = with
+        .surface
+        .views
+        .iter()
+        .map(|v| (v.view.as_str(), v.kind.as_str()))
+        .collect();
+    assert_eq!(
+        described,
+        [
+            ("entry", "base"),
+            ("total", "derived"),
+            ("entry_history", "history")
+        ]
+    );
+    let history = &with.surface.views[2];
+    assert_eq!(
+        history.identity,
+        [["_morpholog_transition_id", "_morpholog_operation"]]
+    );
+    assert_eq!(history.source, None);
+}
+
+/// A field is decoded only where the stored kind is the declared one,
+/// whole. Two units of quantity share a tag, so the unit is part of the
+/// test; a kind every value has needs none.
+#[test]
+fn a_history_field_is_guarded_by_its_whole_declared_kind() {
+    let with = render_with_history(
+        "program kinds\n\
+         predicate Lot(lot: Subject, size: Decimal[kg], extra: Any)\n\
+         transformation add(lot, size, extra):\n    admit Lot(lot, size, extra)\n",
+    )
+    .unwrap();
+    assert!(with.sql.contains(
+        "CASE WHEN arguments -> 0 ->> 'type' = 'subject' THEN arguments -> 0 ->> 'value' END AS \"lot\""
+    ));
+    assert!(with.sql.contains(
+        "CASE WHEN arguments -> 1 ->> 'type' = 'quantity' AND arguments -> 1 -> 'value' ->> 'unit' = 'kg' \
+         THEN (arguments -> 1 -> 'value' ->> 'amount')::numeric END AS \"size\""
+    ));
+    assert!(with.sql.contains("    arguments -> 2 AS \"extra\""));
+    assert!(with.sql.contains(
+        "COALESCE(jsonb_array_length(arguments) = 3 AND arguments -> 0 ->> 'type' = 'subject' \
+         AND arguments -> 1 ->> 'type' = 'quantity' AND arguments -> 1 -> 'value' ->> 'unit' = 'kg', false) \
+         AS \"_morpholog_shape_matches\""
+    ));
+}
+
+/// A history view's name can land on another predicate's view, and one
+/// past PostgreSQL's limit would be cut short: both refuse the run.
+#[test]
+fn a_history_view_name_that_collides_or_is_too_long_is_refused() {
+    let found = render_with_history(
+        "program clash\n\
+         predicate Stock(item: Subject)\n\
+         predicate StockHistory(item: Subject)\n\
+         transformation a(item):\n    admit Stock(item)\n    admit StockHistory(item)\n",
+    )
+    .expect_err("refuses");
+    assert_eq!(
+        found.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        [
+            "predicates `StockHistory` and `Stock (its history)` all generate view `stock_history`; rename one"
+        ]
+    );
+    assert!(
+        render_ok(
+            "program clash\n\
+             predicate Stock(item: Subject)\n\
+             predicate StockHistory(item: Subject)\n\
+             transformation a(item):\n    admit Stock(item)\n    admit StockHistory(item)\n"
+        )
+        .history_view_count
+            == 0,
+        "without history the two predicates are no collision"
+    );
+
+    let long = format!("P{}", "a".repeat(58));
+    let found = render_with_history(&format!(
+        "program long\npredicate {long}(item: Subject)\ntransformation a(item):\n    admit {long}(item)\n"
+    ))
+    .expect_err("refuses");
+    assert!(
+        found
+            .iter()
+            .any(|r| matches!(r, ViewRefusal::IdentifierTooLong { .. })),
+        "{found:?}"
+    );
+}
+
+/// Every kind a field can declare, so each SQL type the description can
+/// name meets PostgreSQL once.
+const EVERY_KIND: &str = "program every_kind
+predicate Wide(who: Subject, amount: Decimal, on: Date, at: Timestamp, held_for: Duration, open: Bool, load: Decimal[kg], parts: Collection)
+transformation note(who, amount, on, at, held_for, open, load, parts):
+    admit Wide(who, amount, on, at, held_for, open, load, parts)
+";
+
 /// Applied to PostgreSQL, every view has the described columns, in the
-/// described order, with the described types: the agreement a consumer
-/// can check itself from `information_schema.columns`.
+/// described order, and each described type is the column's own: the
+/// name resolves, in PostgreSQL, to the type the column has. History
+/// views included.
 #[tokio::test]
 async fn the_applied_views_have_the_described_columns() {
     let pool = crate::compiled_differential::test_pool().await;
     crate::testing::reset_database(&pool).await.unwrap();
-    for program in morpholog_examples::all_programs() {
+    let mut programs = morpholog_examples::all_programs();
+    programs.push(parse_program(EVERY_KIND).expect("fixture parses"));
+    for program in programs {
         let validated = program.validated().unwrap();
         let hash = format!("sha256:{}", "0".repeat(64));
         let schema = "described_views";
-        let Ok(rendered) = render_views(&validated, schema, &hash, DerivedSource::Cache) else {
+        let Ok(rendered) = render_views(&validated, schema, &hash, DerivedSource::Cache, true)
+        else {
             continue;
         };
         // Safe: the schema name is this test's constant.
@@ -543,19 +702,26 @@ async fn the_applied_views_have_the_described_columns() {
             .unwrap_or_else(|e| panic!("{}: applying the views: {e}", program.name));
         for view in &rendered.surface.views {
             let rows: Vec<(String, String)> = sqlx::query_as(
-                "SELECT column_name::text, udt_name::text FROM information_schema.columns
-                 WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position",
+                "SELECT a.attname::text, a.atttypid::regtype::text
+                 FROM pg_attribute a
+                 WHERE a.attrelid = format('%I.%I', $1::text, $2::text)::regclass
+                   AND a.attnum > 0 AND NOT a.attisdropped
+                 ORDER BY a.attnum",
             )
             .bind(schema)
             .bind(&view.view)
             .fetch_all(&pool)
             .await
             .unwrap();
-            let described: Vec<(String, String)> = view
-                .columns
-                .iter()
-                .map(|c| (c.name.clone(), c.sql_type.clone()))
-                .collect();
+            let mut described = Vec::new();
+            for c in &view.columns {
+                let (resolved,): (String,) = sqlx::query_as("SELECT to_regtype($1)::text")
+                    .bind(&c.sql_type)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                described.push((c.name.clone(), resolved));
+            }
             assert_eq!(rows, described, "{}.{}", program.name, view.view);
         }
     }
@@ -590,6 +756,7 @@ fn live_derived_views_are_computed_from_their_definitions() {
         "morpholog_views",
         "sha256:testhash",
         DerivedSource::Cache,
+        false,
     )
     .unwrap();
     let live = render_views(
@@ -597,6 +764,7 @@ fn live_derived_views_are_computed_from_their_definitions() {
         "morpholog_views",
         "sha256:testhash",
         DerivedSource::Live,
+        false,
     )
     .unwrap();
     assert_eq!(live.derived_view_count, 2);
@@ -696,6 +864,7 @@ derived OnHand(item):
         "morpholog_views",
         "sha256:testhash",
         DerivedSource::Live,
+        false,
     )
     .expect_err("a value lookup is outside the fragment");
     assert_eq!(refused.len(), 1);
@@ -708,7 +877,8 @@ derived OnHand(item):
             &validated,
             "morpholog_views",
             "sha256:testhash",
-            DerivedSource::Cache
+            DerivedSource::Cache,
+            false,
         )
         .is_ok()
     );
@@ -733,6 +903,7 @@ derived Counted(item):
         "morpholog_views",
         "sha256:testhash",
         DerivedSource::Live,
+        false,
     )
     .expect("a binding call renders live");
     let block = live
@@ -769,12 +940,12 @@ async fn switching_a_deployed_surface_to_live_needs_the_derived_views_dropped() 
     .execute(&pool)
     .await
     .unwrap();
-    let cached = render_views(&validated, schema, &hash, DerivedSource::Cache).unwrap();
+    let cached = render_views(&validated, schema, &hash, DerivedSource::Cache, false).unwrap();
     sqlx::raw_sql(sqlx::AssertSqlSafe(cached.sql))
         .execute(&pool)
         .await
         .unwrap();
-    let live = render_views(&validated, schema, &hash, DerivedSource::Live).unwrap();
+    let live = render_views(&validated, schema, &hash, DerivedSource::Live, false).unwrap();
     // On its own connection: the script's `BEGIN` leaves the failed
     // transaction open, and the pool would hand it on.
     let mut conn = pool.acquire().await.unwrap();

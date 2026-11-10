@@ -4372,7 +4372,18 @@ class ViewColumn:
             role=data.member("role", {"metadata", "field"}),
             sql_type=data.member(
                 "sql_type",
-                {"text", "numeric", "date", "timestamptz", "interval", "boolean", "jsonb", "uuid"},
+                {
+                    "text",
+                    "numeric",
+                    "date",
+                    "timestamptz",
+                    "interval",
+                    "boolean",
+                    "jsonb",
+                    "uuid",
+                    "bigint",
+                    "integer",
+                },
             ),
             kind=data.optional_text("kind"),
             position=data.optional_integer("position", minimum=0),
@@ -4383,7 +4394,9 @@ class ViewColumn:
 class ViewDescription:
     """One generated view. ``identity`` lists the field sets the programme
     declares unique, as declared and possibly empty; whether one serves as
-    a key is the consumer's decision."""
+    a key is the consumer's decision. A ``history`` view holds the
+    operations the audit log records on the predicate, and its identity
+    is the operation's place in the log."""
 
     predicate: str
     view: str
@@ -4404,7 +4417,7 @@ class ViewDescription:
         return cls(
             predicate=data.text("predicate"),
             view=data.text("view"),
-            kind=data.member("kind", {"base", "derived"}),
+            kind=data.member("kind", {"base", "derived", "history"}),
             columns=data.array("columns", ViewColumn.from_json),
             identity=data.array("identity", lambda item: parse_list(item, _text_item)),
             source=source,
@@ -4440,12 +4453,12 @@ class ViewSurface:
             payload,
             {"format", "programme", "model_hash", "schema", "catalog", "seal_table", "views"},
         )
-        if data.raw("format") != 2:
+        if data.raw("format") != 3:
             raise EnvelopeError(
-                f"view_surface: format {data.raw('format')!r} is not the 2 this client reads"
+                f"view_surface: format {data.raw('format')!r} is not the 3 this client reads"
             )
         return cls(
-            format=2,
+            format=3,
             programme=data.text("programme"),
             model_hash=_hash(data, "model_hash"),
             schema=data.text("schema"),

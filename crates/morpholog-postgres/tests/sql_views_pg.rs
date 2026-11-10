@@ -96,6 +96,7 @@ fn render(p: &Program, schema: &str) -> String {
         schema,
         SENTINEL_HASH,
         morpholog_postgres::DerivedSource::Cache,
+        false,
     )
     .expect("renders")
     .sql

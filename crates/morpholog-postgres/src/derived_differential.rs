@@ -91,6 +91,7 @@ async fn apply(pool: &PgPool, validated: &ValidatedProgram<'_>) -> Option<Vec<St
         SCHEMA,
         &format!("sha256:{}", "0".repeat(64)),
         DerivedSource::Live,
+        false,
     )
     .ok()?;
     // Safe: the schema name is this test's constant.

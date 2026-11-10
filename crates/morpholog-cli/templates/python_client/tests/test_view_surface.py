@@ -14,6 +14,9 @@ DESCRIPTION = (
 )
 
 
+HISTORY_DESCRIPTION = TEMPLATES_DIR.parent / "tests" / "golden" / "views" / "ledger_history.json"
+
+
 def surface() -> envelopes.ViewSurface:
     return envelopes.read_view_surface(str(DESCRIPTION))
 
@@ -25,7 +28,7 @@ def catalogue_rows(described: envelopes.ViewSurface) -> list[tuple[str, str, str
 class ReadingTheDescription(unittest.TestCase):
     def test_reads_every_view_with_typed_columns(self):
         described = surface()
-        self.assertEqual(described.format, 2)
+        self.assertEqual(described.format, 3)
         self.assertEqual(described.programme, "trade_lifecycle")
         self.assertTrue(described.model_hash.startswith("sha256:"))
         self.assertEqual(described.catalog, "_morpholog_catalog")
@@ -58,9 +61,27 @@ class ReadingTheDescription(unittest.TestCase):
         with self.assertRaises(envelopes.EnvelopeError):
             envelopes.ViewSurface.from_json(payload)
         payload = json.loads(DESCRIPTION.read_text())
-        payload["format"] = 3
+        payload["format"] = 2
         with self.assertRaises(envelopes.EnvelopeError):
             envelopes.ViewSurface.from_json(payload)
+
+    def test_reads_a_history_view_with_its_place_in_the_log_as_identity(self):
+        described = envelopes.read_view_surface(str(HISTORY_DESCRIPTION))
+        history = [v for v in described.views if v.kind == "history"]
+        base = [v for v in described.views if v.kind == "base"]
+        self.assertEqual({v.predicate for v in history}, {v.predicate for v in base})
+        lines = next(v for v in history if v.view == "journal_line_history")
+        self.assertEqual(lines.identity, [["_morpholog_transition_id", "_morpholog_operation"]])
+        self.assertIsNone(lines.single_key())
+        metadata = {c.name: c.sql_type for c in lines.columns if c.role == "metadata"}
+        self.assertEqual(metadata["_morpholog_audit_order"], "bigint")
+        self.assertEqual(metadata["_morpholog_act_ordinal"], "integer")
+        self.assertEqual(metadata["_morpholog_shape_matches"], "boolean")
+        self.assertEqual(metadata["_morpholog_ordered_at"], "timestamptz")
+        of_base = next(v for v in base if v.predicate == lines.predicate)
+        fields = lambda v: [(c.name, c.kind, c.sql_type) for c in v.columns if c.role == "field"]  # noqa: E731
+        self.assertEqual(fields(lines), fields(of_base))
+        self.assertEqual(envelopes.catalogue_differences(described, catalogue_rows(described)), [])
 
 
 class ComparingWithTheCatalogue(unittest.TestCase):
