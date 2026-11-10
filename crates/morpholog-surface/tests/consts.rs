@@ -320,3 +320,17 @@ fn a_state_reading_initialiser_is_refused() {
         "reads state",
     );
 }
+
+#[test]
+fn a_const_calling_a_figure_is_refused_whatever_its_arguments() {
+    // A figure's body may read the record, so its value is not constant
+    // even when every argument is a literal.
+    refusal_containing(
+        "define posted(l) = (sum(net | Line(l, net)))\n\n\
+         const first_posted = (posted(#first))\n\n\
+         transformation post(l, net):\n    \
+             require net <= first_posted\n    \
+             admit Line(l, net)",
+        "calls `posted`, a figure",
+    );
+}

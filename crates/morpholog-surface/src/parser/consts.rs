@@ -556,11 +556,20 @@ fn refuse_open_initialiser(
                 walk(right, c, const_names, errors);
             }
             // A builtin is pure, so it is constant when its arguments are.
-            ValueExpr::Call { args, .. } | ValueExpr::Defined { args, .. } => {
+            ValueExpr::Call { args, .. } => {
                 for a in args {
                     walk(a, c, const_names, errors);
                 }
             }
+            // A figure's body may read the record, whatever its arguments.
+            ValueExpr::Defined { name, .. } => errors.push((
+                c.span.clone(),
+                format!(
+                    "const `{}` calls `{name}`, a figure, whose body may read the \
+                     record - a const holds a value the record cannot change",
+                    c.name
+                ),
+            )),
             ValueExpr::Cond { .. } => errors.push((
                 c.span.clone(),
                 format!(

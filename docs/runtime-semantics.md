@@ -488,8 +488,13 @@ in a fresh frame, and the body evaluated under that frame alone, so
 `allocated(item)` is the same figure in a gate, a rule, a derived read,
 the interpreted route, the compiled route and a live view. A figure's
 parameters are inputs only: every call supplies each one, and the body
-may only use it. A figure called where a condition is required, or a
-condition where a figure is, is refused by name. `value Pred(args)`
+may only use it. A figure's kind is its body's, inferred once at the
+declaration; a body whose kind the checker cannot read (a bare
+parameter, an expression over parameters nothing types) is refused
+rather than left for each call to guess. A figure called where a
+condition is required, or a condition where a figure is, is refused by
+name. A `const` may not call a figure, since the body may read the
+record. `value Pred(args)`
 reads claims, never definitions, and a definition can never be an
 `admit` / `retract` / `emit` target; naming one in any of those
 positions is a dedicated category error, not an undeclared-predicate

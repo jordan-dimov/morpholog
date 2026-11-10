@@ -467,7 +467,15 @@ pub(crate) fn check_program(program: &Program) -> Checked {
                 cx.walk_prop(body, &mut scope);
                 None
             }
-            crate::ir::DefinitionBody::Value(body) => Some(cx.infer_value(body, &mut scope)),
+            crate::ir::DefinitionBody::Value(body) => {
+                let kind = cx.infer_value(body, &mut scope);
+                if matches!(kind, InferredKind::UnknownOrAny) {
+                    cx.errors.push(ValidationError::DefinitionKindUnknown {
+                        definition: def.name.to_string(),
+                    });
+                }
+                Some(kind)
+            }
         };
         for param in &def.parameters {
             if !occurs_in_body(param, &def.body) {

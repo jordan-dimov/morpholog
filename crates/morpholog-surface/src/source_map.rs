@@ -122,7 +122,8 @@ impl SourceMap {
                 self.decl_span(DeclKind::Invariant, invariant)
             }
             ValidationError::DefinitionNameCollision { name }
-            | ValidationError::DefinitionNameIsBuiltin { name } => {
+            | ValidationError::DefinitionNameIsBuiltin { name }
+            | ValidationError::DefinitionKindUnknown { definition: name } => {
                 self.decl_span(DeclKind::Definition, name)
             }
             ValidationError::DefinitionCycle { names } => names

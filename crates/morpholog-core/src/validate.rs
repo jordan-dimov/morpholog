@@ -585,6 +585,14 @@ pub enum ValidationError {
         name: String,
         context: ValidationContext,
     },
+    /// A figure's body gives its kind to nothing the checker can read: a
+    /// bare parameter, or an expression over parameters of unknown kind.
+    /// Every call would then carry an unknown value, so the body is
+    /// refused rather than inferred from its uses.
+    #[error(
+        "definition `{definition}` names a figure whose kind cannot be inferred from its body; compute it from a claim's field, a literal or a sum, or compare a parameter so its kind is known"
+    )]
+    DefinitionKindUnknown { definition: String },
     /// A definition that names a figure is called where a condition is
     /// required: a `require`, a `bind`, an `if` test, a rule's body.
     #[error(

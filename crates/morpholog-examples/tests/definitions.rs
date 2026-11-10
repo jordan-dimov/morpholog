@@ -761,6 +761,11 @@ fn what_a_figure_refuses_is_refused_by_name() {
         &|e| matches!(e, ValidationError::DefinitionNameIsBuiltin { name } if name == "periods"),
     );
     refused(
+        "define headroom(item, on_hand) = (if(StockItem(item, _), on_hand, on_hand))",
+        "quantity <= headroom(item, on_hand)",
+        &|e| matches!(e, ValidationError::DefinitionKindUnknown { definition } if definition == "headroom"),
+    );
+    refused(
         "define headroom(item, on_hand) = (on_hand - allocated(item))",
         "quantity <= headroom(item)",
         &|e| matches!(e, ValidationError::ArityMismatch { name, expected: 2, actual: 1, .. } if name == "headroom"),
