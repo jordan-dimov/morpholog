@@ -10,12 +10,17 @@
 //! bind_stmt     ::= "bind" claim_pattern    -- restricted; see below
 //! let_stmt      ::= "let" Ident "=" let_rhs
 //! let_rhs       ::= "new" "Subject" "(" ")" | value_expression
-//! admit_stmt    ::= "admit" claim_pattern
+//! admit_stmt    ::= "admit" constructive_pattern
 //! retract_stmt  ::= "retract" claim_pattern
-//! emit_stmt     ::= "emit" claim_pattern    -- Intent shares the shape
+//! emit_stmt     ::= "emit" constructive_pattern    -- Intent shares the shape
 //! for_stmt      ::= "for" Ident "in" value_expression ":" Indent statement+ Dedent
 //! claim_pattern ::= Ident "(" term_list ")"
+//! constructive_pattern ::= Ident "(" (term | "new" "Subject" "(" ")")* ")"
 //! ```
+//!
+//! An inline `new Subject()` in an `admit` or `emit` argument is sugar: the transformation's
+//! naming pass ([`super::mint`]) turns each into `let <generated> = new Subject()` before the
+//! statement, so the IR, the kernel and the draw record see the two-line form.
 //!
 //! The claim-shaped verbs share one pattern and differ only in the IR they build:
 //!
@@ -34,7 +39,8 @@ use morpholog_core::{Claim, Intent, PredicateArgKind, Prop, Stmt, Term, ValueExp
 use crate::lexer::Token;
 
 use super::expr::{
-    PatternArgs, expression_parser, pattern_args_parser, resolve_pattern, value_expr_parser,
+    PatternArgs, constructive_term_parser, expression_parser, pattern_args_over,
+    pattern_args_parser, resolve_pattern, value_expr_parser,
 };
 use super::field_table::{FieldTable, Vocabulary};
 
@@ -57,6 +63,12 @@ where
         // Each verb resolves the pattern against its own vocabulary.
         let claim_pattern = ident
             .then(pattern_args_parser().delimited_by(just(Token::LParen), just(Token::RParen)));
+        // The same, with `new Subject()` allowed in a slot: an admitted claim or an emitted
+        // intent writes a subject down, so one can be minted there.
+        let constructive_pattern = ident.then(
+            pattern_args_over(constructive_term_parser())
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        );
 
         // An optional `<name>:` prefix. No proposition starts with `Ident :`, so it is unambiguous.
         let rule_name = ident.then_ignore(just(Token::Colon)).or_not();
@@ -96,7 +108,7 @@ where
         //
         // Wildcards are refused here, with a span, since the kernel would refuse them anyway.
         let admit_stmt = just(Token::KwAdmit)
-            .ignore_then(claim_pattern.clone())
+            .ignore_then(constructive_pattern.clone())
             .validate(move |(predicate, args), e, emitter| {
                 let span: SimpleSpan = e.span();
                 // `..` leaves fields unfilled, the same mistake as a wildcard. Refuse it by name
@@ -153,7 +165,7 @@ where
         //
         // Intents look like claims but are not. Wildcards and `..` are refused as in `admit`.
         let emit_stmt = just(Token::KwEmit)
-            .ignore_then(claim_pattern.clone())
+            .ignore_then(constructive_pattern)
             .validate(move |(name, args), e, emitter| {
                 let span: SimpleSpan = e.span();
                 let rest_refused = matches!(&args, PatternArgs::Named { rest: true, .. });
