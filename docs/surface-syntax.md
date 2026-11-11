@@ -138,7 +138,9 @@ and who it really is must be settled at the integration boundary.
 ## Rules: the propositions
 
 The forms: `implies`, `and`, `or`, `not`, `xor`, `forall x in source:
-body`, `exists x: body`, `pre(...)` for the state before the change,
+body` (the source a claim pattern, a collection, or a `periods(...)`
+grid, with a bound on the window in a conjunct before it), `exists x:
+body`, `pre(...)` for the state before the change,
 `x in xs` for membership, `x in (#open, #held)` for one of a list
 written out, and the comparators. `exists` names one
 variable: in `exists r: Report(r, t, o) and ...` the pattern binds `t`

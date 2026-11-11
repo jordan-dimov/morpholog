@@ -13,7 +13,9 @@ mod common;
 use std::sync::OnceLock;
 
 use common::{Example, claim_instance, date, dec_str, subj, test_actor, ts};
-use morpholog_core::{Compared, EvalError, Outcome, RejectionReason, State};
+use morpholog_core::{
+    Bounding, Compared, EvalError, Impact, ImpactPlan, Outcome, RejectionReason, State,
+};
 use morpholog_examples::delivery_hour_limits;
 
 fn ex() -> &'static Example {
@@ -346,4 +348,238 @@ fn a_published_day_must_be_a_civil_day() {
             "a day ending {ends_at} is refused by name: {outcome:?}"
         );
     }
+}
+
+/// Each hour's start between two instants, as the grid would build it.
+fn hours_from(from: &str, until: &str) -> Vec<morpholog_core::EvalValue> {
+    let (from, until): (jiff::Timestamp, jiff::Timestamp) =
+        (from.parse().unwrap(), until.parse().unwrap());
+    let mut out = Vec::new();
+    let mut h = from;
+    while h < until {
+        out.push(morpholog_core::EvalValue::Timestamp(h));
+        h = h.checked_add(jiff::SignedDuration::from_hours(1)).unwrap();
+    }
+    out
+}
+
+fn price_hour(local_date: &str, hour: morpholog_core::EvalValue, state: State) -> State {
+    ex().must_accept_as(
+        &delivery_hour_limits::price_hour(),
+        vec![subj(BERLIN), date(local_date), hour, dec_str("42.5")],
+        PUBLISHER,
+        state,
+    )
+}
+
+fn publish_prices(local_date: &str, state: &State) -> Result<Outcome, EvalError> {
+    ex().propose_as(
+        &delivery_hour_limits::publish_prices(),
+        vec![subj(BERLIN), date(local_date)],
+        PUBLISHER,
+        state,
+    )
+}
+
+fn rule_refusal(outcome: &Result<Outcome, EvalError>, rule: &str) -> Option<RejectionReason> {
+    match outcome {
+        Ok(Outcome::Rejected {
+            reason: reason @ RejectionReason::Invariant { name, .. },
+        }) if name.as_str() == rule => Some(reason.clone()),
+        _ => None,
+    }
+}
+
+/// The 23-hour day with its hours priced, all but the last if `short`.
+fn priced_spring_day(short: bool) -> State {
+    let mut hours = hours_from("2026-03-28T23:00:00Z", "2026-03-29T22:00:00Z");
+    assert_eq!(hours.len(), 23);
+    if short {
+        hours.pop();
+    }
+    hours.into_iter().fold(with_published_days(), |state, h| {
+        price_hour("2026-03-29", h, state)
+    })
+}
+
+/// A published day has a price for every hour it has: 23 on the
+/// spring day, 25 on the fall day. One hour short, the rule refuses and
+/// names the hour.
+#[test]
+fn a_published_day_has_a_price_for_every_hour_it_has() {
+    let full = priced_spring_day(false);
+    assert!(matches!(
+        publish_prices("2026-03-29", &full),
+        Ok(Outcome::Accepted { .. })
+    ));
+    let short = priced_spring_day(true);
+    let refused = publish_prices("2026-03-29", &short);
+    let reason = rule_refusal(&refused, "a_published_day_is_priced_hour_by_hour")
+        .unwrap_or_else(|| panic!("the unpriced hour refuses the day: {refused:?}"));
+    let RejectionReason::Invariant { witness, .. } = reason else {
+        unreachable!()
+    };
+    assert!(
+        witness
+            .iter()
+            .any(|w| w.var.as_str() == "h" && w.value == ts("2026-03-29T21:00:00Z")),
+        "the witness names the missing hour: {witness:?}"
+    );
+    // The fall day has 25 hours, and needs all of them.
+    let hours = hours_from("2026-10-24T22:00:00Z", "2026-10-25T23:00:00Z");
+    assert_eq!(hours.len(), 25);
+    let mut state = full;
+    for h in &hours[..24] {
+        state = price_hour("2026-10-25", h.clone(), state);
+    }
+    assert!(
+        rule_refusal(
+            &publish_prices("2026-10-25", &state),
+            "a_published_day_is_priced_hour_by_hour"
+        )
+        .is_some()
+    );
+    let state = price_hour("2026-10-25", hours[24].clone(), state);
+    assert!(matches!(
+        publish_prices("2026-10-25", &state),
+        Ok(Outcome::Accepted { .. })
+    ));
+}
+
+/// Exactly one price per hour is two rules composed, and a price is for
+/// an hour inside its day. Taking the only price for an hour away from
+/// a published day breaks the grid rule.
+#[test]
+fn prices_are_one_per_hour_inside_the_day_and_kept_once_published() {
+    let state = priced_spring_day(false);
+    let again = ex().propose_as(
+        &delivery_hour_limits::price_hour(),
+        vec![
+            subj(BERLIN),
+            date("2026-03-29"),
+            ts("2026-03-29T10:00:00Z"),
+            dec_str("1"),
+        ],
+        PUBLISHER,
+        &state,
+    );
+    assert!(
+        rule_refusal(&again, "price_unique_by_calendar_local_date_hour").is_some(),
+        "{again:?}"
+    );
+    let outside = ex().propose_as(
+        &delivery_hour_limits::price_hour(),
+        vec![
+            subj(BERLIN),
+            date("2026-03-29"),
+            ts("2026-03-29T22:00:00Z"),
+            dec_str("1"),
+        ],
+        PUBLISHER,
+        &state,
+    );
+    assert!(
+        rule_refusal(&outside, "a_price_falls_in_its_day").is_some(),
+        "{outside:?}"
+    );
+    let published = ex().must_accept_as(
+        &delivery_hour_limits::publish_prices(),
+        vec![subj(BERLIN), date("2026-03-29")],
+        PUBLISHER,
+        state,
+    );
+    let withdrawn = ex().propose_as(
+        &delivery_hour_limits::withdraw_price(),
+        vec![subj(BERLIN), date("2026-03-29"), ts("2026-03-29T10:00:00Z")],
+        PUBLISHER,
+        &published,
+    );
+    assert!(
+        rule_refusal(&withdrawn, "a_published_day_is_priced_hour_by_hour").is_some(),
+        "{withdrawn:?}"
+    );
+}
+
+/// The grid rule's bound stops a day longer than its bound; it does not
+/// stop an empty or reversed day, which would pass vacuously. The
+/// civil-day rule does, and the grid rule leans on it.
+#[test]
+fn an_empty_or_reversed_day_is_refused_by_the_civil_day_rule_not_the_grid() {
+    let mut claims = capped().claims().to_vec();
+    claims.push(claim_instance(
+        "CalendarPublisher",
+        &[subj(BERLIN), subj(PUBLISHER)],
+    ));
+    let state = State::from_claims(claims);
+    for (name, from, until) in [
+        ("empty", "2026-03-29T00:00:00Z", "2026-03-29T00:00:00Z"),
+        ("reversed", "2026-03-30T00:00:00Z", "2026-03-29T00:00:00Z"),
+    ] {
+        let outcome = ex().propose_as(
+            &delivery_hour_limits::publish_delivery_day(),
+            vec![
+                subj(BERLIN),
+                date("2026-03-29"),
+                ts(from),
+                ts(until),
+                subj("tzdb_2026a"),
+            ],
+            PUBLISHER,
+            &state,
+        );
+        assert!(
+            rule_refusal(&outcome, "a_delivery_day_is_a_civil_day").is_some(),
+            "{name}: {outcome:?}"
+        );
+    }
+}
+
+/// The grid rule is judged per day: a price on one day touches that
+/// day's case only, and a day's bounds touch that day's case.
+#[test]
+fn the_grid_rule_is_bounded_to_its_day() {
+    let program = delivery_hour_limits::program();
+    let rule = program
+        .invariants
+        .iter()
+        .find(|i| i.name.as_str() == "a_published_day_is_priced_hour_by_hour")
+        .unwrap();
+    let plan = ImpactPlan::with_definitions(rule, &program.definitions);
+    assert!(
+        matches!(plan.bounding(), Bounding::Bound),
+        "{:?}",
+        plan.bounding()
+    );
+    let case = |delta: &[morpholog_core::ClaimInstance]| match plan.classify(delta, &[]) {
+        Impact::Bounded(cases) => cases
+            .iter()
+            .map(|c| c[&"local_date".into()].clone())
+            .collect::<Vec<_>>(),
+        other => panic!("bounded to a day: {other:?}"),
+    };
+    assert_eq!(
+        case(&[claim_instance(
+            "Price",
+            &[
+                subj(BERLIN),
+                date("2026-10-25"),
+                ts("2026-10-25T10:00:00Z"),
+                dec_str("1")
+            ]
+        )]),
+        vec![date("2026-10-25")]
+    );
+    assert_eq!(
+        case(&[claim_instance(
+            "DeliveryDay",
+            &[
+                subj(BERLIN),
+                date("2026-03-29"),
+                ts("2026-03-28T23:00:00Z"),
+                ts("2026-03-29T22:00:00Z"),
+                subj("tzdb_2026b")
+            ]
+        )]),
+        vec![date("2026-03-29")]
+    );
 }

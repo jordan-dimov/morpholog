@@ -784,7 +784,10 @@ fn parses_membership_between_variables() {
     let got = parse_expression("line in lines").unwrap();
     assert_eq!(
         got,
-        Prop::In(Term::Var("line".into()), Term::Var("lines".into()),)
+        Prop::In(
+            Term::Var("line".into()),
+            ValueExpr::Term(Term::Var("lines".into()))
+        )
     );
 }
 
@@ -825,7 +828,10 @@ fn a_written_list_after_in_is_the_chain_of_equalities() {
 /// makes no list of one, and an empty list is refused by name.
 #[test]
 fn only_a_comma_makes_a_list_after_in() {
-    let collection = Prop::In(Term::Var("s".into()), Term::Var("xs".into()));
+    let collection = Prop::In(
+        Term::Var("s".into()),
+        ValueExpr::Term(Term::Var("xs".into())),
+    );
     assert_eq!(parse_expression("s in xs").unwrap(), collection);
     assert_eq!(parse_expression("s in (xs)").unwrap(), collection);
     parse_expression("s in (xs,)").expect_err("a trailing comma is no list");
@@ -883,7 +889,10 @@ fn forall_with_variable_source_wraps_as_in() {
     // `In(Var("line"), Var("lines"))` so the kernel can iterate.
     assert_eq!(
         *source,
-        Prop::In(Term::Var("line".into()), Term::Var("lines".into()),)
+        Prop::In(
+            Term::Var("line".into()),
+            ValueExpr::Term(Term::Var("lines".into()))
+        )
     );
     assert!(matches!(*body, Prop::Claim { .. }));
 }

@@ -284,8 +284,9 @@ impl BoundEnv {
 struct Scope {
     kinds: KindEnv,
     bound: BoundEnv,
-    /// Windows an earlier `require` has bounded, as (until, from) cells,
-    /// so a `periods` grid over them has a size the rule fixes.
+    /// Windows an earlier `require` or conjunct has bounded, as (until,
+    /// from) cells, so a `periods` grid over them has a size the rule
+    /// fixes.
     windows: Vec<(CellId, CellId)>,
 }
 
@@ -812,9 +813,17 @@ impl CheckCtx<'_> {
             }
             Prop::And(items) => {
                 // Conjuncts thread the scope forward: each branch
-                // sees bindings and refinements from earlier ones.
+                // sees bindings and refinements from earlier ones. A
+                // conjunct that bounds a window bounds a grid in a
+                // later conjunct, as a `require` does for a body.
                 for item in items {
                     self.walk_prop(item, scope);
+                    if let Some(bound) = grid::window_bound(item)
+                        && let (Some(until), Some(from)) =
+                            (scope.kinds.cell(bound.until), scope.kinds.cell(bound.from))
+                    {
+                        scope.windows.push((until, from));
+                    }
                 }
             }
             Prop::Or(items) => {
@@ -857,7 +866,12 @@ impl CheckCtx<'_> {
             }
             Prop::Implies { left, right } => {
                 self.walk_closed(scope, |cx, scoped| {
+                    // The antecedent's bindings reach the consequent; a
+                    // window bound there does not. A window beyond it
+                    // would make the rule vacuous, not broken.
+                    let windows = scoped.windows.clone();
                     cx.walk_prop(left, scoped);
+                    scoped.windows = windows;
                     cx.walk_prop(right, scoped);
                 });
             }
@@ -878,7 +892,7 @@ impl CheckCtx<'_> {
                     scoped.kinds.rebind(binding, &mut cx.cells);
                     cx.walk_prop(source, scoped);
                     cx.walk_prop(body, scoped);
-                    if let Prop::In(_, Term::Var(collection)) = source.as_ref()
+                    if let Prop::In(_, ValueExpr::Term(Term::Var(collection))) = source.as_ref()
                         && let (Some(over), Some(each)) =
                             (scoped.kinds.cell(collection), scoped.kinds.cell(binding))
                     {
@@ -921,7 +935,7 @@ impl CheckCtx<'_> {
                         .observe(name, InferredKind::UnknownOrAny, &mut self.cells);
                 }
                 match collection {
-                    Term::Var(name) => {
+                    ValueExpr::Term(Term::Var(name)) => {
                         self.use_var(scope, name);
                         self.observe_or_report(
                             scope,
@@ -935,8 +949,20 @@ impl CheckCtx<'_> {
                             self.observe_or_report(scope, each, InferredKind::Known(kind));
                         }
                     }
-                    Term::Wildcard => {}
-                    other => {
+                    ValueExpr::Term(Term::Wildcard) => {}
+                    // A grid: its own checks (kinds, a literal step, a
+                    // bound before it), and the element is an instant.
+                    grid if grid::grid_call(grid).is_some() => {
+                        let _ = self.infer_value(grid, scope);
+                        if let Term::Var(each) = element {
+                            self.observe_or_report(
+                                scope,
+                                each,
+                                InferredKind::Known(PredicateArgKind::Timestamp),
+                            );
+                        }
+                    }
+                    ValueExpr::Term(other) => {
                         if let InferredKind::Known(actual) = term_kind(other)
                             && !kinds_compatible(&PredicateArgKind::Collection, &actual)
                         {
@@ -949,6 +975,9 @@ impl CheckCtx<'_> {
                             });
                         }
                     }
+                    // Hand-built IR: the parser never produces another
+                    // shape, and no walker is proven over one.
+                    _ => self.report(|context| ValidationError::InSourceShape { context }),
                 }
             }
         }

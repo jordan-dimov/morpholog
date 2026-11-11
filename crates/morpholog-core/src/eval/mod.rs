@@ -1135,12 +1135,15 @@ pub(crate) fn find_disjunction(
 
 pub(crate) fn find_in_matches(
     elem: &Term,
-    coll: &Term,
+    coll: &ValueExpr,
     ctx: &EvalContext<'_>,
 ) -> Result<Vec<Bindings>, EvalError> {
     let base = ctx.bindings;
     let transition = ctx.transition;
-    let coll_val = resolve_term_shared(coll, base, transition)?;
+    let coll_val = match coll {
+        ValueExpr::Term(t) => resolve_term_shared(t, base, transition)?,
+        grid => Bound::from(eval_value(grid, ctx)?),
+    };
     let EvalValue::Collection(items) = &*coll_val else {
         return Err(EvalError::TypeMismatch("In expects a collection".into()));
     };

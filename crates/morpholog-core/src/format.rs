@@ -533,7 +533,7 @@ fn fmt_prop(p: &Prop, ctx: FormatContext) -> String {
         Prop::Neq(lhs, rhs) => {
             format!("{} != {}", value_primary(lhs, ctx), value_primary(rhs, ctx))
         }
-        Prop::In(elem, coll) => format!("{} in {}", format_term(elem), format_term(coll)),
+        Prop::In(elem, coll) => format!("{} in {}", format_term(elem), fmt_value(coll, ctx)),
 
         // Boolean composition: prefix `not`, infix `and`/`or`/`implies`.
         Prop::Pre(inner) => format!("pre({})", fmt_prop(inner, ctx)),
@@ -574,7 +574,7 @@ fn fmt_prop(p: &Prop, ctx: FormatContext) -> String {
             // `Prop::In(Term::Var(x), coll)`; print that shape back the
             // same way, and any other source as a proposition.
             let source_text = match source.as_ref() {
-                Prop::In(Term::Var(b), coll) if b == binding => format_term(coll),
+                Prop::In(Term::Var(b), coll) if b == binding => fmt_value(coll, ctx),
                 _ => prop_primary(source, ctx),
             };
             format!("forall {binding} in {source_text}: {}", fmt_prop(body, ctx))

@@ -1388,6 +1388,7 @@ dependencies = [
 name = "morpholog-examples"
 version = "0.0.18"
 dependencies = [
+ "jiff",
  "morpholog-core",
  "morpholog-surface",
  "morpholog-test-support",

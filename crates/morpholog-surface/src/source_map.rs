@@ -99,6 +99,7 @@ impl SourceMap {
             | ValidationError::UnresolvedDefinitionCall { context, .. }
             | ValidationError::DefinitionYieldsValue { context, .. }
             | ValidationError::DefinitionYieldsNoValue { context, .. }
+            | ValidationError::InSourceShape { context }
             | ValidationError::PreNotAvailable { context }
             | ValidationError::CalendarSpanEscapesExpression { context, .. }
             | ValidationError::RetractsAppendOnly { context, .. }
@@ -201,9 +202,10 @@ impl SourceMap {
             Lint::SharedWriter { transformation, .. } => {
                 self.decl_span(DeclKind::Transformation, transformation)
             }
-            // On the rule that holds the sum.
+            // On the rule that holds the sum or the grid.
             Lint::WildcardedCallUnderSum { owner, .. }
-            | Lint::OverlappingOrUnderSum { owner, .. } => {
+            | Lint::OverlappingOrUnderSum { owner, .. }
+            | Lint::LargeGrid { owner, .. } => {
                 let (kind, name) = owner.rsplit_once('`')?.0.rsplit_once('`')?;
                 let kind = if kind.contains("transformation") {
                     DeclKind::Transformation
@@ -215,10 +217,6 @@ impl SourceMap {
                     DeclKind::Definition
                 };
                 self.decl_span(kind, name)
-            }
-            // On the transformation whose gate and step set the grid's size.
-            Lint::LargeGrid { transformation, .. } => {
-                self.decl_span(DeclKind::Transformation, transformation)
             }
             // On the bind, which the pattern retract makes unnecessary.
             Lint::BindOnlyToRetract {

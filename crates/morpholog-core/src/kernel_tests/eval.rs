@@ -196,7 +196,10 @@ fn predicates_referenced_by_prop_covers_every_variant() {
             Box::new(ValueExpr::Term(Term::Var("a".into()))),
             Box::new(ValueExpr::Term(Term::Var("b".into()))),
         ),
-        Prop::In(Term::Var("e".into()), Term::Var("coll".into())),
+        Prop::In(
+            Term::Var("e".into()),
+            ValueExpr::Term(Term::Var("coll".into())),
+        ),
     ]);
 
     let mut got = BTreeSet::new();

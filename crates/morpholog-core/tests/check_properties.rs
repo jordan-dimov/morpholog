@@ -135,7 +135,7 @@ fn arb_value_expr() -> impl Strategy<Value = ValueExpr> {
 fn arb_prop_leaf() -> impl Strategy<Value = Prop> {
     prop_oneof![
         (arb_pred_name(), arb_args()).prop_map(|(predicate, args)| Prop::Claim { predicate, args }),
-        (arb_term(), arb_term()).prop_map(|(a, b)| Prop::In(a, b)),
+        (arb_term(), arb_term()).prop_map(|(a, b)| Prop::In(a, ValueExpr::Term(b))),
     ]
 }
 
@@ -145,7 +145,7 @@ fn arb_prop() -> impl Strategy<Value = Prop> {
     let leaf = prop_oneof![
         (arb_pred_name(), arb_args()).prop_map(|(predicate, args)| Prop::Claim { predicate, args }),
         (arb_value_expr(), arb_value_expr()).prop_map(|(a, b)| Prop::Neq(Box::new(a), Box::new(b))),
-        (arb_term(), arb_term()).prop_map(|(a, b)| Prop::In(a, b)),
+        (arb_term(), arb_term()).prop_map(|(a, b)| Prop::In(a, ValueExpr::Term(b))),
         // Calls into the fixed definition table `arb_program` carries;
         // arity is deliberately unconstrained (validate must refuse a
         // mismatch, never panic on one).

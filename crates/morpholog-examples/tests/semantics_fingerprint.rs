@@ -582,6 +582,77 @@ transformation close(order, force: Bool):
         );
         record(out, case.to_string(), &input, &decided);
     }
+
+    // A rule over a grid built from a claim's bounds: a full day
+    // publishes, a short one is refused at its missing hour, a window
+    // beyond the bound is refused by the bound, and an empty window
+    // passes the grid rule, since bounded is not non-empty.
+    let program = morpholog_surface::parse_program(
+        "
+program priced
+
+predicate Day(day: Date, starts_at: Timestamp, ends_at: Timestamp)
+    unique by (day)
+predicate Published(day: Date)
+    append only
+predicate Price(day: Date, hour: Timestamp, price: Decimal)
+    unique by (day, hour)
+
+invariant a_published_day_is_priced:
+    Published(day)
+    implies Day(day, starts_at, ends_at)
+    and ends_at - starts_at no_longer_than duration(PT25H)
+    and (forall h in periods(starts_at, ends_at, duration(PT1H)): exists p: Price(day, h, p))
+
+transformation publish(day):
+    admit Published(day)
+",
+    )
+    .unwrap();
+    let claim = |predicate: &str, args: Vec<EvalValue>| morpholog_core::ClaimInstance {
+        predicate: predicate.into(),
+        args,
+    };
+    let (day, price) = {
+        use morpholog_test_support::{date, dec, ts};
+        (
+            |from: &str, until: &str| claim("Day", vec![date("2026-06-01"), ts(from), ts(until)]),
+            |hour: &str| claim("Price", vec![date("2026-06-01"), ts(hour), dec(5)]),
+        )
+    };
+    let publish = program.transformation("publish").unwrap();
+    let day_arg = || vec![morpholog_test_support::date("2026-06-01")];
+    for (case, claims) in [
+        (
+            "fixture/grid_rule/full_day",
+            vec![
+                day("2026-06-01T00:00:00Z", "2026-06-01T03:00:00Z"),
+                price("2026-06-01T00:00:00Z"),
+                price("2026-06-01T01:00:00Z"),
+                price("2026-06-01T02:00:00Z"),
+            ],
+        ),
+        (
+            "fixture/grid_rule/missing_hour",
+            vec![
+                day("2026-06-01T00:00:00Z", "2026-06-01T03:00:00Z"),
+                price("2026-06-01T00:00:00Z"),
+                price("2026-06-01T01:00:00Z"),
+            ],
+        ),
+        (
+            "fixture/grid_rule/beyond_the_bound",
+            vec![day("2026-06-01T00:00:00Z", "2026-06-03T00:00:00Z")],
+        ),
+        (
+            "fixture/grid_rule/empty_window",
+            vec![day("2026-06-01T00:00:00Z", "2026-06-01T00:00:00Z")],
+        ),
+    ] {
+        let (input, decided) =
+            proposal_case(&program, publish, day_arg(), &State::from_claims(claims));
+        record(out, case.to_string(), &input, &decided);
+    }
 }
 
 /// Values admitted or emitted into fields of another declared kind,

@@ -421,14 +421,17 @@ pub enum ValidationError {
     },
     /// A `periods` grid whose size the rule does not fix. The most periods
     /// a grid can hold is its window's bound over its step, so the step
-    /// must be a literal duration and an earlier gate must bound the
-    /// window, `require {until} - {from} no_longer_than duration(...)`
-    /// with a literal bound; a transformation body is the only place that
-    /// gate can stand.
+    /// must be a literal duration and the window must be bounded before
+    /// the grid: `require {until} - {from} no_longer_than duration(...)`
+    /// with a literal bound in a body, or the same comparison as a
+    /// conjunct before the grid in a rule. A bound in an implication's
+    /// antecedent does not count, since a window beyond it would make the
+    /// rule vacuous rather than broken.
     #[error(
-        "periods needs a size the rule fixes: a literal step, and `require {until} - {from} \
-         no_longer_than duration(...)` with a literal bound earlier in the same \
-         transformation, in {context}"
+        "periods needs a size the rule fixes: a literal step, and `{until} - {from} \
+         no_longer_than duration(...)` with a literal bound, as a `require` earlier in \
+         the same transformation or a conjunct before the grid on the same side of \
+         `implies`, in {context}"
     )]
     PeriodsUnbounded {
         from: String,
@@ -612,6 +615,13 @@ pub enum ValidationError {
         name: String,
         context: ValidationContext,
     },
+    /// The right side of an `in` is neither a term nor a `periods(...)`
+    /// grid: hand-built IR, since the parser produces nothing else, and
+    /// no walker is proven over another shape.
+    #[error(
+        "the right side of `in` is a collection variable or a `periods(...)` grid, in {context}; nothing else ranges there"
+    )]
+    InSourceShape { context: ValidationContext },
     /// A transformation's declared kinds do not line up with its
     /// parameters, one entry per parameter: hand-built IR, since the
     /// parser and the builder write them together.

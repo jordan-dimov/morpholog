@@ -158,6 +158,13 @@ impl ImpactPlan {
                 widening.get_or_insert_with(|| Widening::UnfollowedCall(name.clone()));
                 calls = true;
             }
+            NodeKind::Grid(binder) => {
+                if let Term::Var(v) = binder
+                    && case_vars.contains(v)
+                {
+                    widening.get_or_insert_with(|| Widening::ScopeReadsBeforeBinding(v.clone()));
+                }
+            }
             NodeKind::Widens(w) => {
                 widening.get_or_insert(w);
             }
@@ -403,6 +410,14 @@ fn follow(
                     out.footprint = None;
                 }
             },
+            NodeKind::Grid(binder) => {
+                if let Term::Var(v) = binder
+                    && matches!(frame.get(v), Some(Traced::Case(_)))
+                {
+                    out.widening
+                        .get_or_insert_with(|| Widening::ScopeReadsBeforeBinding(v.clone()));
+                }
+            }
             NodeKind::Widens(w) => {
                 out.widening.get_or_insert(w);
             }
@@ -449,6 +464,10 @@ fn follow(
 enum NodeKind<'a> {
     Claim(&'a PredicateName, &'a [Term]),
     Call(&'a DefinitionName, &'a [Term]),
+    /// Ranging over a grid built from terms: inert, unless the binder
+    /// takes a case variable's name, which the body would then read as
+    /// the grid's hour and the plan as the case.
+    Grid(&'a Term),
     /// A call to a figure: followed as a condition's call is when every
     /// argument is a term, since an expression carries no case variable
     /// into the body.
@@ -529,7 +548,19 @@ fn classify_node<'a>(n: &Node<'a>, antecedent: &HashSet<*const Prop>) -> NodeKin
             }
         }
         Node::Prop(Prop::Xor(_, _)) => NodeKind::Widens(Widening::Xor),
-        Node::Prop(Prop::In(_, _)) => NodeKind::Widens(Widening::In),
+        // A grid built from terms reads nothing and its binder is the
+        // scope's own name, so ranging over it is inert; any other
+        // collection is a value the plan cannot follow.
+        Node::Prop(Prop::In(binder, source)) => match crate::check::grid::grid_call(source) {
+            Some((from, until, step))
+                if [from, until, step]
+                    .iter()
+                    .all(|a| matches!(a, ValueExpr::Term(_))) =>
+            {
+                NodeKind::Grid(binder)
+            }
+            _ => NodeKind::Widens(Widening::In),
+        },
         Node::Prop(
             Prop::And(_)
             | Prop::Not(_)
