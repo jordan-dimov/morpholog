@@ -91,6 +91,48 @@ fn a_grid_in_a_rule_needs_a_bound_before_it_and_a_literal_step() {
     );
 }
 
+/// A bound in the antecedent proves nothing about the consequent: a
+/// window beyond it would make the rule vacuous, not broken. So it does
+/// not authorise the grid; moved into the consequent it does, and a
+/// window beyond it is then refused rather than skipped.
+#[test]
+fn a_bound_in_the_antecedent_does_not_authorise_a_grid_in_the_consequent() {
+    let antecedent = PRICED.replace(
+        "    Published(day)\n    implies Day(day, starts_at, ends_at)\n    and ends_at - starts_at no_longer_than duration(PT25H)\n    and (forall",
+        "    Published(day)\n    and Day(day, starts_at, ends_at)\n    and ends_at - starts_at no_longer_than duration(PT25H)\n    implies (forall",
+    );
+    assert_ne!(antecedent, PRICED);
+    let refused = errors(&antecedent);
+    assert!(
+        refused
+            .iter()
+            .any(|e| matches!(e, ValidationError::PeriodsUnbounded { .. })),
+        "{refused:?}"
+    );
+    let p = parsed(PRICED);
+    let long = must_accept(
+        p.transformation("declare").unwrap(),
+        vec![
+            date("2026-06-01"),
+            ts("2026-06-01T00:00:00Z"),
+            ts("2026-06-02T02:00:00Z"),
+        ],
+        State::default(),
+        &p,
+    );
+    let published = propose_with_test_actor(
+        p.transformation("publish").unwrap(),
+        vec![date("2026-06-01")],
+        &long,
+        &p,
+    );
+    assert!(
+        matches!(&published, Ok(Outcome::Rejected { reason: RejectionReason::Invariant { name, .. } })
+            if name.as_str() == "a_published_day_is_priced"),
+        "a 26-hour day is refused, not skipped: {published:?}"
+    );
+}
+
 /// Hand-built IR with another value as the source of `in` is refused by
 /// name: the parser never writes one, and no walker is proven over it.
 #[test]
@@ -262,6 +304,12 @@ predicate Trade(market: Subject, trade: Subject, mw: Decimal, starts_at: Timesta
 invariant every_limited_market_has_a_step:
     Limit(market, _) implies MarketStep(market, _)
 
+invariant a_step_is_one_the_ledger_limits:
+    MarketStep(_, step) implies step in (#quarter, #half, #hour)
+
+invariant a_trade_runs_forward:
+    Trade(starts_at: starts_at, ends_at: ends_at, ..) implies starts_at strictly_before ends_at
+
 invariant quarter_hourly_limit:
     Trade(market, trade, _, starts_at, ends_at) and MarketStep(market, #quarter) and Limit(market, cap)
     implies ends_at - starts_at no_longer_than duration(PT744H)
@@ -289,8 +337,9 @@ transformation capture(market, trade, mw, starts_at, ends_at):
 "#;
 
 /// Three markets, three steps, one ledger: each rule checks its own
-/// grid under its market's declared step, and a market with a limit
-/// and no step is refused, so no rule can be vacuous by omission.
+/// grid under its market's declared step. A market with a limit and no
+/// step, a step none of the rules selects, and a trade whose window
+/// runs backwards are each refused, so no rule is vacuous by omission.
 #[test]
 fn three_steps_coexist_each_selected_by_its_markets_declared_step() {
     let p = parsed(MARKETS);
@@ -365,5 +414,31 @@ fn three_steps_coexist_each_selected_by_its_markets_declared_step() {
     assert!(
         matches!(&stepless, Ok(Outcome::Rejected { reason: RejectionReason::Invariant { name, .. } }) if name.as_str() == "every_limited_market_has_a_step"),
         "{stepless:?}"
+    );
+    let five_minutes = propose_with_test_actor(
+        open,
+        vec![subj("fr"), subj("five_minutes"), dec_str("10")],
+        &state,
+        &p,
+    );
+    assert!(
+        matches!(&five_minutes, Ok(Outcome::Rejected { reason: RejectionReason::Invariant { name, .. } }) if name.as_str() == "a_step_is_one_the_ledger_limits"),
+        "{five_minutes:?}"
+    );
+    let reversed = propose_with_test_actor(
+        capture,
+        vec![
+            subj("de"),
+            subj("de_3"),
+            dec_str("6"),
+            ts("2026-06-01T12:00:00Z"),
+            ts("2026-06-01T10:00:00Z"),
+        ],
+        &state,
+        &p,
+    );
+    assert!(
+        matches!(&reversed, Ok(Outcome::Rejected { reason: RejectionReason::Invariant { name, .. } }) if name.as_str() == "a_trade_runs_forward"),
+        "{reversed:?}"
     );
 }

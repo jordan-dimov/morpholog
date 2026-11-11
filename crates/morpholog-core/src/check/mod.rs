@@ -284,8 +284,9 @@ impl BoundEnv {
 struct Scope {
     kinds: KindEnv,
     bound: BoundEnv,
-    /// Windows an earlier `require` has bounded, as (until, from) cells,
-    /// so a `periods` grid over them has a size the rule fixes.
+    /// Windows an earlier `require` or conjunct has bounded, as (until,
+    /// from) cells, so a `periods` grid over them has a size the rule
+    /// fixes.
     windows: Vec<(CellId, CellId)>,
 }
 
@@ -865,7 +866,12 @@ impl CheckCtx<'_> {
             }
             Prop::Implies { left, right } => {
                 self.walk_closed(scope, |cx, scoped| {
+                    // The antecedent's bindings reach the consequent; a
+                    // window bound there does not. A window beyond it
+                    // would make the rule vacuous, not broken.
+                    let windows = scoped.windows.clone();
                     cx.walk_prop(left, scoped);
+                    scoped.windows = windows;
                     cx.walk_prop(right, scoped);
                 });
             }
