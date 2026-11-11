@@ -1,0 +1,92 @@
+{
+  "_": "Texts the binary's argument codec and the generated client's reader answer alike. both_accept and both_refuse are the wire contract; binary_only is what the binary's input takes but never writes, so the client's reader refuses it. Read by crates/morpholog-cli/src/commands/args.rs and crates/morpholog-cli/templates/python_client/tests/test_values.py.",
+  "decimal": {
+    "both_accept": [
+      "0",
+      "1",
+      "100",
+      "100.50",
+      "-1",
+      "-100.50",
+      "0.5",
+      "-0.5"
+    ],
+    "both_refuse": [
+      "",
+      "+1",
+      "00.12",
+      "01",
+      "1.",
+      ".5",
+      "1.2.3",
+      "abc",
+      "1e10",
+      "-",
+      "-.5",
+      "NaN",
+      "Infinity",
+      " 1",
+      "1_000"
+    ],
+    "binary_only": []
+  },
+  "date": {
+    "both_accept": [
+      "2026-06-01"
+    ],
+    "both_refuse": [
+      "2026-W01-1",
+      "2026-02-30",
+      "2026-1-2",
+      "",
+      "2026-06-01T00:00:00Z"
+    ],
+    "binary_only": [
+      "20260102",
+      "0000-01-01",
+      "-001000-01-01"
+    ]
+  },
+  "timestamp": {
+    "both_accept": [
+      "2026-06-01T12:00:00Z",
+      "2026-06-01t13:30:00+01:30",
+      "2026-06-01T12:00:00.5Z",
+      "2026-06-01T12:00:00-00:00",
+      "2026-06-01T12:00:00z"
+    ],
+    "both_refuse": [
+      "2026-06-01T12:00:00",
+      "2026-06-01T25:00:00Z"
+    ],
+    "binary_only": [
+      "2026-06-01T12:00:00.123456789Z",
+      "2026-06-01 12:00:00Z",
+      "2026-06-01T12:00Z",
+      "2026-06-01T12:00:00+0000",
+      "20260601T120000Z"
+    ]
+  },
+  "duration": {
+    "both_accept": [
+      "PT6H",
+      "PT1H30M",
+      "-PT6H",
+      "PT0.5S",
+      "PT90M",
+      "PT1H30M15.25S",
+      "PT36H"
+    ],
+    "both_refuse": [
+      "6H",
+      "P1D",
+      "PT",
+      "PT1.S",
+      "",
+      "P1DT6H"
+    ],
+    "binary_only": [
+      "PT6h"
+    ]
+  }
+}

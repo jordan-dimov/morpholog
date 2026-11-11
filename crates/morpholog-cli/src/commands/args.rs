@@ -249,14 +249,15 @@ fn decode_decimal(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result
         "a decimal string (e.g. \"100.50\")",
         schema_hint,
     )?;
-    // Match the schema's `^-?(0|[1-9]\d*)(\.\d+)?$` exactly.
-    // `Decimal::from_str` alone also accepts a leading `+`, leading zeros
-    // and a trailing dot, so check the shape first.
+    // Match the schema's pattern exactly. `Decimal::from_str` alone also
+    // accepts a leading `+`, leading zeros and a trailing dot, so check
+    // the shape first.
     if !is_schema_decimal(s) {
         bail!(
             "parameter `{param}` is Decimal but `{s}` does not match the schema pattern \
-             ^-?(0|[1-9]\\d*)(\\.\\d+)?$ (no leading `+`, no leading zeros except \"0\", \
-             no trailing dot, no empty string). {schema_hint}"
+             {} (no leading `+`, no leading zeros except \"0\", no trailing dot, no \
+             empty string). {schema_hint}",
+            morpholog_core::schema::DECIMAL_PATTERN
         );
     }
     let d = Decimal::from_str(s).map_err(|e| {
@@ -268,9 +269,9 @@ fn decode_decimal(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result
     Ok(EvalValue::Decimal(d))
 }
 
-/// Decimal shape check matching the JSON Schema pattern from
-/// `morpholog-core::schema`. Hand-rolled: the grammar is too small to be
-/// worth a `regex` dependency.
+/// Decimal shape check matching [`morpholog_core::schema::DECIMAL_PATTERN`].
+/// Hand-rolled: the grammar is too small to be worth a `regex` dependency,
+/// and the wire-text corpus holds it to the pattern.
 fn is_schema_decimal(s: &str) -> bool {
     let body = s.strip_prefix('-').unwrap_or(s);
     let (int_part, frac_part) = match body.split_once('.') {
@@ -406,32 +407,62 @@ pub(crate) fn decode_declared_value(
 
 #[cfg(test)]
 mod tests {
-    use super::is_schema_decimal;
+    /// The texts the binary's codec and the generated client's reader
+    /// answer alike, shared with the client's test suite. `binary_only`
+    /// is what this input takes but the binary never writes, so the
+    /// client's reader refuses it.
+    const WIRE_TEXTS: &str = include_str!("../../tests/golden/wire_texts.json");
 
     #[test]
-    fn accepts_canonical_decimal_forms() {
-        for s in ["0", "1", "100", "100.50", "-1", "-100.50", "0.5", "-0.5"] {
-            assert!(is_schema_decimal(s), "{s} should be accepted");
+    fn the_wire_texts_decode_as_the_corpus_says() {
+        let corpus: serde_json::Value = serde_json::from_str(WIRE_TEXTS).unwrap();
+        for (kind, param_kind) in [
+            ("decimal", PredicateArgKind::Decimal),
+            ("date", PredicateArgKind::Date),
+            ("timestamp", PredicateArgKind::Timestamp),
+            ("duration", PredicateArgKind::Duration),
+        ] {
+            let kind_cases = &corpus[kind];
+            let texts = |key: &str| {
+                kind_cases[key]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|t| t.as_str().unwrap().to_string())
+                    .collect::<Vec<_>>()
+            };
+            for text in texts("both_accept").into_iter().chain(texts("binary_only")) {
+                let decoded = decode_value(
+                    "p",
+                    &ParamKind::Concrete(param_kind.clone()),
+                    &json!(text),
+                    "",
+                );
+                assert!(decoded.is_ok(), "{kind} {text:?} is accepted: {decoded:?}");
+            }
+            for text in texts("both_refuse") {
+                let decoded = decode_value(
+                    "p",
+                    &ParamKind::Concrete(param_kind.clone()),
+                    &json!(text),
+                    "",
+                );
+                assert!(decoded.is_err(), "{kind} {text:?} is refused: {decoded:?}");
+            }
         }
     }
 
+    /// The generated client carries the schema's own decimal pattern.
     #[test]
-    fn rejects_forms_the_schema_pattern_excludes() {
-        for s in [
-            "",      // empty
-            "+1",    // leading plus
-            "00.12", // leading zero
-            "01",    // leading zero on integer
-            "1.",    // trailing dot
-            ".5",    // no leading integer
-            "1.2.3", // multiple dots
-            "abc",   // non-numeric
-            "1e10",  // scientific (deliberately out of scope in v0)
-            "-",     // bare minus
-            "-.5",   // minus before missing integer
-        ] {
-            assert!(!is_schema_decimal(s), "{s} should be rejected");
-        }
+    fn the_client_template_carries_the_decimal_pattern() {
+        let line = format!(
+            "_DECIMAL_PATTERN = re.compile(r\"{}\")",
+            morpholog_core::schema::DECIMAL_PATTERN
+        );
+        assert!(
+            crate::commands::generate::VALUES_PY.contains(&line),
+            "values.py must read `{line}`"
+        );
     }
 
     use super::decode_value;

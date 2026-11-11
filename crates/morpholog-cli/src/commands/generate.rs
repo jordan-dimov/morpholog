@@ -27,7 +27,7 @@ use morpholog_core::{
 use crate::GeneratePythonClientArgs;
 use crate::commands::{AlreadyReported, parse_or_report, validate_or_report};
 
-const VALUES_PY: &str = include_str!("../../templates/python_client/values.py");
+pub(crate) const VALUES_PY: &str = include_str!("../../templates/python_client/values.py");
 const ENVELOPES_PY: &str = include_str!("../../templates/python_client/envelopes.py");
 const ADAPTER_PY: &str = include_str!("../../templates/python_client/adapter.py");
 const SESSION_PY: &str = include_str!("../../templates/python_client/session.py");
