@@ -195,6 +195,7 @@ The `.morph` surface verbs map one-to-one onto the IR constructs above. The rena
 | `bind X(args)` | `Stmt::BindOne` | The `_one` suffix is redundant - there is no `bind_many`. `bind` reads as the binding-statement it is. |
 | `if expr:` ... `else:` ... (statement blocks) | `Stmt::If { when, then, otherwise }` | A gate that chooses instead of refusing. The condition is tested as a `require` is and exports nothing, so a branch reads only what the act already had; the branch taken runs and the other does not, which is what makes a `new Subject()` inside a branch draw only when that branch runs. Branch bindings are scoped like a `for` body's, so the statements after the `if` see the same names whichever branch ran. `if` and `else` are contextual, as `if(...)` the value is: a statement starts with a verb, so `if` at statement start can mean nothing else, and no keyword is spent. The `else` is optional and an absent one is an empty block. Forced by a shipment that splits a stock item only when the allocation takes less than the whole (`examples/25_stock_allocation/`): one act where the host had chosen between two. |
 | `for Predicate(args):` ... (statement block) | `Stmt::ForEach { predicate, args, body }` | A `for` whose source is the record. Told from `for x in xs` by the `(` after the name; the pattern is what `retract` takes, named fields and wildcards included. One pass per matching claim, in the canonical order of the claims' arguments, each pass binding what the pattern leaves unbound and scoped to itself. The trace nests the passes under one entry with the claim each ran for. |
+| `transformation cancel_order(order, force: Bool):` (a parameter as `name: Kind`) | `Transformation.declared_kinds`, by position, `None` where inferred | A parameter may declare its kind; one that does not is inferred from the body. The declaration is the contract the schema, the named codec and the client see, and the kernel holds the argument to it before the body runs. A flag read only by `force = true` reaches no claim, so nothing else would type it. |
 | `require name: expr` / `bind name: X(args)` | `name` on `Stmt::{Require, BindOne}` | An optional stable identifier for a refusing statement. A refusal otherwise quotes the rendered expression, which reads well and identifies nothing - reword the rule and anything holding that text breaks. Optional because a transformation with one gate is already unambiguous, and most gates are one self-evident line; the name earns its place where several rules could each be the one that said no. Unique per transformation, not per programme: two acts legitimately carry the same gate verbatim. The name is contextual, not reserved - `ident :` cannot open a proposition, so no keyword is spent. |
 | `unique by (fields)`, `append only`, `current pointer by (fields)`, `superseded via L`, `effective by (keys) on (date) [partial]` (clauses on a `predicate` declaration) | `Discipline::{UniqueBy, AppendOnly, CurrentPointerBy, SupersededVia, EffectiveBy}` on `PredicateDecl.disciplines` | Claim disciplines (see "Claim disciplines" below). Every clause word is contextual, not reserved - the `before`/`duration` precedent - so all stay usable as variable names. Clauses sit inline after the argument list or on indented continuation lines. |
 | `define name(params): body` / `name(args)` at call sites | `Definition` / `Prop::Defined` | A named, parameterised proposition (see "Definitions: named propositions" below). The call is spelled exactly like a claim reference - a condition should read no differently from the evidence it checks - and resolves by name against the declared definitions, which is why definition and predicate names share one namespace and may not collide. Definition names are snake_case by convention (they name rules, like invariants), predicates CamelCase (they name claim shapes); the convention aids the reader, not the resolver. |
@@ -242,6 +243,8 @@ The `.morph` surface verbs map one-to-one onto the IR constructs above. The rena
 2. Snapshot the current set of claims. All reads in the transformation
    body see this snapshot only. No read-your-writes.
 3. Execute T(args) against the snapshot, staging:
+     (an argument of another kind than its parameter declares is refused
+     here, before any statement runs)
      - asserted claims
      - retracted claims
      - emitted intents
@@ -387,7 +390,7 @@ Four statement classes serve different binding purposes; conflating them is the 
 
 - **`for binding in collection: body`** is **controlled iteration**. Variables bound inside the body are **scoped to the iteration**: they do not leak across iterations and do not survive the loop. Without this scoping, a residual `bind_one` binding from iteration N would constrain the lookup in iteration N+1; with it, each iteration sees only the outer bindings plus the iteration variable.
 
-- **`for Predicate(args): body`** is **iteration over the record**: the body runs once per pre-state claim the pattern matches. The pattern is a `bind`'s: a variable already bound is a key, a variable not yet bound binds per claim, a wildcard matches anything. Each matching claim is one iteration, so two claims differing only in a wildcarded field are two passes, never one. The passes run in the canonical order of the matched claims' arguments, field by field under the kernel's one total order on values, so a subject drawn in the second pass goes to the same claim on every platform and under every load order. Bindings are scoped per pass as `for`'s are; every pass reads the state as the act began, so a pass that re-admits a claim changed reads the old one and stages the new; no match is no pass, not a refusal. A gate inside is a condition on every match: `inspect controls` lists it under neither the act nor the loop. The read is keyed by the pattern's known positions, as a `bind`'s is, and what the pattern binds keys the body's reads as a `bind`'s does for its block.
+- **`for Predicate(args): body`** is **iteration over the record**: the body runs once per pre-state claim the pattern matches. The pattern is a `bind`'s: a bound variable is a key, an unbound one binds per claim, a wildcard matches anything. Two claims differing only in a wildcarded field are two passes. The passes run in the canonical order of the claims' arguments, under the kernel's one order on values, so a subject drawn in the second pass goes to the same claim on every platform and under every load order. Bindings are scoped per pass. Every pass reads the state as the act began. No match is no pass, not a refusal. A gate inside holds for every match; `inspect controls` does not list it. The read is keyed by the pattern's known positions, and what the pattern binds keys the body's reads, as a `bind` does.
 
   To copy a prior record's claims, in one act, the pattern form ranges over them and nothing is passed in:
 
@@ -433,22 +436,19 @@ Decision times are not in log order. Two concurrent transactions can commit in t
 
 ## Definitions: named conditions and named figures
 
-A `Definition` names a condition or a figure. A condition is a named,
-parameterised `Prop`, declared with `define name(params): body` and
-called from invariant bodies, `require`/`bind` gates, derived-claim
-domains, `Sum` bodies, and other definitions. A figure is a named,
-parameterised `ValueExpr`, declared with `define name(params) = (body)`
-and called wherever a value stands: a `let`, a comparison, a sum
-target, a derived `value` clause, another definition's body. Either is
-body grammar, not a third first-class construct: a definition never
-changes state and carries no standing of its own - it gives a recurring
-condition, or a recurring quantity, the name the business uses for it,
-so a validity window, a lifecycle phase, a statutory requirement or an
-allocated total is written once and read everywhere by name. A
-condition's call is spelled exactly like a claim reference; the parser
-resolves it against the declared definitions once the whole programme
-is collected, which is why a definition name may never collide with a
-predicate name. A figure's call is spelled like a builtin's, and a
+A `Definition` names a condition or a figure. A condition is a
+parameterised `Prop`: `define name(params): body`. It is called from
+invariant bodies, `require`/`bind` gates, derived-claim domains, `Sum`
+bodies and other definitions. A figure is a parameterised `ValueExpr`:
+`define name(params) = (body)`. It is called wherever a value stands:
+a `let`, a comparison, a sum target, a derived `value` clause, another
+definition's body. Neither is a third first-class construct. A
+definition changes no state and has no standing of its own. It gives a
+recurring condition or quantity the name the business uses, so a
+validity window or an allocated total is written once and read by name.
+A condition's call is spelled like a claim reference and resolved once
+the whole programme is read, which is why a definition may not share a
+predicate's name. A figure's call is spelled like a builtin's, and a
 definition may not take a builtin's bare-word name.
 
 **Evaluation is relational substitution with projection.** A call
@@ -478,31 +478,26 @@ Parameter names are duplicate-free: each is one binding slot in the
 call frame.
 
 **A condition answers with its matches; a figure answers with one
-value.** A condition's call answers "does this condition hold?" and
-hands values out solely by binding its arguments - the trade
-lifecycle's `trade_terms_in_force_on(trade: trade, as_of: d, quantity: qty, ..)` returns the
-governing quantity *through* `qty`, and a `bind` of such a call exports
-them to the statements after it. A figure's call is evaluated: the
-arguments are evaluated where the call stands, bound to the parameters
-in a fresh frame, and the body evaluated under that frame alone, so
-`allocated(item)` is the same figure in a gate, a rule, a derived read,
-the interpreted route, the compiled route and a live view. A figure's
-parameters are inputs only: every call supplies each one, and the body
-may only use it. A figure's kind is its body's, inferred once at the
-declaration; a body whose kind the checker cannot read (a bare
-parameter, an expression over parameters nothing types) is refused
-rather than left for each call to guess. A figure called where a
-condition is required, or a condition where a figure is, is refused by
-name. A `const` may not call a figure, since the body may read the
-record. `value Pred(args)`
-reads claims, never definitions, and a definition can never be an
-`admit` / `retract` / `emit` target; naming one in any of those
-positions is a dedicated category error, not an undeclared-predicate
-report. A rule over a figure is bounded as the inlined body would be:
-the plan follows the call into the body under the call's frame when
-every argument is a term, so a sum keyed on the case variable keeps
-the rule bound; an expression argument carries no case into the body
-and the rule is checked whole, named by `check -v`.
+value.** A condition's call asks "does this hold?" and hands values out
+only by binding its arguments: the trade lifecycle's
+`trade_terms_in_force_on(trade: trade, as_of: d, quantity: qty, ..)`
+returns the governing quantity through `qty`, and a `bind` of such a
+call exports it to the statements after. A figure's call is evaluated.
+The arguments are evaluated where the call stands and bound to the
+parameters in a fresh frame; the body is evaluated under that frame
+alone. So `allocated(item)` is the same figure in a gate, a rule, a
+derived read, both routes and a live view. A figure's parameters are
+inputs: every call supplies each one. A figure's kind is its body's,
+read once at the declaration; a body whose kind cannot be read, such as
+a bare parameter, is refused. A figure called where a condition is
+required, or a condition where a figure is, is refused by name. A
+`const` may not call a figure, since the body may read the record.
+`value Pred(args)` reads claims, never definitions, and a definition is
+never an `admit` / `retract` / `emit` target; each is its own error. A
+rule over a figure is bounded as the inlined body would be: with term
+arguments the plan follows the call into the body, so a sum keyed on
+the case variable keeps the rule bound; an expression argument widens
+the rule to a whole check, which `check -v` names.
 
 **Bodies are context-free.** `actor` and `pre(...)` inside a definition
 body are validation errors, so a definition means the same thing in a

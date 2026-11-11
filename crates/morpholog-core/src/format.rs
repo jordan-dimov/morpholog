@@ -349,7 +349,11 @@ pub(crate) fn format_transformation(t: &Transformation, ctx: FormatContext) -> S
         t.name,
         t.parameters
             .iter()
-            .map(Var::as_str)
+            .enumerate()
+            .map(|(i, p)| match t.declared_kinds.get(i) {
+                Some(Some(kind)) => format!("{p}: {kind}"),
+                _ => p.to_string(),
+            })
             .collect::<Vec<_>>()
             .join(", ")
     ));

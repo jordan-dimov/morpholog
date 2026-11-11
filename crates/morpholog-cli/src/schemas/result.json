@@ -783,7 +783,8 @@
         "pre_state_unavailable", "subject_source_exhausted", "division_by_zero",
         "round_quantum_not_positive", "period_span_not_positive", "period_index_not_whole",
         "round_out_of_range", "arith_out_of_range", "empty_extremum",
-        "unknown_definition", "claim_kind_mismatch", "intent_kind_mismatch"
+        "unknown_definition", "claim_kind_mismatch", "argument_kind_mismatch",
+        "intent_kind_mismatch"
       ]
     },
     "propose_error_code": {

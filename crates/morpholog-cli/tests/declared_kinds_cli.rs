@@ -67,6 +67,19 @@ fn bin(args: &[&str], stdin: Option<&str>) -> (i32, String) {
     )
 }
 
+/// The binary with no database: for the commands that take none.
+fn plain(args: &[&str]) -> (i32, String) {
+    let output = Command::new(common::bin()).args(args).output().unwrap();
+    (
+        output.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    )
+}
+
 /// The `nth` JSON value on stdout, printed pretty or one to a line.
 fn json_line(text: &str, nth: usize) -> Value {
     serde_json::Deserializer::from_str(text)
@@ -204,4 +217,103 @@ fn rehearse(file: &Path) -> Value {
     let (code, out) = bin(&["rehearse", file.to_str().unwrap()], None);
     assert_eq!(code, 0, "{out}");
     serde_json::from_str(&out).unwrap()
+}
+
+const DECLARED_FLAG: &str = "\
+program closing
+predicate Order(id: Subject)
+predicate Closed(id: Subject)
+transformation open(id):
+    admit Order(id)
+transformation close(id, force: Bool):
+    require known: Order(id)
+    require force = true or Closed(id)
+    admit Closed(id)
+";
+
+/// A flag tested only by equality has a kind because its parameter
+/// declares one: the schema types it, the generated client takes the
+/// programme, the named codec reads it, and an argument of another kind
+/// is the same coded error on the binary, writing nothing.
+#[tokio::test(flavor = "current_thread")]
+async fn a_declared_parameter_kind_is_the_contract_at_the_binary() {
+    reset_db().await;
+    let file = common::write_fixture("declared_flag", DECLARED_FLAG);
+    let path = file.to_str().unwrap();
+
+    let (code, out) = plain(&["schema", path, "close"]);
+    assert_eq!(code, 0, "{out}");
+    let schema: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(
+        schema["properties"]["force"]["type"], "boolean",
+        "the declared kind types the flag: {schema}"
+    );
+
+    let out_dir = file.parent().unwrap().join("declared_flag_client");
+    let (code, out) = plain(&[
+        "generate",
+        "python-client",
+        path,
+        "--out",
+        out_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "the generator takes the declared flag: {out}");
+    let undeclared = common::write_fixture(
+        "undeclared_flag",
+        &DECLARED_FLAG.replace("close(id, force: Bool)", "close(id, force)"),
+    );
+    let (code, out) = plain(&[
+        "generate",
+        "python-client",
+        undeclared.to_str().unwrap(),
+        "--out",
+        out_dir.to_str().unwrap(),
+    ]);
+    assert_ne!(code, 0, "the undeclared flag has no kind: {out}");
+    assert!(out.contains("force"), "the refusal names the flag: {out}");
+
+    let (code, out) = bin(
+        &[
+            "propose",
+            path,
+            "open",
+            "--actor",
+            "desk",
+            "--args-named",
+            r#"{"id":"o1"}"#,
+        ],
+        None,
+    );
+    assert_eq!(code, 0, "{out}");
+    let (code, out) = bin(
+        &[
+            "propose",
+            path,
+            "close",
+            "--actor",
+            "desk",
+            "--args",
+            r#"[{"type":"subject","value":"o1"},{"type":"decimal","value":"1"}]"#,
+        ],
+        None,
+    );
+    assert_eq!(code, 1, "{out}");
+    let error = json_line(&out, 0);
+    assert_eq!(error["code"], "kernel_error", "{error}");
+    assert_eq!(error["kind"], "argument_kind_mismatch", "{error}");
+    assert_eq!(claims_written(), 1, "the misfit wrote nothing");
+    let (code, out) = bin(
+        &[
+            "propose",
+            path,
+            "close",
+            "--actor",
+            "desk",
+            "--args-named",
+            r#"{"id":"o1","force":true}"#,
+        ],
+        None,
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(json_line(&out, 0)["status"], "committed");
 }

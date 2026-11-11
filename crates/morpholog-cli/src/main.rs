@@ -1756,7 +1756,8 @@ pub(crate) struct ProposeArgs {
     /// facing codec; strict (missing required, unknown keys, wrong
     /// types, and `null` all error). Refuses Polymorphic, Ambiguous,
     /// Unconstrained, and Collection parameters; use `--args` for
-    /// those.
+    /// those, or declare the parameter's kind (`flag: Bool`) so the
+    /// codec has one.
     #[arg(
         long,
         conflicts_with_all = ["args", "batch"],

@@ -126,6 +126,10 @@ impl SourceMap {
             | ValidationError::DefinitionKindUnknown { definition: name } => {
                 self.decl_span(DeclKind::Definition, name)
             }
+            ValidationError::DeclaredKindsMisaligned {
+                transformation: name,
+                ..
+            } => self.decl_span(DeclKind::Transformation, name),
             ValidationError::DefinitionCycle { names } => names
                 .iter()
                 .find_map(|n| self.decl_span(DeclKind::Definition, n)),

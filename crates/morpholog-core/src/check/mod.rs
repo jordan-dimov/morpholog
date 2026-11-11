@@ -553,11 +553,25 @@ pub(crate) fn check_program(program: &Program) -> Checked {
         let mut scope = Scope::new();
         // Parameters arrive bound and untyped, so their kind refines on
         // first use.
-        for param in &transformation.parameters {
+        // A declared kind is observed before the body, so every use
+        // refines against it and the contract starts from it. `Any`
+        // declared refines nothing but is recorded, so a parameter the
+        // body never uses is polymorphic rather than unconstrained.
+        for (i, param) in transformation.parameters.iter().enumerate() {
             scope.bound.bind(param);
-            let _ = scope
-                .kinds
-                .observe(param, InferredKind::UnknownOrAny, &mut cx.cells);
+            let declared = transformation
+                .declared_kinds
+                .get(i)
+                .and_then(Option::as_ref);
+            let entry = match declared {
+                Some(PredicateArgKind::Any) | None => InferredKind::UnknownOrAny,
+                Some(kind) => InferredKind::Known(kind.clone()),
+            };
+            let _ = scope.kinds.observe(param, entry, &mut cx.cells);
+            if declared == Some(&PredicateArgKind::Any) {
+                let cell = scope.kinds.slot_mut(param, &mut cx.cells).cell;
+                cx.cells.record(cell, PredicateArgKind::Any);
+            }
         }
         // The contract reads these cells after the walk: a parameter
         // rebound by a `let` keeps its input contract on the cell it

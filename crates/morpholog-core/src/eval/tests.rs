@@ -840,6 +840,12 @@ fn every_kernel_error_has_one_published_kind() {
             declared: PredicateArgKind::Date,
             found: PredicateArgKind::Subject,
         },
+        EvalError::ArgumentKindMismatch {
+            transformation: String::new(),
+            parameter: String::new(),
+            declared: PredicateArgKind::Bool,
+            found: PredicateArgKind::Decimal,
+        },
         EvalError::IntentKindMismatch {
             intent: String::new(),
             field: String::new(),

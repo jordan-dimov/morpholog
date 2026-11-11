@@ -216,6 +216,7 @@ pub fn morpholog_core::ir_builder::term(morpholog_core::Term) -> morpholog_core:
 pub fn morpholog_core::ir_builder::timestamp(&str) -> morpholog_core::Term
 pub fn morpholog_core::ir_builder::timestamp_le(morpholog_core::ValueExpr, morpholog_core::ValueExpr) -> morpholog_core::Prop
 pub fn morpholog_core::ir_builder::transformation(&str, alloc::vec::Vec<morpholog_core::Var>, alloc::vec::Vec<morpholog_core::Stmt>) -> morpholog_core::Transformation
+pub fn morpholog_core::ir_builder::transformation_typed(&str, alloc::vec::Vec<(morpholog_core::Var, core::option::Option<morpholog_core::PredicateArgKind>)>, alloc::vec::Vec<morpholog_core::Stmt>) -> morpholog_core::Transformation
 pub fn morpholog_core::ir_builder::value_definition(&str, alloc::vec::Vec<morpholog_core::Var>, morpholog_core::ValueExpr) -> morpholog_core::Definition
 pub fn morpholog_core::ir_builder::value_of(&str, alloc::vec::Vec<morpholog_core::Term>) -> morpholog_core::ValueExpr
 pub fn morpholog_core::ir_builder::value_of_extracting(&str, alloc::vec::Vec<morpholog_core::Term>, usize) -> morpholog_core::ValueExpr
@@ -729,6 +730,11 @@ impl core::marker::UnsafeUnpin for morpholog_core::Discipline
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Discipline
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Discipline
 pub enum morpholog_core::EvalError
+pub morpholog_core::EvalError::ArgumentKindMismatch
+pub morpholog_core::EvalError::ArgumentKindMismatch::declared: morpholog_core::PredicateArgKind
+pub morpholog_core::EvalError::ArgumentKindMismatch::found: morpholog_core::PredicateArgKind
+pub morpholog_core::EvalError::ArgumentKindMismatch::parameter: alloc::string::String
+pub morpholog_core::EvalError::ArgumentKindMismatch::transformation: alloc::string::String
 pub morpholog_core::EvalError::ArithOutOfRange(alloc::string::String)
 pub morpholog_core::EvalError::ClaimKindMismatch
 pub morpholog_core::EvalError::ClaimKindMismatch::declared: morpholog_core::PredicateArgKind
@@ -1665,6 +1671,10 @@ pub morpholog_core::ValidationError::DecisionTimeMatched::context: morpholog_cor
 pub morpholog_core::ValidationError::DecisionTimeMatched::predicate: alloc::string::String
 pub morpholog_core::ValidationError::DecisionTimeNotAvailable
 pub morpholog_core::ValidationError::DecisionTimeNotAvailable::context: morpholog_core::ValidationContext
+pub morpholog_core::ValidationError::DeclaredKindsMisaligned
+pub morpholog_core::ValidationError::DeclaredKindsMisaligned::declared: usize
+pub morpholog_core::ValidationError::DeclaredKindsMisaligned::parameters: usize
+pub morpholog_core::ValidationError::DeclaredKindsMisaligned::transformation: alloc::string::String
 pub morpholog_core::ValidationError::DefinitionCycle
 pub morpholog_core::ValidationError::DefinitionCycle::names: alloc::vec::Vec<alloc::string::String>
 pub morpholog_core::ValidationError::DefinitionKindUnknown
@@ -3514,8 +3524,11 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::rehearse::Total
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::rehearse::Totals
 pub struct morpholog_core::Transformation
 pub morpholog_core::Transformation::body: alloc::vec::Vec<morpholog_core::Stmt>
+pub morpholog_core::Transformation::declared_kinds: alloc::vec::Vec<core::option::Option<morpholog_core::PredicateArgKind>>
 pub morpholog_core::Transformation::name: morpholog_core::TransformationName
 pub morpholog_core::Transformation::parameters: alloc::vec::Vec<morpholog_core::Var>
+impl morpholog_core::Transformation
+pub fn morpholog_core::Transformation::declared_kind(&self, &morpholog_core::Var) -> core::option::Option<&morpholog_core::PredicateArgKind>
 impl core::clone::Clone for morpholog_core::Transformation
 pub fn morpholog_core::Transformation::clone(&self) -> morpholog_core::Transformation
 impl core::cmp::Eq for morpholog_core::Transformation

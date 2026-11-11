@@ -342,34 +342,34 @@ where
         PredicateArgKind::Subject
     }));
 
-    // arg ::= Ident ":" Kind ("[" Ident "]")?
-    // Only `Decimal` takes a unit, as in `Decimal[USD]`.
+    // kind_with_unit ::= Kind ("[" Ident "]")?
+    // Only `Decimal` takes a unit, as in `Decimal[USD]`. Shared by a predicate's fields and a
+    // transformation's declared parameters.
     let unit = just(Token::LBracket)
         .ignore_then(ident)
         .then_ignore(just(Token::RBracket));
+    let kind_with_unit = kind
+        .then(unit.or_not())
+        .validate(|(kind, unit), e, emitter| match (kind, unit) {
+            (k, None) => k,
+            (PredicateArgKind::Decimal, Some(u)) => {
+                PredicateArgKind::Quantity(Unit::from(u.clone()))
+            }
+            (k, Some(_)) => {
+                let span: SimpleSpan = e.span();
+                emitter.emit(Rich::custom(
+                    span,
+                    format!("only `Decimal` takes a unit annotation; `{k}[...]` has no meaning"),
+                ));
+                k
+            }
+        });
+
+    // arg ::= Ident ":" kind_with_unit
     let arg = ident
         .then_ignore(just(Token::Colon))
-        .then(kind)
-        .then(unit.or_not())
-        .validate(|((name, kind), unit), e, emitter| {
-            let kind = match (kind, unit) {
-                (k, None) => k,
-                (PredicateArgKind::Decimal, Some(u)) => {
-                    PredicateArgKind::Quantity(Unit::from(u.clone()))
-                }
-                (k, Some(_)) => {
-                    let span: SimpleSpan = e.span();
-                    emitter.emit(Rich::custom(
-                        span,
-                        format!(
-                            "only `Decimal` takes a unit annotation; `{k}[...]` has no meaning"
-                        ),
-                    ));
-                    k
-                }
-            };
-            ArgDecl { name, kind }
-        });
+        .then(kind_with_unit.clone())
+        .map(|(name, kind)| ArgDecl { name, kind });
 
     // arg_list ::= arg ("," arg)* ","?
     let arg_list = arg
@@ -538,7 +538,7 @@ where
 
     // definition_decl ::= "define" Ident "(" param-list ")" ":" body
     //
-    // A named proposition with parameters, whose kinds are inferred from the body. The body is
+    // A named condition with parameters, whose kinds are inferred from the body. The body is
     // shaped like an invariant's.
     let definition_param_list = ident
         .separated_by(just(Token::Comma))
@@ -617,12 +617,14 @@ where
         });
 
     // transformation_decl ::= "transformation" Ident "(" param-list ")" ":" Indent stmt+ Dedent
+    // param ::= Ident (":" kind_with_unit)?
     //
-    // Parameters are bare identifiers; their kinds are inferred.
+    // A parameter may declare its kind; one that does not has it inferred from the body.
     let param_list = ident
+        .then(just(Token::Colon).ignore_then(kind_with_unit).or_not())
         .separated_by(just(Token::Comma))
         .allow_trailing()
-        .collect::<Vec<String>>();
+        .collect::<Vec<(String, Option<PredicateArgKind>)>>();
     // Keep each top-level statement's span, so a finding can point at the statement.
     let transformation_body = just(Token::Indent)
         .ignore_then(
@@ -643,6 +645,8 @@ where
         .then(transformation_body)
         .map_with(|((name, parameters), body), e| {
             let span: SimpleSpan = e.span();
+            let (parameters, declared_kinds): (Vec<String>, Vec<Option<PredicateArgKind>>) =
+                parameters.into_iter().unzip();
             let (body, stmt_spans): (Vec<_>, Vec<_>) =
                 super::mint::name_the_mints(&parameters, body)
                     .into_iter()
@@ -651,6 +655,7 @@ where
                 Transformation {
                     name: name.into(),
                     parameters: parameters.into_iter().map(Var::from).collect(),
+                    declared_kinds,
                     body,
                 },
                 span.start()..span.end(),

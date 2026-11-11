@@ -8,8 +8,9 @@
 //! order takes every line and allocation with it; and the rules refuse
 //! an allocation beyond the line, a change that would overflow it, a
 //! second allocation of one item on one shipment, shipping twice,
-//! changing an allocation on a shipment that has gone, and cancelling
-//! an order with stock already shipped.
+//! changing an allocation on a shipment that has gone, cancelling an
+//! order with stock already shipped, forcing that cancellation without
+//! the authority to, and a flag that is not a Boolean.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -269,9 +270,10 @@ fn cancelling_an_order_takes_every_line_and_allocation_with_it() {
         vec![subj("line_2"), subj("order"), subj("bolt"), dec(2)],
         allocate(stocked(10, 8), "alloc", "pallet", 3),
     );
+    let cancel = |force: bool| vec![subj("order"), EvalValue::Bool(force)];
     let cancelled = ex().must_accept(
         &stock_allocation::cancel_order(),
-        vec![subj("order")],
+        cancel(false),
         state.clone(),
     );
     for predicate in ["SalesOrder", "SalesLine", "Allocation", "Shipment"] {
@@ -287,17 +289,13 @@ fn cancelling_an_order_takes_every_line_and_allocation_with_it() {
     // cancelled: the gate inside the loop refuses at that line.
     let shipped = ex().must_accept(&stock_allocation::ship(), vec![subj("shipment")], state);
     refused_by(
-        &ex().must_reject(
-            &stock_allocation::cancel_order(),
-            vec![subj("order")],
-            &shipped,
-        ),
+        &ex().must_reject(&stock_allocation::cancel_order(), cancel(false), &shipped),
         "nothing_shipped",
     );
     // And the explanation finds that gate inside the loop.
     let transition = Transition {
         transformation_name: "cancel_order".into(),
-        args: vec![subj("order")],
+        args: cancel(false),
         actor: "clerk".into(),
         decided_at: None,
     };
@@ -444,5 +442,62 @@ fn a_shipped_allocation_may_not_drift_from_what_its_item_holds() {
     assert!(
         !eval_invariant(&program, &rule, &State::from_claims(drifted), None).unwrap(),
         "an allocation of 2 against a shipped child of 3 breaks the rule"
+    );
+}
+
+/// Cancelling over shipped stock takes the caller's flag and the
+/// authority to: the flag alone is refused, and no act of the programme
+/// hands the authority out. A flag that is not a Boolean is an error
+/// before any gate runs.
+#[test]
+fn cancelling_over_shipped_stock_takes_the_flag_and_the_authority() {
+    let state = allocate(stocked(10, 8), "alloc", "pallet", 3);
+    let (shipped, _) = ship_traced(&state, ["child"]);
+    let cancel = |force: bool| vec![subj("order"), EvalValue::Bool(force)];
+    refused_by(
+        &ex().must_reject(&stock_allocation::cancel_order(), cancel(true), &shipped),
+        "override_authorised",
+    );
+    let program = stock_allocation::program();
+    assert!(
+        morpholog_core::transformations_asserting(&program, "MayCancelShipped").is_empty(),
+        "no act hands the authority out"
+    );
+    // Granted with the deployment, the actor may force it.
+    let mut granted = shipped.claims().to_vec();
+    granted.push(claim_instance(
+        "MayCancelShipped",
+        &[EvalValue::Subject(common::test_actor())],
+    ));
+    let cancelled = ex().must_accept(
+        &stock_allocation::cancel_order(),
+        cancel(true),
+        State::from_claims(granted),
+    );
+    assert!(cancelled.claims_for("SalesOrder").next().is_none());
+    assert!(
+        has_claim(&cancelled, "ShippedTo", &[subj("child"), subj("customer")]),
+        "what shipped stays shipped"
+    );
+    // The flag is declared a Boolean: a decimal there is an error, not a refusal.
+    let transition = Transition {
+        transformation_name: "cancel_order".into(),
+        args: vec![subj("order"), dec(1)],
+        actor: "clerk".into(),
+        decided_at: None,
+    };
+    let errored = propose_with_trace(
+        &stock_allocation::program(),
+        &transition,
+        &shipped,
+        &mut subjects([]),
+    );
+    assert!(
+        matches!(
+            &errored,
+            TracedProposal::Errored { error: morpholog_core::EvalError::ArgumentKindMismatch { parameter, .. }, .. }
+                if parameter == "force"
+        ),
+        "{errored:?}"
     );
 }

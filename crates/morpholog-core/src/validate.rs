@@ -575,11 +575,12 @@ pub enum ValidationError {
 
     /// A reference names a definition where a predicate is required: an
     /// `admit` / `retract` / `value` target, or a hand-built `Prop::Claim`
-    /// that skipped resolution. A definition is a condition only. Hand-built
-    /// IR builds calls with `ir_builder::defined` or runs
-    /// [`crate::resolve_defined_calls`] before validating.
+    /// that skipped resolution. A definition names a condition or a figure,
+    /// never a claim shape. Hand-built IR builds calls with
+    /// `ir_builder::defined` or runs [`crate::resolve_defined_calls`]
+    /// before validating.
     #[error(
-        "`{name}` names a definition where a predicate is required, in {context}; a definition is a condition - callable in rule bodies, never an `admit`/`retract`/`emit` target or a `value` lookup (hand-built body calls use `ir_builder::defined` or `resolve_defined_calls`)"
+        "`{name}` names a definition where a predicate is required, in {context}; a definition names a condition or a figure - callable in rule bodies and values, never an `admit`/`retract`/`emit` target or a `value` lookup (hand-built body calls use `ir_builder::defined` or `resolve_defined_calls`)"
     )]
     UnresolvedDefinitionCall {
         name: String,
@@ -610,6 +611,17 @@ pub enum ValidationError {
     DefinitionYieldsNoValue {
         name: String,
         context: ValidationContext,
+    },
+    /// A transformation's declared kinds do not line up with its
+    /// parameters, one entry per parameter: hand-built IR, since the
+    /// parser and the builder write them together.
+    #[error(
+        "transformation `{transformation}` declares kinds for {declared} parameters but has {parameters}; one entry per parameter, `None` where the body infers it"
+    )]
+    DeclaredKindsMisaligned {
+        transformation: String,
+        parameters: usize,
+        declared: usize,
     },
     /// A definition parameter is never referenced by the body. A call
     /// passing an unbound variable for it would always fail at runtime,
@@ -987,6 +999,13 @@ fn collect_depth_errors(
         }
     }
     for t in &p.transformations {
+        if t.declared_kinds.len() != t.parameters.len() {
+            errors.push(ValidationError::DeclaredKindsMisaligned {
+                transformation: t.name.to_string(),
+                parameters: t.parameters.len(),
+                declared: t.declared_kinds.len(),
+            });
+        }
         if let Some(index) = t
             .body
             .iter()
