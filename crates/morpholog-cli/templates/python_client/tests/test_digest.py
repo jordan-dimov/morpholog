@@ -78,6 +78,7 @@ class WhatTheKernelCanHold(unittest.TestCase):
         with self.assertRaises(CodecError):
             values.encode_decimal(long_one)
         self.assertEqual(digest(Decimal("0E-40")), digest(Decimal("0")))
+        self.assertEqual(digest(Decimal("100." + "0" * 30000)), digest(Decimal("100")))
         self.assertEqual(digest(Decimal("0E-1000000000")), digest(Decimal("0")))
         for too_far in ("1E-29", "1.00000000000000000000000000001"):
             with self.subTest(too_far), self.assertRaises(CodecError):

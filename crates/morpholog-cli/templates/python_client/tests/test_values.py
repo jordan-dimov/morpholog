@@ -188,6 +188,12 @@ class WireFormats(unittest.TestCase):
         for text in corpus["decimal"]["both_refuse"]:
             self.refused({"type": "quantity", "value": {"amount": text, "unit": "USD"}})
 
+    def test_a_decimal_past_what_int_reads_is_still_this_codecs_refusal(self):
+        # Python's `int` refuses a string of thousands of digits with its
+        # own ValueError; the reader bounds the digit count first, so the
+        # refusal is a CodecError like every other.
+        self.refused({"type": "decimal", "value": "1" + "0" * 4300})
+
     def test_a_quantity_unit_must_be_a_string(self):
         for unit in (None, 7, ["USD"]):
             self.refused({"type": "quantity", "value": {"amount": "1", "unit": unit}})

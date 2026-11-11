@@ -73,7 +73,10 @@ def _wire_decimal(text: str) -> str:
     if not _DECIMAL_PATTERN.fullmatch(text):
         raise CodecError(f"decimal {text!r} is outside the wire pattern")
     whole, _, fraction = text.lstrip("-").partition(".")
-    if len(fraction) > 28 or int(whole + fraction) >= 1 << 96:
+    digits = whole + fraction
+    # Thirty written digits cannot fit, and `int` refuses thousands with
+    # its own error; the count keeps the refusal this codec's.
+    if len(fraction) > 28 or len(digits) > 29 or int(digits) >= 1 << 96:
         raise CodecError(
             f"decimal {text!r} is not one the kernel holds as written: at most 28 "
             f"fractional digits, with an unsigned, unscaled coefficient smaller than 2^96"
@@ -217,10 +220,10 @@ def _trimmed_decimal(value: Decimal) -> str:
         raise CodecError(f"{value} is not a decimal the kernel holds")
     if value == 0:
         return "0"
-    while digits[-1] == 0:
-        digits = digits[:-1]
-        exponent += 1
-    return encode_decimal(Decimal((sign, digits, exponent)))
+    cut = len(digits)
+    while digits[cut - 1] == 0:
+        cut -= 1
+    return encode_decimal(Decimal((sign, digits[:cut], exponent + len(digits) - cut)))
 
 
 def _trimmed_timestamp(text: str) -> str:
