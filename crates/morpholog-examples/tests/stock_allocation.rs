@@ -8,8 +8,9 @@
 //! order takes every line and allocation with it; and the rules refuse
 //! an allocation beyond the line, a change that would overflow it, a
 //! second allocation of one item on one shipment, shipping twice,
-//! changing an allocation on a shipment that has gone, and cancelling
-//! an order with stock already shipped.
+//! changing an allocation on a shipment that has gone, cancelling an
+//! order with stock already shipped, and closing an order short without
+//! the authority to or with a flag that is not a Boolean.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -444,5 +445,62 @@ fn a_shipped_allocation_may_not_drift_from_what_its_item_holds() {
     assert!(
         !eval_invariant(&program, &rule, &State::from_claims(drifted), None).unwrap(),
         "an allocation of 2 against a shipped child of 3 breaks the rule"
+    );
+}
+
+/// An order closes once every line has shipped what it ordered. Short,
+/// it closes only on the caller's flag and only for an actor who may;
+/// a flag that is not a Boolean is an error before any gate runs.
+#[test]
+fn an_order_closes_complete_or_short_on_authority() {
+    let state = allocate(stocked(10, 8), "alloc", "pallet", 3);
+    let complete = stock_allocation::complete_order();
+    let ask = |allow: bool| vec![subj("order"), EvalValue::Bool(allow)];
+    // Three of eight shipped: not complete, and not closable without the flag.
+    let shipped = ex().must_accept(&stock_allocation::ship(), vec![subj("shipment")], state);
+    refused_by(
+        &ex().must_reject(&complete, ask(false), &shipped),
+        "every_line_shipped_or_allowed",
+    );
+    // With the flag, only an actor who may close an incomplete order.
+    refused_by(
+        &ex().must_reject(&complete, ask(true), &shipped),
+        "override_authorised",
+    );
+    let granted = ex().must_accept(
+        &stock_allocation::grant_close_incomplete(),
+        vec![EvalValue::Subject(common::test_actor())],
+        shipped.clone(),
+    );
+    let closed = ex().must_accept(&complete, ask(true), granted);
+    assert!(has_claim(&closed, "OrderComplete", &[subj("order")]));
+    refused_by(
+        &ex().must_reject(
+            &stock_allocation::cancel_order(),
+            vec![subj("order")],
+            &closed,
+        ),
+        "not_complete",
+    );
+    // The flag is declared a Boolean: a decimal there is an error, not a refusal.
+    let transition = Transition {
+        transformation_name: "complete_order".into(),
+        args: vec![subj("order"), dec(1)],
+        actor: "clerk".into(),
+        decided_at: None,
+    };
+    let errored = propose_with_trace(
+        &stock_allocation::program(),
+        &transition,
+        &shipped,
+        &mut subjects([]),
+    );
+    assert!(
+        matches!(
+            &errored,
+            TracedProposal::Errored { error: morpholog_core::EvalError::ArgumentKindMismatch { parameter, .. }, .. }
+                if parameter == "allow_incomplete"
+        ),
+        "{errored:?}"
     );
 }

@@ -582,9 +582,26 @@ pub fn invariant(name: &str, body: Prop) -> Invariant {
 
 /// Build a [`Transformation`]. Parameters come from [`params`].
 pub fn transformation(name: &str, parameters: Vec<Var>, body: Vec<Stmt>) -> Transformation {
+    let declared_kinds = vec![None; parameters.len()];
     Transformation {
         name: name.into(),
         parameters,
+        declared_kinds,
+        body,
+    }
+}
+
+/// A transformation whose parameters may declare their kinds.
+pub fn transformation_typed(
+    name: &str,
+    parameters: Vec<(Var, Option<PredicateArgKind>)>,
+    body: Vec<Stmt>,
+) -> Transformation {
+    let (parameters, declared_kinds) = parameters.into_iter().unzip();
+    Transformation {
+        name: name.into(),
+        parameters,
+        declared_kinds,
         body,
     }
 }

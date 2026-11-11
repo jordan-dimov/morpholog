@@ -611,6 +611,17 @@ pub enum ValidationError {
         name: String,
         context: ValidationContext,
     },
+    /// A transformation's declared kinds do not line up with its
+    /// parameters, one entry per parameter: hand-built IR, since the
+    /// parser and the builder write them together.
+    #[error(
+        "transformation `{transformation}` declares kinds for {declared} parameters but has {parameters}; one entry per parameter, `None` where the body infers it"
+    )]
+    DeclaredKindsMisaligned {
+        transformation: String,
+        parameters: usize,
+        declared: usize,
+    },
     /// A definition parameter is never referenced by the body. A call
     /// passing an unbound variable for it would always fail at runtime,
     /// since nothing could give it a value.
@@ -987,6 +998,13 @@ fn collect_depth_errors(
         }
     }
     for t in &p.transformations {
+        if t.declared_kinds.len() != t.parameters.len() {
+            errors.push(ValidationError::DeclaredKindsMisaligned {
+                transformation: t.name.to_string(),
+                parameters: t.parameters.len(),
+                declared: t.declared_kinds.len(),
+            });
+        }
         if let Some(index) = t
             .body
             .iter()

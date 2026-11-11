@@ -104,6 +104,18 @@ fn error(e: &EvalError) -> Value {
             "declared": declared.to_string(),
             "found": found.to_string(),
         }),
+        EvalError::ArgumentKindMismatch {
+            transformation,
+            parameter,
+            declared,
+            found,
+        } => json!({
+            "error": "argument_kind_mismatch",
+            "transformation": transformation,
+            "parameter": parameter,
+            "declared": declared.to_string(),
+            "found": found.to_string(),
+        }),
         EvalError::IntentKindMismatch {
             intent,
             field,
@@ -528,6 +540,48 @@ derived Allocated(item):
         &input,
         &answer(&result),
     );
+
+    // A declared parameter kind: the argument is held to it before the
+    // body runs. The right kind reaches the gate and decides; the wrong
+    // kind is an error that stages nothing.
+    let program = morpholog_surface::parse_program(
+        "
+program closing
+
+predicate Order(order: Subject)
+predicate Closed(order: Subject)
+
+transformation close(order, force: Bool):
+    require known: Order(order)
+    require force = true or Closed(order)
+    admit Closed(order)
+",
+    )
+    .unwrap();
+    let open = State::from_claims(vec![morpholog_core::ClaimInstance {
+        predicate: "Order".into(),
+        args: vec![EvalValue::Subject(Subject::from("o"))],
+    }]);
+    let t = program.transformation("close").unwrap();
+    for (case, flag) in [
+        ("fixture/declared_kind/right_kind", EvalValue::Bool(true)),
+        (
+            "fixture/declared_kind/right_kind_refused",
+            EvalValue::Bool(false),
+        ),
+        (
+            "fixture/declared_kind/wrong_kind",
+            morpholog_test_support::dec(1),
+        ),
+    ] {
+        let (input, decided) = proposal_case(
+            &program,
+            t,
+            vec![EvalValue::Subject(Subject::from("o")), flag],
+            &open,
+        );
+        record(out, case.to_string(), &input, &decided);
+    }
 }
 
 /// Values admitted or emitted into fields of another declared kind,

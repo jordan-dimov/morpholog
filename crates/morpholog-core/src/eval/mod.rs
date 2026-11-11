@@ -138,6 +138,17 @@ pub enum EvalError {
         declared: crate::ir::PredicateArgKind,
         found: crate::ir::PredicateArgKind,
     },
+    /// An argument of a kind its parameter does not declare: refused
+    /// before the body runs, so nothing is staged.
+    #[error(
+        "transformation `{transformation}` declares parameter `{parameter}` {declared}, but the argument passed there is {found}"
+    )]
+    ArgumentKindMismatch {
+        transformation: String,
+        parameter: String,
+        declared: crate::ir::PredicateArgKind,
+        found: crate::ir::PredicateArgKind,
+    },
     /// A value emitted into an intent field it does not fit.
     #[error(
         "intent `{intent}` declares field `{field}` {declared}, but the value emitted there is {found}"
@@ -195,6 +206,7 @@ impl EvalError {
             EvalError::EmptyExtremum { .. } => "empty_extremum",
             EvalError::UnknownDefinition(_) => "unknown_definition",
             EvalError::ClaimKindMismatch { .. } => "claim_kind_mismatch",
+            EvalError::ArgumentKindMismatch { .. } => "argument_kind_mismatch",
             EvalError::IntentKindMismatch { .. } => "intent_kind_mismatch",
         }
     }

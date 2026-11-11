@@ -664,6 +664,26 @@ pub(crate) fn stage_delta_inner(
         )));
     }
 
+    // A declared kind holds the argument as a claim's field holds a
+    // value at admission: refused here, before the body runs.
+    for (i, (name, val)) in transformation
+        .parameters
+        .iter()
+        .zip(&transition.args)
+        .enumerate()
+    {
+        if let Some(Some(declared)) = transformation.declared_kinds.get(i) {
+            let found = val.kind();
+            if !declared.holds(&found) {
+                return Err(EvalError::ArgumentKindMismatch {
+                    transformation: transformation.name.to_string(),
+                    parameter: name.to_string(),
+                    declared: declared.clone(),
+                    found,
+                });
+            }
+        }
+    }
     let mut bindings = Bindings::new();
     for (name, val) in transformation
         .parameters

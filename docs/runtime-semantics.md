@@ -242,6 +242,8 @@ The `.morph` surface verbs map one-to-one onto the IR constructs above. The rena
 2. Snapshot the current set of claims. All reads in the transformation
    body see this snapshot only. No read-your-writes.
 3. Execute T(args) against the snapshot, staging:
+     (an argument of another kind than its parameter declares is refused
+     here, before any statement runs)
      - asserted claims
      - retracted claims
      - emitted intents

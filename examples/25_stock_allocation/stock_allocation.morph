@@ -60,6 +60,15 @@ predicate SplitFrom(child: Subject, parent: Subject, quantity: Decimal)
 predicate SalesOrder(order: Subject, customer: Subject)
     unique by (order)
 
+-- An order closed: every line shipped what it ordered, or someone with
+-- the authority to said an incomplete order was to be closed anyway.
+predicate OrderComplete(order: Subject)
+    append only
+
+-- Who may close an order with lines still short. Granted by its own
+-- act, so the override is a matter of record, not of who called.
+predicate MayCloseIncomplete(person: Subject)
+
 predicate SalesLine(line: Subject, order: Subject, part: Subject, quantity: Decimal)
     unique by (line)
 
@@ -251,6 +260,22 @@ transformation ship(shipment):
             emit ItemShipped(item, customer)
     admit ShipmentShipped(shipment)
 
+-- Close an order. The caller supplies a flag that says whether an
+-- incomplete order is to be closed, and declares its kind, since no
+-- rule reads the flag into a claim: without the declaration the flag
+-- would have no type for the schema or the generated client. The flag
+-- says what the caller asks; the rules say whether the order is
+-- complete and whether this actor may close one that is not.
+transformation complete_order(order, allow_incomplete: Bool):
+    require known_order: SalesOrder(order, _)
+    require not_yet_complete: not OrderComplete(order)
+    require every_line_shipped_or_allowed: allow_incomplete = true or not (exists l: SalesLine(l, order, _, ordered) and sum(q | Allocation(_, l, s, _, q) and ShipmentShipped(s)) < ordered)
+    require override_authorised: allow_incomplete = false or MayCloseIncomplete(actor)
+    admit OrderComplete(order)
+
+transformation grant_close_incomplete(person):
+    admit MayCloseIncomplete(person)
+
 -- Cancel an order: every line goes, with whatever was reserved for it,
 -- and so do the order's shipments. The act ranges over the lines the
 -- record holds for the order, so a line the caller forgot cannot be
@@ -258,6 +283,7 @@ transformation ship(shipment):
 -- one line with stock already shipped refuses the whole cancellation.
 transformation cancel_order(order):
     require known_order: SalesOrder(order, _)
+    require not_complete: not OrderComplete(order)
     for SalesLine(line, order, _, _):
         require nothing_shipped: not (exists a: Allocation(a, line, shipment, _, _) and ShipmentShipped(shipment))
         retract Allocation(line: line, ..)

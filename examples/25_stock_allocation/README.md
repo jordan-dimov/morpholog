@@ -7,8 +7,8 @@ the rest, the lineage is recorded, and the allocation is re-pointed at
 the child. An allocation that takes the whole item ships the item.
 
 This is the worked example for the conditional statement, for a `for`
-over the claims a pattern matches, and for a definition that names a
-figure. Shipping is one act, `ship`,
+over the claims a pattern matches, for a definition that names a
+figure, and for a parameter that declares its kind. Shipping is one act, `ship`,
 that ranges over the allocations the record holds for the shipment,
 `for Allocation(allocation, line, shipment, item, quantity):`, and in
 each pass chooses by a condition on the record: `if quantity <
@@ -33,6 +33,8 @@ that got any branch wrong would be refused, not stored.
 | `InStock(item)` | The item is still on the shelf. |
 | `SplitFrom(child, parent, quantity)` | The lineage of a split. Kept forever. |
 | `SalesOrder`, `SalesLine` | An order and its lines. |
+| `OrderComplete(order)` | The order is closed. Kept forever. |
+| `MayCloseIncomplete(person)` | Who may close an order with lines still short. |
 | `Shipment(shipment, order)`, `ShipmentShipped(shipment)` | A shipment on an order, and that it has gone out. |
 | `Allocation(allocation, line, shipment, item, quantity)` | Stock reserved for a line, on a shipment. |
 | `ShippedTo(item, customer)` | The item went to the customer. Kept forever. |
@@ -51,7 +53,9 @@ that got any branch wrong would be refused, not stored.
 | `allocate` | Reserves part of an item for a line, on a shipment, within the stock and the line. |
 | `change_allocation` | Changes the quantity while the shipment is open; the rules refuse a change that no longer fits. |
 | `ship` | For every allocation on the shipment, splits the item or ships it whole, by the condition in the act; then marks the shipment gone. |
-| `cancel_order` | For every line on the order, removes the line and its allocations; refused if any line has stock already shipped. |
+| `cancel_order` | For every line on the order, removes the line and its allocations; refused if any line has stock already shipped or the order is closed. |
+| `complete_order` | Closes the order once every line has shipped what it ordered, or on a flag the caller sets, if the actor may close an incomplete order. |
+| `grant_close_incomplete` | Records who may close an incomplete order. |
 
 `allocated(item)` is one figure, defined once: how much of an item is
 reserved. The `allocate` gate reads it, the `allocations_fit_the_stock`
@@ -66,7 +70,11 @@ Choosing between a split and a whole shipment: the condition in the
 act. Enumerating the allocations on a shipment, and the lines on an
 order: the pattern each act ranges over. Checking that the list the
 caller passed was complete: there is no list. Keeping a shipped figure
-per line in step with the shipments: it is read from them.
+per line in step with the shipments: it is read from them. Deciding
+whether an order may be closed short, and by whom: two gates. And the
+type of the flag the caller sets to ask for that: `allow_incomplete:
+Bool` declares it, since no rule reads the flag into a claim, so the
+schema and the generated client carry it typed.
 
 ## Run it
 
@@ -78,7 +86,9 @@ morpholog check --strict examples/25_stock_allocation/stock_allocation.morph
 The tests walk a receipt, an order, allocations and a shipment through
 both branches, read the figures back after a split, ship a shipment
 with several allocations from a record loaded in two orders and get the
-same children, cancel an order, and try the changes the rules refuse:
+same children, cancel an order, close an order complete and short, and
+try the changes the rules refuse: closing short without the authority
+to, a flag that is not a Boolean,
 an allocation beyond the stock, a change that would overflow it, a
 second allocation of one item on one shipment, shipping twice, changing
 an allocation on a shipment that has gone, and cancelling an order with

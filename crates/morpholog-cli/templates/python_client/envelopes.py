@@ -1108,6 +1108,7 @@ KERNEL_ERROR_KINDS = frozenset(
         "unknown_definition",
         "claim_kind_mismatch",
         "intent_kind_mismatch",
+        "argument_kind_mismatch",
     }
 )
 

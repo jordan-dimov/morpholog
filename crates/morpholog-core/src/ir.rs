@@ -916,7 +916,22 @@ pub enum Stmt {
 pub struct Transformation {
     pub name: TransformationName,
     pub parameters: Vec<Var>,
+    /// The kind each parameter declares, by position, `None` where the
+    /// body infers it. One entry per parameter; validation refuses a
+    /// mismatch in length.
+    pub declared_kinds: Vec<Option<PredicateArgKind>>,
     pub body: Vec<Stmt>,
+}
+
+impl Transformation {
+    /// The kind `parameter` declares, if it declares one.
+    pub fn declared_kind(&self, parameter: &Var) -> Option<&PredicateArgKind> {
+        self.parameters
+            .iter()
+            .position(|p| p == parameter)
+            .and_then(|i| self.declared_kinds.get(i))
+            .and_then(Option::as_ref)
+    }
 }
 
 /// A named, parameterised proposition: a condition declared once and

@@ -101,7 +101,11 @@ transformation place_or_flag(desk, qty):
     else:
         admit Flagged(new Subject())
 
-transformation unflag(order):
+transformation unflag(order, confirmed: Bool):
+    -- A parameter may declare its kind. This flag reaches no claim, so
+    -- nothing else would give it one for the schema and the client; the
+    -- argument is held to the declaration before the act runs.
+    require confirmed = true
     require Flagged(order)
     retract Flagged(order)
 
