@@ -6,7 +6,6 @@ import json
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from pathlib import Path
 
 from _support import TEMPLATES_DIR
 from python_client import values
