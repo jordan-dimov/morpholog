@@ -7,7 +7,7 @@
 
 mod common;
 
-use common::{claim_instance, date, dec_str, subj, ts};
+use common::{date, dec_str, subj, ts};
 use morpholog_core::{
     Bounding, ImpactPlan, Outcome, Program, RejectionReason, State, ValidationError, Widening,
 };
@@ -366,5 +366,4 @@ fn three_steps_coexist_each_selected_by_its_markets_declared_step() {
         matches!(&stepless, Ok(Outcome::Rejected { reason: RejectionReason::Invariant { name, .. } }) if name.as_str() == "every_limited_market_has_a_step"),
         "{stepless:?}"
     );
-    let _ = claim_instance;
 }
