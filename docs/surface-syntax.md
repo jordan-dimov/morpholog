@@ -227,6 +227,8 @@ predicate Limit(account: Subject, cap: Decimal)
     unique by (account)
 predicate Exposure(position: Subject, account: Subject, amount: Decimal)
     unique by (position)
+predicate Sealed(lot: Subject, bidder: Subject, commitment: Subject)
+predicate Bid(lot: Subject, bidder: Subject, amount: Decimal, salt: Subject)
 
 const penny = (0.01)
 
@@ -261,6 +263,20 @@ invariant largest_position_within_limit:
 
 invariant exposure_is_bounded_either_way:
     Exposure(p, _, amount) implies abs(amount) <= 1000000 and min(amount, 0) <= 0
+
+-- A reveal held to a commitment made before it: `digest` hashes its
+-- arguments in order, each as the record stores it, so a bid revealed
+-- as 100.0 opens an envelope sealed over 100. The first argument names
+-- the protocol; the salt is the bidder's own.
+invariant a_revealed_bid_hashes_to_its_commitment:
+    Bid(lot, bidder, amount, salt) and Sealed(lot, bidder, commitment)
+    implies digest(#sealed_bid_v1, lot, bidder, amount, salt) = commitment
+
+transformation seal(lot, commitment):
+    admit Sealed(lot, actor, commitment)
+
+transformation reveal(lot, amount, salt):
+    admit Bid(lot, actor, amount, salt)
 ```
 
 Arithmetic is `+ - * / %` over decimals, same-unit quantities and the

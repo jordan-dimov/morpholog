@@ -293,6 +293,23 @@ transformation publish(day):
     admit Published(day)
 ";
 
+/// A digest in a rule and in a gate, with a literal, case variables and
+/// a figure among its arguments: every walker must descend a variadic
+/// call and read its result as a subject.
+const DIGEST_IN_RULE_AND_GATE: &str = "\
+program digest_in_rule_and_gate
+predicate Sealed(lot: Subject, bidder: Subject, commitment: Subject)
+predicate Bid(lot: Subject, bidder: Subject, amount: Decimal, salt: Subject)
+define doubled(a) = (a * 2)
+invariant a_revealed_bid_hashes_to_its_commitment:
+    Bid(lot, bidder, amount, salt) and Sealed(lot, bidder, commitment)
+    implies digest(#sealed_bid_v1, lot, bidder, doubled(amount), salt) = commitment
+transformation reveal(lot, amount, salt):
+    bind sealed: Sealed(lot, actor, commitment)
+    require matches: digest(#sealed_bid_v1, lot, actor, doubled(amount), salt) = commitment
+    admit Bid(lot, actor, amount, salt)
+";
+
 const UNSUPPLIED_THROUGH_DEFINED: &str = "\
 program unsupplied_through_defined
 predicate Ghost(g: Subject)
@@ -532,6 +549,7 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ("for_over_a_pattern", FOR_OVER_A_PATTERN),
         ("figure_across_positions", FIGURE_ACROSS_POSITIONS),
         ("grid_in_a_rule", GRID_IN_A_RULE),
+        ("digest_in_rule_and_gate", DIGEST_IN_RULE_AND_GATE),
         ("unsupplied_through_defined", UNSUPPLIED_THROUGH_DEFINED),
         ("let_sugared_define", LET_SUGARED_DEFINE),
         ("round_in_let_sugared_body", ROUND_IN_LET_SUGARED_BODY),

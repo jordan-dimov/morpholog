@@ -10,7 +10,9 @@
 
 use crate::analysis::ParamKind;
 use crate::eval::EvalError;
-use crate::ir::{DefinitionName, PredicateArgKind, Program, Prop, Stmt, SumSeed, ValueExpr, Var};
+use crate::ir::{
+    Arity, DefinitionName, PredicateArgKind, Program, Prop, Stmt, SumSeed, ValueExpr, Var,
+};
 use crate::state::{ClaimInstance, State};
 use std::collections::{BTreeMap, HashMap};
 
@@ -398,8 +400,19 @@ pub enum ValidationError {
     #[error("{builtin} takes {expected} argument(s), got {found} in {context}")]
     BuiltinArity {
         builtin: &'static str,
-        expected: usize,
+        expected: Arity,
         found: usize,
+        context: ValidationContext,
+    },
+    /// A `digest` argument of a kind no claim can carry: a collection or
+    /// a calendar span. The encoding is the stored value's, so only a
+    /// storable kind has one.
+    #[error(
+        "digest takes the kinds a claim can carry, not {kind} (argument {position}) in {context}"
+    )]
+    DigestArgumentKind {
+        kind: PredicateArgKind,
+        position: usize,
         context: ValidationContext,
     },
     /// A period builtin (`period_index`, `period_start_of`) was given a
@@ -1101,7 +1114,8 @@ fn duplicated<'a>(names: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
 /// definition-predicate name collisions.
 /// The builtins the surface spells as a bare word rather than a keyword,
 /// so a definition so named would be shadowed in value position.
-const BARE_WORD_BUILTINS: [&str; 4] = ["if", "period_index", "period_start_of", "periods"];
+const BARE_WORD_BUILTINS: [&str; 5] =
+    ["if", "period_index", "period_start_of", "periods", "digest"];
 
 fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
     let mut errors = Vec::new();

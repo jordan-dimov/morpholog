@@ -20,6 +20,7 @@ by what you want to write in a `.morph` file.
 | Hold a running total under a limit | [Insurance claim settlement](05_insurance_claim_settlement/), [Borrowing base](11_borrowing_base/) |
 | Show what the record said at a past moment | [Double-entry ledger](03_double_entry_ledger/), [Trade lifecycle](10_trade_lifecycle/) |
 | Require human oversight of an AI's output | [Biometric identification oversight](13_biometric_identification_oversight/) |
+| Hold someone to a commitment made before the outcome was known | [Sealed bids](26_sealed_bids/) |
 | Add Morpholog to an application you already run | [Adding Morpholog to an existing trading system](etrm_embedder/) |
 
 ## Find an example by what you want to write
@@ -83,6 +84,7 @@ one act is a margin-call run.
 | range over the claims a pattern matches, one pass per claim | [25_stock_allocation](25_stock_allocation/) | `for Allocation(allocation, line, shipment, item, quantity):` |
 | name a figure once and read it from a gate, a rule and a view | [25_stock_allocation](25_stock_allocation/) | `define allocated(item) = (sum(q | Allocation(item: item, quantity: q, ..)))` |
 | declare a parameter's kind where the body gives it none | [25_stock_allocation](25_stock_allocation/) | `force: Bool` |
+| hold a reveal to a commitment made before it | [26_sealed_bids](26_sealed_bids/) | `digest(#sealed_bid_v1, lot, bidder, amount, salt) = commitment` |
 | call Morpholog from an application | [etrm_embedder](etrm_embedder/) | the generated Python client |
 
 ## If the thing you want is not here

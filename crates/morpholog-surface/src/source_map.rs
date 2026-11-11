@@ -85,6 +85,7 @@ impl SourceMap {
             | ValidationError::PeriodIndexNotWhole { context, .. }
             | ValidationError::PeriodsUnbounded { context, .. }
             | ValidationError::BuiltinArity { context, .. }
+            | ValidationError::DigestArgumentKind { context, .. }
             | ValidationError::BuiltinKind { context, .. }
             | ValidationError::AbsKind { context, .. }
             | ValidationError::RoundQuantumNotPositive { context, .. }

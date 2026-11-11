@@ -655,6 +655,57 @@ transformation publish(day):
     }
 }
 
+/// A reveal held to a commitment: a matching reveal is admitted, so is
+/// one at another scale, and a wrong amount or a wrong salt is refused.
+fn digest_cases(out: &mut BTreeMap<String, Fingerprints>) {
+    let program = morpholog_surface::parse_program(
+        "
+program sealed
+
+predicate Sealed(lot: Subject, bidder: Subject, commitment: Subject)
+    unique by (lot, bidder)
+predicate Bid(lot: Subject, bidder: Subject, amount: Decimal, salt: Subject)
+    unique by (lot, bidder)
+
+invariant a_revealed_bid_hashes_to_its_commitment:
+    Bid(lot, bidder, amount, salt) and Sealed(lot, bidder, commitment)
+    implies digest(#sealed_bid_v1, lot, bidder, amount, salt) = commitment
+
+transformation reveal(lot, bidder, amount, salt):
+    admit Bid(lot, bidder, amount, salt)
+",
+    )
+    .unwrap();
+    use morpholog_test_support::{dec_str, subj};
+    let commitment = morpholog_core::digest::digest(&[
+        subj("sealed_bid_v1"),
+        subj("lot"),
+        subj("alice"),
+        dec_str("100"),
+        subj("s1"),
+    ])
+    .unwrap();
+    let sealed = State::from_claims(vec![morpholog_core::ClaimInstance {
+        predicate: "Sealed".into(),
+        args: vec![subj("lot"), subj("alice"), subj(&commitment)],
+    }]);
+    let reveal = program.transformation("reveal").unwrap();
+    for (case, amount, salt) in [
+        ("fixture/digest/matching", "100", "s1"),
+        ("fixture/digest/another_scale", "100.0", "s1"),
+        ("fixture/digest/wrong_amount", "101", "s1"),
+        ("fixture/digest/wrong_salt", "100", "s2"),
+    ] {
+        let (input, decided) = proposal_case(
+            &program,
+            reveal,
+            vec![subj("lot"), subj("alice"), dec_str(amount), subj(salt)],
+            &sealed,
+        );
+        record(out, case.to_string(), &input, &decided);
+    }
+}
+
 /// Values admitted or emitted into fields of another declared kind,
 /// beside values that fit. The arguments are tagged, as `propose --args`
 /// sends them, so nothing checks them before the body runs.
@@ -946,6 +997,7 @@ fn corpus() -> BTreeMap<String, Fingerprints> {
     arithmetic_fixtures(&mut out);
     bounded_fixtures(&mut out);
     kind_fixtures(&mut out);
+    digest_cases(&mut out);
     out
 }
 

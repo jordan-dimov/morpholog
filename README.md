@@ -210,6 +210,7 @@ If you came with a question rather than an industry - "can it accept a whole bat
 - [Residue classes](examples/22_residue_classes/) - two textbook theorems made finite by a change of representation: the record verifies the finite part itself, keeps a proof assistant's report apart as testimony, and lets a conclusion stand only on both.
 - [Delivery-hour limits](examples/23_delivery_hour_limits/) - a power book's cap that holds in every hour a trade touches, the hours computed from the trade, and a day product as long as the published calendar day says.
 - [Stock allocation](examples/25_stock_allocation/) - a warehouse ships a shipment by visiting every allocation on it, splitting the item or sending it whole, the act deciding which, and stock is conserved across every split.
+- [Sealed bids](examples/26_sealed_bids/) - bidders commit to a bid before the close and reveal it after, and the record refuses a reveal that does not hash to its commitment.
 
 **Language features**
 

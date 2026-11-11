@@ -17,6 +17,8 @@ model encodes it element by element, each item passing through
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -103,12 +105,18 @@ def encode_decimal(value: Decimal) -> str:
     """``Decimal`` -> wire decimal text. Plain form always -
     ``Decimal.__str__`` goes scientific for some values, which the
     schema pattern (rightly) refuses - and NaN/Inf are not numbers the
-    contract knows."""
-    if not value.is_finite():
-        raise CodecError(f"{value} is not a finite decimal")
+    contract knows. A value crosses as written or not at all: the kernel
+    holds at most 28 places and a coefficient under 2^96, and rounds
+    past that."""
+    if not value.is_finite() or value.adjusted() > 28:
+        raise CodecError(f"{value} is not a decimal the kernel holds")
     text = format(value, "f")
     if not _DECIMAL_PATTERN.match(text):
         raise CodecError(f"{value} renders as {text!r}, outside the wire pattern")
+    whole, _, fraction = text.partition(".")
+    fraction = fraction.rstrip("0")
+    if len(fraction) > 28 or abs(int(whole + fraction)) >= 1 << 96:
+        raise CodecError(f"{value} is beyond the decimal the kernel holds")
     return text
 
 
@@ -140,6 +148,72 @@ def encode_named(value: object) -> object:
     if isinstance(value, date):
         return value.isoformat()
     raise CodecError(f"no named-codec encoding for {type(value).__name__}: {value!r}")
+
+
+def digest(*values: object) -> str:
+    """``sha256:<hex>`` over these values in order, the bytes the
+    programme's ``digest(...)`` hashes, so a commitment computed here is
+    the one the record later holds a reveal to.
+
+    Each value is encoded as the record stores it: a ``str`` is a
+    subject, a ``Decimal`` a decimal with its scale trimmed (so
+    ``Decimal("100.00")`` and ``Decimal("100")`` commit alike), a ``bool``
+    a bool, a ``date`` a date and an aware ``datetime`` an instant. An
+    ``int`` or a ``float`` is refused rather than read as a decimal, and
+    so is a naive datetime: a commitment the kernel could not reproduce
+    is worse than none. No database, subprocess or network.
+    """
+    if not values:
+        raise CodecError("digest takes at least one value")
+    preimage = _digest_preimage(values)
+    return "sha256:" + hashlib.sha256(preimage.encode("utf-8")).hexdigest()
+
+
+def _digest_preimage(values: tuple[object, ...]) -> str:
+    # PostgreSQL's jsonb text: ", " between items, non-ASCII as it is,
+    # the short escapes and \u00xx for the other control characters,
+    # which is what json.dumps writes with these settings.
+    keys = [_value_key(value) for value in values]
+    return json.dumps(keys, separators=(", ", ": "), ensure_ascii=False)
+
+
+def _value_key(value: object) -> list[object]:
+    # bool before the rest: it is an int subclass.
+    if isinstance(value, bool):
+        return ["bool", value]
+    if isinstance(value, str):
+        return ["subject", value]
+    if isinstance(value, Decimal):
+        return ["decimal", _trimmed_decimal(value)]
+    if isinstance(value, datetime):
+        # datetime before date: it is a date subclass.
+        return ["timestamp", _trimmed_timestamp(encode_timestamp(value))]
+    if isinstance(value, date):
+        return ["date", value.isoformat()]
+    raise CodecError(
+        "digest takes a str, a Decimal, a bool, a date or an aware datetime, "
+        f"not {type(value).__name__}: {value!r}"
+    )
+
+
+def _trimmed_decimal(value: Decimal) -> str:
+    """``trim_scale(numeric)::text``: no trailing zeros, no exponent, and
+    a zero is ``0`` whatever its sign or scale. On the text, not through
+    ``Decimal.normalize``, which rounds to the context's precision."""
+    text = encode_decimal(value)
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return "0" if text == "-0" else text
+
+
+def _trimmed_timestamp(text: str) -> str:
+    """The stored instant's text: a fraction only when non-zero, with
+    its trailing zeros trimmed."""
+    if "." not in text:
+        return text
+    whole, fraction = text[:-1].split(".")
+    fraction = fraction.rstrip("0")
+    return f"{whole}.{fraction}Z" if fraction else f"{whole}Z"
 
 
 def decode_tagged(tagged: object) -> object:

@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::definitions::DefinitionTable;
 use crate::ir::{
     ArithOp, Builtin, CompareOp, Definition, DefinitionName, OrderedDomain, PredicateName, Prop,
-    Term, Value, ValueExpr, Var,
+    Subject, Term, Value, ValueExpr, Var,
 };
 use crate::propose::{Compared, Transition};
 use crate::state::{Bindings, Bound, CandidateBucket, ClaimInstance, EvalValue, State, StateRef};
@@ -1543,7 +1543,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
 /// Refuse a builtin call with the wrong number of arguments. Checked
 /// before the arguments are evaluated, and again in [`eval_builtin`].
 fn check_builtin_arity(builtin: Builtin, found: usize) -> Result<(), EvalError> {
-    if found == builtin.arity() {
+    if builtin.arity().accepts(found) {
         return Ok(());
     }
     Err(EvalError::TypeMismatch(format!(
@@ -1647,6 +1647,18 @@ pub(crate) fn eval_builtin(builtin: Builtin, args: &[EvalValue]) -> Result<EvalV
             period_starts(*from, *until, *step).map(EvalValue::Collection)
         }
         Builtin::Min | Builtin::Max => extremum_of(builtin, &args[0], &args[1]),
+        Builtin::Digest => {
+            for arg in args {
+                if matches!(arg, EvalValue::Collection(_) | EvalValue::CalendarSpan(_)) {
+                    return Err(EvalError::TypeMismatch(format!(
+                        "digest takes the kinds a claim can carry, got {}",
+                        runtime_kind_label(arg)
+                    )));
+                }
+            }
+            let digest = crate::digest::digest(args).map_err(EvalError::TypeMismatch)?;
+            Ok(EvalValue::Subject(Subject::from(digest.as_str())))
+        }
     }
 }
 

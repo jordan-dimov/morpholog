@@ -839,7 +839,8 @@ enum ForallSource {
 /// bodies. [`expression_parser`] builds the same grammar inside itself.
 /// The builtins the value grammar matches by name rather than by keyword. A definition call
 /// never takes one of these names, and validation refuses a definition so named.
-const BARE_WORD_BUILTINS: [&str; 4] = ["if", "period_index", "period_start_of", "periods"];
+const BARE_WORD_BUILTINS: [&str; 5] =
+    ["if", "period_index", "period_start_of", "periods", "digest"];
 
 pub(super) fn value_expr_parser<'a, I>(
     table: &'a FieldTable,
@@ -1076,25 +1077,38 @@ where
                 otherwise: Box::new(otherwise),
             });
 
-        // `period_index(anchor, span, date)`, its inverse `period_start_of(anchor, span,
-        // index)`, and `periods(from, until, step)`. Contextual, like `if`.
-        let period_builtin_expr = select! {
+        // The builtins matched by name: `period_index(anchor, span, date)`, its
+        // inverse `period_start_of(anchor, span, index)`, `periods(from, until,
+        // step)` and `digest(a, b, ...)`. Contextual, like `if`. One alternative
+        // with one argument list, so a nesting level costs one frame; the count
+        // is checked here against the builtin's arity.
+        let named_builtin_expr = select! {
             Token::Ident(s) if s == "period_index" => Builtin::PeriodIndex,
             Token::Ident(s) if s == "period_start_of" => Builtin::PeriodStartOf,
             Token::Ident(s) if s == "periods" => Builtin::Periods,
+            Token::Ident(s) if s == "digest" => Builtin::Digest,
         }
         .then(
             value
                 .clone()
-                .then_ignore(just(Token::Comma))
-                .then(value.clone())
-                .then_ignore(just(Token::Comma))
-                .then(value.clone())
+                .separated_by(just(Token::Comma))
+                .collect::<Vec<ValueExpr>>()
                 .delimited_by(just(Token::LParen), just(Token::RParen)),
         )
-        .map(|(builtin, ((first, second), third))| ValueExpr::Call {
-            builtin,
-            args: vec![first, second, third],
+        .validate(|(builtin, args): (Builtin, Vec<ValueExpr>), e, emitter| {
+            if !builtin.arity().accepts(args.len()) {
+                let span: SimpleSpan = e.span();
+                emitter.emit(Rich::custom(
+                    span,
+                    format!(
+                        "{} takes {} argument(s), got {}",
+                        builtin.name(),
+                        builtin.arity(),
+                        args.len()
+                    ),
+                ));
+            }
+            ValueExpr::Call { builtin, args }
         });
 
         let primary = choice((
@@ -1103,7 +1117,7 @@ where
             abs_expr,
             round_expr,
             if_expr,
-            period_builtin_expr,
+            named_builtin_expr,
             value_lookup,
             parenthesised,
             decimal_as_value,

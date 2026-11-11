@@ -20,6 +20,7 @@ MORPHOLOG_VERSION = "0.0.18"
 PYTHON_FLOOR = (3, 12)
 
 from . import envelopes, models, values  # noqa: E402
+from .values import digest  # noqa: E402
 from .adapter import (  # noqa: E402
     Morpholog,
     MorphologBatchIncomplete,
@@ -115,6 +116,7 @@ __all__ = [
     "open_client",
     "open_session",
     "connect_service",
+    "digest",
     "envelopes",
     "models",
     "values",

@@ -451,6 +451,72 @@ fn periods_carrier() -> Program {
         .build()
 }
 
+/// A digest over a literal, variables and a figure, in a rule and a gate.
+fn digest_carrier() -> Program {
+    use crate::ir::{Builtin, Subject, Term, Value};
+    let protocol = || {
+        term(Term::Literal(Value::Subject(Subject::from(
+            "sealed_bid_v1",
+        ))))
+    };
+    program("digest_carrier")
+        .predicates(vec![
+            predicate("Sealed")
+                .subject("lot")
+                .subject("bidder")
+                .subject("commitment")
+                .build(),
+            predicate("Bid")
+                .subject("lot")
+                .subject("bidder")
+                .decimal("amount")
+                .subject("salt")
+                .build(),
+        ])
+        .invariants(vec![invariant(
+            "a_revealed_bid_hashes_to_its_commitment",
+            implies(
+                and(vec![
+                    claim(
+                        "Bid",
+                        vec![var("lot"), var("bidder"), var("amount"), var("salt")],
+                    ),
+                    claim("Sealed", vec![var("lot"), var("bidder"), var("commitment")]),
+                ]),
+                eq(
+                    call(
+                        Builtin::Digest,
+                        vec![protocol(), v("lot"), v("bidder"), v("amount"), v("salt")],
+                    ),
+                    v("commitment"),
+                ),
+            ),
+        )])
+        .transformations(vec![transformation(
+            "reveal",
+            params(&["lot", "amount", "salt", "commitment"]),
+            vec![
+                require(eq(
+                    call(Builtin::Digest, vec![v("amount"), v("salt")]),
+                    v("commitment"),
+                )),
+                assert_("Bid", vec![var("lot"), actor(), var("amount"), var("salt")]),
+            ],
+        )])
+        .build()
+}
+
+const DIGEST_PREIMAGE: &str = "program digest_carrier\n\npredicate Sealed(lot: Subject, bidder: Subject, commitment: Subject)\npredicate Bid(lot: Subject, bidder: Subject, amount: Decimal, salt: Subject)\n\ninvariant a_revealed_bid_hashes_to_its_commitment:\n  (Bid(lot, bidder, amount, salt) and Sealed(lot, bidder, commitment)) implies (digest(#sealed_bid_v1, lot, bidder, amount, salt) = commitment)\n\ntransformation reveal(lot, amount, salt, commitment):\n  require digest(amount, salt) = commitment\n  admit Bid(lot, actor, amount, salt)\n";
+const DIGEST_HASH: &str = "sha256:17e83e3d1d876488f52a4e7c622c96328fc59984cfe814d056703c7101427831";
+
+#[test]
+fn the_digest_encoding_is_pinned() {
+    let program = digest_carrier();
+    program.validate().expect("the digest carrier validates");
+    assert_eq!(canonical_preimage(&program), DIGEST_PREIMAGE);
+    assert_eq!(canonical_hash(&program), DIGEST_HASH);
+}
+
 const PERIODS_PREIMAGE: &str = "program periods_carrier\n\npredicate Window(id: Subject, from: Timestamp, until: Timestamp)\n\ntransformation open(id, from, until):\n  require (until - from) no_longer_than duration(PT744H)\n  let hours = periods(from, until, duration(PT1H))\n  require sum(1 | h in hours) = 24\n  require forall h in hours: from at_or_before h\n  admit Window(id, from, until)\n";
 const PERIODS_HASH: &str =
     "sha256:185cf4fc11a41b81678aa641402930ed1dc568691c56705ce7fd0b8df557940a";

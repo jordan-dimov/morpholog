@@ -31,6 +31,7 @@ mod controls;
 mod coverage;
 mod definitions;
 mod derive;
+pub mod digest;
 mod disciplines;
 mod eval;
 pub mod execution;

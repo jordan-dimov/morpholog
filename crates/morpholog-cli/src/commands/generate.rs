@@ -594,6 +594,7 @@ fn render_init(program: &Program) -> String {
          MORPHOLOG_VERSION = \"{version}\"\n\
          PYTHON_FLOOR = ({floor_major}, {floor_minor})\n\n\
          from . import envelopes, models, values  # noqa: E402\n\
+         from .values import digest  # noqa: E402\n\
          from .adapter import (  # noqa: E402\n    \
              Morpholog,\n    \
              MorphologBatchIncomplete,\n    \
@@ -680,6 +681,7 @@ fn render_init(program: &Program) -> String {
              \"open_client\",\n    \
              \"open_session\",\n    \
              \"connect_service\",\n    \
+             \"digest\",\n    \
              \"envelopes\",\n    \
              \"models\",\n    \
              \"values\",\n]\n",

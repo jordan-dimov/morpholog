@@ -86,6 +86,11 @@ impl core::marker::UnsafeUnpin for morpholog_core::calendar::CalendarSpan
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::calendar::CalendarSpan
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::calendar::CalendarSpan
 pub fn morpholog_core::calendar::parse_calendar_span(&str) -> core::result::Result<morpholog_core::calendar::CalendarSpan, alloc::string::String>
+pub mod morpholog_core::digest
+pub fn morpholog_core::digest::digest(&[morpholog_core::EvalValue]) -> core::result::Result<alloc::string::String, alloc::string::String>
+pub fn morpholog_core::digest::jsonb_text(&serde_json::value::Value, &mut alloc::string::String) -> core::result::Result<(), alloc::string::String>
+pub fn morpholog_core::digest::preimage(&[morpholog_core::EvalValue]) -> core::result::Result<alloc::string::String, alloc::string::String>
+pub fn morpholog_core::digest::value_key_v1(&morpholog_core::EvalValue) -> core::result::Result<serde_json::value::Value, alloc::string::String>
 pub mod morpholog_core::execution
 pub fn morpholog_core::execution::admission_range<'a>(&'a morpholog_core::Admission<'_>, core::ops::range::Range<usize>) -> morpholog_core::Admission<'a>
 pub fn morpholog_core::execution::finish_staged_delta_with_effective(morpholog_core::StagedDelta, &morpholog_core::State, &morpholog_core::Admission<'_>, &morpholog_core::EffectiveDelta) -> core::result::Result<morpholog_core::Outcome, morpholog_core::EvalError>
@@ -537,6 +542,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Bounding
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Bounding
 pub enum morpholog_core::Builtin
 pub morpholog_core::Builtin::Abs
+pub morpholog_core::Builtin::Digest
 pub morpholog_core::Builtin::Max
 pub morpholog_core::Builtin::Min
 pub morpholog_core::Builtin::PeriodIndex
@@ -544,7 +550,7 @@ pub morpholog_core::Builtin::PeriodStartOf
 pub morpholog_core::Builtin::Periods
 pub morpholog_core::Builtin::Round
 impl morpholog_core::Builtin
-pub fn morpholog_core::Builtin::arity(self) -> usize
+pub fn morpholog_core::Builtin::arity(self) -> morpholog_core::ir::Arity
 pub fn morpholog_core::Builtin::name(self) -> &'static str
 impl core::clone::Clone for morpholog_core::Builtin
 pub fn morpholog_core::Builtin::clone(&self) -> morpholog_core::Builtin
@@ -1648,7 +1654,7 @@ pub morpholog_core::ValidationError::ArityMismatch::vocabulary: morpholog_core::
 pub morpholog_core::ValidationError::BuiltinArity
 pub morpholog_core::ValidationError::BuiltinArity::builtin: &'static str
 pub morpholog_core::ValidationError::BuiltinArity::context: morpholog_core::ValidationContext
-pub morpholog_core::ValidationError::BuiltinArity::expected: usize
+pub morpholog_core::ValidationError::BuiltinArity::expected: morpholog_core::ir::Arity
 pub morpholog_core::ValidationError::BuiltinArity::found: usize
 pub morpholog_core::ValidationError::BuiltinKind
 pub morpholog_core::ValidationError::BuiltinKind::builtin: &'static str
@@ -1696,6 +1702,10 @@ pub morpholog_core::ValidationError::DerivedInRule::predicate: alloc::string::St
 pub morpholog_core::ValidationError::DerivedValueNotAKey
 pub morpholog_core::ValidationError::DerivedValueNotAKey::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::DerivedValueNotAKey::variable: alloc::string::String
+pub morpholog_core::ValidationError::DigestArgumentKind
+pub morpholog_core::ValidationError::DigestArgumentKind::context: morpholog_core::ValidationContext
+pub morpholog_core::ValidationError::DigestArgumentKind::kind: morpholog_core::PredicateArgKind
+pub morpholog_core::ValidationError::DigestArgumentKind::position: usize
 pub morpholog_core::ValidationError::DisciplineDuplicateClause
 pub morpholog_core::ValidationError::DisciplineDuplicateClause::predicate: alloc::string::String
 pub morpholog_core::ValidationError::DisciplineLineageUnfit
