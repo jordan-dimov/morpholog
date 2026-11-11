@@ -128,3 +128,36 @@ fn the_digest_follows_the_stored_values_equality() {
     let out = digest(&[s("r1")]);
     assert!(out.starts_with("sha256:") && out.len() == 7 + 64, "{out}");
 }
+
+/// Hand-built IR with no argument is refused by the arity authority,
+/// which the parser never reaches.
+#[test]
+fn a_digest_over_nothing_is_refused_by_arity() {
+    use crate::ir::{Arity, Builtin};
+    use crate::ir_builder::*;
+    use crate::validate::ValidationError;
+    let p = program("empty_digest")
+        .predicates(vec![predicate("Seen").subject("x").build()])
+        .transformations(vec![transformation(
+            "see",
+            params(&["x"]),
+            vec![
+                require(eq(call(Builtin::Digest, vec![]), term(var("x")))),
+                assert_("Seen", vec![var("x")]),
+            ],
+        )])
+        .build();
+    let errors = p.validate().unwrap_err();
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            ValidationError::BuiltinArity {
+                builtin: "digest",
+                expected: Arity::AtLeast(1),
+                found: 0,
+                ..
+            }
+        )),
+        "{errors:?}"
+    );
+}
