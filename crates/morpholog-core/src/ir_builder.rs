@@ -214,7 +214,12 @@ pub fn duration_le(lhs: ValueExpr, rhs: ValueExpr) -> Prop {
 }
 
 pub fn in_(elem: Term, coll: Term) -> Prop {
-    Prop::In(elem, coll)
+    Prop::In(elem, ValueExpr::Term(coll))
+}
+
+/// Membership in a `periods(...)` grid, the one computed source `in` takes.
+pub fn in_grid(elem: Term, grid: ValueExpr) -> Prop {
+    Prop::In(elem, grid)
 }
 
 // ============================================================

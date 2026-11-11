@@ -511,7 +511,9 @@ impl Walker<'_> {
         for conjunct in conjuncts {
             match conjunct {
                 Prop::Claim { .. } => {}
-                Prop::In(Term::Var(x), Term::Var(source)) => self.element(x, source, &mut inner),
+                Prop::In(Term::Var(x), ValueExpr::Term(Term::Var(source))) => {
+                    self.element(x, source, &mut inner);
+                }
                 Prop::In(_, _) => {}
                 _ => break,
             }
@@ -638,7 +640,7 @@ impl Walker<'_> {
                 self.prop(source, known, seen);
                 let mut inner = known.clone();
                 inner.remove(binding);
-                if let Prop::In(Term::Var(x), Term::Var(collection)) = &**source
+                if let Prop::In(Term::Var(x), ValueExpr::Term(Term::Var(collection))) = &**source
                     && x == binding
                 {
                     self.element(binding, collection, &mut inner);

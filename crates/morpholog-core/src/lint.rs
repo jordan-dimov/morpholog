@@ -210,7 +210,7 @@ pub enum Lint {
     /// bound and the call's step. A hint, because the cost may be meant;
     /// a shorter bound or a coarser step says so in the source.
     LargeGrid {
-        transformation: String,
+        owner: String,
         bound: String,
         step: String,
         periods: u128,
@@ -307,13 +307,13 @@ impl std::fmt::Display for Lint {
                  test the `or` under `exists` when any branch holding is what counts"
             ),
             Lint::LargeGrid {
-                transformation,
+                owner,
                 bound,
                 step,
                 periods,
             } => write!(
                 f,
-                "`{transformation}` builds a grid of up to {periods} periods on every proposal \
+                "{owner} builds a grid of up to {periods} periods on every proposal \
                  (a window up to {bound} in steps of {step}), and each rule over the grid runs \
                  once per period. If that cost is not meant, shorten the window bound or coarsen \
                  the step"
@@ -622,33 +622,34 @@ pub fn lints(prepared: &PreparedProgram) -> Vec<Lint> {
         }
     }
     wildcarded_call_findings(program, &definitions, &mut out);
+    large_grid_findings(program, &mut out);
     overlapping_or_findings(program, &mut out);
-    for t in &program.transformations {
-        large_grid_findings(t, &mut out);
-    }
     out
 }
 
 /// Each `periods` grid in `t` whose gate still allows more than
 /// [`LARGE_GRID_PERIODS`] periods, in statement order. The gate is
 /// matched by name here; validation has already held every grid to one.
-fn large_grid_findings(t: &crate::ir::Transformation, out: &mut Vec<Lint>) {
+/// Every grid an owner builds, with the most periods its bound and step
+/// allow: a `require` before the grid in a body, a conjunct before it in
+/// a rule.
+fn large_grid_findings(program: &Program, out: &mut Vec<Lint>) {
     use crate::check::grid;
-    let mut bounds: Vec<(&Var, &Var, jiff::SignedDuration)> = Vec::new();
-    for stmt in &t.body {
-        if let Stmt::Require { prop, .. } = stmt {
-            for conjunct in grid::conjuncts(prop) {
-                if let Some(b) = grid::window_bound(conjunct) {
-                    bounds.push((b.until, b.from, b.bound));
-                }
+    for (owner, _, nodes) in rules(program) {
+        let mut bounds: Vec<(&Var, &Var, jiff::SignedDuration)> = Vec::new();
+        for node in &nodes {
+            if let fold::Node::Prop(prop) = node
+                && let Some(b) = grid::window_bound(prop)
+            {
+                bounds.push((b.until, b.from, b.bound));
             }
         }
-        fold::walk_stmt(stmt, &mut |node| {
+        for node in &nodes {
             let fold::Node::Value(expr) = node else {
-                return;
+                continue;
             };
             let Some((from, until, step)) = grid::grid_call(expr) else {
-                return;
+                continue;
             };
             let (
                 ValueExpr::Term(Term::Var(from)),
@@ -656,25 +657,25 @@ fn large_grid_findings(t: &crate::ir::Transformation, out: &mut Vec<Lint>) {
                 ValueExpr::Term(Term::Literal(Value::Duration(step))),
             ) = (from, until, step)
             else {
-                return;
+                continue;
             };
             let Some(bound) = bounds
                 .iter()
                 .find(|(u, f, _)| *u == until && *f == from)
                 .map(|(_, _, b)| *b)
             else {
-                return;
+                continue;
             };
             let periods = grid::max_periods(bound, *step);
             if periods > LARGE_GRID_PERIODS {
                 out.push(Lint::LargeGrid {
-                    transformation: t.name.to_string(),
+                    owner: owner.clone(),
                     bound: bound.to_string(),
                     step: step.to_string(),
                     periods,
                 });
             }
-        });
+        }
     }
 }
 

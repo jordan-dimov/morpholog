@@ -1422,6 +1422,12 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 
 **Landed:** `name: Kind` in a transformation's parameter list, optional and authoritative, with inference for the rest. A declaration is the least the contract says and never less than the body shows. The checker observes it before the body, so a use at another kind is refused. The kernel holds the argument to it before the body runs, with `argument_kind_mismatch` and nothing staged. Misaligned hand-built IR is refused. The semantics version stays at 6. The example cancels an order over shipped stock on `force: Bool`, with the override governed by a claim no act hands out. Not done: recording an equality as a kind, declarations on a definition's parameters, a wider Python generator.
 
+### A rule over a grid built from a claim's bounds
+
+**Forced by:** three embedders (#606). Gate Closure wanted every quarter-hour of a delivery day priced before an outcome stands; a research record wanted every day of a run's window to carry a row; Glasshouse checks a position limit per delivery period with the period a market's own. Each wrote a closing act that built the grid and gated on it, since a grid could stand only in a body.
+
+**Landed:** `forall h in periods(starts_at, ends_at, duration(PT1H)):` in a rule, a derived claim or a definition, in `examples/23_delivery_hour_limits/`: a published day has a price for every hour it has. The bound is a conjunct before the grid in the same conjunction, of the `require`'s shape, in the consequent so a window beyond it is refused rather than skipped; the step stays a literal. `in`'s right side is a value, held to a variable or a `periods` call. A grid built from the case's fields is inert for the plan, so the rule stays bounded to its case; a binder that takes a case variable's name widens it. The grid lint reads a rule's bound as it reads a gate's. A grid rule runs interpreted. Not done: a step from a claim, a date-valued grid, a compiled grid, any other value as an `in` source.
+
 ### A predicate's history as a view
 
 **Forced by:** the InvenTree spike (#734). Its stock history page is read from the audit log, with nothing written beside the act, but the read decoded `operations` by position in hand SQL, restating field names and kinds the programme already declares.

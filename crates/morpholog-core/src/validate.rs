@@ -612,6 +612,13 @@ pub enum ValidationError {
         name: String,
         context: ValidationContext,
     },
+    /// The right side of an `in` is neither a term nor a `periods(...)`
+    /// grid: hand-built IR, since the parser produces nothing else, and
+    /// no walker is proven over another shape.
+    #[error(
+        "the right side of `in` is a collection variable or a `periods(...)` grid, in {context}; nothing else ranges there"
+    )]
+    InSourceShape { context: ValidationContext },
     /// A transformation's declared kinds do not line up with its
     /// parameters, one entry per parameter: hand-built IR, since the
     /// parser and the builder write them together.

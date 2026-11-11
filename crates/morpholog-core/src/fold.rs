@@ -118,7 +118,7 @@ fn prop_scoped<'a>(
         Prop::Claim { args, .. } | Prop::Defined { args, .. } => slots(args, visit, scope),
         Prop::In(l, r) => {
             visit(Node::Slot(l), scope);
-            visit(Node::Slot(r), scope);
+            value_scoped(r, visit, scope);
         }
         Prop::And(props) | Prop::Or(props) => {
             for p in props {
@@ -311,7 +311,7 @@ mod tests {
         assert!(mentions_pre(&arith_prop));
 
         // In: the sought term only on the LEFT side.
-        let membership = Prop::In(var_term("x"), var_term("ys"));
+        let membership = Prop::In(var_term("x"), ValueExpr::Term(var_term("ys")));
         assert!(any_term_in_prop(&membership, &is_x));
 
         // ValueOf: the term only in the ARGS, with a default present

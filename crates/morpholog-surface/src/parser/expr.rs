@@ -541,11 +541,11 @@ where
                                 let lhs_term = value_as_term(&lhs);
                                 let rhs_term = value_as_term(&rhs);
                                 match (lhs_term, rhs_term) {
-                                    (Some(l), Some(r)) => Prop::In(l, r),
+                                    (Some(l), Some(r)) => Prop::In(l, ValueExpr::Term(r)),
                                     _ => {
                                         emitter.emit(Rich::custom(
                                             span,
-                                            "`in` (membership) requires both sides to be terms (variable, wildcard, literal, or `actor`); arithmetic and other expressions are not allowed because the IR's In operates on terms only",
+                                            "`in` (membership) takes terms on both sides (a variable, a wildcard, a literal, or `actor`); the one computed source is a `periods(...)` grid, in `forall x in periods(...)`",
                                         ));
                                         Prop::Eq(Box::new(lhs), Box::new(rhs))
                                     }
@@ -749,7 +749,25 @@ where
                 .delimited_by(just(Token::LParen), just(Token::RParen))
                 .or_not(),
         );
+        // `forall h in periods(from, until, step):` ranges over a grid, the one computed source.
+        let forall_grid_source = select! { Token::Ident(s) if s == "periods" => () }
+            .ignore_then(
+                arith
+                    .clone()
+                    .then_ignore(just(Token::Comma))
+                    .then(arith.clone())
+                    .then_ignore(just(Token::Comma))
+                    .then(arith.clone())
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .map(|((from, until), step)| {
+                ForallSource::Grid(ValueExpr::Call {
+                    builtin: Builtin::Periods,
+                    args: vec![from, until, step],
+                })
+            });
         let forall_source = choice((
+            forall_grid_source,
             expression
                 .clone()
                 .delimited_by(just(Token::LParen), just(Token::RParen))
@@ -792,7 +810,10 @@ where
                     ));
                 }
                 let source_prop = match source {
-                    ForallSource::BareTerm(t) => Prop::In(Term::Var(binding.clone().into()), t),
+                    ForallSource::BareTerm(t) => {
+                        Prop::In(Term::Var(binding.clone().into()), ValueExpr::Term(t))
+                    }
+                    ForallSource::Grid(grid) => Prop::In(Term::Var(binding.clone().into()), grid),
                     ForallSource::Prop(p) => p,
                 };
                 Prop::Forall {
@@ -810,6 +831,7 @@ where
 /// used as it is.
 enum ForallSource {
     BareTerm(Term),
+    Grid(ValueExpr),
     Prop(Prop),
 }
 

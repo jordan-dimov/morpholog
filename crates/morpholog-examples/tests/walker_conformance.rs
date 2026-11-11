@@ -270,6 +270,29 @@ derived Allocated(item):
     value quantity = allocated(item)
 ";
 
+/// A rule ranging over a grid built from a claim's bounds, with a
+/// definition called inside the grid's body and a sum over it: every
+/// walker must take the grid as `in`'s source and descend the body.
+const GRID_IN_A_RULE: &str = "\
+program grid_in_a_rule
+predicate Day(day: Date, starts_at: Timestamp, ends_at: Timestamp)
+predicate Published(day: Date)
+predicate Price(day: Date, hour: Timestamp, price: Decimal)
+define priced(d, h):
+    Price(d, h, _)
+invariant a_published_day_is_priced:
+    Published(day)
+    implies Day(day, starts_at, ends_at)
+    and ends_at - starts_at no_longer_than duration(PT25H)
+    and (forall h in periods(starts_at, ends_at, duration(PT1H)): priced(day, h))
+transformation declare(day, starts_at, ends_at):
+    admit Day(day, starts_at, ends_at)
+transformation price(day, hour, price):
+    admit Price(day, hour, price)
+transformation publish(day):
+    admit Published(day)
+";
+
 const UNSUPPLIED_THROUGH_DEFINED: &str = "\
 program unsupplied_through_defined
 predicate Ghost(g: Subject)
@@ -508,6 +531,7 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ("if_across_branches", IF_ACROSS_BRANCHES),
         ("for_over_a_pattern", FOR_OVER_A_PATTERN),
         ("figure_across_positions", FIGURE_ACROSS_POSITIONS),
+        ("grid_in_a_rule", GRID_IN_A_RULE),
         ("unsupplied_through_defined", UNSUPPLIED_THROUGH_DEFINED),
         ("let_sugared_define", LET_SUGARED_DEFINE),
         ("round_in_let_sugared_body", ROUND_IN_LET_SUGARED_BODY),

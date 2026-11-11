@@ -281,7 +281,11 @@ pub enum Prop {
         source: Box<Prop>,
         body: Box<Prop>,
     },
-    In(Term, Term),
+    /// Membership of the left term in a collection: a variable holding
+    /// one, or a `periods(...)` grid built from terms. Validation holds
+    /// the right side to those two shapes, since every walker takes it
+    /// as something that reads nothing but its own arguments.
+    In(Term, ValueExpr),
 }
 
 /// A value expression. It *computes exactly one value* from a binding

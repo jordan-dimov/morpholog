@@ -130,10 +130,10 @@ fn a_large_grid_is_a_hint() {
         found.iter().any(|l| matches!(
             l,
             Lint::LargeGrid {
-                transformation,
+                owner,
                 periods: 35041,
                 ..
-            } if transformation == "capture"
+            } if owner == "transformation `capture`"
         )),
         "{found:?}"
     );

@@ -13,8 +13,11 @@ window may be before the grid is built. A day product takes its window
 from a published calendar day, 23, 24 or 25 hours long, and the same
 hour-by-hour check runs over whatever the day has.
 
-This is the worked example that forced `periods(from, until, step)`:
-the start of every period a window touches, computed in the rule.
+This is the worked example that forced `periods(from, until, step)`,
+the start of every period a window touches, computed in the rule. It
+also carries a rule that ranges over a grid: a published day has a
+price for every hour it has, with the hours built from the day's own
+bounds, so no one lists them and no one checks a list.
 
 ## The programme at a glance
 
@@ -24,16 +27,25 @@ the start of every period a window touches, computed in the rule.
 | `Trade(book, trade, mw, starts_at, ends_at)` | A captured trade: signed megawatts over a half-open window of instants. |
 | `DeliveryDay(calendar, local_date, starts_at, ends_at, tzdb_version)` | A local day's bounds as a calendar authority published them, with the tzdb version they came from. |
 | `CalendarPublisher(calendar, publisher)` | Who may publish a calendar's days. |
+| `Price(calendar, local_date, hour, price)` | A price for one hour of a day. One per hour. |
+| `Published(calendar, local_date)` | The day's prices are complete. Kept forever. |
 
 | Rule | What it refuses |
 |---|---|
 | `limits_are_positive` | A cap that is not a positive figure. |
 | `a_delivery_day_is_a_civil_day` | A published day that is not exactly 23, 24 or 25 hours long. |
+| `a_published_day_is_priced_hour_by_hour` | Publishing a day with an hour unpriced, named by the hour; taking a price away from a published day. |
+| `a_price_falls_in_its_day` | A price for an hour outside its day. |
 | `capture`'s gates, in order | A window running backwards or longer than a month; a window off the hour grid, since it touches more hours than its length holds; and the trade that would take any hour's net position past the cap, named by the hour. |
 | `capture_day`'s gates | The same, with the window read from the published day, so the caller cannot state it and an unpublished day cannot be traded. |
 
 Transformations: `set_limit`, `appoint_calendar_publisher`,
-`publish_delivery_day`, `capture`, `capture_day`.
+`publish_delivery_day`, `capture`, `capture_day`, `price_hour`,
+`withdraw_price`, `publish_prices`.
+
+Exactly one price per hour is two rules composed: the grid rule says a
+price exists for each hour, and `Price` declared unique by its hour
+says there is at most one.
 
 The limit is a gate by design: a pre-trade check at capture. Lowering
 a cap under open trades is a breach to manage, another act, not

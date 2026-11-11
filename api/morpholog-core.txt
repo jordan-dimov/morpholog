@@ -184,6 +184,7 @@ pub fn morpholog_core::ir_builder::forall(&str, morpholog_core::Prop, morpholog_
 pub fn morpholog_core::ir_builder::if_(morpholog_core::Prop, alloc::vec::Vec<morpholog_core::Stmt>, alloc::vec::Vec<morpholog_core::Stmt>) -> morpholog_core::Stmt
 pub fn morpholog_core::ir_builder::implies(morpholog_core::Prop, morpholog_core::Prop) -> morpholog_core::Prop
 pub fn morpholog_core::ir_builder::in_(morpholog_core::Term, morpholog_core::Term) -> morpholog_core::Prop
+pub fn morpholog_core::ir_builder::in_grid(morpholog_core::Term, morpholog_core::ValueExpr) -> morpholog_core::Prop
 pub fn morpholog_core::ir_builder::invariant(&str, morpholog_core::Prop) -> morpholog_core::Invariant
 pub fn morpholog_core::ir_builder::le(morpholog_core::ValueExpr, morpholog_core::ValueExpr) -> morpholog_core::Prop
 pub fn morpholog_core::ir_builder::let_(&str, morpholog_core::ValueExpr) -> morpholog_core::Stmt
@@ -998,9 +999,9 @@ pub morpholog_core::Lint::GoverningSelectionWithoutTotality::invariant: alloc::s
 pub morpholog_core::Lint::GoverningSelectionWithoutTotality::predicates: alloc::vec::Vec<alloc::string::String>
 pub morpholog_core::Lint::LargeGrid
 pub morpholog_core::Lint::LargeGrid::bound: alloc::string::String
+pub morpholog_core::Lint::LargeGrid::owner: alloc::string::String
 pub morpholog_core::Lint::LargeGrid::periods: u128
 pub morpholog_core::Lint::LargeGrid::step: alloc::string::String
-pub morpholog_core::Lint::LargeGrid::transformation: alloc::string::String
 pub morpholog_core::Lint::OverlappingOrUnderSum
 pub morpholog_core::Lint::OverlappingOrUnderSum::disjunction: alloc::string::String
 pub morpholog_core::Lint::OverlappingOrUnderSum::owner: alloc::string::String
@@ -1176,7 +1177,7 @@ pub morpholog_core::Prop::Forall::source: alloc::boxed::Box<morpholog_core::Prop
 pub morpholog_core::Prop::Implies
 pub morpholog_core::Prop::Implies::left: alloc::boxed::Box<morpholog_core::Prop>
 pub morpholog_core::Prop::Implies::right: alloc::boxed::Box<morpholog_core::Prop>
-pub morpholog_core::Prop::In(morpholog_core::Term, morpholog_core::Term)
+pub morpholog_core::Prop::In(morpholog_core::Term, morpholog_core::ValueExpr)
 pub morpholog_core::Prop::Neq(alloc::boxed::Box<morpholog_core::ValueExpr>, alloc::boxed::Box<morpholog_core::ValueExpr>)
 pub morpholog_core::Prop::Not(alloc::boxed::Box<morpholog_core::Prop>)
 pub morpholog_core::Prop::Or(alloc::vec::Vec<morpholog_core::Prop>)
@@ -1743,6 +1744,8 @@ pub morpholog_core::ValidationError::EqualityKindMismatch::right: morpholog_core
 pub morpholog_core::ValidationError::GeneratedNotFaithful
 pub morpholog_core::ValidationError::GeneratedNotFaithful::kind: alloc::string::String
 pub morpholog_core::ValidationError::GeneratedNotFaithful::name: alloc::string::String
+pub morpholog_core::ValidationError::InSourceShape
+pub morpholog_core::ValidationError::InSourceShape::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::InvalidValueExtraction
 pub morpholog_core::ValidationError::InvalidValueExtraction::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::InvalidValueExtraction::extract: usize

@@ -326,7 +326,7 @@ pub(super) fn substitute_in_prop(
         }
         Prop::In(l, r) => {
             substitute_term_slot(l, name, value, binding, "as an `in` operand", errors);
-            substitute_term_slot(r, name, value, binding, "as an `in` operand", errors);
+            substitute_in_value(r, name, value, binding, errors);
         }
         Prop::And(props) | Prop::Or(props) => {
             for p in props {

@@ -58,6 +58,14 @@ predicate DeliveryDay(calendar: Subject, local_date: Date, starts_at: Timestamp,
 predicate CalendarPublisher(calendar: Subject, publisher: Subject)
     unique by (calendar)
 
+-- A price for one hour of a published day. One per hour.
+predicate Price(calendar: Subject, local_date: Date, hour: Timestamp, price: Decimal)
+    unique by (calendar, local_date, hour)
+
+-- The publisher says a day's prices are complete. Once said, kept.
+predicate Published(calendar: Subject, local_date: Date)
+    append only
+
 -- A cap is a positive figure.
 invariant limits_are_positive:
     Limit(book, cap_mw) implies 0 < cap_mw
@@ -69,6 +77,22 @@ invariant a_delivery_day_is_a_civil_day:
     let length = (ends_at - starts_at)
     DeliveryDay(calendar, local_date, starts_at, ends_at, _)
     implies (length = duration(PT23H) or length = duration(PT24H) or length = duration(PT25H))
+
+-- A published day has a price for every hour it has. The rule builds
+-- the day's hours from the day's own bounds, so nobody lists them and
+-- nobody checks a list. The bound before the grid says how long a day
+-- may be, as a gate does for a trade. It does not say a day is not
+-- empty; the civil-day rule above does, and this rule leans on it.
+invariant a_published_day_is_priced_hour_by_hour:
+    Published(calendar, local_date)
+    implies DeliveryDay(calendar, local_date, starts_at, ends_at, _)
+    and ends_at - starts_at no_longer_than duration(PT25H)
+    and (forall h in periods(starts_at, ends_at, duration(PT1H)): exists p: Price(calendar, local_date, h, p))
+
+-- A price belongs to an hour inside its day.
+invariant a_price_falls_in_its_day:
+    Price(calendar, local_date, hour, _)
+    implies DeliveryDay(calendar, local_date, starts_at, ends_at, _) and starts_at at_or_before hour and hour strictly_before ends_at
 
 -- The acts.
 
@@ -86,6 +110,25 @@ transformation publish_delivery_day(calendar, local_date, starts_at, ends_at, tz
     require CalendarPublisher(calendar, actor)
     require not DeliveryDay(calendar, local_date, _, _, _)
     admit DeliveryDay(calendar, local_date, starts_at, ends_at, tzdb_version)
+
+-- A day's prices arrive one hour at a time, and the publisher says
+-- when the day is complete. The rule above then refuses a day with an
+-- hour unpriced, naming the hour, and refuses taking a price away from
+-- a day already published.
+transformation price_hour(calendar, local_date, hour, price):
+    require CalendarPublisher(calendar, actor)
+    require DeliveryDay(calendar: calendar, local_date: local_date, ..)
+    admit Price(calendar, local_date, hour, price)
+
+transformation withdraw_price(calendar, local_date, hour):
+    require CalendarPublisher(calendar, actor)
+    require Price(calendar, local_date, hour, _)
+    retract Price(calendar, local_date, hour, _)
+
+transformation publish_prices(calendar, local_date):
+    require CalendarPublisher(calendar, actor)
+    require not Published(calendar, local_date)
+    admit Published(calendar, local_date)
 
 -- Capturing a block. The gates run in order, and the order matters.
 -- First the window: forward, at most a month. Then the grid, built

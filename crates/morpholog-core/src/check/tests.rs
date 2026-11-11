@@ -1451,7 +1451,7 @@ fn in_with_non_collection_literal_flags_operand_mismatch() {
     let mut p = empty_program();
     p.invariants = vec![invariant(
         "in_lit",
-        Prop::In(Term::Var("x".into()), dec("100")),
+        Prop::In(Term::Var("x".into()), ValueExpr::Term(dec("100"))),
     )];
     let errs = check_program(&p).errors;
     assert!(
