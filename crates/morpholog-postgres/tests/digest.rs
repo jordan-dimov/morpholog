@@ -174,7 +174,8 @@ async fn a_digest_rule_runs_interpreted_and_decides_as_the_kernel_does() {
         subj("alice"),
         dec_str("100"),
         subj("s1"),
-    ]);
+    ])
+    .unwrap();
     let sealed = ClaimInstance {
         predicate: "Sealed".into(),
         args: vec![subj("lot"), subj("alice"), subj(&commitment)],

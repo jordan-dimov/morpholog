@@ -683,7 +683,8 @@ transformation reveal(lot, bidder, amount, salt):
         subj("alice"),
         dec_str("100"),
         subj("s1"),
-    ]);
+    ])
+    .unwrap();
     let sealed = State::from_claims(vec![morpholog_core::ClaimInstance {
         predicate: "Sealed".into(),
         args: vec![subj("lot"), subj("alice"), subj(&commitment)],

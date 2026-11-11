@@ -87,10 +87,10 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::calendar::Calen
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::calendar::CalendarSpan
 pub fn morpholog_core::calendar::parse_calendar_span(&str) -> core::result::Result<morpholog_core::calendar::CalendarSpan, alloc::string::String>
 pub mod morpholog_core::digest
-pub fn morpholog_core::digest::digest(&[morpholog_core::EvalValue]) -> alloc::string::String
+pub fn morpholog_core::digest::digest(&[morpholog_core::EvalValue]) -> core::result::Result<alloc::string::String, alloc::string::String>
 pub fn morpholog_core::digest::jsonb_text(&serde_json::value::Value, &mut alloc::string::String) -> core::result::Result<(), alloc::string::String>
-pub fn morpholog_core::digest::preimage(&[morpholog_core::EvalValue]) -> alloc::string::String
-pub fn morpholog_core::digest::value_key_v1(&morpholog_core::EvalValue) -> serde_json::value::Value
+pub fn morpholog_core::digest::preimage(&[morpholog_core::EvalValue]) -> core::result::Result<alloc::string::String, alloc::string::String>
+pub fn morpholog_core::digest::value_key_v1(&morpholog_core::EvalValue) -> core::result::Result<serde_json::value::Value, alloc::string::String>
 pub mod morpholog_core::execution
 pub fn morpholog_core::execution::admission_range<'a>(&'a morpholog_core::Admission<'_>, core::ops::range::Range<usize>) -> morpholog_core::Admission<'a>
 pub fn morpholog_core::execution::finish_staged_delta_with_effective(morpholog_core::StagedDelta, &morpholog_core::State, &morpholog_core::Admission<'_>, &morpholog_core::EffectiveDelta) -> core::result::Result<morpholog_core::Outcome, morpholog_core::EvalError>

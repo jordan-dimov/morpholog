@@ -69,8 +69,8 @@ fn computed() -> Value {
                 json!({
                     "name": name,
                     "args": args,
-                    "preimage": preimage(&args),
-                    "digest": digest(&args),
+                    "preimage": preimage(&args).unwrap(),
+                    "digest": digest(&args).unwrap(),
                 })
             })
             .collect(),

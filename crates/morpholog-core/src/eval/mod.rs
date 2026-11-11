@@ -1656,9 +1656,8 @@ pub(crate) fn eval_builtin(builtin: Builtin, args: &[EvalValue]) -> Result<EvalV
                     )));
                 }
             }
-            Ok(EvalValue::Subject(Subject::from(
-                crate::digest::digest(args).as_str(),
-            )))
+            let digest = crate::digest::digest(args).map_err(EvalError::TypeMismatch)?;
+            Ok(EvalValue::Subject(Subject::from(digest.as_str())))
         }
     }
 }

@@ -26,23 +26,32 @@ fn t(x: &str) -> EvalValue {
 /// text and different kinds do not; order counts.
 #[test]
 fn the_digest_follows_the_stored_values_equality() {
-    assert_eq!(digest(&[d("30")]), digest(&[d("30.0")]));
-    assert_eq!(digest(&[d("30")]), digest(&[d("30.00")]));
-    assert_eq!(digest(&[d("0")]), digest(&[d("-0.0")]));
-    assert_eq!(preimage(&[d("-0.0")]), r#"[["decimal", "0"]]"#);
+    assert_eq!(digest(&[d("30")]).unwrap(), digest(&[d("30.0")]).unwrap());
+    assert_eq!(digest(&[d("30")]).unwrap(), digest(&[d("30.00")]).unwrap());
+    assert_eq!(digest(&[d("0")]).unwrap(), digest(&[d("-0.0")]).unwrap());
+    assert_eq!(preimage(&[d("-0.0")]).unwrap(), r#"[["decimal", "0"]]"#);
     assert_eq!(
-        digest(&[t("2026-06-01T12:00:00Z")]),
-        digest(&[t("2026-06-01T13:00:00+01:00")])
+        digest(&[t("2026-06-01T12:00:00Z")]).unwrap(),
+        digest(&[t("2026-06-01T13:00:00+01:00")]).unwrap()
     );
-    assert_ne!(digest(&[EvalValue::Bool(true)]), digest(&[s("true")]));
-    assert_ne!(digest(&[d("1")]), digest(&[s("1")]));
-    assert_ne!(digest(&[s("a"), s("b")]), digest(&[s("b"), s("a")]));
-    assert_ne!(digest(&[s("ab"), s("c")]), digest(&[s("a"), s("bc")]));
+    assert_ne!(
+        digest(&[EvalValue::Bool(true)]).unwrap(),
+        digest(&[s("true")]).unwrap()
+    );
+    assert_ne!(digest(&[d("1")]).unwrap(), digest(&[s("1")]).unwrap());
+    assert_ne!(
+        digest(&[s("a"), s("b")]).unwrap(),
+        digest(&[s("b"), s("a")]).unwrap()
+    );
+    assert_ne!(
+        digest(&[s("ab"), s("c")]).unwrap(),
+        digest(&[s("a"), s("bc")]).unwrap()
+    );
     assert_eq!(
-        preimage(&[s("r1"), d("30.0"), EvalValue::Bool(true)]),
+        preimage(&[s("r1"), d("30.0"), EvalValue::Bool(true)]).unwrap(),
         r#"[["subject", "r1"], ["decimal", "30"], ["bool", true]]"#
     );
-    let out = digest(&[s("r1")]);
+    let out = digest(&[s("r1")]).unwrap();
     assert!(out.starts_with("sha256:") && out.len() == 7 + 64, "{out}");
 }
 

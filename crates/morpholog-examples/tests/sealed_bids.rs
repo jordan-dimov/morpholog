@@ -16,13 +16,14 @@ const CLOSES: &str = "2026-06-01T12:00:00Z";
 const AFTER: &str = "2026-06-01T12:00:01Z";
 
 fn commitment(lot: &str, bidder: &str, amount: &str, salt: &str) -> EvalValue {
-    subj(&digest::digest(&[
+    let args = [
         subj("sealed_bid_v1"),
         subj(lot),
         subj(bidder),
         dec_str(amount),
         subj(salt),
-    ]))
+    ];
+    subj(&digest::digest(&args).unwrap())
 }
 
 /// Decide `t` as `actor` at `at`.

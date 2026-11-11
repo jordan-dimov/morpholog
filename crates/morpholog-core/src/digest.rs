@@ -14,8 +14,9 @@ use sha2::{Digest as _, Sha256};
 
 /// `morpholog.value_key_v1` over a stored value: the kind tag, then the
 /// value with a decimal's scale trimmed, so `30.0` and `30` share a key.
-pub fn value_key_v1(value: &EvalValue) -> Json {
-    match value {
+/// The error is a value with no stored form, which no claim can carry.
+pub fn value_key_v1(value: &EvalValue) -> Result<Json, String> {
+    Ok(match value {
         EvalValue::Decimal(d) => Json::Array(vec![Json::from("decimal"), decimal_key(*d)]),
         EvalValue::Quantity { amount, unit } => Json::Array(vec![
             Json::from("quantity"),
@@ -24,13 +25,18 @@ pub fn value_key_v1(value: &EvalValue) -> Json {
         ]),
         EvalValue::Collection(items) => Json::Array(vec![
             Json::from("collection"),
-            Json::Array(items.iter().map(value_key_v1).collect()),
+            Json::Array(
+                items
+                    .iter()
+                    .map(value_key_v1)
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
         ]),
         other => {
-            let tagged = serde_json::to_value(other).expect("a stored value serialises");
+            let tagged = serde_json::to_value(other).map_err(|e| e.to_string())?;
             Json::Array(vec![tagged["type"].clone(), tagged["value"].clone()])
         }
-    }
+    })
 }
 
 /// `trim_scale(numeric)::text`: no trailing zeros, no exponent, and a
@@ -40,22 +46,26 @@ fn decimal_key(d: Decimal) -> Json {
 }
 
 /// The preimage of `digest` over these arguments.
-pub fn preimage(args: &[EvalValue]) -> String {
-    let keys = Json::Array(args.iter().map(value_key_v1).collect());
+pub fn preimage(args: &[EvalValue]) -> Result<String, String> {
+    let keys = Json::Array(
+        args.iter()
+            .map(value_key_v1)
+            .collect::<Result<Vec<_>, _>>()?,
+    );
     let mut out = String::new();
-    jsonb_text(&keys, &mut out).expect("a value key holds no JSON number");
-    out
+    jsonb_text(&keys, &mut out)?;
+    Ok(out)
 }
 
 /// `sha256:<hex>` over the preimage.
-pub fn digest(args: &[EvalValue]) -> String {
-    let hash = Sha256::digest(preimage(args).as_bytes());
+pub fn digest(args: &[EvalValue]) -> Result<String, String> {
+    let hash = Sha256::digest(preimage(args)?.as_bytes());
     let mut out = String::with_capacity(7 + 64);
     out.push_str("sha256:");
     for byte in hash {
         out.push_str(&format!("{byte:02x}"));
     }
-    out
+    Ok(out)
 }
 
 /// JSON as PostgreSQL prints a `jsonb`: object keys sorted by length then
