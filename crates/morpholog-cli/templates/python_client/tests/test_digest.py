@@ -57,7 +57,7 @@ class WhatTheHelperRefuses(unittest.TestCase):
 
 class WhatTheKernelCanHold(unittest.TestCase):
     """A commitment over a decimal the kernel would round could never be
-    revealed, so the helper refuses it at the kernel's own limits: a
+    revealed, so the codec refuses it at the kernel's own limits: a
     96-bit coefficient and 28 decimal places."""
 
     def test_the_largest_and_smallest_decimals_are_the_kernels(self):
