@@ -123,14 +123,14 @@ and reads as them, with a name of the parser's choosing. Only an `admit`
 or `emit` argument takes it; a fresh subject matches nothing, so a
 `bind`, `retract` or `require` names one with `let` first.
 
-An `if` tests its condition as a `require` does, keeping nothing it
-matched, and runs one block or the other; the `else:` block may be left
-out. A `for` over a pattern runs its block once per claim the pattern
-matches, as `for o in orders` runs it once per element; a gate inside
-is a condition on every match, and no match is no pass. Every statement
-reads the state as it was when the act began: a claim admitted two lines
-up is not visible to a `require` below it, both branches of an `if` read
-the same record, and so does every pass of a `for`. The rules
+An `if` tests its condition as a `require` does, keeps nothing it
+matched, and runs one block or the other. The `else:` block may be
+left out. A `for` over a pattern runs its block once per claim the
+pattern matches, as `for o in orders` runs it once per element. A gate
+inside holds for every match. No match is no pass. Every statement
+reads the state as it was when the act began: a claim admitted two
+lines up is not visible to a `require` below it, and every branch and
+every pass reads the same record. The rules
 then judge the state the act proposes. `actor` is the identity supplied
 with the proposal; the record can check what it may do against claims,
 and who it really is must be settled at the integration boundary.
@@ -487,13 +487,12 @@ derived TrialBalance(account):
     value balance = balance_of(account)
 ```
 
-A `bind` may name a condition as well as a claim: `bind
-consented_on(p, day)` refuses when no form covers the day, and a
-condition whose body binds one of its parameters through a claim
-pattern hands that value to the statements after the `bind`, as a
-claim's fields are handed on. A parameter fixed by `=` is an input, not
-a result; a value chosen by a condition is a figure, `if(...)` in its
-body.
+A `bind` may name a condition as well as a claim. `bind
+consented_on(p, day)` refuses when no form covers the day. A parameter
+the body binds through a claim pattern is handed to the statements
+after the `bind`, as a claim's fields are. A parameter fixed by `=` is
+an input, not a result. A value a condition chooses is a figure, with
+`if(...)` in its body.
 
 **A tree the host closes.** Without recursion, a rule that asks whether
 one part descends from another reads a closure the host keeps as claims:

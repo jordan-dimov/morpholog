@@ -538,7 +538,7 @@ where
 
     // definition_decl ::= "define" Ident "(" param-list ")" ":" body
     //
-    // A named proposition with parameters, whose kinds are inferred from the body. The body is
+    // A named condition with parameters, whose kinds are inferred from the body. The body is
     // shaped like an invariant's.
     let definition_param_list = ident
         .separated_by(just(Token::Comma))

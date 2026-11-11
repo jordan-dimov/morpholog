@@ -575,11 +575,12 @@ pub enum ValidationError {
 
     /// A reference names a definition where a predicate is required: an
     /// `admit` / `retract` / `value` target, or a hand-built `Prop::Claim`
-    /// that skipped resolution. A definition is a condition only. Hand-built
-    /// IR builds calls with `ir_builder::defined` or runs
-    /// [`crate::resolve_defined_calls`] before validating.
+    /// that skipped resolution. A definition names a condition or a figure,
+    /// never a claim shape. Hand-built IR builds calls with
+    /// `ir_builder::defined` or runs [`crate::resolve_defined_calls`]
+    /// before validating.
     #[error(
-        "`{name}` names a definition where a predicate is required, in {context}; a definition is a condition - callable in rule bodies, never an `admit`/`retract`/`emit` target or a `value` lookup (hand-built body calls use `ir_builder::defined` or `resolve_defined_calls`)"
+        "`{name}` names a definition where a predicate is required, in {context}; a definition names a condition or a figure - callable in rule bodies and values, never an `admit`/`retract`/`emit` target or a `value` lookup (hand-built body calls use `ir_builder::defined` or `resolve_defined_calls`)"
     )]
     UnresolvedDefinitionCall {
         name: String,

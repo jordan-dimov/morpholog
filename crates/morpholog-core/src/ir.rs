@@ -1022,8 +1022,9 @@ pub struct Program {
     /// target one, so a misspelling is a validation error. Separate
     /// namespace from predicates.
     pub intents: Vec<IntentDecl>,
-    /// Named propositions (see [`Definition`]). They share a namespace
-    /// with `predicates`, so a name used by both is a validation error.
+    /// Named conditions and figures (see [`Definition`]). They share a
+    /// namespace with `predicates`, so a name used by both is a
+    /// validation error.
     pub definitions: Vec<Definition>,
     pub invariants: Vec<Invariant>,
     pub transformations: Vec<Transformation>,
