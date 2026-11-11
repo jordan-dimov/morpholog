@@ -1077,41 +1077,39 @@ where
                 otherwise: Box::new(otherwise),
             });
 
-        // `period_index(anchor, span, date)`, its inverse `period_start_of(anchor, span,
-        // index)`, and `periods(from, until, step)`. Contextual, like `if`.
-        let period_builtin_expr = select! {
+        // The builtins matched by name: `period_index(anchor, span, date)`, its
+        // inverse `period_start_of(anchor, span, index)`, `periods(from, until,
+        // step)` and `digest(a, b, ...)`. Contextual, like `if`. One alternative
+        // with one argument list, so a nesting level costs one frame; the count
+        // is checked here against the builtin's arity.
+        let named_builtin_expr = select! {
             Token::Ident(s) if s == "period_index" => Builtin::PeriodIndex,
             Token::Ident(s) if s == "period_start_of" => Builtin::PeriodStartOf,
             Token::Ident(s) if s == "periods" => Builtin::Periods,
+            Token::Ident(s) if s == "digest" => Builtin::Digest,
         }
         .then(
             value
                 .clone()
-                .then_ignore(just(Token::Comma))
-                .then(value.clone())
-                .then_ignore(just(Token::Comma))
-                .then(value.clone())
+                .separated_by(just(Token::Comma))
+                .collect::<Vec<ValueExpr>>()
                 .delimited_by(just(Token::LParen), just(Token::RParen)),
         )
-        .map(|(builtin, ((first, second), third))| ValueExpr::Call {
-            builtin,
-            args: vec![first, second, third],
+        .validate(|(builtin, args): (Builtin, Vec<ValueExpr>), e, emitter| {
+            if !builtin.arity().accepts(args.len()) {
+                let span: SimpleSpan = e.span();
+                emitter.emit(Rich::custom(
+                    span,
+                    format!(
+                        "{} takes {} argument(s), got {}",
+                        builtin.name(),
+                        builtin.arity(),
+                        args.len()
+                    ),
+                ));
+            }
+            ValueExpr::Call { builtin, args }
         });
-
-        // `digest(a, b, ...)`: one or more values. Contextual, like `if`.
-        let digest_expr = select! { Token::Ident(s) if s == "digest" => () }
-            .ignore_then(
-                value
-                    .clone()
-                    .separated_by(just(Token::Comma))
-                    .at_least(1)
-                    .collect::<Vec<ValueExpr>>()
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
-            )
-            .map(|args| ValueExpr::Call {
-                builtin: Builtin::Digest,
-                args,
-            });
 
         let primary = choice((
             sum_expr,
@@ -1119,8 +1117,7 @@ where
             abs_expr,
             round_expr,
             if_expr,
-            period_builtin_expr,
-            digest_expr,
+            named_builtin_expr,
             value_lookup,
             parenthesised,
             decimal_as_value,
