@@ -190,10 +190,43 @@ def _value_key(value: object) -> list[object]:
     )
 
 
+# The kernel's decimal: a 96-bit coefficient and at most 28 decimal
+# places. A value past either is rounded on the way in, so a commitment
+# over the unrounded one could never be revealed.
+_MAX_COEFFICIENT = (1 << 96) - 1
+_MAX_SCALE = 28
+
+
+def _representable(value: Decimal) -> None:
+    """Refuse a decimal the kernel cannot hold exactly. Decided on the
+    digit tuple, before any text is rendered, so an absurd exponent
+    costs nothing."""
+    if not value.is_finite():
+        raise CodecError(f"{value} is not a finite decimal")
+    _sign, digit_tuple, exponent = value.as_tuple()
+    assert isinstance(exponent, int)
+    digits = list(digit_tuple)
+    while len(digits) > 1 and digits[-1] == 0:
+        digits.pop()
+        exponent += 1
+    if digits == [0]:
+        return
+    if -exponent > _MAX_SCALE:
+        raise CodecError(
+            f"{value} has more than {_MAX_SCALE} decimal places; the kernel would round it"
+        )
+    if len(digits) + max(exponent, 0) > len(str(_MAX_COEFFICIENT)):
+        raise CodecError(f"{value} is beyond the kernel's largest decimal")
+    coefficient = int("".join(map(str, digits))) * 10 ** max(exponent, 0)
+    if coefficient > _MAX_COEFFICIENT:
+        raise CodecError(f"{value} is beyond the kernel's largest decimal")
+
+
 def _trimmed_decimal(value: Decimal) -> str:
     """``trim_scale(numeric)::text``: no trailing zeros, no exponent, and
     a zero is ``0`` whatever its sign or scale. On the text, not through
     ``Decimal.normalize``, which rounds to the context's precision."""
+    _representable(value)
     text = encode_decimal(value)
     if "." in text:
         text = text.rstrip("0").rstrip(".")

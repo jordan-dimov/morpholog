@@ -203,9 +203,9 @@ def _representable(value: Decimal) -> None:
     costs nothing."""
     if not value.is_finite():
         raise CodecError(f"{value} is not a finite decimal")
-    _sign, digits, exponent = value.as_tuple()
+    _sign, digit_tuple, exponent = value.as_tuple()
     assert isinstance(exponent, int)
-    digits = list(digits)
+    digits = list(digit_tuple)
     while len(digits) > 1 and digits[-1] == 0:
         digits.pop()
         exponent += 1
