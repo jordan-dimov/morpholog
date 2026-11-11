@@ -100,6 +100,28 @@ class EncodeNamed(unittest.TestCase):
         # scientific notation, so the encoder renders plain form.
         self.assertEqual(values.encode_named(Decimal("1E+2")), "100")
 
+    def test_a_decimal_is_held_as_written_or_refused(self):
+        # The kernel holds at most 28 fractional digits and a coefficient
+        # below 2^96, trailing zeros counted, and refuses past that rather
+        # than rounds; the encoder refuses the same values, reading the
+        # exponent first so an absurd one costs no allocation.
+        for held in (
+            "79228162514264337593543950335",
+            "0.0000000000000000000000000001",
+            "1.0000000000000000000000000000",
+        ):
+            self.assertEqual(values.encode_decimal(Decimal(held)), held)
+        for too_far in (
+            "1." + "0" * 29,
+            "0E-40",
+            "1E-29",
+            "79228162514264337593543950336",
+            "1E+1000000000",
+            "1E-1000000000",
+        ):
+            with self.subTest(too_far), self.assertRaises(values.CodecError):
+                values.encode_decimal(Decimal(too_far))
+
     def test_non_finite_decimals_are_refused(self):
         for bad in [Decimal("NaN"), Decimal("Infinity")]:
             with self.assertRaises(ValueError, msg=repr(bad)):

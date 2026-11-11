@@ -16,6 +16,8 @@
 //! - `Polymorphic` and `Unconstrained` parameters have no `type`, and a
 //!   description saying the kernel cannot narrow them.
 
+use rust_decimal::Decimal;
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::analysis::{AnalysisError, ParamKind, transformation_param_kinds};
@@ -150,6 +152,56 @@ fn concrete_property(kind: &PredicateArgKind, ctx: SchemaContext) -> Value {
 /// generated client carries it.
 pub const DECIMAL_PATTERN: &str = r"^-?(0|[1-9]\d*)(\.\d+)?$";
 
+/// Read a decimal as the wire carries it: a text matching
+/// [`DECIMAL_PATTERN`] that the kernel holds exactly, with the scale it
+/// was written with. A text the kernel would round is refused, never
+/// rounded, so a value is admitted as written or not at all.
+///
+/// # Errors
+///
+/// A message naming the text and the limit it is outside.
+pub fn decimal_from_wire(text: &str) -> Result<Decimal, String> {
+    if !matches_decimal_pattern(text) {
+        return Err(format!(
+            "`{text}` does not match the schema pattern {DECIMAL_PATTERN} (no leading `+`, no \
+             leading zeros except \"0\", no trailing dot, no exponent, no empty string)"
+        ));
+    }
+    Decimal::from_str_exact(text).map_err(|_| {
+        format!(
+            "`{text}` is not a decimal the kernel holds as written: at most 28 fractional \
+             digits, with an unsigned, unscaled coefficient smaller than 2^96"
+        )
+    })
+}
+
+/// [`DECIMAL_PATTERN`] by hand: the grammar is too small for a regex
+/// dependency, and the wire-text corpus holds it to the pattern.
+fn matches_decimal_pattern(s: &str) -> bool {
+    let body = s.strip_prefix('-').unwrap_or(s);
+    let (int_part, frac_part) = match body.split_once('.') {
+        Some((int, frac)) => (int, Some(frac)),
+        None => (body, None),
+    };
+    let int_ok = int_part == "0"
+        || int_part
+            .chars()
+            .next()
+            .is_some_and(|c| ('1'..='9').contains(&c))
+            && int_part.chars().all(|c| c.is_ascii_digit());
+    let frac_ok = frac_part.is_none_or(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_digit()));
+    int_ok && frac_ok
+}
+
+/// The serde reader for every decimal field a value carries, so a
+/// decimal read from JSON on any route is [`decimal_from_wire`]'s.
+pub(crate) fn deserialize_decimal<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Decimal, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    decimal_from_wire(&text).map_err(serde::de::Error::custom)
+}
+
 /// The JSON Schema type/format/pattern for a concrete kind, with no
 /// description.
 fn bare_kind_shape(kind: &PredicateArgKind) -> Value {
@@ -185,8 +237,10 @@ fn concrete_kind_description(kind: &PredicateArgKind, ctx: SchemaContext) -> Opt
     let owned = match kind {
         PredicateArgKind::Quantity(u) => {
             return Some(format!(
-                "exact decimal amount in {u}, carried as a string for \
-                 exactness. The unit is fixed by the declaration \
+                "exact decimal amount in {u}, carried as a string and held as \
+                 written: at most 28 fractional digits, with an unsigned, \
+                 unscaled coefficient smaller than 2^96; past that it is \
+                 refused, never rounded. The unit is fixed by the declaration \
                  (`Decimal[{u}]`) and is not sent with the value."
             ));
         }
@@ -200,9 +254,12 @@ fn concrete_kind_description(kind: &PredicateArgKind, ctx: SchemaContext) -> Opt
              etc.) are opaque strings. The schema describes the shape, not \
              a format constraint.",
             ),
-            PredicateArgKind::Decimal => {
-                Some("arbitrary-precision decimal carried as a string for exactness")
-            }
+            PredicateArgKind::Decimal => Some(
+                "exact decimal, carried as a string and held as written: at most 28 \
+             fractional digits, with an unsigned, unscaled coefficient smaller than \
+             2^96 (`100.50` and `0.0000000000000000000000000001` are held; \
+             `0.00000000000000000000000000001` is refused, never rounded)",
+            ),
             PredicateArgKind::Date => Some("ISO-8601 civil date (YYYY-MM-DD)"),
             PredicateArgKind::Timestamp => Some(
                 "RFC 3339 UTC instant (e.g. 2026-10-24T14:00:00Z). Zone-less \

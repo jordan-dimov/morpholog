@@ -2503,6 +2503,68 @@ async fn run_args_named_decimal_outside_schema_pattern_errors() {
     }
 }
 
+/// A decimal the kernel cannot hold as written is an argument error on
+/// both codecs, never a rounded value and never a decision: no proposal
+/// is built, so the log gains neither an admission nor a rejection.
+#[tokio::test(flavor = "current_thread")]
+async fn run_args_decimal_past_what_the_kernel_holds_is_refused_unrounded() {
+    reset_db().await;
+    let path = write_temp_ledger_morph();
+    let too_fine = "0.00000000000000000000000000001";
+    let args_named = format!(
+        r#"{{
+            "entry_id":"018f0000-0000-7000-8000-000000000061",
+            "posting_date":"018f0000-0000-7000-8000-000000000062",
+            "period":"018f0000-0000-7000-8000-000000000063",
+            "debit_account":"018f0000-0000-7000-8000-000000000064",
+            "credit_account":"018f0000-0000-7000-8000-000000000065",
+            "amount":"{too_fine}"
+        }}"#
+    );
+    propose_named_expect_stderr_at(
+        &path,
+        &args_named,
+        &["`amount` is Decimal but", "at most 28 fractional digits"],
+    );
+    let tagged = ledger_args_json(
+        "018f0000-0000-7000-8000-000000000066",
+        "2026-04-15",
+        "q1_2026",
+        too_fine,
+    );
+    let (status, _stdout, stderr) = run_cli(&[
+        "propose",
+        path.to_str().unwrap(),
+        "post_simple_entry",
+        "--actor",
+        "alex",
+        "--args",
+        &tagged,
+    ]);
+    assert!(
+        !status.success(),
+        "the tagged codec refuses too; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("at most 28 fractional digits"),
+        "the tagged refusal names the limit; got: {stderr}"
+    );
+    let pool = PgPool::connect(&database_url()).await.unwrap();
+    let audit: i64 = sqlx::query_scalar("SELECT count(*) FROM morpholog.audit")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let rejections: i64 = sqlx::query_scalar("SELECT count(*) FROM morpholog.rejections")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        (audit, rejections),
+        (0, 0),
+        "no proposal was built, so nothing was decided"
+    );
+}
+
 /// A wrong JSON type names the parameter and the kind it should be.
 #[tokio::test(flavor = "current_thread")]
 async fn run_args_named_wrong_type_errors_with_kind_label() {

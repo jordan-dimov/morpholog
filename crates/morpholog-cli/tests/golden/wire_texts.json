@@ -1,5 +1,5 @@
 {
-  "_": "Texts the binary's argument codec and the generated client's reader answer alike. both_accept and both_refuse are the wire contract; binary_only is what the binary's input takes but never writes, so the client's reader refuses it. Read by crates/morpholog-cli/src/commands/args.rs and crates/morpholog-cli/templates/python_client/tests/test_values.py.",
+  "_": "Texts the binary's argument codec and the generated client's reader answer alike. both_accept and both_refuse are the wire contract; binary_only is what the binary's input takes but never writes, so the client's reader refuses it. Read by crates/morpholog-cli/src/commands/args.rs and crates/morpholog-cli/templates/python_client/tests/test_values.py. A decimal is held as written: at most 28 fractional digits, with an unsigned, unscaled coefficient smaller than 2^96, trailing zeros counted; both readers refuse past that rather than round, and read ASCII digits only.",
   "decimal": {
     "both_accept": [
       "0",
@@ -9,7 +9,12 @@
       "-1",
       "-100.50",
       "0.5",
-      "-0.5"
+      "-0.5",
+      "79228162514264337593543950335",
+      "-79228162514264337593543950335",
+      "7.9228162514264337593543950335",
+      "0.0000000000000000000000000001",
+      "1.0000000000000000000000000000"
     ],
     "both_refuse": [
       "",
@@ -26,7 +31,18 @@
       "NaN",
       "Infinity",
       " 1",
-      "1_000"
+      "1_000",
+      "0.00000000000000000000000000001",
+      "1.000000000000000000000000000050",
+      "7922816251426433759354395033.6",
+      "1.00000000000000000000000000000",
+      "10.0000000000000000000000000000",
+      "79228162514264337593543950335.0",
+      "79228162514264337593543950336",
+      "1٢",
+      "0.١",
+      "1\n",
+      "1.0\n"
     ],
     "binary_only": []
   },

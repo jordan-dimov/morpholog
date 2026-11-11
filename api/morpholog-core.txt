@@ -442,6 +442,7 @@ pub const morpholog_core::rehearse::REHEARSAL_CONTRACT: &str
 pub const morpholog_core::rehearse::REHEARSAL_FORMAT_VERSION: u32
 pub mod morpholog_core::schema
 pub const morpholog_core::schema::DECIMAL_PATTERN: &str
+pub fn morpholog_core::schema::decimal_from_wire(&str) -> core::result::Result<rust_decimal::decimal::Decimal, alloc::string::String>
 pub fn morpholog_core::schema::intent_arg_schema(&morpholog_core::ValidatedProgram<'_>, &morpholog_core::IntentName) -> core::option::Option<serde_json::value::Value>
 pub fn morpholog_core::schema::transformation_arg_schema(&morpholog_core::ValidatedProgram<'_>, &morpholog_core::TransformationName) -> core::result::Result<serde_json::value::Value, morpholog_core::analysis::AnalysisError>
 pub mod morpholog_core::tally

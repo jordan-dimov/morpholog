@@ -69,12 +69,21 @@ class WhatTheKernelCanHold(unittest.TestCase):
                 digest(Decimal(too_far))
 
     def test_trailing_zeros_past_the_limit_are_not_precision(self):
-        self.assertEqual(
-            digest(Decimal("1.0000000000000000000000000000000")), digest(Decimal("1"))
-        )
-        self.assertEqual(digest(Decimal("0E-40")), digest(Decimal("0")))
+        """The digest hashes the stored key with its scale trimmed, so a
+        value the encoder refuses for its written scale still commits as
+        its trimmed twin; a non-zero digit past the limit is refused by
+        both, and a zero of any scale is the key ``0`` at no cost."""
+        long_one = Decimal("1." + "0" * 29)
+        self.assertEqual(digest(long_one), digest(Decimal("1")))
         with self.assertRaises(CodecError):
-            digest(Decimal("1.00000000000000000000000000001"))
+            values.encode_decimal(long_one)
+        self.assertEqual(digest(Decimal("0E-40")), digest(Decimal("0")))
+        self.assertEqual(digest(Decimal("0E-1000000000")), digest(Decimal("0")))
+        for too_far in ("1E-29", "1.00000000000000000000000000001"):
+            with self.subTest(too_far), self.assertRaises(CodecError):
+                digest(Decimal(too_far))
+            with self.subTest(too_far), self.assertRaises(CodecError):
+                values.encode_decimal(Decimal(too_far))
 
 
 class WhatTheHelperEquates(unittest.TestCase):

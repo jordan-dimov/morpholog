@@ -18,10 +18,8 @@ use morpholog_core::{
     EvalValue, ParamKind, PredicateArgKind, Subject, Transformation, TransformationName,
     ValidatedProgram, transformation_param_kinds,
 };
-use rust_decimal::Decimal;
 use serde_json::Value;
 use std::path::Path;
-use std::str::FromStr;
 
 /// The two inputs `propose` and `explain` accept. Clap has already
 /// enforced that exactly one was given.
@@ -249,55 +247,9 @@ fn decode_decimal(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result
         "a decimal string (e.g. \"100.50\")",
         schema_hint,
     )?;
-    // Match the schema's pattern exactly. `Decimal::from_str` alone also
-    // accepts a leading `+`, leading zeros and a trailing dot, so check
-    // the shape first.
-    if !is_schema_decimal(s) {
-        bail!(
-            "parameter `{param}` is Decimal but `{s}` does not match the schema pattern \
-             {} (no leading `+`, no leading zeros except \"0\", no trailing dot, no \
-             empty string). {schema_hint}",
-            morpholog_core::schema::DECIMAL_PATTERN
-        );
-    }
-    let d = Decimal::from_str(s).map_err(|e| {
-        anyhow!(
-            "parameter `{param}` is Decimal but `{s}` failed to parse: {e}. \
-             Expected a numeric string. {schema_hint}"
-        )
-    })?;
+    let d = morpholog_core::schema::decimal_from_wire(s)
+        .map_err(|e| anyhow!("parameter `{param}` is Decimal but {e}. {schema_hint}"))?;
     Ok(EvalValue::Decimal(d))
-}
-
-/// Decimal shape check matching [`morpholog_core::schema::DECIMAL_PATTERN`].
-/// Hand-rolled: the grammar is too small to be worth a `regex` dependency,
-/// and the wire-text corpus holds it to the pattern.
-fn is_schema_decimal(s: &str) -> bool {
-    let body = s.strip_prefix('-').unwrap_or(s);
-    let (int_part, frac_part) = match body.split_once('.') {
-        Some((int, frac)) => (int, Some(frac)),
-        None => (body, None),
-    };
-
-    // Integer part: "0" or a non-zero digit followed by digits.
-    let int_ok = if int_part == "0" {
-        true
-    } else {
-        let mut chars = int_part.chars();
-        match chars.next() {
-            Some(c) if ('1'..='9').contains(&c) => chars.all(|c| c.is_ascii_digit()),
-            _ => false,
-        }
-    };
-
-    // Fractional part: present iff `.` was present, then at least
-    // one digit and all digits.
-    let frac_ok = match frac_part {
-        None => true,
-        Some(f) => !f.is_empty() && f.chars().all(|c| c.is_ascii_digit()),
-    };
-
-    int_ok && frac_ok
 }
 
 fn decode_date(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
@@ -449,6 +401,30 @@ mod tests {
                 );
                 assert!(decoded.is_err(), "{kind} {text:?} is refused: {decoded:?}");
             }
+            if kind != "decimal" {
+                continue;
+            }
+            // The tagged route reads the same texts: bare, as a quantity's
+            // amount, and nested in a collection.
+            let tagged = |text: &str| {
+                [
+                    json!([{"type": "decimal", "value": text}]),
+                    json!([{"type": "quantity", "value": {"amount": text, "unit": "USD"}}]),
+                    json!([{"type": "collection", "value": [{"type": "decimal", "value": text}]}]),
+                ]
+            };
+            for text in texts("both_accept") {
+                for shape in tagged(&text) {
+                    let decoded = decode_tagged(&shape.to_string());
+                    assert!(decoded.is_ok(), "tagged {shape} is accepted: {decoded:?}");
+                }
+            }
+            for text in texts("both_refuse") {
+                for shape in tagged(&text) {
+                    let decoded = decode_tagged(&shape.to_string());
+                    assert!(decoded.is_err(), "tagged {shape} is refused: {decoded:?}");
+                }
+            }
         }
     }
 
@@ -456,7 +432,7 @@ mod tests {
     #[test]
     fn the_client_template_carries_the_decimal_pattern() {
         let line = format!(
-            "_DECIMAL_PATTERN = re.compile(r\"{}\")",
+            "_DECIMAL_PATTERN = re.compile(r\"{}\", re.ASCII)",
             morpholog_core::schema::DECIMAL_PATTERN
         );
         assert!(
@@ -465,7 +441,7 @@ mod tests {
         );
     }
 
-    use super::decode_value;
+    use super::{decode_tagged, decode_value};
     use morpholog_core::{EvalValue, ParamKind, PredicateArgKind};
     use serde_json::json;
 

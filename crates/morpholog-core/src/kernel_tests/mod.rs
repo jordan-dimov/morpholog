@@ -9,6 +9,7 @@ mod case_bound;
 mod checked_arith;
 mod cond_semantics;
 mod date_arithmetic;
+mod decimal_wire;
 mod definitions_adversarial;
 mod digest;
 mod error_over_false;
