@@ -385,7 +385,7 @@ async fn shipping_cancelling_and_over_allocating_decide_as_the_kernel_does() {
             &pool,
             &stock_allocation::program(),
             &stock_allocation::cancel_order(),
-            vec![subj("order")],
+            vec![subj("order"), EvalValue::Bool(false)],
         )
         .await;
         assert!(
@@ -398,7 +398,7 @@ async fn shipping_cancelling_and_over_allocating_decide_as_the_kernel_does() {
             &pool,
             &pg,
             &stock_allocation::cancel_order(),
-            vec![subj("order")],
+            vec![subj("order"), EvalValue::Bool(false)],
         )
         .await;
         assert_eq!(got, expected, "{route}: cancel_order");

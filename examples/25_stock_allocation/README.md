@@ -33,8 +33,7 @@ that got any branch wrong would be refused, not stored.
 | `InStock(item)` | The item is still on the shelf. |
 | `SplitFrom(child, parent, quantity)` | The lineage of a split. Kept forever. |
 | `SalesOrder`, `SalesLine` | An order and its lines. |
-| `OrderComplete(order)` | The order is closed. Kept forever. |
-| `MayCloseIncomplete(person)` | Who may close an order with lines still short. |
+| `MayCancelShipped(person)` | Who may cancel an order with stock already shipped. Arrives with the deployment; no act hands it out. |
 | `Shipment(shipment, order)`, `ShipmentShipped(shipment)` | A shipment on an order, and that it has gone out. |
 | `Allocation(allocation, line, shipment, item, quantity)` | Stock reserved for a line, on a shipment. |
 | `ShippedTo(item, customer)` | The item went to the customer. Kept forever. |
@@ -53,9 +52,7 @@ that got any branch wrong would be refused, not stored.
 | `allocate` | Reserves part of an item for a line, on a shipment, within the stock and the line. |
 | `change_allocation` | Changes the quantity while the shipment is open; the rules refuse a change that no longer fits. |
 | `ship` | For every allocation on the shipment, splits the item or ships it whole, by the condition in the act; then marks the shipment gone. |
-| `cancel_order` | For every line on the order, removes the line and its allocations; refused if any line has stock already shipped or the order is closed. |
-| `complete_order` | Closes the order once every line has shipped what it ordered, or on a flag the caller sets, if the actor may close an incomplete order. |
-| `grant_close_incomplete` | Records who may close an incomplete order. |
+| `cancel_order` | For every line on the order, removes the line and its allocations; refused if any line has stock already shipped, unless the caller sets `force` and may cancel over shipped stock. |
 
 `allocated(item)` is one figure, defined once: how much of an item is
 reserved. The `allocate` gate reads it, the `allocations_fit_the_stock`
@@ -71,10 +68,10 @@ act. Enumerating the allocations on a shipment, and the lines on an
 order: the pattern each act ranges over. Checking that the list the
 caller passed was complete: there is no list. Keeping a shipped figure
 per line in step with the shipments: it is read from them. Deciding
-whether an order may be closed short, and by whom: two gates. And the
-type of the flag the caller sets to ask for that: `allow_incomplete:
-Bool` declares it, since no rule reads the flag into a claim, so the
-schema and the generated client carry it typed.
+whether an order may be cancelled over shipped stock, and by whom: two
+gates. And the type of the flag the caller sets to ask for that:
+`force: Bool` declares it, since no rule reads the flag into a claim,
+so the schema and the generated client carry it typed.
 
 ## Run it
 
@@ -86,9 +83,9 @@ morpholog check --strict examples/25_stock_allocation/stock_allocation.morph
 The tests walk a receipt, an order, allocations and a shipment through
 both branches, read the figures back after a split, ship a shipment
 with several allocations from a record loaded in two orders and get the
-same children, cancel an order, close an order complete and short, and
-try the changes the rules refuse: closing short without the authority
-to, a flag that is not a Boolean,
+same children, cancel an order plain and over shipped stock, and try
+the changes the rules refuse: cancelling over shipped stock without
+the authority to, a flag that is not a Boolean,
 an allocation beyond the stock, a change that would overflow it, a
 second allocation of one item on one shipment, shipping twice, changing
 an allocation on a shipment that has gone, and cancelling an order with
