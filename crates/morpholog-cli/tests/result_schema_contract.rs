@@ -3811,7 +3811,7 @@ fn the_manual_schema_intent_ledger_holds() {
             "decimals and digests are patterned strings; ids and instants carry formats",
             nodes
                 .iter()
-                .any(|(_, n)| n["pattern"] == "^-?(0|[1-9]\\d*)(\\.\\d+)?$")
+                .any(|(_, n)| n["pattern"] == morpholog_core::schema::DECIMAL_PATTERN)
                 && nodes
                     .iter()
                     .any(|(_, n)| n["pattern"] == "^sha256:[0-9a-f]{64}$")

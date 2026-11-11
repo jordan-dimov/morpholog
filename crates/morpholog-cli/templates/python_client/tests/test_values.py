@@ -1,12 +1,13 @@
 """The value codecs, both directions, including the traps the standard
 library makes real (scientific Decimal rendering, naive datetimes)."""
 
+import json
 import unittest
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from _support import TEMPLATES_DIR
+from _support import GOLDEN_DIR, TEMPLATES_DIR
 from python_client import values
 
 
@@ -150,33 +151,24 @@ class WireFormats(unittest.TestCase):
         with self.assertRaises(values.CodecError, msg=repr(tagged)):
             values.decode_tagged(tagged)
 
-    def test_decimal_text_outside_the_wire_pattern_is_refused(self):
-        for text in ("NaN", "Infinity", "1e5", "01", "1.", ".5", "+1", " 1", "1_000"):
-            self.refused({"type": "decimal", "value": text})
+    def test_the_wire_texts_read_as_the_binary_reads_them(self):
+        """One corpus with the binary: a text both accept, a text both
+        refuse, and the spellings the binary's input takes but never
+        writes, which this reader refuses."""
+        corpus = json.loads((GOLDEN_DIR.parent / "wire_texts.json").read_text())
+        for kind in ("decimal", "date", "timestamp", "duration"):
+            for text in corpus[kind]["both_accept"]:
+                with self.subTest(kind=kind, text=text):
+                    values.decode_tagged({"type": kind, "value": text})
+            for text in corpus[kind]["both_refuse"] + corpus[kind]["binary_only"]:
+                with self.subTest(kind=kind, text=text):
+                    self.refused({"type": kind, "value": text})
+        for text in corpus["decimal"]["both_refuse"]:
             self.refused({"type": "quantity", "value": {"amount": text, "unit": "USD"}})
-
-    def test_dates_outside_yyyy_mm_dd_or_the_calendar_are_refused(self):
-        for text in ("20260102", "2026-W01-1", "2026-02-30", "2026-1-2", "0000-01-01", ""):
-            self.refused({"type": "date", "value": text})
-
-    def test_timestamps_outside_rfc_3339_are_refused(self):
-        for text in (
-            "2026-06-01 12:00:00Z",
-            "2026-06-01T12:00Z",
-            "2026-06-01T12:00:00",
-            "2026-06-01T12:00:00+0000",
-            "2026-06-01T25:00:00Z",
-            "20260601T120000Z",
-        ):
-            self.refused({"type": "timestamp", "value": text})
 
     def test_a_quantity_unit_must_be_a_string(self):
         for unit in (None, 7, ["USD"]):
             self.refused({"type": "quantity", "value": {"amount": "1", "unit": unit}})
-
-    def test_durations_outside_exact_spans_are_refused(self):
-        for text in ("6H", "P1D", "PT", "PT1.S", "PT6h", ""):
-            self.refused({"type": "duration", "value": text})
 
     def test_the_spellings_the_contract_allows_are_read(self):
         cases = [

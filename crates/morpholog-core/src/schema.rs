@@ -144,6 +144,12 @@ fn concrete_property(kind: &PredicateArgKind, ctx: SchemaContext) -> Value {
     value
 }
 
+/// The text a decimal crosses the wire as: an optional sign, no leading
+/// zeros, no exponent, a fraction only after a dot. One source: the
+/// schema states it, the binary's argument codec matches it, and the
+/// generated client carries it.
+pub const DECIMAL_PATTERN: &str = r"^-?(0|[1-9]\d*)(\.\d+)?$";
+
 /// The JSON Schema type/format/pattern for a concrete kind, with no
 /// description.
 fn bare_kind_shape(kind: &PredicateArgKind) -> Value {
@@ -151,9 +157,7 @@ fn bare_kind_shape(kind: &PredicateArgKind) -> Value {
         // No `format: "uuid"`: a subject can also be a domain symbol such
         // as a commodity code.
         PredicateArgKind::Subject => json!({"type": "string"}),
-        PredicateArgKind::Decimal => {
-            json!({"type": "string", "pattern": r"^-?(0|[1-9]\d*)(\.\d+)?$"})
-        }
+        PredicateArgKind::Decimal => json!({"type": "string", "pattern": DECIMAL_PATTERN}),
         PredicateArgKind::Date => json!({"type": "string", "format": "date"}),
         PredicateArgKind::Timestamp => json!({"type": "string", "format": "date-time"}),
         PredicateArgKind::Duration => json!({"type": "string", "format": "duration"}),
@@ -164,7 +168,7 @@ fn bare_kind_shape(kind: &PredicateArgKind) -> Value {
         // generators ignore custom extensions.
         PredicateArgKind::Quantity(u) => json!({
             "type": "string",
-            "pattern": r"^-?(0|[1-9]\d*)(\.\d+)?$",
+            "pattern": DECIMAL_PATTERN,
             "x-morpholog-unit": u.as_str(),
         }),
         // Unreachable: the validator refuses this kind in any declaration.
