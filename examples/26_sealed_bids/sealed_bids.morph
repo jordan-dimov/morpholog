@@ -1,0 +1,115 @@
+-- Sealed bids: commit now, reveal later, and let the record refuse a
+-- reveal that differs from what was committed.
+--
+-- A quick tour of the domain. An auctioneer offers a lot and names the
+-- instant bidding closes. Each bidder hands in a sealed envelope before
+-- the close: not the bid, but a commitment to it, a digest of the bid
+-- with a secret salt only the bidder knows. Nobody, the auctioneer
+-- included, can read a bid before the close. After the close each
+-- bidder opens their envelope: they reveal the bid and the salt, and
+-- anyone can recompute the digest and see that it matches what was
+-- handed in. A bidder cannot change their mind after seeing the others,
+-- and the auctioneer cannot favour one bidder by leaking the rest.
+--
+-- The same shape governs a blind review, a forecast that must not be
+-- edited after the outcome is known, and any commit-now-reveal-later
+-- protocol. What Morpholog adds is that the check is a rule of the
+-- record, not a reader's script: a reveal that does not hash to its
+-- commitment is not a bid at all, and no act can admit it.
+--
+-- Two kinds of rule do the work below. An `invariant` is a standing
+-- rule about what the record may hold; the runtime refuses any change
+-- that would break one. A `require` is a gate on one act, checked at
+-- the moment someone acts and never again. "A revealed bid hashes to
+-- its commitment" is an invariant: it is true of the record, whoever
+-- acts and in whatever order. "You may seal only before the close" is a
+-- gate: closing the lot must not reach back and unseat the envelopes
+-- that were handed in lawfully while it was open.
+
+program sealed_bids
+
+-- The vocabulary. Every claim is append only: an offered lot, a sealed
+-- envelope, a closed lot and a revealed bid are each a thing that
+-- happened, and the record never forgets one. A bidder has one envelope
+-- and one reveal per lot.
+predicate Lot(lot: Subject, auctioneer: Subject, closes_at: Timestamp)
+    unique by (lot)
+    append only
+predicate Sealed(lot: Subject, bidder: Subject, commitment: Subject)
+    unique by (lot, bidder)
+    append only
+predicate Closed(lot: Subject)
+    append only
+predicate Bid(lot: Subject, bidder: Subject, amount: Decimal, salt: Subject)
+    unique by (lot, bidder)
+    append only
+predicate LeadingBid(lot: Subject, bidder: Subject, amount: Decimal)
+
+-- The commitment. `digest` hashes its arguments in order, each in the
+-- encoding the record stores it in, so a bid revealed as `100.0` and a
+-- bid sealed as `100` are the same bid. The first argument names the
+-- protocol: if a later version of this programme changes what goes
+-- into the envelope, it names a new protocol, and an envelope sealed
+-- under this one is still revealed under this one. The lot and the
+-- bidder are in it so an envelope sealed for one lot cannot be opened
+-- against another. The salt is in it so a bid cannot be guessed: an
+-- amount to the penny under a thousand pounds is only a hundred
+-- thousand candidates, and without a salt anyone holding the
+-- commitment could try them all before the close. The salt comes from
+-- the bidder's own randomness; the record never makes one.
+invariant a_revealed_bid_hashes_to_its_commitment:
+    Bid(lot, bidder, amount, salt) and Sealed(lot, bidder, commitment)
+    implies digest(#sealed_bid_v1, lot, bidder, amount, salt) = commitment
+
+-- A reveal opens an envelope that was handed in, on a lot that has
+-- closed. These are rules, not gates: however the claims arrive, the
+-- record holds no bid without its envelope and no bid on an open lot.
+invariant a_bid_is_of_a_sealed_envelope:
+    Bid(lot, bidder, _, _) implies Sealed(lot, bidder, _)
+
+invariant a_bid_stands_on_a_closed_lot:
+    Bid(lot, _, _, _) implies Closed(lot)
+
+invariant an_envelope_is_for_an_offered_lot:
+    Sealed(lot, _, _) implies Lot(lot, _, _)
+
+-- The highest revealed bid so far. A leader, not a winner: envelopes
+-- can still be opened after the close, and the leader can change with
+-- each one. An award needs a reveal deadline, which this example does
+-- not model.
+derived LeadingBid(lot, bidder):
+    over (Bid(lot, bidder, bid, _)
+          and not (exists other: Bid(lot, other, higher, _) and higher > bid))
+    value amount = value Bid(lot: lot, bidder: bidder, amount: _, ..)
+
+-- The auctioneer is whoever offers the lot.
+transformation offer(lot, closes_at):
+    admit Lot(lot, actor, closes_at)
+
+-- Sealing takes two gates, because a clock is not a seal. `decided_at`
+-- is the instant this decision began, and a decision begun before the
+-- deadline can commit after it. `Closed` is a claim, and a seal that
+-- finds the lot closed is refused whatever its clock said: the record,
+-- not the clock, orders every envelope before every reveal. The bidder
+-- is the actor, so nobody can hand in an envelope in another's name.
+transformation seal(lot, commitment):
+    bind offered: Lot(lot, _, closes_at)
+    require before_the_deadline: decided_at strictly_before closes_at
+    require still_open: not Closed(lot)
+    admit Sealed(lot, actor, commitment)
+
+-- Only the auctioneer closes the lot, and only once the deadline has
+-- passed.
+transformation close(lot):
+    bind offered: Lot(lot, actor, closes_at)
+    require deadline_passed: closes_at at_or_before decided_at
+    require still_open: not Closed(lot)
+    admit Closed(lot)
+
+-- Opening the envelope: the bid and the salt, admitted under the
+-- bidder's own name. The gate says the lot is closed; the rules above
+-- say the rest, and a reveal that does not match its envelope is
+-- refused by the first of them.
+transformation reveal(lot, amount, salt):
+    require closed: Closed(lot)
+    admit Bid(lot, actor, amount, salt)

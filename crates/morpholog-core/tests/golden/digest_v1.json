@@ -1,0 +1,282 @@
+[
+  {
+    "name": "subject",
+    "args": [
+      {
+        "type": "subject",
+        "value": "r1"
+      }
+    ],
+    "preimage": "[[\"subject\", \"r1\"]]",
+    "digest": "sha256:26dc3cabafa7fc67c5e95555a5a88496ca417e9de6e655fe85307b20ee6933e0"
+  },
+  {
+    "name": "decimal",
+    "args": [
+      {
+        "type": "decimal",
+        "value": "30"
+      }
+    ],
+    "preimage": "[[\"decimal\", \"30\"]]",
+    "digest": "sha256:0f8b046c5c44cdd18ba772fd03a8c63793fedb97a091eb33aef1bdd4d95bbbfb"
+  },
+  {
+    "name": "bool",
+    "args": [
+      {
+        "type": "bool",
+        "value": true
+      }
+    ],
+    "preimage": "[[\"bool\", true]]",
+    "digest": "sha256:7981b92b9a74beb0e43bc51574af784b30896ba2a7d406e93119311145b513ca"
+  },
+  {
+    "name": "date",
+    "args": [
+      {
+        "type": "date",
+        "value": "2026-06-01"
+      }
+    ],
+    "preimage": "[[\"date\", \"2026-06-01\"]]",
+    "digest": "sha256:7e4767205552e75c8fd86a063c457c982d4653168a9d1c87db35462daaad38ef"
+  },
+  {
+    "name": "timestamp",
+    "args": [
+      {
+        "type": "timestamp",
+        "value": "2026-06-01T12:00:00Z"
+      }
+    ],
+    "preimage": "[[\"timestamp\", \"2026-06-01T12:00:00Z\"]]",
+    "digest": "sha256:2d16ff26f685b276fea0aea0d1cfed315ad5da27c5334ce1e68350987095f54f"
+  },
+  {
+    "name": "timestamp_with_a_fraction",
+    "args": [
+      {
+        "type": "timestamp",
+        "value": "2026-06-01T12:00:00.000000001Z"
+      }
+    ],
+    "preimage": "[[\"timestamp\", \"2026-06-01T12:00:00.000000001Z\"]]",
+    "digest": "sha256:6140b3d7ab25b6776cecfd2ad03c584a9ee9a6601f0846ca34df88788fc5e2c9"
+  },
+  {
+    "name": "timestamp_with_a_short_fraction",
+    "args": [
+      {
+        "type": "timestamp",
+        "value": "2026-06-01T12:00:00.1Z"
+      }
+    ],
+    "preimage": "[[\"timestamp\", \"2026-06-01T12:00:00.1Z\"]]",
+    "digest": "sha256:bca8260c1e50c84933865fd8c88c76777f37544639547c03170e17e05b02cae8"
+  },
+  {
+    "name": "duration",
+    "args": [
+      {
+        "type": "duration",
+        "value": "PT6H"
+      }
+    ],
+    "preimage": "[[\"duration\", \"PT6H\"]]",
+    "digest": "sha256:88ba73a727d66c22fe1aa4949422d78f68b0081365a5fbd298e0c86f26653889"
+  },
+  {
+    "name": "quantity",
+    "args": [
+      {
+        "type": "quantity",
+        "value": {
+          "amount": "25000.00",
+          "unit": "USD"
+        }
+      }
+    ],
+    "preimage": "[[\"quantity\", \"USD\", \"25000\"]]",
+    "digest": "sha256:cc5169ffd04cf1ee953c193ff0163db3b863fe07d1223c28b23c5811cff58f4c"
+  },
+  {
+    "name": "trailing_zeros",
+    "args": [
+      {
+        "type": "decimal",
+        "value": "30.00"
+      }
+    ],
+    "preimage": "[[\"decimal\", \"30\"]]",
+    "digest": "sha256:0f8b046c5c44cdd18ba772fd03a8c63793fedb97a091eb33aef1bdd4d95bbbfb"
+  },
+  {
+    "name": "negative_zero",
+    "args": [
+      {
+        "type": "decimal",
+        "value": "0.0"
+      }
+    ],
+    "preimage": "[[\"decimal\", \"0\"]]",
+    "digest": "sha256:4723a30502262ef5cdff51d93fc3d942cd34231e4024cfc456e885fa4e689f66"
+  },
+  {
+    "name": "negative",
+    "args": [
+      {
+        "type": "decimal",
+        "value": "-1.50"
+      }
+    ],
+    "preimage": "[[\"decimal\", \"-1.5\"]]",
+    "digest": "sha256:c497bb7d6f8c663b89f9b667e577d3f4c11372dd45795a4f934e3099ec4d2260"
+  },
+  {
+    "name": "smallest",
+    "args": [
+      {
+        "type": "decimal",
+        "value": "0.0000000000000000000000000001"
+      }
+    ],
+    "preimage": "[[\"decimal\", \"0.0000000000000000000000000001\"]]",
+    "digest": "sha256:b73dfd8558f6759654bf9a38f8377e07552760e4ba8052496e8d1924bce85ee6"
+  },
+  {
+    "name": "largest",
+    "args": [
+      {
+        "type": "decimal",
+        "value": "79228162514264337593543950335"
+      }
+    ],
+    "preimage": "[[\"decimal\", \"79228162514264337593543950335\"]]",
+    "digest": "sha256:aff96dab30c35d3e167591759fa697e8823fe1707698a7429187d4d36bbe8640"
+  },
+  {
+    "name": "unicode_subject",
+    "args": [
+      {
+        "type": "subject",
+        "value": "café ☕"
+      }
+    ],
+    "preimage": "[[\"subject\", \"café ☕\"]]",
+    "digest": "sha256:5eda9e9033910201060ddf0fdb66bb4db193eff45655ea10b6ff733c59e02d99"
+  },
+  {
+    "name": "escaped_subject",
+    "args": [
+      {
+        "type": "subject",
+        "value": "a\"b\\c\nd\te\u0001f/g"
+      }
+    ],
+    "preimage": "[[\"subject\", \"a\\\"b\\\\c\\nd\\te\\u0001f/g\"]]",
+    "digest": "sha256:fbdeca1011819c02a64f45ae5eabdf811e87a492bdd575b538461abe91b4e39d"
+  },
+  {
+    "name": "several",
+    "args": [
+      {
+        "type": "subject",
+        "value": "sealed_bid_v1"
+      },
+      {
+        "type": "subject",
+        "value": "lot"
+      },
+      {
+        "type": "subject",
+        "value": "alice"
+      },
+      {
+        "type": "decimal",
+        "value": "100"
+      },
+      {
+        "type": "subject",
+        "value": "s1"
+      }
+    ],
+    "preimage": "[[\"subject\", \"sealed_bid_v1\"], [\"subject\", \"lot\"], [\"subject\", \"alice\"], [\"decimal\", \"100\"], [\"subject\", \"s1\"]]",
+    "digest": "sha256:6976aee5885c541d43faa59d5e897069488fb8b99dc67061ed03c603af1bdb58"
+  },
+  {
+    "name": "order_a_b",
+    "args": [
+      {
+        "type": "subject",
+        "value": "a"
+      },
+      {
+        "type": "subject",
+        "value": "b"
+      }
+    ],
+    "preimage": "[[\"subject\", \"a\"], [\"subject\", \"b\"]]",
+    "digest": "sha256:1cfa7019f97a16130800d5a1d7f51be22d0d8712f815ac01d256ec70e31a50e5"
+  },
+  {
+    "name": "order_b_a",
+    "args": [
+      {
+        "type": "subject",
+        "value": "b"
+      },
+      {
+        "type": "subject",
+        "value": "a"
+      }
+    ],
+    "preimage": "[[\"subject\", \"b\"], [\"subject\", \"a\"]]",
+    "digest": "sha256:91d52ad2ac3d7f64ac426593b9c474f17014fbfb6a9784f6dcfc9585b73896d3"
+  },
+  {
+    "name": "bool_true",
+    "args": [
+      {
+        "type": "bool",
+        "value": true
+      }
+    ],
+    "preimage": "[[\"bool\", true]]",
+    "digest": "sha256:7981b92b9a74beb0e43bc51574af784b30896ba2a7d406e93119311145b513ca"
+  },
+  {
+    "name": "decimal_one",
+    "args": [
+      {
+        "type": "decimal",
+        "value": "1"
+      }
+    ],
+    "preimage": "[[\"decimal\", \"1\"]]",
+    "digest": "sha256:52b623168704951ef73a75b9918f56533e3ae85ae8afafa093a0e5059fb1c95c"
+  },
+  {
+    "name": "subject_true",
+    "args": [
+      {
+        "type": "subject",
+        "value": "true"
+      }
+    ],
+    "preimage": "[[\"subject\", \"true\"]]",
+    "digest": "sha256:ac5d72e52d92624e06042f21465215a10186f69a60db994880ed8936b66c5cd9"
+  },
+  {
+    "name": "subject_one",
+    "args": [
+      {
+        "type": "subject",
+        "value": "1"
+      }
+    ],
+    "preimage": "[[\"subject\", \"1\"]]",
+    "digest": "sha256:cbea6cfe44a5e35988ef2a0f487576a748390c53a3dde5cd7e90d8a0d9279b7d"
+  }
+]

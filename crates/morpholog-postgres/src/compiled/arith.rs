@@ -176,6 +176,13 @@ fn render(
             arith(*op, &l, &r)
         }
         ValueExpr::Call { builtin, args } => {
+            // A digest is not arithmetic: refused as itself, before its
+            // arguments are read as decimals.
+            if *builtin == Builtin::Digest {
+                return Err(CompileReason::Construct {
+                    construct: "a digest",
+                });
+            }
             let mut rendered = Vec::with_capacity(args.len());
             for arg in args {
                 rendered.push(render(arg, env, ctx, sums)?);

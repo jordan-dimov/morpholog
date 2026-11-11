@@ -1704,7 +1704,7 @@ impl CheckCtx<'_> {
             // Arity first, so a wrong count is one clear error rather
             // than a cascade about kinds.
             ValueExpr::Call { builtin, args } => {
-                if args.len() != builtin.arity() {
+                if !builtin.arity().accepts(args.len()) {
                     self.report(|context| ValidationError::BuiltinArity {
                         builtin: builtin.name(),
                         expected: builtin.arity(),
@@ -1805,6 +1805,21 @@ impl CheckCtx<'_> {
         scope: &mut Scope,
     ) -> InferredKind {
         match builtin {
+            Builtin::Digest => {
+                for (position, arg) in args.iter().enumerate() {
+                    if let InferredKind::Known(
+                        kind @ (PredicateArgKind::Collection | PredicateArgKind::CalendarSpan),
+                    ) = self.infer_value(arg, scope)
+                    {
+                        self.report(|context| ValidationError::DigestArgumentKind {
+                            kind,
+                            position: position + 1,
+                            context,
+                        });
+                    }
+                }
+                InferredKind::Known(PredicateArgKind::Subject)
+            }
             Builtin::Abs => match self.infer_value(&args[0], scope) {
                 // abs keeps a signed value's kind; other kinds are errors.
                 InferredKind::Known(

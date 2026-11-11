@@ -839,7 +839,8 @@ enum ForallSource {
 /// bodies. [`expression_parser`] builds the same grammar inside itself.
 /// The builtins the value grammar matches by name rather than by keyword. A definition call
 /// never takes one of these names, and validation refuses a definition so named.
-const BARE_WORD_BUILTINS: [&str; 4] = ["if", "period_index", "period_start_of", "periods"];
+const BARE_WORD_BUILTINS: [&str; 5] =
+    ["if", "period_index", "period_start_of", "periods", "digest"];
 
 pub(super) fn value_expr_parser<'a, I>(
     table: &'a FieldTable,
@@ -1097,6 +1098,21 @@ where
             args: vec![first, second, third],
         });
 
+        // `digest(a, b, ...)`: one or more values. Contextual, like `if`.
+        let digest_expr = select! { Token::Ident(s) if s == "digest" => () }
+            .ignore_then(
+                value
+                    .clone()
+                    .separated_by(just(Token::Comma))
+                    .at_least(1)
+                    .collect::<Vec<ValueExpr>>()
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .map(|args| ValueExpr::Call {
+                builtin: Builtin::Digest,
+                args,
+            });
+
         let primary = choice((
             sum_expr,
             min_max_expr,
@@ -1104,6 +1120,7 @@ where
             round_expr,
             if_expr,
             period_builtin_expr,
+            digest_expr,
             value_lookup,
             parenthesised,
             decimal_as_value,

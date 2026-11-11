@@ -449,6 +449,18 @@ impl Example {
         self.run(t, &transition_as(t, args, actor), pre)
     }
 
+    /// [`Self::propose`] decided at `decided_at` (RFC 3339), as the
+    /// runtime always decides, for a body that reads `decided_at`.
+    pub fn propose_at(
+        &self,
+        t: &Transformation,
+        args: Vec<EvalValue>,
+        decided_at: &str,
+        pre: &State,
+    ) -> Result<Outcome, EvalError> {
+        self.run(t, &transition_at(t, args, test_actor(), decided_at), pre)
+    }
+
     /// [`must_accept`] against this example.
     pub fn must_accept(&self, t: &Transformation, args: Vec<EvalValue>, pre: State) -> State {
         accepted(self.propose(t, args, &pre), t)

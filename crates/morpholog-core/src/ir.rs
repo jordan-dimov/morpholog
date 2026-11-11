@@ -499,6 +499,40 @@ pub enum Builtin {
     /// The forms over a proposition are [`ValueExpr::Extremum`].
     Min,
     Max,
+    /// `digest(a, b, ...)`: sha256 over the canonical encoding of its
+    /// arguments in order, as the Subject `sha256:<hex>`, for a reveal
+    /// held to a commitment made before it. The encoding is the stored
+    /// value key (`value_key_v1`), so two spellings of one value digest
+    /// alike; its bytes are the contract, pinned in [`crate::digest`].
+    /// Takes any kind a claim can carry, at least one argument. Reads
+    /// no state.
+    Digest,
+}
+
+/// How many arguments a builtin takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arity {
+    Exact(usize),
+    AtLeast(usize),
+}
+
+impl Arity {
+    /// Whether a call with `found` arguments has the right count.
+    pub fn accepts(self, found: usize) -> bool {
+        match self {
+            Arity::Exact(n) => found == n,
+            Arity::AtLeast(n) => found >= n,
+        }
+    }
+}
+
+impl std::fmt::Display for Arity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Arity::Exact(n) => write!(f, "{n}"),
+            Arity::AtLeast(n) => write!(f, "at least {n}"),
+        }
+    }
 }
 
 impl Builtin {
@@ -512,15 +546,17 @@ impl Builtin {
             Builtin::Periods => "periods",
             Builtin::Min => "min",
             Builtin::Max => "max",
+            Builtin::Digest => "digest",
         }
     }
 
     /// How many arguments it takes.
-    pub fn arity(self) -> usize {
+    pub fn arity(self) -> Arity {
         match self {
-            Builtin::Abs => 1,
-            Builtin::Round | Builtin::Min | Builtin::Max => 2,
-            Builtin::PeriodIndex | Builtin::PeriodStartOf | Builtin::Periods => 3,
+            Builtin::Abs => Arity::Exact(1),
+            Builtin::Round | Builtin::Min | Builtin::Max => Arity::Exact(2),
+            Builtin::PeriodIndex | Builtin::PeriodStartOf | Builtin::Periods => Arity::Exact(3),
+            Builtin::Digest => Arity::AtLeast(1),
         }
     }
 }

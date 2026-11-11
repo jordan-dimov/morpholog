@@ -1428,6 +1428,12 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 
 **Landed:** `forall h in periods(starts_at, ends_at, duration(PT1H)):` in a rule, a derived claim or a definition, in `examples/23_delivery_hour_limits/`: a published day has a price for every hour it has. The bound is a conjunct before the grid in the same conjunction, of the `require`'s shape, in the consequent so a window beyond it is refused rather than skipped; the step stays a literal. `in`'s right side is a value, held to a variable or a `periods` call. A grid built from the case's fields is inert for the plan, so the rule stays bounded to its case; a binder that takes a case variable's name widens it. The grid lint reads a rule's bound as it reads a gate's. A grid rule runs interpreted. Not done: a step from a claim, a date-valued grid, a compiled grid, any other value as an `in` source.
 
+### A digest over admitted values
+
+**Forced by:** Gate Closure (#420). An entry is admitted before a round closes as a commitment, a hash of the forecast and a salt; after the close the host reveals the values and the salt as claims and the kernel computes the scores from them. The one link the record could not check was that the reveal hashes to the commitment, so a pack reader checked it outside the record.
+
+**Landed:** `digest(a, b, ...)`, a builtin over any kinds a claim can carry, returning the Subject `sha256:<hex>`, in `examples/26_sealed_bids/`: a revealed bid hashes to its envelope, as a rule. The preimage is the stored value key of each argument (`value_key_v1`, so scale is not part of a decimal) printed as PostgreSQL prints a `jsonb`, and the bytes are pinned by one golden the kernel, the generated Python client's `digest()` and the adapter's differential all read, since a commitment computed outside the kernel must stay revealable. Arity grew a form, at least one. The example closes a lot by a claim, not a clock, seals under the actor's own name, and leads with a protocol literal so a change to the envelope is a protocol migration. A digest rule runs interpreted. Not done: a bytes kind, a compiled rendering, a salt from the kernel, a CLI command, collections as arguments.
+
 ### A predicate's history as a view
 
 **Forced by:** the InvenTree spike (#734). Its stock history page is read from the audit log, with nothing written beside the act, but the read decoded `operations` by position in hand SQL, restating field names and kinds the programme already declares.

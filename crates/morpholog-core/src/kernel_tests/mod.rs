@@ -10,6 +10,7 @@ mod checked_arith;
 mod cond_semantics;
 mod date_arithmetic;
 mod definitions_adversarial;
+mod digest;
 mod error_over_false;
 mod eval;
 mod eval_arms;

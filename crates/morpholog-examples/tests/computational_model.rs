@@ -111,7 +111,8 @@ fn value(v: &ValueExpr) -> &'static [Draws] {
             | Builtin::Round
             | Builtin::PeriodStartOf
             | Builtin::Min
-            | Builtin::Max => &[Children],
+            | Builtin::Max
+            | Builtin::Digest => &[Children],
             // A binary search over the calendar's day range.
             Builtin::PeriodIndex => &[Children, InternallyBounded],
             // One start per step from the period holding `from` until

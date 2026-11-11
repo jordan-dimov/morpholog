@@ -36,6 +36,8 @@ const REACHABILITY_DEPTH: usize = 2;
 /// asserting each outcome is lawful. Returns the successor of each BASELINE
 /// acceptance only; keeping every variant's successor would blow up the
 /// frontier without reaching deeper.
+const DECIDED_AT: &str = "2026-01-01T00:00:00Z";
+
 fn propose_all(
     program: &Program,
     validated: &ValidatedProgram<'_>,
@@ -49,7 +51,8 @@ fn propose_all(
             .enumerate()
         {
             let args = case.args;
-            match ex.propose(t, args.clone(), pre) {
+            // Decided at an instant, as the runtime always decides.
+            match ex.propose_at(t, args.clone(), DECIDED_AT, pre) {
                 Ok(morpholog_core::Outcome::Accepted {
                     candidate_state, ..
                 }) => {
