@@ -182,6 +182,7 @@ impl EvalError {
         "empty_extremum",
         "unknown_definition",
         "claim_kind_mismatch",
+        "argument_kind_mismatch",
         "intent_kind_mismatch",
     ];
 
