@@ -55,6 +55,14 @@ fn the_digest_follows_the_stored_values_equality() {
     assert!(out.starts_with("sha256:") && out.len() == 7 + 64, "{out}");
 }
 
+/// The public helper refuses an empty list too, as the builtin and the
+/// client do, so no interface commits to nothing.
+#[test]
+fn the_helper_refuses_an_empty_list() {
+    assert!(preimage(&[]).is_err());
+    assert!(digest(&[]).is_err());
+}
+
 /// Hand-built IR with no argument is refused by the arity authority,
 /// which the parser never reaches.
 #[test]

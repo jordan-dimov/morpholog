@@ -45,8 +45,12 @@ fn decimal_key(d: Decimal) -> Json {
     Json::from(d.normalize().to_string())
 }
 
-/// The preimage of `digest` over these arguments.
+/// The preimage of `digest` over these arguments: at least one, as the
+/// builtin takes, so no caller commits to nothing.
 pub fn preimage(args: &[EvalValue]) -> Result<String, String> {
+    if args.is_empty() {
+        return Err("digest takes at least one value".to_string());
+    }
     let keys = Json::Array(
         args.iter()
             .map(value_key_v1)

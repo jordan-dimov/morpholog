@@ -55,6 +55,28 @@ class WhatTheHelperRefuses(unittest.TestCase):
             digest()
 
 
+class WhatTheKernelCanHold(unittest.TestCase):
+    """A commitment over a decimal the kernel would round could never be
+    revealed, so the helper refuses it at the kernel's own limits: a
+    96-bit coefficient and 28 decimal places."""
+
+    def test_the_largest_and_smallest_decimals_are_the_kernels(self):
+        digest(Decimal("79228162514264337593543950335"))
+        digest(Decimal("-79228162514264337593543950335"))
+        digest(Decimal("0.0000000000000000000000000001"))
+        for too_far in ("79228162514264337593543950336", "1E+29", "1E-29", "1E+1000000"):
+            with self.subTest(too_far), self.assertRaises(CodecError):
+                digest(Decimal(too_far))
+
+    def test_trailing_zeros_past_the_limit_are_not_precision(self):
+        self.assertEqual(
+            digest(Decimal("1.0000000000000000000000000000000")), digest(Decimal("1"))
+        )
+        self.assertEqual(digest(Decimal("0E-40")), digest(Decimal("0")))
+        with self.assertRaises(CodecError):
+            digest(Decimal("1.00000000000000000000000000001"))
+
+
 class WhatTheHelperEquates(unittest.TestCase):
     def test_scale_is_not_part_of_a_decimal(self):
         self.assertEqual(digest(Decimal("100.00")), digest(Decimal("100")))

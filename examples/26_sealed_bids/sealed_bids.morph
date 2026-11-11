@@ -49,8 +49,9 @@ predicate LeadingBid(lot: Subject, bidder: Subject, amount: Decimal)
 -- encoding the record stores it in, so a bid revealed as `100.0` and a
 -- bid sealed as `100` are the same bid. The first argument names the
 -- protocol: if a later version of this programme changes what goes
--- into the envelope, it names a new protocol, and an envelope sealed
--- under this one is still revealed under this one. The lot and the
+-- into the envelope, it names a new protocol and keeps this rule
+-- beside the new one, so an envelope sealed under this one is still
+-- opened under this one. The lot and the
 -- bidder are in it so an envelope sealed for one lot cannot be opened
 -- against another. The salt is in it so a bid cannot be guessed: an
 -- amount to the penny under a thousand pounds is only a hundred
