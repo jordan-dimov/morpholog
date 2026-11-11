@@ -7,7 +7,7 @@
 
 mod common;
 
-use common::{date, dec, reset_db, seed_claims, subj, test_pool};
+use common::{date, dec, reset_db, seed_claims, test_pool};
 use morpholog_core::{
     ClaimInstance, EvalValue, Outcome, PreparedProgram, Program, State, TracedProposal,
     Transformation,
