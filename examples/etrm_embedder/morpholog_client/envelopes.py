@@ -327,6 +327,9 @@ class Committed:
     asserted_claims: list[ClaimInstance]
     retracted_claims: list[ClaimInstance]
     emitted_intents: list[IntentInstance]
+    # What the act drew from `new Subject()`, in draw order. A draw that
+    # reached no admitted claim is still listed.
+    drawn_subjects: list[str]
 
     @classmethod
     def from_json(cls, payload: object) -> Committed:
@@ -340,6 +343,7 @@ class Committed:
                 "asserted_claims",
                 "retracted_claims",
                 "emitted_intents",
+                "drawn_subjects",
             },
         )
         data.constant("status", "committed")
@@ -349,6 +353,7 @@ class Committed:
             asserted_claims=data.array("asserted_claims", ClaimInstance.from_json),
             retracted_claims=data.array("retracted_claims", ClaimInstance.from_json),
             emitted_intents=data.array("emitted_intents", IntentInstance.from_json),
+            drawn_subjects=data.texts("drawn_subjects"),
         )
 
 
@@ -467,6 +472,7 @@ class AtomicAct:
                 "asserted_claims",
                 "retracted_claims",
                 "emitted_intents",
+                "drawn_subjects",
             },
         )
         body = {k: v for k, v in data.data.items() if k != "row"}

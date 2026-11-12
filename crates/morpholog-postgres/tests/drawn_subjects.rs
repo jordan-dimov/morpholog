@@ -23,8 +23,8 @@ use morpholog_core::{
 };
 use morpholog_postgres::{
     AuditRow, CompensationSpec, Deliverer, DeliveryOutcome, InvariantPlan, OutboxRow,
-    PgAtomicOutcome, PgProgram, PgTracedOutcome, ProcessOutcome, list_audit_rows,
-    process_one_outbox_row, propose_against_pg, propose_against_pg_with_trace,
+    PgAtomicOutcome, PgProgram, PgProposalOutcome, PgTracedOutcome, ProcessOutcome,
+    list_audit_rows, process_one_outbox_row, propose_against_pg, propose_against_pg_with_trace,
     propose_all_against_pg,
 };
 
@@ -107,6 +107,30 @@ fn rerun(
     (outcome, source.count())
 }
 
+/// What each committed receipt said its act drew, by transition.
+#[derive(Default)]
+struct Receipts(HashMap<uuid::Uuid, Vec<Subject>>);
+
+impl Receipts {
+    fn record(&mut self, outcome: PgProposalOutcome) {
+        let PgProposalOutcome::Committed {
+            transition_id,
+            drawn_subjects,
+            ..
+        } = outcome
+        else {
+            panic!("expected a commit, got {outcome:?}");
+        };
+        self.0.insert(transition_id, drawn_subjects);
+    }
+
+    fn record_acts(&mut self, acts: &[morpholog_postgres::AtomicAct]) {
+        for act in acts {
+            self.0.insert(act.transition_id, act.drawn_subjects.clone());
+        }
+    }
+}
+
 #[tokio::test]
 async fn every_commit_reruns_from_its_history_and_recorded_inputs() {
     let pool = test_pool().await;
@@ -120,17 +144,18 @@ async fn every_commit_reruns_from_its_history_and_recorded_inputs() {
     );
     let interpreted = PgProgram::interpreted(first.clone());
     let later = PgProgram::new(revised.clone());
+    let mut receipts = Receipts::default();
 
     // Every durable path: a single proposal on each route, a traced one,
     // an atomic batch on each route whose acts draw separately, and a
     // compensation.
     for (note, program) in [("n1", &compiled), ("n2", &interpreted)] {
-        expect_committed(
+        receipts.record(
             propose_against_pg(&pool, program, &attested(&act(&first, "open", note)))
                 .await
                 .unwrap(),
         );
-        expect_committed(
+        receipts.record(
             propose_against_pg(&pool, program, &attested(&act(&first, "pair", note)))
                 .await
                 .unwrap(),
@@ -143,7 +168,7 @@ async fn every_commit_reruns_from_its_history_and_recorded_inputs() {
     else {
         panic!("the traced proposal must decide");
     };
-    expect_committed(outcome);
+    receipts.record(outcome);
     let PgAtomicOutcome::Committed { acts } = propose_all_against_pg(
         &pool,
         &compiled,
@@ -158,7 +183,8 @@ async fn every_commit_reruns_from_its_history_and_recorded_inputs() {
         panic!("the batch must commit");
     };
     assert_eq!(acts.len(), 3);
-    expect_committed(
+    receipts.record_acts(&acts);
+    receipts.record(
         propose_against_pg(&pool, &later, &attested(&act(&revised, "twin", "n3")))
             .await
             .unwrap(),
@@ -176,6 +202,7 @@ async fn every_commit_reruns_from_its_history_and_recorded_inputs() {
         panic!("the interpreted batch must commit");
     };
     assert_eq!(acts.len(), 2);
+    receipts.record_acts(&acts);
     let compensation = CompensationSpec::new(
         revised.clone(),
         "twin".into(),
@@ -213,6 +240,20 @@ async fn every_commit_reruns_from_its_history_and_recorded_inputs() {
         vec![0, 4, 0, 4, 4, 0, 4, 4, 1, 0, 4, 1],
         "every row records its own act's draws, an empty list when it drew none"
     );
+
+    // Every receipt lists what its own row records, in the same order.
+    // The compensation is the one commit that hands back no receipt.
+    assert_eq!(receipts.0.len(), rows.len() - 1);
+    for row in &rows {
+        if let Some(listed) = receipts.0.get(&row.transition_id) {
+            assert_eq!(
+                Some(listed),
+                row.drawn_subjects.as_ref(),
+                "{}",
+                row.transition_id
+            );
+        }
+    }
 
     let mut state = State::default();
     for row in &rows {
@@ -328,4 +369,61 @@ async fn the_record_is_needed_exactly() {
             "{unseen:?} is in no admitted claim"
         );
     }
+}
+
+/// A draw inside a branch is listed only when that branch ran.
+#[tokio::test]
+async fn a_receipt_lists_only_the_draws_of_the_branch_that_ran() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let programme = prepared(
+        "
+program branches
+
+predicate Note(id: Subject)
+predicate Child(note: Subject, child: Subject)
+
+transformation grow(note):
+    if Note(note):
+        let child = new Subject()
+        admit Child(note, child)
+    else:
+        admit Note(note)
+    let after = new Subject()
+    admit Child(note, after)
+",
+    );
+    let program = PgProgram::new(programme.clone());
+    let mut drawn = Vec::new();
+    for _ in 0..2 {
+        let outcome =
+            propose_against_pg(&pool, &program, &attested(&act(&programme, "grow", "n1")))
+                .await
+                .unwrap();
+        let PgProposalOutcome::Committed {
+            drawn_subjects,
+            asserted_claims,
+            ..
+        } = outcome
+        else {
+            panic!("expected a commit, got {outcome:?}");
+        };
+        let children: Vec<EvalValue> = asserted_claims
+            .iter()
+            .filter(|c| c.predicate == "Child")
+            .map(|c| c.args[1].clone())
+            .collect();
+        let listed: Vec<EvalValue> = drawn_subjects
+            .iter()
+            .cloned()
+            .map(EvalValue::Subject)
+            .collect();
+        assert_eq!(listed, children, "the draws, in the order they were made");
+        drawn.push(drawn_subjects.len());
+    }
+    assert_eq!(
+        drawn,
+        vec![1, 2],
+        "the first run took the branch without a draw"
+    );
 }

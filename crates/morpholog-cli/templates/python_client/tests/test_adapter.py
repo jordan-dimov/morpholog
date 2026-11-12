@@ -612,7 +612,7 @@ class AdapterDiscrimination(unittest.TestCase):
             '{"row": 1, "status": "rejected", "reason": "closed"}\n'
             '{"row": 2, "status": "error", "code": "a_future_code", "error": "x"}\n'
             '{"row": 3, "status": "committed", "asserted_claims": [], '
-            '"retracted_claims": [], "emitted_intents": []}\n'
+            '"retracted_claims": [], "emitted_intents": [], "drawn_subjects": []}\n'
         )
         self.addCleanup(os.environ.pop, "STUB_EXIT", None)
         for exit_code in ("0", "1"):
@@ -652,7 +652,7 @@ class AdapterDiscrimination(unittest.TestCase):
         committed = (
             '{{"row": 2, "status": "committed", "transition_id": {tid}, '
             '"actor": {actor}, "asserted_claims": [{claim}], "retracted_claims": [], '
-            '"emitted_intents": []}}\n'
+            '"emitted_intents": [], "drawn_subjects": []}}\n'
         )
         subject = '{"type": "subject", "value": "a"}'
         claim = '{"predicate": "P", "args": [%s]}'

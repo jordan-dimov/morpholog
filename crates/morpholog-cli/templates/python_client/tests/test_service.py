@@ -44,6 +44,7 @@ def committed(row: int) -> str:
             "actor": {"type": "subject", "value": "teller"},
             "asserted_claims": [],
             "emitted_intents": [],
+            "drawn_subjects": [],
             "retracted_claims": [],
             "row": row,
             "status": "committed",

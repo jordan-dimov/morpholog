@@ -121,9 +121,12 @@ Without `--trace`, stdout is the `PgProposalOutcome` JSON directly:
   "actor": {"type":"subject","value":"..."},
   "asserted_claims": [...],
   "retracted_claims": [...],
-  "emitted_intents": [...]
+  "emitted_intents": [...],
+  "drawn_subjects": ["0192-...", "..."]
 }
 ```
+
+`drawn_subjects` is the subjects the act drew from `new Subject()`, in draw order, as its audit row records them, and an empty list when it drew none. A caller that needs the id of what it just created reads it here, without a second read. It is a list of draws and nothing more: a draw that reached no admitted claim is still listed, and the first entry is not "the record created" by any rule. To know which claim holds a drawn subject, read `asserted_claims`. A rejected outcome carries none.
 
 or:
 
@@ -781,7 +784,8 @@ One JSON object on stdout, the `atomic_outcome` union:
 
 - `{"status": "committed", "acts": [...]}` - one receipt per act, in
   order, each the committed outcome's fields (no `status` of its own)
-  plus its 1-based `row` and its own `transition_id`. Audit replay order within the batch is
+  plus its 1-based `row`, with its own `transition_id` and its own
+  `drawn_subjects`. Audit replay order within the batch is
   act order (every act shares the transaction's `committed_at`; the
   ids carry the order). The last act's `transition_id` is therefore the
   record just after the decision: use it as the `--as-of` or `--after`

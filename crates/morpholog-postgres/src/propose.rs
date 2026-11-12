@@ -38,6 +38,11 @@ pub enum PgProposalOutcome {
         asserted_claims: Vec<ClaimInstance>,
         retracted_claims: Vec<ClaimInstance>,
         emitted_intents: Vec<IntentInstance>,
+        /// The subjects the act drew from `new Subject()`, in draw order,
+        /// as its audit row records them. A draw that reached no admitted
+        /// claim is still listed, and no entry is "the record created":
+        /// the asserted claims say which claim holds a subject.
+        drawn_subjects: Vec<Subject>,
     },
     Rejected {
         reason: String,
@@ -310,6 +315,10 @@ fn trace_drawing(
 impl DrawRecord {
     fn into_subjects(self) -> Vec<Subject> {
         self.0
+    }
+
+    pub(crate) fn subjects(&self) -> Vec<Subject> {
+        self.0.clone()
     }
 }
 
@@ -843,6 +852,7 @@ async fn finalise_outcome(
                 asserted_claims: admitted.asserted,
                 retracted_claims: admitted.retracted,
                 emitted_intents: admitted.emitted,
+                drawn_subjects: draws.subjects(),
             })
         }
         Err(reason) => {
