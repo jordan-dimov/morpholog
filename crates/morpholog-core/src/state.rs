@@ -25,7 +25,13 @@ use crate::ir::{IntentName, PredicateName, Subject, Unit, Var};
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "lowercase")]
 pub enum EvalValue {
-    Decimal(#[serde(with = "rust_decimal::serde::str")] Decimal),
+    Decimal(
+        #[serde(
+            serialize_with = "rust_decimal::serde::str::serialize",
+            deserialize_with = "crate::schema::deserialize_decimal"
+        )]
+        Decimal,
+    ),
     Subject(Subject),
     Bool(bool),
     Collection(Vec<EvalValue>),
@@ -52,7 +58,10 @@ pub enum EvalValue {
     /// unit is an opaque case-sensitive symbol. JSON shape:
     /// `{ "type": "quantity", "value": { "amount": "25000", "unit": "USD" } }`.
     Quantity {
-        #[serde(with = "rust_decimal::serde::str")]
+        #[serde(
+            serialize_with = "rust_decimal::serde::str::serialize",
+            deserialize_with = "crate::schema::deserialize_decimal"
+        )]
         amount: Decimal,
         unit: Unit,
     },

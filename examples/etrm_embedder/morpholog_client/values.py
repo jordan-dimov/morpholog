@@ -27,7 +27,8 @@ from typing import TypeVar
 
 # The schema pattern for decimal text, mirrored from the binary's
 # argument codec: optional sign, no leading zeros, optional fraction.
-_DECIMAL_PATTERN = re.compile(r"^-?(0|[1-9]\d*)(\.\d+)?$")
+# ASCII digits only and the whole text, as the binary reads it.
+_DECIMAL_PATTERN = re.compile(r"^-?(0|[1-9]\d*)(\.\d+)?$", re.ASCII)
 # The schema's `date` and `date-time` formats (RFC 3339), and the
 # signed exact-seconds spans the binary writes for a duration.
 _DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -61,10 +62,26 @@ def _expect_str(what: str, value: object) -> str:
 def parse_decimal(text: object) -> Decimal:
     """Wire decimal text -> exact ``Decimal``. Only the wire pattern is
     read: ``NaN``, exponents and leading zeros are refused, not parsed."""
-    text = _expect_str("a decimal", text)
-    if not _DECIMAL_PATTERN.match(text):
+    return Decimal(_wire_decimal(_expect_str("a decimal", text)))
+
+
+def _wire_decimal(text: str) -> str:
+    """The text, if it is a decimal the kernel holds as written: the wire
+    pattern, at most 28 fractional digits, and its digits as one integer
+    below 2^96, trailing zeros counted. Past that the kernel refuses
+    rather than rounds, and so does this client on both directions."""
+    if not _DECIMAL_PATTERN.fullmatch(text):
         raise CodecError(f"decimal {text!r} is outside the wire pattern")
-    return Decimal(text)
+    whole, _, fraction = text.lstrip("-").partition(".")
+    digits = whole + fraction
+    # Thirty written digits cannot fit, and `int` refuses thousands with
+    # its own error; the count keeps the refusal this codec's.
+    if len(fraction) > 28 or len(digits) > 29 or int(digits) >= 1 << 96:
+        raise CodecError(
+            f"decimal {text!r} is not one the kernel holds as written: at most 28 "
+            f"fractional digits, with an unsigned, unscaled coefficient smaller than 2^96"
+        )
+    return text
 
 
 def parse_date(text: object) -> date:
@@ -105,19 +122,15 @@ def encode_decimal(value: Decimal) -> str:
     """``Decimal`` -> wire decimal text. Plain form always -
     ``Decimal.__str__`` goes scientific for some values, which the
     schema pattern (rightly) refuses - and NaN/Inf are not numbers the
-    contract knows. A value crosses as written or not at all: the kernel
-    holds at most 28 places and a coefficient under 2^96, and rounds
-    past that."""
-    if not value.is_finite() or value.adjusted() > 28:
+    contract knows. A value crosses as written or not at all. The limit
+    is read off the digits and exponent before any text is written,
+    since ``format`` writes about as many characters as the exponent."""
+    exponent = value.as_tuple().exponent
+    if not isinstance(exponent, int):
         raise CodecError(f"{value} is not a decimal the kernel holds")
-    text = format(value, "f")
-    if not _DECIMAL_PATTERN.match(text):
-        raise CodecError(f"{value} renders as {text!r}, outside the wire pattern")
-    whole, _, fraction = text.partition(".")
-    fraction = fraction.rstrip("0")
-    if len(fraction) > 28 or abs(int(whole + fraction)) >= 1 << 96:
-        raise CodecError(f"{value} is beyond the decimal the kernel holds")
-    return text
+    if exponent < -28 or len(value.as_tuple().digits) + max(exponent, 0) > 29:
+        raise CodecError(f"{value} is beyond the decimal the kernel holds as written")
+    return _wire_decimal(format(value, "f"))
 
 
 def encode_timestamp(value: datetime) -> str:
@@ -198,12 +211,19 @@ def _value_key(value: object) -> list[object]:
 
 def _trimmed_decimal(value: Decimal) -> str:
     """``trim_scale(numeric)::text``: no trailing zeros, no exponent, and
-    a zero is ``0`` whatever its sign or scale. On the text, not through
-    ``Decimal.normalize``, which rounds to the context's precision."""
-    text = encode_decimal(value)
-    if "." in text:
-        text = text.rstrip("0").rstrip(".")
-    return "0" if text == "-0" else text
+    a zero is ``0`` whatever its sign or scale. Trimmed on the digits
+    before any text is written, so a long scale costs nothing and no
+    non-zero digit is ever dropped; ``Decimal.normalize`` would round to
+    the context's precision instead."""
+    sign, digits, exponent = value.as_tuple()
+    if not isinstance(exponent, int):
+        raise CodecError(f"{value} is not a decimal the kernel holds")
+    if value == 0:
+        return "0"
+    cut = len(digits)
+    while digits[cut - 1] == 0:
+        cut -= 1
+    return encode_decimal(Decimal((sign, digits[:cut], exponent + len(digits) - cut)))
 
 
 def _trimmed_timestamp(text: str) -> str:
