@@ -52,6 +52,10 @@
           "predicate": "EveryKind"
         }
       ],
+      "drawn_subjects": [
+        "01900000-0000-7000-8000-00000000000a",
+        "01900000-0000-7000-8000-00000000000b"
+      ],
       "emitted_intents": [],
       "retracted_claims": [],
       "row": 1,
@@ -63,6 +67,7 @@
         "value": "alex"
       },
       "asserted_claims": [],
+      "drawn_subjects": [],
       "emitted_intents": [
         {
           "args": [

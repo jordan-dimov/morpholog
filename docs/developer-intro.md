@@ -327,7 +327,8 @@ first claim shown in full and the rest elided (`...`) to save space - every
   "retracted_claims": [],
   "emitted_intents": [
     { "name": "RevenueReported", "args": [ ... ] }
-  ]
+  ],
+  "drawn_subjects": []
 }
 ```
 

@@ -672,6 +672,7 @@ pub enum morpholog_postgres::PgProposalOutcome
 pub morpholog_postgres::PgProposalOutcome::Committed
 pub morpholog_postgres::PgProposalOutcome::Committed::actor: morpholog_core::ir::Subject
 pub morpholog_postgres::PgProposalOutcome::Committed::asserted_claims: alloc::vec::Vec<morpholog_core::state::ClaimInstance>
+pub morpholog_postgres::PgProposalOutcome::Committed::drawn_subjects: alloc::vec::Vec<morpholog_core::ir::Subject>
 pub morpholog_postgres::PgProposalOutcome::Committed::emitted_intents: alloc::vec::Vec<morpholog_core::state::IntentInstance>
 pub morpholog_postgres::PgProposalOutcome::Committed::retracted_claims: alloc::vec::Vec<morpholog_core::state::ClaimInstance>
 pub morpholog_postgres::PgProposalOutcome::Committed::transition_id: uuid::Uuid
@@ -1330,6 +1331,7 @@ impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ActivationPref
 pub struct morpholog_postgres::AtomicAct
 pub morpholog_postgres::AtomicAct::actor: morpholog_core::ir::Subject
 pub morpholog_postgres::AtomicAct::asserted_claims: alloc::vec::Vec<morpholog_core::state::ClaimInstance>
+pub morpholog_postgres::AtomicAct::drawn_subjects: alloc::vec::Vec<morpholog_core::ir::Subject>
 pub morpholog_postgres::AtomicAct::emitted_intents: alloc::vec::Vec<morpholog_core::state::IntentInstance>
 pub morpholog_postgres::AtomicAct::retracted_claims: alloc::vec::Vec<morpholog_core::state::ClaimInstance>
 pub morpholog_postgres::AtomicAct::row: u64

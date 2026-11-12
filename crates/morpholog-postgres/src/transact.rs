@@ -33,6 +33,8 @@ pub struct AtomicAct {
     #[serde(with = "morpholog_core::actor_repr")]
     pub actor: Subject,
     pub asserted_claims: Vec<ClaimInstance>,
+    /// As on the single-run committed outcome: this act's own draws.
+    pub drawn_subjects: Vec<Subject>,
     pub emitted_intents: Vec<IntentInstance>,
     pub retracted_claims: Vec<ClaimInstance>,
     pub row: u64,
@@ -145,6 +147,7 @@ pub async fn propose_all_against_pg(
         receipts.push(AtomicAct {
             actor: transition.actor.clone(),
             asserted_claims: admitted.asserted,
+            drawn_subjects: draws.subjects(),
             emitted_intents: admitted.emitted,
             retracted_claims: admitted.retracted,
             row,

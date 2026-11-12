@@ -210,7 +210,8 @@
         "actor",
         "asserted_claims",
         "retracted_claims",
-        "emitted_intents"
+        "emitted_intents",
+        "drawn_subjects"
       ],
       "properties": {
         "status": { "const": "committed" },
@@ -218,7 +219,12 @@
         "actor": { "$ref": "#/$defs/tagged_value" },
         "asserted_claims": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } },
         "retracted_claims": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } },
-        "emitted_intents": { "type": "array", "items": { "$ref": "#/$defs/intent_instance" } }
+        "emitted_intents": { "type": "array", "items": { "$ref": "#/$defs/intent_instance" } },
+        "drawn_subjects": {
+          "description": "The subjects the act drew from `new Subject()`, in draw order, as its audit row records them; empty when it drew none. A draw that reached no admitted claim is still listed, and no position means the record created: the asserted claims say which claim holds a subject.",
+          "type": "array",
+          "items": { "type": "string" }
+        }
       }
     },
     "rejected": {
@@ -256,7 +262,8 @@
         "actor",
         "asserted_claims",
         "retracted_claims",
-        "emitted_intents"
+        "emitted_intents",
+        "drawn_subjects"
       ],
       "properties": {
         "row": { "type": "integer", "minimum": 1 },
@@ -264,7 +271,12 @@
         "actor": { "$ref": "#/$defs/tagged_value" },
         "asserted_claims": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } },
         "retracted_claims": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } },
-        "emitted_intents": { "type": "array", "items": { "$ref": "#/$defs/intent_instance" } }
+        "emitted_intents": { "type": "array", "items": { "$ref": "#/$defs/intent_instance" } },
+        "drawn_subjects": {
+          "description": "The subjects this act drew from `new Subject()`, in draw order, as its audit row records them; empty when it drew none. A draw that reached no admitted claim is still listed, and no position means the record created: the asserted claims say which claim holds a subject.",
+          "type": "array",
+          "items": { "type": "string" }
+        }
       }
     },
     "atomic_committed": {
@@ -691,7 +703,8 @@
             "actor",
             "asserted_claims",
             "retracted_claims",
-            "emitted_intents"
+            "emitted_intents",
+            "drawn_subjects"
           ],
           "properties": {
             "row": { "type": "integer", "minimum": 1 },
@@ -700,7 +713,12 @@
             "actor": { "$ref": "#/$defs/tagged_value" },
             "asserted_claims": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } },
             "retracted_claims": { "type": "array", "items": { "$ref": "#/$defs/claim_instance" } },
-            "emitted_intents": { "type": "array", "items": { "$ref": "#/$defs/intent_instance" } }
+            "emitted_intents": { "type": "array", "items": { "$ref": "#/$defs/intent_instance" } },
+            "drawn_subjects": {
+              "description": "As on `committed`: the subjects this row's act drew, in draw order; empty when it drew none.",
+              "type": "array",
+              "items": { "type": "string" }
+            }
           }
         },
         {

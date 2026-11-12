@@ -150,7 +150,15 @@ fn committed_outcome() -> PgProposalOutcome {
             name: "AccountOpened".into(),
             args: vec![EvalValue::Subject(Subject::from("acct_1"))],
         }],
+        drawn_subjects: sample_draws(),
     }
+}
+
+fn sample_draws() -> Vec<Subject> {
+    vec![
+        Subject::from("01900000-0000-7000-8000-00000000000a"),
+        Subject::from("01900000-0000-7000-8000-00000000000b"),
+    ]
 }
 
 /// `transact`: one decision, three shapes; the session adds `row`.
@@ -170,6 +178,7 @@ fn atomic_committed() -> PgAtomicOutcome {
             AtomicAct {
                 actor: actor.clone(),
                 asserted_claims: asserted_claims.clone(),
+                drawn_subjects: sample_draws(),
                 emitted_intents: Vec::new(),
                 retracted_claims: Vec::new(),
                 row: 1,
@@ -178,6 +187,7 @@ fn atomic_committed() -> PgAtomicOutcome {
             AtomicAct {
                 actor,
                 asserted_claims: Vec::new(),
+                drawn_subjects: Vec::new(),
                 emitted_intents,
                 retracted_claims,
                 row: 2,
@@ -439,12 +449,17 @@ fn traced_run(
         actor: Subject::from("alex"),
         decided_at: None,
     };
-    match propose_with_trace(
-        &p,
-        &transition,
-        pre,
-        &mut morpholog_postgres::runtime_subjects(),
-    ) {
+    // `walk` draws once; a fixed source makes the receipt's list the
+    // subject the trace shows.
+    let fresh = Subject::from("01900000-0000-7000-8000-00000000000f");
+    let mut source = std::iter::once(fresh.clone());
+    let traced = propose_with_trace(&p, &transition, pre, &mut source);
+    let drawn_subjects = if source.next().is_none() {
+        vec![fresh]
+    } else {
+        Vec::new()
+    };
+    match traced {
         TracedProposal::Completed { outcome, trace } => {
             let envelope = match outcome {
                 Outcome::Accepted {
@@ -458,6 +473,7 @@ fn traced_run(
                     asserted_claims,
                     retracted_claims,
                     emitted_intents,
+                    drawn_subjects,
                 },
                 Outcome::Rejected { reason } => PgProposalOutcome::Rejected {
                     reason: reason.to_string(),
@@ -3183,6 +3199,36 @@ fn a_gate_row_cannot_carry_an_invariant_version() {
     )
     .unwrap();
     validate(&with_witness, def, defs, "rejection_row").expect("a gate row with a witness");
+}
+
+/// A committed receipt without `drawn_subjects` is refused: single,
+/// atomic, or a batch row. The goldens carry the key, so they alone would still validate
+/// against a schema that had stopped requiring it.
+#[test]
+fn a_committed_receipt_without_its_draws_is_refused() {
+    let schema = result_schema();
+    let defs = &schema["$defs"];
+    let read = |name: &str| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(golden_dir().join(name)).unwrap()).unwrap()
+    };
+
+    let mut committed = read("committed.json");
+    validate(&committed, &defs["committed"], defs, "committed").expect("the golden validates");
+    committed.as_object_mut().unwrap().remove("drawn_subjects");
+    let err = validate(&committed, &defs["committed"], defs, "committed").unwrap_err();
+    assert!(err.contains("drawn_subjects"), "{err}");
+
+    let mut act = read("transact_committed.json")["acts"][0].clone();
+    validate(&act, &defs["atomic_act"], defs, "atomic_act").expect("the golden's act validates");
+    act.as_object_mut().unwrap().remove("drawn_subjects");
+    let err = validate(&act, &defs["atomic_act"], defs, "atomic_act").unwrap_err();
+    assert!(err.contains("drawn_subjects"), "{err}");
+
+    let mut row = read("batch_committed_receipt.json");
+    validate(&row, &defs["batch_receipt"], defs, "batch_receipt").expect("the golden validates");
+    row.as_object_mut().unwrap().remove("drawn_subjects");
+    let err = validate(&row, &defs["batch_receipt"], defs, "batch_receipt").unwrap_err();
+    assert!(err.contains("drawn_subjects"), "{err}");
 }
 
 /// No golden carries an empty `witness`. Absent means nothing was

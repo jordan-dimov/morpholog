@@ -551,6 +551,7 @@ fn propose_outcome_serialises_with_status_tag() {
         }],
         retracted_claims: vec![],
         emitted_intents: vec![],
+        drawn_subjects: vec![],
     };
     let json = serde_json::to_string(&committed).unwrap();
     assert!(

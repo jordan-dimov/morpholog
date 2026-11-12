@@ -33,6 +33,32 @@ class RunOutcomes(unittest.TestCase):
         )
         self.assertEqual(outcome.emitted_intents[0].name, "AccountOpened")
 
+    def test_a_committed_receipt_lists_its_draws_or_is_refused(self):
+        draws = [
+            "01900000-0000-7000-8000-00000000000a",
+            "01900000-0000-7000-8000-00000000000b",
+        ]
+        single = envelopes.parse_run_outcome(golden("committed.json"))
+        self.assertEqual(single.drawn_subjects, draws)
+        atomic = envelopes.parse_atomic_outcome(golden("transact_committed.json"))
+        self.assertEqual([a.outcome.drawn_subjects for a in atomic.acts], [draws, []])
+        row = envelopes.BatchReceipt.from_json(golden("batch_committed_receipt.json"))
+        self.assertEqual(row.outcome.drawn_subjects, draws)
+
+        # A binary without the field is drift, never an empty list.
+        without = golden("committed.json")
+        del without["drawn_subjects"]
+        with self.assertRaisesRegex(envelopes.EnvelopeError, "drawn_subjects"):
+            envelopes.parse_run_outcome(without)
+        without = golden("transact_committed.json")
+        del without["acts"][0]["drawn_subjects"]
+        with self.assertRaisesRegex(envelopes.EnvelopeError, "drawn_subjects"):
+            envelopes.parse_atomic_outcome(without)
+        without = golden("batch_committed_receipt.json")
+        del without["drawn_subjects"]
+        with self.assertRaisesRegex(envelopes.EnvelopeError, "drawn_subjects"):
+            envelopes.BatchReceipt.from_json(without)
+
     def test_to_json_prints_every_decoded_value_kind_exactly(self):
         outcome = envelopes.parse_run_outcome(golden("committed.json"))
         printed = json.loads(envelopes.to_json(outcome))

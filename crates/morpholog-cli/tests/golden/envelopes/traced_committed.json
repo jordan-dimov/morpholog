@@ -33,6 +33,9 @@
         "predicate": "Seen"
       }
     ],
+    "drawn_subjects": [
+      "01900000-0000-7000-8000-00000000000f"
+    ],
     "emitted_intents": [
       {
         "args": [
