@@ -300,7 +300,7 @@ def conforms(value, schema) -> bool:
     if "$ref" in schema:
         return conforms(value, DEFS[schema["$ref"].removeprefix("#/$defs/")])
     if "oneOf" in schema:
-        return any(conforms(value, branch) for branch in schema["oneOf"])
+        return sum(conforms(value, branch) for branch in schema["oneOf"]) == 1
     if "const" in schema:
         return _same(value, schema["const"])
     if "enum" in schema:
