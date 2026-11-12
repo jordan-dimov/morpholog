@@ -25,7 +25,7 @@ use morpholog_core::{
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::commands::args::{CliArgs, decode_args};
+use crate::commands::args::{CliArgs, decode_args, with_schema_hint};
 use crate::commands::{lookup_transformation, parse_or_report, prepare_or_report};
 use crate::{GenerateBusinessDaysArgs, GenerateLocalDaysArgs, GeneratedRowsArgs};
 
@@ -131,8 +131,7 @@ impl<'a> Target<'a> {
     fn resolve(args: &'a GeneratedRowsArgs, generated: &[&str]) -> anyhow::Result<Self> {
         let parsed = parse_or_report(&args.file)?;
         let prepared = prepare_or_report(&parsed)?;
-        let transformation =
-            lookup_transformation(&prepared, &args.transformation, &args.file)?.clone();
+        let transformation = lookup_transformation(&prepared, &args.transformation)?.clone();
 
         let mut fixed = BTreeMap::new();
         for pair in &args.arg {
@@ -232,9 +231,9 @@ impl<'a> Target<'a> {
             decode_args(
                 &validated,
                 &self.transformation,
-                &self.args.file,
                 CliArgs::Named(&named_json),
             )
+            .map_err(|e| with_schema_hint(e, &self.args.file))
             .with_context(|| format!("row for {}", fields[0].1))?;
             rows.push(json!({
                 "transformation": self.transformation.name.as_str(),

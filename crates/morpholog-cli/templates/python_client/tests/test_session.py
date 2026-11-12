@@ -283,6 +283,8 @@ class TranscriptConversation(SessionHarness):
             with self.assertRaises(MorphologRequestError) as missing_figure:
                 s.explain("post_balance", "teller", {"account": "acct_1"})
             self.assertEqual(missing_figure.exception.code, "invalid_arguments")
+            self.assertEqual(missing_figure.exception.parameter, "figure")
+            self.assertNotIn("morpholog schema", missing_figure.exception.error)
             accounts = s.claims_named("Account")
             self.assertEqual(accounts[0].args["account"], "acct_1")
             balances = s.claims_named("Balance", where={"figure": "100"})
@@ -292,9 +294,12 @@ class TranscriptConversation(SessionHarness):
             with self.assertRaises(MorphologRequestError) as refused:
                 s.propose("no_such_act", "teller", {})
             self.assertEqual(refused.exception.code, "unknown_transformation")
+            self.assertIsNone(refused.exception.parameter)
             with self.assertRaises(MorphologRequestError) as bad_as_of:
                 s.claims(as_of="not-a-coordinate")
             self.assertEqual(bad_as_of.exception.code, "invalid_arguments")
+            # Refused outside the argument codec: no request key to name.
+            self.assertIsNone(bad_as_of.exception.parameter)
             # Reads between two proposals: the resident loop's shape.
             history = s.audit_named()
             self.assertEqual(

@@ -5522,3 +5522,74 @@ async fn inspect_audit_and_rejections_keep_only_the_rows_mentioning_a_subject() 
         assert!(stderr.contains("names nothing"), "{stderr}");
     }
 }
+
+/// The one-shot commands are run by the person who named the file, so an
+/// argument refusal still ends with the schema command for it, and the
+/// error object names the parameter as a field.
+#[tokio::test(flavor = "current_thread")]
+async fn one_shot_argument_refusals_keep_the_schema_hint_and_name_the_parameter() {
+    reset_db().await;
+    let fixture = common::write_fixture(
+        "one_shot_refusals",
+        "\
+program one_shot_refusals
+
+predicate Balance(account: Subject, figure: Decimal)
+
+transformation post_balance(account, figure):
+    admit Balance(account, figure)
+",
+    );
+    let file = fixture.to_str().unwrap();
+    let hint = format!("Run `morpholog schema {file} post_balance` to inspect the accepted shape.");
+    let bad = r#"{"account":"a","figure":"1e10"}"#;
+    let row = format!(r#"{{"transformation":"post_balance","actor":"teller","args_named":{bad}}}"#);
+    let rows = fixture.with_file_name("rows.ndjson");
+    std::fs::write(&rows, format!("{row}\n")).unwrap();
+    let rows = rows.to_str().unwrap();
+
+    let named = |stdout: &str| -> Value {
+        let object: Value = serde_json::from_str(stdout.trim())
+            .unwrap_or_else(|e| panic!("an error object on stdout ({e}): {stdout:?}"));
+        assert_eq!(object["code"], "invalid_arguments", "{object}");
+        assert_eq!(object["parameter"], "figure", "{object}");
+        assert!(
+            object["error"].as_str().unwrap().ends_with(&hint),
+            "{object}"
+        );
+        object
+    };
+
+    let (status, stdout, stderr) = run_cli(&[
+        "propose",
+        file,
+        "post_balance",
+        "--actor",
+        "teller",
+        "--args-named",
+        bad,
+    ]);
+    assert!(!status.success());
+    named(&stdout);
+    assert!(stderr.contains(&hint), "{stderr}");
+
+    let (_, stdout, _) = run_cli(&["propose", file, "--batch", rows]);
+    assert_eq!(named(&stdout)["row"], 1);
+
+    let (status, stdout, stderr) = run_cli(&["transact", file, "--acts", rows]);
+    assert!(!status.success());
+    named(&stdout);
+    assert!(stderr.contains(&hint), "{stderr}");
+
+    let (status, _, stderr) = run_cli(&[
+        "explain",
+        file,
+        "post_balance",
+        "--actor",
+        "teller",
+        "--args-named",
+        bad,
+    ]);
+    assert!(!status.success());
+    assert!(stderr.contains(&hint), "{stderr}");
+}

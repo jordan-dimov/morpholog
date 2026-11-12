@@ -157,9 +157,11 @@ pub struct morpholog_cli::envelopes::ErrorReceipt
 pub morpholog_cli::envelopes::ErrorReceipt::code: morpholog_cli::envelopes::ErrorCode
 pub morpholog_cli::envelopes::ErrorReceipt::error: alloc::string::String
 pub morpholog_cli::envelopes::ErrorReceipt::kind: core::option::Option<&'static str>
+pub morpholog_cli::envelopes::ErrorReceipt::parameter: core::option::Option<alloc::string::String>
 pub morpholog_cli::envelopes::ErrorReceipt::row: u64
 pub morpholog_cli::envelopes::ErrorReceipt::status: &'static str
 impl morpholog_cli::envelopes::ErrorReceipt
+pub fn morpholog_cli::envelopes::ErrorReceipt::naming(self, core::option::Option<alloc::string::String>) -> Self
 pub fn morpholog_cli::envelopes::ErrorReceipt::new(morpholog_cli::envelopes::ErrorCode, alloc::string::String, core::option::Option<&'static str>, u64) -> Self
 impl serde_core::ser::Serialize for morpholog_cli::envelopes::ErrorReceipt
 pub fn morpholog_cli::envelopes::ErrorReceipt::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
@@ -366,8 +368,10 @@ pub struct morpholog_cli::envelopes::RequestError
 pub morpholog_cli::envelopes::RequestError::code: morpholog_cli::envelopes::ErrorCode
 pub morpholog_cli::envelopes::RequestError::error: alloc::string::String
 pub morpholog_cli::envelopes::RequestError::kind: core::option::Option<&'static str>
+pub morpholog_cli::envelopes::RequestError::parameter: core::option::Option<alloc::string::String>
 pub morpholog_cli::envelopes::RequestError::status: &'static str
 impl morpholog_cli::envelopes::RequestError
+pub fn morpholog_cli::envelopes::RequestError::naming(self, core::option::Option<alloc::string::String>) -> Self
 pub fn morpholog_cli::envelopes::RequestError::new(morpholog_cli::envelopes::ErrorCode, alloc::string::String, core::option::Option<&'static str>) -> Self
 impl serde_core::ser::Serialize for morpholog_cli::envelopes::RequestError
 pub fn morpholog_cli::envelopes::RequestError::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer

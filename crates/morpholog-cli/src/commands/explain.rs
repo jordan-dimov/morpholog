@@ -15,7 +15,7 @@ use morpholog_core::{Subject, Transition};
 use morpholog_postgres::load_scoped_state;
 
 use crate::ExplainArgs;
-use crate::commands::args::{CliArgs, decode_args};
+use crate::commands::args::{CliArgs, decode_args, with_schema_hint};
 use crate::commands::{
     connect, lookup_transformation, parse_or_report, prepare_or_report, print_json,
 };
@@ -25,7 +25,7 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
     let parsed = parse_or_report(&args.file)?;
     let prepared = prepare_or_report(&parsed)?;
 
-    let transformation = lookup_transformation(&prepared, &args.transformation, &args.file)?;
+    let transformation = lookup_transformation(&prepared, &args.transformation)?;
 
     // The same codec as `propose`, so both accept the same input.
     let codec_input = match (&args.args, &args.args_named) {
@@ -33,12 +33,8 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
         (None, Some(named)) => CliArgs::Named(named.as_str()),
         _ => unreachable!("clap enforces exactly-one-of `--args` and `--args-named`"),
     };
-    let eval_args = decode_args(
-        &prepared.validated(),
-        transformation,
-        &args.file,
-        codec_input,
-    )?;
+    let eval_args = decode_args(&prepared.validated(), transformation, codec_input)
+        .map_err(|e| with_schema_hint(e, &args.file))?;
 
     let pool = connect(&args.db.database_url).await?;
     let state = load_scoped_state(&pool, &prepared, &transformation.name)

@@ -62,12 +62,27 @@ CASES = {
     "batch_error_receipt.json": ("batch_receipt", E.BatchReceipt.from_json),
     "batch_error_receipt_kernel_error.json": ("batch_receipt", E.BatchReceipt.from_json),
     "batch_error_receipt_not_committed.json": ("batch_receipt", E.BatchReceipt.from_json),
+    "batch_error_receipt_invalid_arguments.json": ("batch_receipt", E.BatchReceipt.from_json),
+    "batch_error_receipt_invalid_arguments_unnamed.json": (
+        "batch_receipt",
+        E.BatchReceipt.from_json,
+    ),
     "transact_committed.json": ("atomic_outcome", E.parse_atomic_outcome),
     "transact_rejected.json": ("atomic_outcome", E.parse_atomic_outcome),
     "transact_rejected_session.json": ("atomic_outcome", E.parse_atomic_outcome),
     "transact_error.json": ("atomic_outcome", E.RequestError.from_json),
     "propose_error_not_committed.json": ("request_error", E.RequestError.from_json),
     "propose_error_kernel_error.json": ("request_error", E.RequestError.from_json),
+    "propose_error_invalid_arguments.json": ("request_error", E.RequestError.from_json),
+    "propose_error_invalid_arguments_unnamed.json": ("request_error", E.RequestError.from_json),
+    "session_error_receipt_invalid_arguments.json": (
+        "session_error_receipt",
+        E.SessionErrorReceipt.from_json,
+    ),
+    "session_error_receipt_invalid_arguments_unnamed.json": (
+        "session_error_receipt",
+        E.SessionErrorReceipt.from_json,
+    ),
     "session_ready.json": ("session_ready", E.SessionReady.from_json),
     "session_error_receipt.json": ("session_error_receipt", E.SessionErrorReceipt.from_json),
     "session_error_receipt_commit_outcome_unknown.json": (
@@ -285,7 +300,7 @@ def conforms(value, schema) -> bool:
     if "$ref" in schema:
         return conforms(value, DEFS[schema["$ref"].removeprefix("#/$defs/")])
     if "oneOf" in schema:
-        return any(conforms(value, branch) for branch in schema["oneOf"])
+        return sum(conforms(value, branch) for branch in schema["oneOf"]) == 1
     if "const" in schema:
         return _same(value, schema["const"])
     if "enum" in schema:

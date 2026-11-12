@@ -13,7 +13,7 @@ use morpholog_postgres::{
 use std::io::Write as _;
 
 use crate::ProposeArgs;
-use crate::commands::args::{CliArgs, decode_args};
+use crate::commands::args::{CliArgs, decode_args, refused_parameter, with_schema_hint};
 use crate::commands::{
     AlreadyReported, CommitOutcomeUnknown, ParsedSource, connect, lookup_transformation,
     parse_or_report, prepare_or_report, print_json,
@@ -124,20 +124,15 @@ async fn prepare(
             anyhow::anyhow!("a transformation name is required outside --batch"),
         ));
     };
-    let transformation = lookup_transformation(prepared, transformation_name, &args.file)
+    let transformation = lookup_transformation(prepared, transformation_name)
         .map_err(|e| RowError::coded(ProposeCode::UnknownTransformation, e))?;
     let codec_input = match (&args.args, &args.args_named) {
         (Some(tagged), None) => CliArgs::Tagged(tagged.as_str()),
         (None, Some(named)) => CliArgs::Named(named.as_str()),
         _ => unreachable!("clap enforces exactly-one-of `--args` and `--args-named`"),
     };
-    let eval_args = decode_args(
-        &prepared.validated(),
-        transformation,
-        &args.file,
-        codec_input,
-    )
-    .map_err(|e| RowError::coded(ProposeCode::InvalidArguments, e))?;
+    let eval_args = decode_args(&prepared.validated(), transformation, codec_input)
+        .map_err(|e| RowError::coded(ProposeCode::InvalidArguments, e).hinted(&args.file))?;
     let Some(actor) = args.actor.clone() else {
         return Err(RowError::coded(
             ProposeCode::InvalidRequest,
@@ -220,6 +215,25 @@ impl RowError {
     fn after_decision(reason: anyhow::Error) -> Self {
         Self { code: None, reason }
     }
+    /// As a one-shot command reports it, to the person who named `file`.
+    pub(crate) fn hinted(self, file: &std::path::Path) -> Self {
+        Self {
+            code: self.code,
+            reason: with_schema_hint(self.reason, file),
+        }
+    }
+}
+
+/// The parameter an `invalid_arguments` names, for the `parameter` beside
+/// its code; `None` on every other code.
+pub(crate) fn named_parameter(
+    code: envelopes::ErrorCode,
+    reason: &anyhow::Error,
+) -> Option<String> {
+    if code != envelopes::ErrorCode::InvalidArguments {
+        return None;
+    }
+    refused_parameter(reason)
 }
 
 /// The name of the kernel error a `kernel_error` carries, for the `kind`
@@ -251,11 +265,14 @@ pub(crate) fn report_request_failure(failure: RowError) -> anyhow::Result<()> {
     let Some(code) = code else {
         return Err(reason);
     };
-    print_json(&envelopes::RequestError::new(
-        code.into(),
-        format!("{reason:#}"),
-        kernel_kind(code.into(), &reason),
-    ))?;
+    print_json(
+        &envelopes::RequestError::new(
+            code.into(),
+            format!("{reason:#}"),
+            kernel_kind(code.into(), &reason),
+        )
+        .naming(named_parameter(code.into(), &reason)),
+    )?;
     if code == envelopes::ProposeCode::CommitOutcomeUnknown {
         return Err(CommitOutcomeUnknown(format!("{reason:#}")).into());
     }
@@ -275,11 +292,14 @@ fn report_batch_refusal(failure: RowError) -> anyhow::Result<()> {
     writeln!(
         out,
         "{}",
-        serde_json::to_string(&envelopes::RequestError::new(
-            code.into(),
-            format!("{reason:#}"),
-            kernel_kind(code.into(), &reason),
-        ))?
+        serde_json::to_string(
+            &envelopes::RequestError::new(
+                code.into(),
+                format!("{reason:#}"),
+                kernel_kind(code.into(), &reason),
+            )
+            .naming(named_parameter(code.into(), &reason))
+        )?
     )?;
     out.flush()?;
     eprintln!("Error: {reason:?}");
@@ -442,12 +462,15 @@ async fn run_batch(
                 reason,
             }) => {
                 errored += 1;
-                serde_json::to_value(envelopes::ErrorReceipt::new(
-                    code.into(),
-                    format!("{reason:#}"),
-                    kernel_kind(code.into(), &reason),
-                    row as u64,
-                ))?
+                serde_json::to_value(
+                    envelopes::ErrorReceipt::new(
+                        code.into(),
+                        format!("{reason:#}"),
+                        kernel_kind(code.into(), &reason),
+                        row as u64,
+                    )
+                    .naming(named_parameter(code.into(), &reason)),
+                )?
             }
         };
         writeln!(out, "{}", serde_json::to_string(&receipt)?)?;
@@ -469,18 +492,19 @@ async fn batch_row_outcome(
     let row: BatchRow = serde_json::from_str(line)
         .context("malformed batch row")
         .map_err(|e| RowError::coded(envelopes::ProposeCode::InvalidRequest, e))?;
-    propose_row_outcome(&args.file, args.explain_on_reject, program, pool, row).await
+    propose_row_outcome(args.explain_on_reject, program, pool, row)
+        .await
+        .map_err(|e| e.hinted(&args.file))
 }
 
 /// Turn a batch row into its transition: look up the transformation and
 /// decode the arguments. Shared by batch, session and `transact`, so all
 /// refuse a malformed row with the same code.
 pub(crate) fn decode_row(
-    file: &std::path::Path,
     prepared: &morpholog_core::PreparedProgram,
     row: BatchRow,
 ) -> Result<Transition, RowError> {
-    let transformation = lookup_transformation(prepared, &row.transformation, file)
+    let transformation = lookup_transformation(prepared, &row.transformation)
         .map_err(|e| RowError::coded(envelopes::ProposeCode::UnknownTransformation, e))?;
     let (tagged, named);
     let codec_input = match (&row.args, &row.args_named) {
@@ -499,7 +523,7 @@ pub(crate) fn decode_row(
             ));
         }
     };
-    let eval_args = decode_args(&prepared.validated(), transformation, file, codec_input)
+    let eval_args = decode_args(&prepared.validated(), transformation, codec_input)
         .map_err(|e| RowError::coded(envelopes::ProposeCode::InvalidArguments, e))?;
     Ok(Transition {
         transformation_name: transformation.name.clone(),
@@ -513,14 +537,13 @@ pub(crate) fn decode_row(
 /// `row`. It uses the same codecs, calls and JSON shapes as the single-run
 /// path, so receipts cannot drift from it. Shared by batch and session.
 pub(crate) async fn propose_row_outcome(
-    file: &std::path::Path,
     explain_on_reject: bool,
     program: &PgProgram,
     pool: &morpholog_postgres::PgPool,
     row: BatchRow,
 ) -> Result<serde_json::Value, RowError> {
     let prepared = program.prepared();
-    let transition = decode_row(file, prepared, row)?;
+    let transition = decode_row(prepared, row)?;
     if explain_on_reject {
         let refused =
             propose_against_pg_with_rejection_state(pool, program, &Proposal::gateway(&transition))

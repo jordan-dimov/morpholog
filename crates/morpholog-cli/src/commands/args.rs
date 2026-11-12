@@ -31,17 +31,66 @@ pub(crate) enum CliArgs<'a> {
 /// Decode `--args` or `--args-named` into the positional `Vec<EvalValue>`
 /// the kernel takes. The named path reads parameter kinds from `program`
 /// and `transformation` via [`transformation_param_kinds`]; the tagged path
-/// ignores them. `file` lets errors name the right `morpholog schema` call.
+/// ignores them. What the named codec refuses is an [`ArgumentRefusal`].
 pub(crate) fn decode_args(
     program: &ValidatedProgram<'_>,
     transformation: &Transformation,
-    file: &Path,
     input: CliArgs<'_>,
 ) -> anyhow::Result<Vec<EvalValue>> {
     match input {
         CliArgs::Tagged(json) => decode_tagged(json),
-        CliArgs::Named(json) => decode_named(program, transformation, file, json),
+        CliArgs::Named(json) => decode_named(program, transformation, json),
     }
+}
+
+/// What the named codec refused. `parameter` is the one request key it
+/// can point at: the parameter whose value it refused (a collection
+/// element names its parameter), a missing one, or a single unknown key.
+/// It says where decoding failed, never why a rule refused a valid value.
+#[derive(Debug)]
+pub(crate) struct ArgumentRefusal {
+    pub(crate) parameter: Option<String>,
+    transformation: TransformationName,
+    message: String,
+}
+
+impl std::fmt::Display for ArgumentRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ArgumentRefusal {}
+
+/// The parameter an `invalid_arguments` failure names, when the named
+/// codec could point at one. Read off the typed error, never the prose.
+pub(crate) fn refused_parameter(reason: &anyhow::Error) -> Option<String> {
+    reason
+        .chain()
+        .find_map(|e| e.downcast_ref::<ArgumentRefusal>())
+        .and_then(|refusal| refusal.parameter.clone())
+}
+
+/// A one-shot command's argument refusal, ending with the schema command
+/// for the file its caller named. A session or a service never adds
+/// this: its caller cannot run the command, and the path is the server's.
+pub(crate) fn with_schema_hint(reason: anyhow::Error, file: &Path) -> anyhow::Error {
+    let Some(refusal) = reason
+        .chain()
+        .find_map(|e| e.downcast_ref::<ArgumentRefusal>())
+    else {
+        return reason;
+    };
+    ArgumentRefusal {
+        parameter: refusal.parameter.clone(),
+        transformation: refusal.transformation.clone(),
+        message: format!(
+            "{reason:#} Run `morpholog schema {} {}` to inspect the accepted shape.",
+            file.display(),
+            refusal.transformation,
+        ),
+    }
+    .into()
 }
 
 fn decode_tagged(json: &str) -> anyhow::Result<Vec<EvalValue>> {
@@ -56,7 +105,6 @@ fn decode_tagged(json: &str) -> anyhow::Result<Vec<EvalValue>> {
 fn decode_named(
     program: &ValidatedProgram<'_>,
     transformation: &Transformation,
-    file: &Path,
     json: &str,
 ) -> anyhow::Result<Vec<EvalValue>> {
     let object: serde_json::Map<String, Value> =
@@ -66,7 +114,11 @@ fn decode_named(
         .map_err(|e| anyhow!("internal: param-kind analysis failed: {e}"))?;
 
     let declared: Vec<&str> = kinds.iter().map(|(v, _)| v.as_str()).collect();
-    let schema_hint = schema_hint(file, &transformation.name);
+    let refusal = |parameter: Option<&str>, message: String| ArgumentRefusal {
+        parameter: parameter.map(str::to_string),
+        transformation: transformation.name.clone(),
+        message,
+    };
 
     // Reject unknown keys before reporting per-parameter problems,
     // so a typo surfaces clearly rather than as "missing required".
@@ -76,54 +128,64 @@ fn decode_named(
         .map(String::as_str)
         .collect();
     if !extra.is_empty() {
-        bail!(
-            "--args-named contains unknown parameter(s) `{}`; \
-             expected: {}. {schema_hint}",
-            extra.join("`, `"),
-            declared.join(", "),
-        );
+        // One unknown key can be named; several cannot be one answer.
+        let only = match extra.as_slice() {
+            [only] => Some(*only),
+            _ => None,
+        };
+        return Err(refusal(
+            only,
+            format!(
+                "--args-named contains unknown parameter(s) `{}`; \
+                 expected: {}.",
+                extra.join("`, `"),
+                declared.join(", "),
+            ),
+        )
+        .into());
     }
 
     let mut out = Vec::with_capacity(kinds.len());
     for (param, kind) in &kinds {
+        let name = Some(param.as_str());
         let raw = object.get(param.as_str()).ok_or_else(|| {
-            anyhow!("--args-named is missing required parameter `{param}`. {schema_hint}")
+            refusal(
+                name,
+                format!("--args-named is missing required parameter `{param}`."),
+            )
         })?;
         if raw.is_null() {
-            bail!(
-                "parameter `{param}` is `null`; --args-named does not accept null values. \
-                 {schema_hint}"
-            );
+            return Err(refusal(
+                name,
+                format!("parameter `{param}` is `null`; --args-named does not accept null values."),
+            )
+            .into());
         }
-        out.push(decode_value(param.as_str(), kind, raw, &schema_hint)?);
+        // Named here, where the parameter is known, so no decoder below
+        // has to keep an error's type for the name to survive.
+        let value =
+            decode_value(param.as_str(), kind, raw).map_err(|e| refusal(name, format!("{e:#}")))?;
+        out.push(value);
     }
     Ok(out)
 }
 
-fn decode_value(
-    param: &str,
-    kind: &ParamKind,
-    raw: &Value,
-    schema_hint: &str,
-) -> anyhow::Result<EvalValue> {
+fn decode_value(param: &str, kind: &ParamKind, raw: &Value) -> anyhow::Result<EvalValue> {
     match kind {
-        ParamKind::Concrete(PredicateArgKind::Subject) => decode_subject(param, raw, schema_hint),
-        ParamKind::Concrete(PredicateArgKind::Decimal) => decode_decimal(param, raw, schema_hint),
-        ParamKind::Concrete(PredicateArgKind::Date) => decode_date(param, raw, schema_hint),
-        ParamKind::Concrete(PredicateArgKind::Timestamp) => {
-            decode_timestamp(param, raw, schema_hint)
-        }
-        ParamKind::Concrete(PredicateArgKind::Duration) => decode_duration(param, raw, schema_hint),
+        ParamKind::Concrete(PredicateArgKind::Subject) => decode_subject(param, raw),
+        ParamKind::Concrete(PredicateArgKind::Decimal) => decode_decimal(param, raw),
+        ParamKind::Concrete(PredicateArgKind::Date) => decode_date(param, raw),
+        ParamKind::Concrete(PredicateArgKind::Timestamp) => decode_timestamp(param, raw),
+        ParamKind::Concrete(PredicateArgKind::Duration) => decode_duration(param, raw),
         // A quantity travels as a bare decimal string. The declaration
         // already fixes the unit, so it is attached here, not sent.
         ParamKind::Concrete(PredicateArgKind::Quantity(unit)) => {
-            let EvalValue::Decimal(amount) =
-                decode_decimal(param, raw, schema_hint).map_err(|e| {
-                    anyhow!("{e}").context(format!(
-                        "parameter `{param}` is Decimal[{unit}]; the named codec takes the \
+            let EvalValue::Decimal(amount) = decode_decimal(param, raw).map_err(|e| {
+                anyhow!("{e}").context(format!(
+                    "parameter `{param}` is Decimal[{unit}]; the named codec takes the \
                      bare decimal amount (the unit comes from the declaration)"
-                    ))
-                })?
+                ))
+            })?
             else {
                 unreachable!("decode_decimal returns EvalValue::Decimal on success")
             };
@@ -132,26 +194,26 @@ fn decode_value(
                 unit: unit.clone(),
             })
         }
-        ParamKind::Concrete(PredicateArgKind::Bool) => decode_bool(param, raw, schema_hint),
+        ParamKind::Concrete(PredicateArgKind::Bool) => decode_bool(param, raw),
         // Expression-only: a span shifts a date inside a rule body and
         // is never a governed value, so no argument can carry one.
         ParamKind::Concrete(PredicateArgKind::CalendarSpan) => bail!(
             "parameter `{param}` was inferred as a calendar span, which is \
              expression-only and cannot be supplied as an argument; write the \
              span as a literal (e.g. span(P3M)) in the transformation body \
-             instead. {schema_hint}"
+             instead."
         ),
         // A collection with a known element kind: a JSON array, each item
         // decoded by that kind.
         ParamKind::Collection(element) => {
             let Value::Array(items) = raw else {
-                bail!("parameter `{param}` is a collection; expected a JSON array. {schema_hint}");
+                bail!("parameter `{param}` is a collection; expected a JSON array.");
             };
             let decoded = items
                 .iter()
                 .enumerate()
                 .map(|(i, item)| {
-                    decode_value(param, element, item, schema_hint).map_err(|e| {
+                    decode_value(param, element, item).map_err(|e| {
                         anyhow!("{e}").context(format!("collection `{param}`, item {i}"))
                     })
                 })
@@ -163,19 +225,19 @@ fn decode_value(
         ParamKind::Concrete(PredicateArgKind::Collection) => bail!(
             "parameter `{param}` is a collection whose item kind the model never observes; \
              --args-named cannot decode it. Use the parameter's items in the body so their \
-             kind is observed, or send it via --args with the tagged EvalValue codec. {schema_hint}"
+             kind is observed, or send it via --args with the tagged EvalValue codec."
         ),
         ParamKind::Concrete(PredicateArgKind::Any) | ParamKind::Polymorphic => bail!(
             "parameter `{param}` is polymorphic (the schema cannot narrow its kind); \
              --args-named cannot infer an EvalValue kind. Use --args with the tagged \
              EvalValue codec, or constrain the parameter in the model so its kind is \
-             observed. {schema_hint}"
+             observed."
         ),
         ParamKind::Unconstrained => bail!(
             "parameter `{param}` is Unconstrained (never observed in a kind-bearing position). \
              --args-named cannot infer an EvalValue kind. Use --args with the tagged \
              EvalValue codec, or use the parameter in the transformation body so its \
-             kind is observed. {schema_hint}"
+             kind is observed."
         ),
         ParamKind::Ambiguous(observed) => {
             // `Display` keeps the unit (`Decimal[USD]`).
@@ -183,7 +245,7 @@ fn decode_value(
             bail!(
                 "parameter `{param}` is Ambiguous ({}); --args-named cannot choose a branch \
                  safely. Use --args with the tagged EvalValue codec, or refactor the model \
-                 to expose distinct transformations or parameters. {schema_hint}",
+                 to expose distinct transformations or parameters.",
                 names.join(", "),
             )
         }
@@ -220,95 +282,83 @@ fn require_str<'v>(
     raw: &'v Value,
     kind: &str,
     expected: &str,
-    schema_hint: &str,
 ) -> anyhow::Result<&'v str> {
     raw.as_str().ok_or_else(|| {
         anyhow!(
-            "parameter `{param}` is {kind} but received {}; expected {expected}. \
-             {schema_hint}",
+            "parameter `{param}` is {kind} but received {}; expected {expected}.",
             describe_value(raw),
         )
     })
 }
 
-fn decode_subject(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
-    let s = require_str(param, raw, "Subject", "a string", schema_hint)?;
+fn decode_subject(param: &str, raw: &Value) -> anyhow::Result<EvalValue> {
+    let s = require_str(param, raw, "Subject", "a string")?;
     // Any string is a subject: minted ids and domain symbols (commodity
     // codes, period names) alike. The IR pins no format, so neither does
     // the codec. An embedder wanting stricter checks adds its own.
     Ok(EvalValue::Subject(Subject::from(s)))
 }
 
-fn decode_decimal(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
-    let s = require_str(
-        param,
-        raw,
-        "Decimal",
-        "a decimal string (e.g. \"100.50\")",
-        schema_hint,
-    )?;
+fn decode_decimal(param: &str, raw: &Value) -> anyhow::Result<EvalValue> {
+    let s = require_str(param, raw, "Decimal", "a decimal string (e.g. \"100.50\")")?;
     let d = morpholog_core::schema::decimal_from_wire(s)
-        .map_err(|e| anyhow!("parameter `{param}` is Decimal but {e}. {schema_hint}"))?;
+        .map_err(|e| anyhow!("parameter `{param}` is Decimal but {e}."))?;
     Ok(EvalValue::Decimal(d))
 }
 
-fn decode_date(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
+fn decode_date(param: &str, raw: &Value) -> anyhow::Result<EvalValue> {
     let s = require_str(
         param,
         raw,
         "Date",
         "an ISO-8601 civil date string (e.g. \"2026-05-29\")",
-        schema_hint,
     )?;
     let d = s.parse::<Date>().map_err(|e| {
         anyhow!(
             "parameter `{param}` is Date but `{s}` failed to parse: {e}. \
-             Expected YYYY-MM-DD. {schema_hint}"
+             Expected YYYY-MM-DD."
         )
     })?;
     Ok(EvalValue::Date(d))
 }
 
-fn decode_timestamp(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
+fn decode_timestamp(param: &str, raw: &Value) -> anyhow::Result<EvalValue> {
     let s = require_str(
         param,
         raw,
         "Timestamp",
         "an RFC 3339 instant string (e.g. \"2026-10-24T14:00:00Z\")",
-        schema_hint,
     )?;
     let t = s.parse::<jiff::Timestamp>().map_err(|e| {
         anyhow!(
             "parameter `{param}` is Timestamp but `{s}` failed to parse: {e}. \
-             Expected RFC 3339 (e.g. 2026-10-24T14:00:00Z). {schema_hint}"
+             Expected RFC 3339 (e.g. 2026-10-24T14:00:00Z)."
         )
     })?;
     Ok(EvalValue::Timestamp(t))
 }
 
-fn decode_duration(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
+fn decode_duration(param: &str, raw: &Value) -> anyhow::Result<EvalValue> {
     let s = require_str(
         param,
         raw,
         "Duration",
         "an ISO-8601 duration string in exact time units (e.g. \"PT6H\")",
-        schema_hint,
     )?;
     let d = s.parse::<jiff::SignedDuration>().map_err(|e| {
         anyhow!(
             "parameter `{param}` is Duration but `{s}` failed to parse: {e}. \
              Expected ISO 8601 time units (e.g. PT6H, PT1H30M); calendar units \
-             (months, years) are not accepted. {schema_hint}"
+             (months, years) are not accepted."
         )
     })?;
     Ok(EvalValue::Duration(d))
 }
 
-fn decode_bool(param: &str, raw: &Value, schema_hint: &str) -> anyhow::Result<EvalValue> {
+fn decode_bool(param: &str, raw: &Value) -> anyhow::Result<EvalValue> {
     raw.as_bool().map(EvalValue::Bool).ok_or_else(|| {
         anyhow!(
-            "parameter `{param}` is Bool but received {}; expected `true` or `false`. \
-             {schema_hint}",
+            "parameter `{param}` is Bool but received {}; expected `true` or `false`.",
             describe_value(raw),
         )
     })
@@ -323,14 +373,6 @@ fn describe_value(raw: &Value) -> &'static str {
         Value::Array(_) => "array",
         Value::Object(_) => "object",
     }
-}
-
-fn schema_hint(file: &Path, transformation: &TransformationName) -> String {
-    format!(
-        "Run `morpholog schema {} {}` to inspect the accepted shape.",
-        file.display(),
-        transformation,
-    )
 }
 
 /// Decode one bare `--where` value under its declared kind, reusing the
@@ -349,12 +391,9 @@ pub(crate) fn decode_declared_value(
         (PredicateArgKind::Bool, "false") => Value::Bool(false),
         _ => Value::String(raw.to_string()),
     };
-    decode_value(
-        field,
-        &ParamKind::Concrete(kind.clone()),
-        &json,
-        "a --where value is written bare, as in --where invoice_id=inv_1",
-    )
+    decode_value(field, &ParamKind::Concrete(kind.clone()), &json).map_err(|e| {
+        anyhow!("{e:#} a --where value is written bare, as in --where invoice_id=inv_1")
+    })
 }
 
 #[cfg(test)]
@@ -384,21 +423,13 @@ mod tests {
                     .collect::<Vec<_>>()
             };
             for text in texts("both_accept").into_iter().chain(texts("binary_only")) {
-                let decoded = decode_value(
-                    "p",
-                    &ParamKind::Concrete(param_kind.clone()),
-                    &json!(text),
-                    "",
-                );
+                let decoded =
+                    decode_value("p", &ParamKind::Concrete(param_kind.clone()), &json!(text));
                 assert!(decoded.is_ok(), "{kind} {text:?} is accepted: {decoded:?}");
             }
             for text in texts("both_refuse") {
-                let decoded = decode_value(
-                    "p",
-                    &ParamKind::Concrete(param_kind.clone()),
-                    &json!(text),
-                    "",
-                );
+                let decoded =
+                    decode_value("p", &ParamKind::Concrete(param_kind.clone()), &json!(text));
                 assert!(decoded.is_err(), "{kind} {text:?} is refused: {decoded:?}");
             }
             if kind != "decimal" {
@@ -452,7 +483,7 @@ mod tests {
     #[test]
     fn a_collection_param_decodes_a_json_array_item_by_item() {
         let raw = json!(["acct_a", "acct_b"]);
-        let decoded = decode_value("accounts", &subject_collection(), &raw, "").unwrap();
+        let decoded = decode_value("accounts", &subject_collection(), &raw).unwrap();
         let EvalValue::Collection(items) = decoded else {
             panic!("expected a collection, got {decoded:?}");
         };
@@ -464,13 +495,13 @@ mod tests {
     #[test]
     fn a_collection_param_rejects_a_non_array() {
         let raw = json!("not an array");
-        assert!(decode_value("accounts", &subject_collection(), &raw, "").is_err());
+        assert!(decode_value("accounts", &subject_collection(), &raw).is_err());
     }
 
     #[test]
     fn a_collection_param_rejects_an_ill_typed_item() {
         // Each item is decoded by the element kind, so a bad one fails.
         let raw = json!(["acct_a", 42]);
-        assert!(decode_value("accounts", &subject_collection(), &raw, "").is_err());
+        assert!(decode_value("accounts", &subject_collection(), &raw).is_err());
     }
 }

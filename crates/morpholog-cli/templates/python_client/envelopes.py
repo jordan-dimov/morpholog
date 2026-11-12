@@ -1129,6 +1129,18 @@ def _kernel_kind(data: _Fields, code: str) -> str | None:
     return None
 
 
+def _refused_parameter(data: _Fields, code: str) -> str | None:
+    """The ``parameter`` an ``invalid_arguments`` may name; every other
+    code carries none."""
+    if "parameter" not in data:
+        return None
+    if code != "invalid_arguments":
+        raise EnvelopeError(
+            f"a `{code}` error names no parameter, got {data.raw('parameter')!r}"
+        )
+    return data.text("parameter")
+
+
 @dataclass(frozen=True)
 class RequestError:
     """The error object a one-shot ``propose`` or ``transact`` prints when
@@ -1140,13 +1152,24 @@ class RequestError:
     error: str
     #: Which kernel error, on a ``kernel_error`` only.
     kind: str | None = None
+    #: The one request key an ``invalid_arguments`` points at, when the
+    #: binary could name one. Where decoding failed, never why a rule
+    #: refused a valid value.
+    parameter: str | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> RequestError:
-        data = _strict("request error", payload, {"code", "error", "status"}, {"kind"})
+        data = _strict(
+            "request error", payload, {"code", "error", "status"}, {"kind", "parameter"}
+        )
         data.constant("status", "error")
         code = data.member("code", PROPOSE_ERROR_CODES)
-        return cls(code=code, error=data.text("error"), kind=_kernel_kind(data, code))
+        return cls(
+            code=code,
+            error=data.text("error"),
+            kind=_kernel_kind(data, code),
+            parameter=_refused_parameter(data, code),
+        )
 
 
 @dataclass(frozen=True)
@@ -1161,11 +1184,16 @@ class SessionErrorReceipt:
     row: int
     #: Which kernel error, on a ``kernel_error`` only.
     kind: str | None = None
+    #: As on ``RequestError``.
+    parameter: str | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> SessionErrorReceipt:
         data = _strict(
-            "session error receipt", payload, {"code", "error", "row", "status"}, {"kind"}
+            "session error receipt",
+            payload,
+            {"code", "error", "row", "status"},
+            {"kind", "parameter"},
         )
         data.constant("status", "error")
         code = data.member("code", SESSION_ERROR_CODES)
@@ -1174,6 +1202,7 @@ class SessionErrorReceipt:
             error=data.text("error"),
             row=data.integer("row", minimum=1),
             kind=_kernel_kind(data, code),
+            parameter=_refused_parameter(data, code),
         )
 
 
@@ -1186,6 +1215,8 @@ class BatchError:
     error: str
     #: Which kernel error, on a ``kernel_error`` only.
     kind: str | None = None
+    #: As on ``RequestError``.
+    parameter: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1200,12 +1231,15 @@ class BatchReceipt:
         row = _Fields("batch receipt", payload).integer("row", minimum=1)
         body = {k: v for k, v in payload.items() if k != "row"}
         if body.get("status") == "error":
-            data = _strict("batch error receipt", body, {"status", "code", "error"}, {"kind"})
+            data = _strict(
+                "batch error receipt", body, {"status", "code", "error"}, {"kind", "parameter"}
+            )
             code = data.member("code", PROPOSE_ERROR_CODES)
             error = BatchError(
                 code=code,
                 error=data.text("error"),
                 kind=_kernel_kind(data, code),
+                parameter=_refused_parameter(data, code),
             )
             return cls(row=row, outcome=error)
         return cls(row=row, outcome=parse_run_outcome(body))

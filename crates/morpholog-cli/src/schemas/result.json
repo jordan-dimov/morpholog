@@ -318,6 +318,17 @@
         {
           "type": "object",
           "additionalProperties": false,
+          "required": ["status", "code", "error"],
+          "properties": {
+            "status": { "const": "error" },
+            "code": { "const": "invalid_arguments" },
+            "error": { "type": "string" },
+            "parameter": { "description": "The one request key the refusal can point at: the parameter whose value the named codec refused (a collection element names its parameter), a missing one, or a single unknown key. Absent when no single key can be named. It says where decoding failed, never why a rule refused a valid value.", "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
           "required": ["status", "code", "error", "kind"],
           "properties": {
             "status": { "const": "error" },
@@ -751,6 +762,18 @@
             {
               "type": "object",
               "additionalProperties": false,
+              "required": ["row", "status", "code", "error"],
+              "properties": {
+                "row": { "type": "integer", "minimum": 1 },
+                "status": { "const": "error" },
+                "code": { "const": "invalid_arguments" },
+                "error": { "type": "string" },
+                "parameter": { "description": "As on `request_error`.", "type": "string" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
               "required": ["row", "status", "code", "error", "kind"],
               "properties": {
                 "row": { "type": "integer", "minimum": 1 },
@@ -777,18 +800,18 @@
       }
     },
     "propose_error_code_without_kind": {
-      "description": "Every proposal code but `kernel_error`, which alone carries a `kind`.",
+      "description": "The proposal codes that carry nothing beside their prose: every one but `kernel_error`, which carries a `kind`, and `invalid_arguments`, which may carry a `parameter`.",
       "enum": [
         "actor_assertion_unauthorised", "commit_outcome_unknown", "deadlock_detected",
-        "duplicate_intent", "invalid_arguments", "invalid_request",
+        "duplicate_intent", "invalid_request",
         "not_committed", "serialization_failure", "unknown_transformation"
       ]
     },
     "error_code_without_kind": {
-      "description": "Every session code but `kernel_error`, which alone carries a `kind`.",
+      "description": "The session codes that carry nothing beside their prose: every one but `kernel_error`, which carries a `kind`, and `invalid_arguments`, which may carry a `parameter`.",
       "enum": [
         "actor_assertion_unauthorised", "commit_outcome_unknown", "deadlock_detected",
-        "duplicate_intent", "invalid_arguments", "invalid_request",
+        "duplicate_intent", "invalid_request",
         "not_committed", "serialization_failure", "unknown_operation",
         "unknown_transformation"
       ]
@@ -830,6 +853,18 @@
           "properties": {
             "code": { "$ref": "#/$defs/error_code_without_kind" },
             "error": { "type": "string" },
+            "row": { "type": "integer", "minimum": 1 },
+            "status": { "const": "error" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "error", "row", "status"],
+          "properties": {
+            "code": { "const": "invalid_arguments" },
+            "error": { "type": "string" },
+            "parameter": { "description": "As on `request_error`.", "type": "string" },
             "row": { "type": "integer", "minimum": 1 },
             "status": { "const": "error" }
           }
