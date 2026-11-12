@@ -1,0 +1,6 @@
+{
+  "code": "invalid_arguments",
+  "error": "parameter `quantity` is Decimal but `1e10` does not match the schema pattern ^-?(0|[1-9]\\d*)(\\.\\d+)?$ (no leading `+`, no leading zeros except \"0\", no trailing dot, no exponent, no empty string).",
+  "parameter": "quantity",
+  "status": "error"
+}

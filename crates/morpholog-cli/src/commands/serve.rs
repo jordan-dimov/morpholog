@@ -253,7 +253,8 @@ async fn converse(stream: UnixStream, presenter: &Presenter) -> anyhow::Result<(
                     format!("{reason:#}"),
                     crate::commands::propose::kernel_kind(code, &reason),
                     row,
-                );
+                )
+                .naming(crate::commands::propose::named_parameter(code, &reason));
                 write_line(&mut write, &serde_json::to_value(&receipt)?).await?;
             }
             Err(ResidentFailure::Operational(reason)) => {

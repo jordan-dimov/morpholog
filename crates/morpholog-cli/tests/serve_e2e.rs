@@ -594,3 +594,28 @@ async fn a_caller_that_hangs_up_mid_proposal_leaves_one_decision() {
     let pong = ask(&mut conn, r#"{"op":"ping"}"#);
     assert_eq!(pong["status"], "ready", "the service still serves: {pong}");
 }
+
+/// Over the socket an argument refusal names its parameter, and no answer
+/// names the service's file or a command the peer cannot run.
+#[tokio::test]
+async fn an_argument_refusal_names_its_parameter_and_not_the_services_file() {
+    let login = login().await;
+    reset_db().await;
+    let served = serve(&presenter(own_uid(), &login));
+    let mut conn = served.open();
+    let refused = ask(&mut conn, &OPEN.replace("2026-01-15", "15 January"));
+    assert_eq!(refused["code"], "invalid_arguments", "{refused}");
+    assert_eq!(refused["parameter"], "opened_on", "{refused}");
+    let unknown = ask(&mut conn, &OPEN.replace("open_account", "no_such_act"));
+    assert_eq!(unknown["code"], "unknown_transformation", "{unknown}");
+    assert!(unknown.get("parameter").is_none(), "{unknown}");
+    let file = served.fixture.to_str().unwrap().to_string();
+    for answer in [&refused, &unknown] {
+        let text = answer.to_string();
+        assert!(
+            !text.contains(&file),
+            "the file's path is on the wire: {text}"
+        );
+        assert!(!text.contains("morpholog schema"), "{text}");
+    }
+}

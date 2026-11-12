@@ -251,7 +251,6 @@ impl Resident {
             args_named: body.args_named,
         };
         let mut envelope = propose_row_outcome(
-            &self.programme.file,
             body.explain_on_reject,
             &self.programme.program,
             &self.pool,
@@ -284,8 +283,7 @@ impl Resident {
             args_named: body.args_named,
         };
         let prepared = self.prepared();
-        let transition =
-            decode_row(&self.programme.file, prepared, batch_row).map_err(row_failure)?;
+        let transition = decode_row(prepared, batch_row).map_err(row_failure)?;
         let state = morpholog_postgres::load_scoped_state(
             &self.pool,
             prepared,
@@ -320,8 +318,7 @@ impl Resident {
     ) -> Result<serde_json::Value, ResidentFailure> {
         let body: TransactBody = serde_json::from_value(body)
             .map_err(|e| ResidentFailure::request(ErrorCode::InvalidRequest, e.into()))?;
-        let proposals =
-            decode_acts(&self.programme.file, self.prepared(), body.acts).map_err(row_failure)?;
+        let proposals = decode_acts(self.prepared(), body.acts).map_err(row_failure)?;
         let outcome = morpholog_postgres::propose_all_against_pg(
             &self.pool,
             &self.programme.program,

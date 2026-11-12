@@ -104,10 +104,16 @@ class MorphologRequestError(MorphologError):
     ``row`` is the session request number, or ``None`` for a one-shot
     ``propose``, ``transact`` or a batch refused before its first row.
     ``kind`` names the kernel error on a ``kernel_error``, and is ``None``
-    on every other code."""
+    on every other code. ``parameter`` is the one request key an
+    ``invalid_arguments`` points at, when the binary could name one."""
 
     def __init__(
-        self, code: str, error: str, row: int | None = None, kind: str | None = None
+        self,
+        code: str,
+        error: str,
+        row: int | None = None,
+        kind: str | None = None,
+        parameter: str | None = None,
     ) -> None:
         where = f"session request {row}" if row is not None else "request"
         super().__init__(f"{where} refused ({code}): {error}")
@@ -115,6 +121,7 @@ class MorphologRequestError(MorphologError):
         self.error = error
         self.row = row
         self.kind = kind
+        self.parameter = parameter
 
     @property
     def retriable(self) -> bool:  # type: ignore[override]
@@ -724,7 +731,9 @@ class Morpholog:
         except envelopes.EnvelopeError:
             return
         if error.code in envelopes.NOTHING_RECORDED_CODES:
-            raise MorphologRequestError(error.code, error.error, kind=error.kind)
+            raise MorphologRequestError(
+                error.code, error.error, kind=error.kind, parameter=error.parameter
+            )
 
     def transact(
         self, acts: list[dict[str, object]], timeout: float | None = None
@@ -794,7 +803,9 @@ class Morpholog:
                 raise unknown(error.error, proc.stderr)
             if error.code not in envelopes.NOTHING_RECORDED_CODES:
                 raise unknown(f"an unpublished error code {error.code!r}", proc.stderr)
-            raise MorphologRequestError(error.code, error.error, kind=error.kind)
+            raise MorphologRequestError(
+                error.code, error.error, kind=error.kind, parameter=error.parameter
+            )
         try:
             return parse(payload)
         except Exception as exc:

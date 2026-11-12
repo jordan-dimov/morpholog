@@ -10,7 +10,7 @@
 {"actor":"teller","args_named":{"account":"ghost","figure":"5"},"op":"explain","transformation":"post_balance"}
 {"row":5,"transition":{"actor":"teller","args":["ghost","5"],"transformation":"post_balance"},"verdict":{"rejected":{"kind":"invariant","name":"balances_name_an_account","rule":"Balance(a, _) implies Account(a, _)","witness":[{"value":{"type":"subject","value":"ghost"},"var":"a"}]}}}
 {"actor":"teller","args_named":{"account":"acct_1"},"op":"explain","transformation":"post_balance"}
-{"code":"invalid_arguments","error":"--args-named is missing required parameter `figure`. Run `morpholog schema <fixture> post_balance` to inspect the accepted shape.","row":6,"status":"error"}
+{"code":"invalid_arguments","error":"--args-named is missing required parameter `figure`.","parameter":"figure","row":6,"status":"error"}
 {"named":true,"op":"claims","predicates":["Account"]}
 [{"args":{"account":"acct_1","opened_on":"2026-01-15"},"asserted_in":"00000000-0000-0000-0000-000000000000","predicate":"Account"}]
 {"named":true,"op":"claims","predicates":["Balance"],"where":{"figure":"100"}}
@@ -18,7 +18,7 @@
 {"name":"BookTotal","named":true,"op":"derived"}
 [{"args":{"account":"acct_1","total":"100"},"predicate":"BookTotal"}]
 {"actor":"teller","args_named":{},"op":"propose","transformation":"no_such_act"}
-{"code":"unknown_transformation","error":"transformation `no_such_act` not found in `<fixture>`. Available: open_account, post_balance, restate","row":10,"status":"error"}
+{"code":"unknown_transformation","error":"transformation `no_such_act` is not declared. Available: open_account, post_balance, restate","row":10,"status":"error"}
 {"as_of":"not-a-coordinate","op":"claims"}
 {"code":"invalid_arguments","error":"expected a transition_id (UUID) or an RFC 3339 timestamp (e.g. 2026-06-30T00:00:00Z), got `not-a-coordinate`","row":11,"status":"error"}
 {"named":true,"op":"audit"}

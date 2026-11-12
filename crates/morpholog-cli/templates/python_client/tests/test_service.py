@@ -401,6 +401,34 @@ class StalledService(ServiceHarness):
         self.assertIsNotNone(s._poisoned)
 
 
+class RefusedParameter(ServiceHarness):
+    def test_a_refused_parameter_reaches_the_caller_over_the_socket(self):
+        def refuses(c: Conversation) -> None:
+            c.ready()
+            c.request()
+            c.say(
+                wire(
+                    {
+                        "code": "invalid_arguments",
+                        "error": "parameter `opened_on` is Date but received number",
+                        "parameter": "opened_on",
+                        "row": 1,
+                        "status": "error",
+                    }
+                )
+            )
+            c.request()
+            c.ready()
+
+        s = self.connect(self.serve(refuses))
+        with self.assertRaises(MorphologRequestError) as err:
+            s.propose("open_account", "teller", OPEN)
+        self.assertEqual(
+            (err.exception.code, err.exception.parameter), ("invalid_arguments", "opened_on")
+        )
+        self.assertEqual(s.ping(), s.ready)
+
+
 class NoRetry(ServiceHarness):
     def test_a_known_non_commit_is_reported_once_and_not_resent(self):
         """A serialisation failure is safe to re-submit, but that is the

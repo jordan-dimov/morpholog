@@ -139,6 +139,10 @@ pub struct ErrorReceipt {
     /// Which kernel error it was, on a `kernel_error` only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<&'static str>,
+    /// The one request key an `invalid_arguments` can point at, when
+    /// there is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameter: Option<String>,
     pub row: u64,
     pub status: &'static str,
 }
@@ -149,9 +153,17 @@ impl ErrorReceipt {
             code,
             error,
             kind,
+            parameter: None,
             row,
             status: "error",
         }
+    }
+
+    /// Name the parameter an `invalid_arguments` refused.
+    #[must_use]
+    pub fn naming(mut self, parameter: Option<String>) -> Self {
+        self.parameter = parameter;
+        self
     }
 }
 
@@ -166,6 +178,10 @@ pub struct RequestError {
     /// Which kernel error it was, on a `kernel_error` only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<&'static str>,
+    /// The one request key an `invalid_arguments` can point at, when
+    /// there is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameter: Option<String>,
     pub status: &'static str,
 }
 
@@ -175,8 +191,16 @@ impl RequestError {
             code,
             error,
             kind,
+            parameter: None,
             status: "error",
         }
+    }
+
+    /// Name the parameter an `invalid_arguments` refused.
+    #[must_use]
+    pub fn naming(mut self, parameter: Option<String>) -> Self {
+        self.parameter = parameter;
+        self
     }
 }
 

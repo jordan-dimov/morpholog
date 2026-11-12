@@ -137,6 +137,12 @@ fn kitchen_sink_claim() -> ClaimInstance {
     }
 }
 
+const REFUSED_QUANTITY: &str = "parameter `quantity` is Decimal but `1e10` does not match the \
+    schema pattern ^-?(0|[1-9]\\d*)(\\.\\d+)?$ (no leading `+`, no leading zeros except \"0\", no \
+    trailing dot, no exponent, no empty string).";
+const SEVERAL_UNKNOWN: &str =
+    "--args-named contains unknown parameter(s) `qty`, `side`; expected: trade, quantity.";
+
 fn committed_outcome() -> PgProposalOutcome {
     PgProposalOutcome::Committed {
         transition_id: sample_uuid(),
@@ -1596,6 +1602,29 @@ fn composite_envelopes_serialize_as_pinned() {
             3,
         )),
     );
+    // The named codec refused one parameter, and the receipt names it.
+    assert_golden(
+        "batch_error_receipt_invalid_arguments.json",
+        &to_value(
+            &morpholog_cli::envelopes::ErrorReceipt::new(
+                morpholog_cli::envelopes::ErrorCode::InvalidArguments,
+                REFUSED_QUANTITY.to_string(),
+                None,
+                5,
+            )
+            .naming(Some("quantity".to_string())),
+        ),
+    );
+    // No single key to name: the code alone.
+    assert_golden(
+        "batch_error_receipt_invalid_arguments_unnamed.json",
+        &to_value(&morpholog_cli::envelopes::ErrorReceipt::new(
+            morpholog_cli::envelopes::ErrorCode::InvalidArguments,
+            SEVERAL_UNKNOWN.to_string(),
+            None,
+            6,
+        )),
+    );
     // The database refused the row before recording anything: a receipt,
     // and later rows still run.
     assert_golden(
@@ -1724,6 +1753,27 @@ fn report_envelopes_serialize_as_pinned() {
                 "the proposal could not be decided: restart the transaction".to_string(),
                 None,
                 17,
+            )),
+        );
+        assert_golden(
+            "session_error_receipt_invalid_arguments.json",
+            &to_value(
+                &ErrorReceipt::new(
+                    ErrorCode::InvalidArguments,
+                    REFUSED_QUANTITY.to_string(),
+                    None,
+                    19,
+                )
+                .naming(Some("quantity".to_string())),
+            ),
+        );
+        assert_golden(
+            "session_error_receipt_invalid_arguments_unnamed.json",
+            &to_value(&ErrorReceipt::new(
+                ErrorCode::InvalidArguments,
+                SEVERAL_UNKNOWN.to_string(),
+                None,
+                20,
             )),
         );
         // COMMIT failed without a verdict: read the record before
@@ -2358,6 +2408,25 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
             Some("claim_kind_mismatch"),
         )),
     );
+    assert_golden(
+        "propose_error_invalid_arguments.json",
+        &to_value(
+            &morpholog_cli::envelopes::RequestError::new(
+                morpholog_cli::envelopes::ErrorCode::InvalidArguments,
+                REFUSED_QUANTITY.to_string(),
+                None,
+            )
+            .naming(Some("quantity".to_string())),
+        ),
+    );
+    assert_golden(
+        "propose_error_invalid_arguments_unnamed.json",
+        &to_value(&morpholog_cli::envelopes::RequestError::new(
+            morpholog_cli::envelopes::ErrorCode::InvalidArguments,
+            SEVERAL_UNKNOWN.to_string(),
+            None,
+        )),
+    );
     // One-shot `propose` states a known non-commit the same way.
     assert_golden(
         "propose_error_not_committed.json",
@@ -2962,13 +3031,18 @@ fn validate(
     }
     if let Some(branches) = schema.get("oneOf").and_then(|o| o.as_array()) {
         let mut failures = Vec::new();
+        let mut matched = Vec::new();
         for (i, branch) in branches.iter().enumerate() {
             match validate(value, branch, defs, &format!("{path}|{i}")) {
-                Ok(()) => return Ok(()),
+                Ok(()) => matched.push(i),
                 Err(e) => failures.push(e),
             }
         }
-        return Err(format!("{path}: no oneOf branch matched ({failures:?})"));
+        return match matched.len() {
+            1 => Ok(()),
+            0 => Err(format!("{path}: no oneOf branch matched ({failures:?})")),
+            _ => Err(format!("{path}: oneOf branches {matched:?} all matched")),
+        };
     }
     if let Some(expected) = schema.get("const") {
         return if value == expected {
@@ -3231,6 +3305,45 @@ fn a_committed_receipt_without_its_draws_is_refused() {
     assert!(err.contains("drawn_subjects"), "{err}");
 }
 
+/// Only `invalid_arguments` may name a parameter: the same receipt under
+/// any other code is refused, in each of the three error shapes.
+#[test]
+fn a_parameter_under_another_code_is_refused() {
+    let schema = result_schema();
+    let defs = &schema["$defs"];
+    for (golden, def) in [
+        ("propose_error_invalid_arguments.json", "request_error"),
+        (
+            "batch_error_receipt_invalid_arguments.json",
+            "batch_receipt",
+        ),
+        (
+            "session_error_receipt_invalid_arguments.json",
+            "session_error_receipt",
+        ),
+    ] {
+        let named: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(golden_dir().join(golden)).unwrap())
+                .unwrap();
+        assert_eq!(named["parameter"], "quantity", "{golden}");
+        validate(&named, &defs[def], defs, def).expect("the golden validates");
+        for code in defs["propose_error_code"]["enum"].as_array().unwrap() {
+            if code == "invalid_arguments" {
+                continue;
+            }
+            let mut other = named.clone();
+            other["code"] = code.clone();
+            if code == "kernel_error" {
+                other["kind"] = serde_json::json!("division_by_zero");
+            }
+            assert!(
+                validate(&other, &defs[def], defs, def).is_err(),
+                "{def} admits a parameter on {code}"
+            );
+        }
+    }
+}
+
 /// No golden carries an empty `witness`. Absent means nothing was
 /// captured; `[]` would claim the rule read nothing, never true of a
 /// refusal. The walker ignores the schema's `minItems`, so this checks it.
@@ -3293,11 +3406,32 @@ fn every_golden_validates_against_its_defs_entry() {
         ("batch_error_receipt.json", "batch_receipt"),
         ("batch_error_receipt_kernel_error.json", "batch_receipt"),
         ("batch_error_receipt_not_committed.json", "batch_receipt"),
+        (
+            "batch_error_receipt_invalid_arguments.json",
+            "batch_receipt",
+        ),
+        (
+            "batch_error_receipt_invalid_arguments_unnamed.json",
+            "batch_receipt",
+        ),
         ("transact_committed.json", "atomic_outcome"),
         ("transact_rejected.json", "atomic_outcome"),
         ("transact_error.json", "atomic_outcome"),
         ("propose_error_not_committed.json", "request_error"),
         ("propose_error_kernel_error.json", "request_error"),
+        ("propose_error_invalid_arguments.json", "request_error"),
+        (
+            "propose_error_invalid_arguments_unnamed.json",
+            "request_error",
+        ),
+        (
+            "session_error_receipt_invalid_arguments.json",
+            "session_error_receipt",
+        ),
+        (
+            "session_error_receipt_invalid_arguments_unnamed.json",
+            "session_error_receipt",
+        ),
         ("transact_rejected_session.json", "atomic_outcome"),
         (
             "session_error_receipt_commit_outcome_unknown.json",
@@ -3605,8 +3739,9 @@ fn every_session_error_code_is_in_the_pinned_enum() {
         schema["$defs"]["batch_receipt"]["oneOf"][2]["oneOf"][0]["properties"]["code"]["$ref"],
         "#/$defs/propose_error_code_without_kind"
     );
-    // The codes without a kind are every code but `kernel_error`, which
-    // has its own branch carrying the kind.
+    // The plain codes are every code but the two with a branch of their
+    // own: `kernel_error` carries a kind, `invalid_arguments` may carry a
+    // parameter.
     let codes = |def: &str| -> Vec<String> {
         schema["$defs"][def]["enum"]
             .as_array()
@@ -3620,7 +3755,7 @@ fn every_session_error_code_is_in_the_pinned_enum() {
         ("error_code", "error_code_without_kind"),
     ] {
         let mut expected = codes(with_kind);
-        expected.retain(|c| c != "kernel_error");
+        expected.retain(|c| c != "kernel_error" && c != "invalid_arguments");
         assert_eq!(codes(without), expected, "{without}");
     }
     let propose_published: Vec<String> = schema["$defs"]["propose_error_code"]["enum"]

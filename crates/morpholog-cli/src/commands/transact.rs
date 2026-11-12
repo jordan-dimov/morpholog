@@ -39,7 +39,6 @@ impl From<Act> for BatchRow {
 /// (the numbering refusals use). A malformed act makes the whole request
 /// invalid; it never reaches the database.
 pub(crate) fn decode_acts(
-    file: &std::path::Path,
     prepared: &morpholog_core::PreparedProgram,
     acts: Vec<Act>,
 ) -> Result<Vec<Proposal>, RowError> {
@@ -52,7 +51,7 @@ pub(crate) fn decode_acts(
     acts.into_iter()
         .enumerate()
         .map(|(index, act)| {
-            decode_row(file, prepared, act.into())
+            decode_row(prepared, act.into())
                 .map(|t| Proposal::gateway(&t))
                 .map_err(|e| RowError {
                     code: e.code,
@@ -99,10 +98,11 @@ pub(crate) async fn run(args: TransactArgs) -> anyhow::Result<()> {
                 .map_err(|e| RowError::coded(envelopes::ProposeCode::InvalidRequest, e))
         })
         .collect();
-    let proposals = match rows.and_then(|rows| decode_acts(&args.file, prepared, rows)) {
-        Ok(proposals) => proposals,
-        Err(failure) => return report_request_failure(failure),
-    };
+    let proposals =
+        match rows.and_then(|rows| decode_acts(prepared, rows).map_err(|e| e.hinted(&args.file))) {
+            Ok(proposals) => proposals,
+            Err(failure) => return report_request_failure(failure),
+        };
 
     let pool = match connect(&args.db.database_url).await {
         Ok(pool) => pool,

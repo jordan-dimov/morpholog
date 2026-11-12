@@ -212,6 +212,41 @@ class RunOutcomes(unittest.TestCase):
         with self.assertRaises(envelopes.EnvelopeError):
             envelopes.SessionErrorReceipt.from_json(receipt)
 
+    def test_invalid_arguments_names_its_parameter_when_it_can(self):
+        named = [
+            envelopes.RequestError.from_json(golden("propose_error_invalid_arguments.json")),
+            envelopes.SessionErrorReceipt.from_json(
+                golden("session_error_receipt_invalid_arguments.json")
+            ),
+            envelopes.BatchReceipt.from_json(
+                golden("batch_error_receipt_invalid_arguments.json")
+            ).outcome,
+        ]
+        self.assertEqual([e.parameter for e in named], ["quantity"] * 3)
+        unnamed = [
+            envelopes.RequestError.from_json(
+                golden("propose_error_invalid_arguments_unnamed.json")
+            ),
+            envelopes.SessionErrorReceipt.from_json(
+                golden("session_error_receipt_invalid_arguments_unnamed.json")
+            ),
+            envelopes.BatchReceipt.from_json(
+                golden("batch_error_receipt_invalid_arguments_unnamed.json")
+            ).outcome,
+        ]
+        self.assertEqual([(e.code, e.parameter) for e in unnamed], [("invalid_arguments", None)] * 3)
+
+    def test_another_code_naming_a_parameter_is_refused(self):
+        payload = dict(golden("propose_error_not_committed.json"), parameter="quantity")
+        with self.assertRaisesRegex(envelopes.EnvelopeError, "names no parameter"):
+            envelopes.RequestError.from_json(payload)
+        receipt = dict(golden("session_error_receipt.json"), parameter="quantity")
+        with self.assertRaisesRegex(envelopes.EnvelopeError, "names no parameter"):
+            envelopes.SessionErrorReceipt.from_json(receipt)
+        row = dict(golden("batch_error_receipt_not_committed.json"), parameter="quantity")
+        with self.assertRaisesRegex(envelopes.EnvelopeError, "names no parameter"):
+            envelopes.BatchReceipt.from_json(row)
+
     def test_the_developer_intro_recipe_lists_the_same_codes(self):
         # The hand-written recipe in the developer introduction carries its
         # own copy of the list; it must not drift from the client's.

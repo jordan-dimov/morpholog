@@ -1066,3 +1066,150 @@ async fn an_explain_aborts_the_session_when_the_database_is_unreachable() {
     db.drop_it().await;
     outcome.unwrap_or_else(|e| panic!("{e}"));
 }
+
+const REFUSALS_FIXTURE: &str = "\
+program refusals_fixture
+
+predicate Balance(account: Subject, figure: Decimal)
+predicate Seen(item: Subject)
+
+transformation post_balance(account, figure):
+    admit Balance(account, figure)
+
+transformation see(items):
+    for item in items:
+        admit Seen(item)
+";
+
+/// An argument refusal names the one request key it can point at, as a
+/// field read off the decoder's typed error. Nothing on the wire names
+/// the programme's file or a command the caller cannot run.
+#[tokio::test]
+async fn an_argument_refusal_names_its_parameter_and_never_the_servers_file() {
+    reset_db().await;
+    let fixture = common::write_fixture("refusals_fixture", REFUSALS_FIXTURE);
+    let mut child = spawn_session(&fixture.path);
+    let mut stdin = child.stdin.take().unwrap();
+
+    let post = |args: serde_json::Value| request("propose", "post_balance", "teller", args);
+    let cases: Vec<(String, &str, Option<&str>)> = vec![
+        // The codec refused one value.
+        (
+            post(serde_json::json!({"account": "a", "figure": "1e10"})),
+            "invalid_arguments",
+            Some("figure"),
+        ),
+        (
+            post(serde_json::json!({"account": 7, "figure": "1"})),
+            "invalid_arguments",
+            Some("account"),
+        ),
+        (
+            post(serde_json::json!({"account": "a", "figure": null})),
+            "invalid_arguments",
+            Some("figure"),
+        ),
+        // A collection element names its parameter, not a path.
+        (
+            request(
+                "propose",
+                "see",
+                "teller",
+                serde_json::json!({"items": ["a", 7]}),
+            ),
+            "invalid_arguments",
+            Some("items"),
+        ),
+        (
+            post(serde_json::json!({"account": "a"})),
+            "invalid_arguments",
+            Some("figure"),
+        ),
+        // One unknown key is named; two are not one answer.
+        (
+            post(serde_json::json!({"account": "a", "figure": "1", "figur": "1"})),
+            "invalid_arguments",
+            Some("figur"),
+        ),
+        (
+            post(serde_json::json!({"account": "a", "figure": "1", "x": "1", "y": "1"})),
+            "invalid_arguments",
+            None,
+        ),
+        // The tagged body names no key.
+        (
+            serde_json::json!({"op": "propose", "transformation": "post_balance",
+                "actor": "teller", "args": [{"type": "decimal", "value": "1e10"}]})
+            .to_string(),
+            "invalid_arguments",
+            None,
+        ),
+        // The same refusal inside an atomic batch, and in a rehearsal.
+        (
+            serde_json::json!({"op": "transact", "acts": [
+                {"transformation": "post_balance", "actor": "teller",
+                 "args_named": {"account": "a", "figure": "1"}},
+                {"transformation": "post_balance", "actor": "teller",
+                 "args_named": {"account": "a", "figure": "1e10"}},
+            ]})
+            .to_string(),
+            "invalid_arguments",
+            Some("figure"),
+        ),
+        (
+            request(
+                "explain",
+                "post_balance",
+                "teller",
+                serde_json::json!({"account": "a", "figure": "1e10"}),
+            ),
+            "invalid_arguments",
+            Some("figure"),
+        ),
+        // Another code never carries the field.
+        (
+            request("propose", "no_such_act", "teller", serde_json::json!({})),
+            "unknown_transformation",
+            None,
+        ),
+    ];
+    for (line, _, _) in &cases {
+        writeln!(stdin, "{line}").unwrap();
+    }
+    drop(stdin);
+
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let answers: Vec<serde_json::Value> = stdout
+        .lines()
+        .skip(1)
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(answers.len(), cases.len(), "{stdout}");
+    for (answer, (line, code, parameter)) in answers.iter().zip(&cases) {
+        assert_eq!(answer["code"], *code, "{line} -> {answer}");
+        assert_eq!(
+            answer.get("parameter").and_then(|p| p.as_str()),
+            *parameter,
+            "{line} -> {answer}"
+        );
+    }
+    let file = fixture.path.to_str().unwrap();
+    assert!(
+        !stdout.contains(file),
+        "the file's path is on the wire: {stdout}"
+    );
+    assert!(!stdout.contains("morpholog schema"), "{stdout}");
+
+    // Nothing a refused request named was recorded.
+    let pool = morpholog_postgres::PgPool::connect(&database_url())
+        .await
+        .unwrap();
+    let counts = record_counts(&pool).await;
+    assert!(counts.iter().all(|(_, n)| *n == 0), "{counts:?}");
+}

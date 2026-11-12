@@ -229,7 +229,7 @@ fn the_rows_are_refused_whole_when_they_do_not_fit_the_transformation() {
     );
     refused(
         &base("publish_day", &[]),
-        "transformation `publish_day` not found",
+        "transformation `publish_day` is not declared",
     );
 
     // The names fit but a kind does not: caught by the decoder, with

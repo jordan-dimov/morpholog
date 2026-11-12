@@ -56,7 +56,7 @@ Accepts the subset of transformations whose every parameter resolves to one of `
 - **`Collection`** - a JSON array, decoded item by item against the element kind inferred from how the parameter is iterated (`for` / `forall`): a collection of subjects accepts `["acct_a", "acct_b"]`, a collection of amounts accepts an array of decimal strings, and so on. A collection whose element kind the model never observes (iterated with a binding used at no kind-bearing position, or passed only to a `Collection`-declared predicate argument) stays opaque and is refused here - send it via `--args` with the tagged `EvalValue` codec.
 - **`Polymorphic`** / **`Unconstrained`** / **`Ambiguous`** - refused. The schema does not give a single unambiguous kind, so the named codec cannot choose one safely. Declare the parameter's kind (`flag: Bool`) where the body gives it none, or use `--args` with the tagged `EvalValue` codec for these parameters.
 
-Strict beyond the kind check. Missing required keys, unknown keys, wrong JSON types (`true` where a Decimal is expected, etc.), and `null` values are all rejected before any database work. Each error names the parameter, the expected kind, the actual shape, and ends with a pointer at the schema subcommand so the embedder can inspect the accepted shape without leaving the terminal.
+Strict beyond the kind check. Missing required keys, unknown keys, wrong JSON types (`true` where a Decimal is expected, etc.), and `null` values are all rejected before any database work. Each error names the parameter, the expected kind and the actual shape. On the one-shot commands it ends with a pointer at the schema subcommand, for the person who typed the path. A session or a service never adds that: its caller cannot run the command, and the file is the server's.
 
 ### `--args` (implementer-facing)
 
@@ -172,7 +172,7 @@ The proposal-row codes, which `propose`, `propose --batch`, `transact` and the s
 |---|---|---|
 | `invalid_request` | The request is incomplete or unreadable: no transformation or actor, a malformed batch row, an empty `transact`. | After fixing it. |
 | `unknown_transformation` | The programme declares no transformation of that name. | After fixing it. |
-| `invalid_arguments` | The arguments do not decode against the transformation's parameters. | After fixing them. |
+| `invalid_arguments` | The arguments do not decode against the transformation's parameters. `parameter` names the one request key at fault when there is one: the parameter whose value was refused (a collection element names its parameter), a missing one, or a single unknown key. It is absent for a tagged `args` body, for several unknown keys at once, and for a refusal outside the argument codec, and no other code carries it. It says where decoding failed, never why a rule refused a valid value: that is a rejection, with its `rule`. | After fixing them. |
 | `actor_assertion_unauthorised` | The actor is restricted and this login holds no authority to assert it. | Once the authority is granted. |
 | `kernel_error` | The proposal could not be decided on its data, for example arithmetic out of range. `kind` names which (`arith_out_of_range`, `claim_kind_mismatch`, `division_by_zero` and the rest of `kernel_error_kind` in `schema --result`), and no other code carries a `kind`; match on it, never on the message. | After fixing the data. |
 | `duplicate_intent` | An outbox intent with the same idempotency key already exists. | Not as is. |

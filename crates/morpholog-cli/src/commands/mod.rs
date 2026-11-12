@@ -182,7 +182,6 @@ pub(crate) fn prepare_or_report(parsed: &ParsedSource) -> anyhow::Result<Prepare
 pub(crate) fn lookup_transformation<'a>(
     prepared: &'a PreparedProgram,
     name: &str,
-    file: &Path,
 ) -> anyhow::Result<&'a Transformation> {
     prepared
         .transformation(&TransformationName::from(name))
@@ -194,10 +193,7 @@ pub(crate) fn lookup_transformation<'a>(
                 .map(|t| t.name.as_str())
                 .collect::<Vec<_>>()
                 .join(", ");
-            anyhow!(
-                "transformation `{name}` not found in `{}`. Available: {available}",
-                file.display(),
-            )
+            anyhow!("transformation `{name}` is not declared. Available: {available}")
         })
 }
 

@@ -555,6 +555,51 @@ class AdapterDiscrimination(unittest.TestCase):
             self.client.propose_batch([row, row])
         self.assertEqual(caught.exception.code, "not_committed")
 
+    def test_a_refused_parameter_reaches_the_caller_on_every_one_shot_path(self):
+        self._mode("stdout_then_exit")
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        self.addCleanup(os.environ.pop, "STUB_EXIT", None)
+        os.environ["STUB_EXIT"] = "1"
+        refused = (GOLDEN_DIR / "propose_error_invalid_arguments.json").read_text()
+        row = {"transformation": "t", "actor": "a", "args_named": {"quantity": "1e10"}}
+
+        os.environ["STUB_STDOUT"] = refused
+        with self.assertRaises(MorphologRequestError) as proposed:
+            self.client.propose("t", "a", {"quantity": "1e10"})
+        self.assertEqual(proposed.exception.parameter, "quantity")
+        # A batch refused whole, before its first row.
+        os.environ["STUB_STDOUT"] = json.dumps(json.loads(refused)) + "\n"
+        with self.assertRaises(MorphologRequestError) as batch:
+            self.client.propose_batch([row])
+        self.assertEqual(batch.exception.parameter, "quantity")
+
+        # A batch row's own receipt keeps it; later rows still ran.
+        os.environ["STUB_EXIT"] = "0"
+        in_row = json.loads(
+            (GOLDEN_DIR / "batch_error_receipt_invalid_arguments.json").read_text()
+        )
+        os.environ["STUB_STDOUT"] = json.dumps(in_row | {"row": 1}) + "\n"
+        (receipt,) = self.client.propose_batch([row])
+        self.assertEqual(
+            (receipt.outcome.code, receipt.outcome.parameter), ("invalid_arguments", "quantity")
+        )
+
+        self._mode("transact_stdout")
+        os.environ["STUB_EXIT"] = "1"
+        os.environ["STUB_STDOUT"] = refused
+        with self.assertRaises(MorphologRequestError) as transacted:
+            self.client.transact([row])
+        self.assertEqual(transacted.exception.parameter, "quantity")
+        # No single key to name: the code alone.
+        os.environ["STUB_STDOUT"] = (
+            GOLDEN_DIR / "propose_error_invalid_arguments_unnamed.json"
+        ).read_text()
+        with self.assertRaises(MorphologRequestError) as unnamed:
+            self.client.transact([row])
+        self.assertEqual(
+            (unnamed.exception.code, unnamed.exception.parameter), ("invalid_arguments", None)
+        )
+
     def test_a_batch_short_of_receipts_is_incomplete_even_at_exit_0(self):
         # A clean exit with a missing receipt is a broken promise, never a
         # short list; so is a last line the binary did not finish.

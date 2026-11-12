@@ -71,7 +71,8 @@ pub(crate) async fn run(args: SessionArgs) -> anyhow::Result<()> {
                     format!("{reason:#}"),
                     crate::commands::propose::kernel_kind(code, &reason),
                     row,
-                );
+                )
+                .naming(crate::commands::propose::named_parameter(code, &reason));
                 write_line(&mut out, &serde_json::to_value(&receipt)?)?;
             }
             Err(ResidentFailure::Operational(reason)) => {

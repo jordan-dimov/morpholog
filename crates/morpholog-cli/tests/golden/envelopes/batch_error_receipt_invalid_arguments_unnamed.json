@@ -1,0 +1,6 @@
+{
+  "code": "invalid_arguments",
+  "error": "--args-named contains unknown parameter(s) `qty`, `side`; expected: trade, quantity.",
+  "row": 6,
+  "status": "error"
+}
