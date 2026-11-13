@@ -94,11 +94,15 @@ predicate VariantOf(part: Subject, parent: Subject)
 define descends_from(part, ancestor):
     VariantOf(part, ancestor)
     or (VariantOf(part, between) and descends_from(between, ancestor))
+predicate Filled(part: Subject, line_part: Subject)
 transformation set_parent(part, parent):
     require not_its_own_parent: part != parent
     require no_loop: not descends_from(parent, part)
     retract VariantOf(part, _)
     admit VariantOf(part, parent)
+transformation fill(part, line_part):
+    require same_part: descends_from(part, line_part)
+    admit Filled(part, line_part)
 ",
     )
     .unwrap()
@@ -166,5 +170,79 @@ async fn a_loop_two_acts_would_close_together_is_refused_at_the_second() {
             ),
             "{outcome:?}"
         );
+    }
+}
+
+fn fill(part: &str, line_part: &str) -> Proposal {
+    Proposal::gateway(&Transition {
+        transformation_name: "fill".into(),
+        args: vec![subj(part), subj(line_part)],
+        actor: Subject::from("visibility_test"),
+        decided_at: None,
+    })
+}
+
+/// The gate's answers follow the tree as it changes between
+/// transactions: a part several steps down fits, a sibling and an
+/// unrelated part do not; after the part moves to another branch, the
+/// old ancestor no longer fits and the new one does.
+#[tokio::test]
+async fn a_gate_that_walks_the_tree_follows_it_as_it_changes() {
+    let pool = test_pool().await;
+    for route in [
+        PgProgram::interpreted(PreparedProgram::new(tree()).unwrap()),
+        PgProgram::new(PreparedProgram::new(tree()).unwrap()),
+    ] {
+        reset_db(&pool).await;
+        let outcome = propose_all_against_pg(
+            &pool,
+            &route,
+            &[
+                set_parent("b", "a"),
+                set_parent("c", "b"),
+                set_parent("d", "c"),
+                set_parent("s", "a"),
+                set_parent("t", "s"),
+            ],
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(outcome, PgAtomicOutcome::Committed { .. }),
+            "{outcome:?}"
+        );
+        let decide = |part: &'static str, line_part: &'static str| {
+            let (pool, route) = (&pool, &route);
+            async move {
+                match propose_all_against_pg(pool, route, &[fill(part, line_part)])
+                    .await
+                    .unwrap()
+                {
+                    PgAtomicOutcome::Committed { .. } => "fits",
+                    PgAtomicOutcome::Rejected {
+                        rule: Some(rule), ..
+                    } if rule == "same_part" => "refused",
+                    other @ PgAtomicOutcome::Rejected { .. } => panic!("{other:?}"),
+                }
+            }
+        };
+        assert_eq!(decide("d", "a").await, "fits");
+        assert_eq!(decide("d", "b").await, "fits");
+        assert_eq!(decide("d", "s").await, "refused");
+        assert_eq!(decide("d", "nobody").await, "refused");
+
+        // `c` moves under `t`: `d` is now below `s` and `t`, and no longer
+        // below `b`.
+        let outcome = propose_all_against_pg(&pool, &route, &[set_parent("c", "t")])
+            .await
+            .unwrap();
+        assert!(
+            matches!(outcome, PgAtomicOutcome::Committed { .. }),
+            "{outcome:?}"
+        );
+        assert_eq!(decide("d", "b").await, "refused");
+        assert_eq!(decide("d", "s").await, "fits");
+        assert_eq!(decide("d", "t").await, "fits");
+        assert_eq!(decide("d", "a").await, "fits");
     }
 }

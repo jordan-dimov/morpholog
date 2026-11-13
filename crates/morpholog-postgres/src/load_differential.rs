@@ -687,3 +687,304 @@ async fn a_load_the_budget_cannot_fit_is_refused_explicitly() {
         "{refused:?}"
     );
 }
+
+/// Over a small forest with a loop in it: the loader follows the walk up
+/// from each part to exactly the rows the plan's own test admits, round
+/// the loop too.
+#[tokio::test]
+async fn the_loader_follows_a_walk_up_the_tree_to_the_chain() {
+    let program = hostile_program("recursive_condition");
+    let t = &program.transformations[0];
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let full = crate::scope_differential::a_forest();
+    seed(&pool, &full).await;
+    let whole = morpholog_core::State::from_claims(full.clone());
+    for (part, chain) in [("e", 4), ("s", 3), ("x", 2), ("a", 0)] {
+        let transition = Transition {
+            transformation_name: t.name.clone(),
+            args: vec![subj(part), subj("a")],
+            actor: test_actor(),
+            decided_at: None,
+        };
+        let scope = compute_load_scope(
+            t,
+            Some(&transition),
+            &program.invariants,
+            &program.definitions,
+            Reads::Body,
+        );
+        let expected: Vec<ClaimInstance> = full
+            .iter()
+            .filter(|c| scope.admits(c, &whole))
+            .cloned()
+            .collect();
+        let mut tx = pool.begin().await.unwrap();
+        let loaded = load_state(&mut tx, &scope).await.unwrap();
+        tx.rollback().await.unwrap();
+        assert_eq!(
+            sorted(&loaded.claims().to_vec()),
+            sorted(&expected),
+            "{part}"
+        );
+        assert_eq!(loaded.claims_for("Parent").count(), chain, "{part}");
+    }
+}
+
+/// A gate that walks a variant tree up from an item's part, and writes
+/// one claim of its own.
+fn variants_program() -> morpholog_core::Program {
+    morpholog_surface::parse_program(
+        "program variants
+predicate Parent(part: Subject, parent: Subject)
+predicate Item(item: Subject, part: Subject)
+predicate Filled(item: Subject, line_part: Subject)
+define descends_from(part, ancestor):
+    Parent(part, ancestor) or (Parent(part, between) and descends_from(between, ancestor))
+transformation fill(item, line_part):
+    bind Item(item, part)
+    require descends_from(part, line_part)
+    admit Filled(item, line_part)
+",
+    )
+    .unwrap()
+}
+
+/// Ten roots, each with ten children, each with ten, each with ten, and
+/// one item on every leaf: past the page count at which a whole read of
+/// the tree is one lock on the relation.
+async fn variants_pool() -> PgPool {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    sqlx::raw_sql(
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'Parent', jsonb_build_array(jsonb_build_object('type','subject','value',child), jsonb_build_object('type','subject','value',parent)), '00000000-0000-0000-0000-000000000000'
+         FROM (
+             SELECT 'p' || r || '.' || a AS child, 'p' || r AS parent FROM generate_series(0, 9) r, generate_series(0, 9) a
+             UNION ALL
+             SELECT 'p' || r || '.' || a || '.' || b, 'p' || r || '.' || a FROM generate_series(0, 9) r, generate_series(0, 9) a, generate_series(0, 9) b
+             UNION ALL
+             SELECT 'p' || r || '.' || a || '.' || b || '.' || c, 'p' || r || '.' || a || '.' || b FROM generate_series(0, 9) r, generate_series(0, 9) a, generate_series(0, 9) b, generate_series(0, 9) c
+         ) AS tree;
+         INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'Item', jsonb_build_array(jsonb_build_object('type','subject','value','i' || r || '.' || a || '.' || b || '.' || c), jsonb_build_object('type','subject','value','p' || r || '.' || a || '.' || b || '.' || c)), '00000000-0000-0000-0000-000000000000'
+         FROM generate_series(0, 9) r, generate_series(0, 9) a, generate_series(0, 9) b, generate_series(0, 9) c;
+         ANALYZE morpholog.claims",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let program = crate::program::PgProgram::new(
+        morpholog_core::PreparedProgram::new(variants_program()).unwrap(),
+    );
+    crate::indexes::provision_indexes(&pool, &[&program], false)
+        .await
+        .unwrap();
+    pool
+}
+
+/// `fill(item, line_part)` as a contender: its load, and the claim it
+/// writes.
+fn filling(item: &str, line_part: &str) -> Contender {
+    let program = variants_program();
+    let t = program.transformation("fill").unwrap();
+    let transition = Transition {
+        transformation_name: t.name.clone(),
+        args: vec![subj(item), subj(line_part)],
+        actor: test_actor(),
+        decided_at: None,
+    };
+    Contender {
+        scope: compute_load_scope(
+            t,
+            Some(&transition),
+            &program.invariants,
+            &program.definitions,
+            Reads::Body,
+        ),
+        asserted: vec![claim_instance("Filled", &[subj(item), subj(line_part)])],
+        retracted: vec![],
+    }
+}
+
+/// The plan the loader's own statement gets for a scope: every node
+/// type, with the index each scan uses. Unforced, or `generic`: the
+/// statement prepared and planned as PostgreSQL may plan it once cached,
+/// without its values.
+async fn load_plan(pool: &PgPool, scope: &LoadScope, generic: bool) -> Vec<String> {
+    let (sql, binds) = crate::propose::load_sql(scope).unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    let plan: serde_json::Value = if generic {
+        // Safe: the loader's own statement; the values are this test's.
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "SET LOCAL plan_cache_mode = force_generic_plan; PREPARE walk AS {sql}"
+        )))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        let args: Vec<String> = binds
+            .iter()
+            .map(|v| format!("'{}'::jsonb", v.to_string().replace('\'', "''")))
+            .collect();
+        let plan = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN (FORMAT JSON) EXECUTE walk({})",
+            args.join(", ")
+        )))
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        sqlx::raw_sql("DEALLOCATE walk")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        plan
+    } else {
+        // Safe: the loader's own statement, every value a bound parameter.
+        let mut query = sqlx::query_scalar::<_, serde_json::Value>(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN (FORMAT JSON) {sql}"
+        )));
+        for value in binds {
+            query = query.bind(value);
+        }
+        query.fetch_one(&mut *tx).await.unwrap()
+    };
+    tx.rollback().await.unwrap();
+    fn walk(node: &serde_json::Value, out: &mut Vec<String>) {
+        if let Some(kind) = node.get("Node Type").and_then(|t| t.as_str()) {
+            let index = node.get("Index Name").and_then(|i| i.as_str());
+            out.push(match index {
+                Some(index) => format!("{kind} using {index}"),
+                None => kind.to_string(),
+            });
+        }
+        for child in node
+            .get("Plans")
+            .and_then(|p| p.as_array())
+            .into_iter()
+            .flatten()
+        {
+            walk(child, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(&plan[0]["Plan"], &mut out);
+    out
+}
+
+/// Both plans, unforced and generic, are index seeks alone: one on
+/// `index` per step of the walk and one for the rows it reached, and no
+/// scan of the table.
+async fn assert_seeks_only(pool: &PgPool, scope: &LoadScope, index: &str) {
+    for generic in [false, true] {
+        let plan = load_plan(pool, scope, generic).await;
+        assert!(
+            !plan
+                .iter()
+                .any(|node| node.starts_with("Seq Scan") || node.starts_with("Bitmap")),
+            "generic={generic}: {plan:?}"
+        );
+        assert_eq!(
+            plan.iter()
+                .filter(|node| node.starts_with(&format!("Index Scan using {index}")))
+                .count(),
+            2,
+            "generic={generic}: one seek per step, one for the rows reached: {plan:?}"
+        );
+    }
+}
+
+/// Two fills in different branches of an eleven-thousand-row tree, each
+/// walking three steps up from its item's part: both commit, and the
+/// walk leaves no relation-level lock. The loader's statement is index
+/// seeks alone, as the hand-written walk was: the item, each step up,
+/// and the rows the walk reached.
+#[tokio::test]
+async fn two_walks_up_different_branches_commit_together() {
+    let pool = variants_pool().await;
+    assert_seeks_only(
+        &pool,
+        &filling("i1.2.3.4", "p1").scope,
+        "morpholog_ci_parent_0",
+    )
+    .await;
+    let (a, b, relation_locks) = race(
+        &pool,
+        filling("i1.2.3.4", "p1"),
+        filling("i7.6.5.4", "p7.6"),
+    )
+    .await;
+    assert!(a.is_ok() && b.is_ok(), "keyed walks: {a:?} / {b:?}");
+    assert_eq!(
+        relation_locks, 0,
+        "a walk up the tree must leave no relation-level SIRead lock"
+    );
+}
+
+/// The control: the same fills reading the tree whole conflict, and the
+/// lock table says why.
+#[tokio::test]
+async fn the_same_walks_conflict_when_the_tree_is_read_whole() {
+    let pool = variants_pool().await;
+    let (a, b, relation_locks) = race(
+        &pool,
+        whole(filling("i1.2.3.4", "p1")),
+        whole(filling("i7.6.5.4", "p7.6")),
+    )
+    .await;
+    assert!(
+        matches!(a, Err(PgError::SerializationFailure))
+            || matches!(b, Err(PgError::SerializationFailure)),
+        "whole reads must conflict: {a:?} / {b:?}"
+    );
+    assert!(relation_locks > 0);
+}
+
+/// A condition written to walk down from a known ancestor follows the
+/// link from its second coordinate. The index it seeks is the one
+/// `provision indexes` makes for that coordinate, and the plan is index
+/// seeks alone, as the walk up is.
+#[tokio::test]
+async fn a_walk_down_seeks_its_own_provisioned_index() {
+    let pool = variants_pool().await;
+    let program = morpholog_surface::parse_program(
+        "program variants_below
+predicate Parent(part: Subject, parent: Subject)
+predicate Filled(part: Subject, ancestor: Subject)
+define above(ancestor, part):
+    Parent(part, ancestor) or (Parent(between, ancestor) and above(between, part))
+transformation fill(ancestor, part):
+    require above(ancestor, part)
+    admit Filled(part, ancestor)
+",
+    )
+    .unwrap();
+    let pg = crate::program::PgProgram::new(
+        morpholog_core::PreparedProgram::new(program.clone()).unwrap(),
+    );
+    crate::indexes::provision_indexes(&pool, &[&pg], false)
+        .await
+        .unwrap();
+    let t = program.transformation("fill").unwrap();
+    let transition = Transition {
+        transformation_name: t.name.clone(),
+        args: vec![subj("p3.4"), subj("p3.4.5.6")],
+        actor: test_actor(),
+        decided_at: None,
+    };
+    let scope = compute_load_scope(
+        t,
+        Some(&transition),
+        &program.invariants,
+        &program.definitions,
+        Reads::Body,
+    );
+    assert_seeks_only(&pool, &scope, "morpholog_ci_parent_1").await;
+    let mut tx = pool.begin().await.unwrap();
+    let loaded = load_state(&mut tx, &scope).await.unwrap();
+    tx.rollback().await.unwrap();
+    assert_eq!(
+        loaded.claims_for("Parent").count(),
+        110,
+        "the ten children of p3.4 and their hundred"
+    );
+}

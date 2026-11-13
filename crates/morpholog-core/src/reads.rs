@@ -53,6 +53,22 @@ pub enum KnownTerm {
     },
     /// One of the elements of the collection this parameter carries.
     Element(Var),
+    /// The seed's value, or a value reached from it by following `link`
+    /// any number of times: what a condition that walks a tree up from a
+    /// known part can ask about.
+    Reached {
+        seed: Box<KnownTerm>,
+        link: Link,
+    },
+}
+
+/// One step through a two-place predicate: from a row whose coordinate
+/// `from` holds a value already reached, to the value at `to`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Link {
+    pub predicate: PredicateName,
+    pub from: usize,
+    pub to: usize,
 }
 
 /// A known coordinate with the transition's values in place: a value,
@@ -70,6 +86,12 @@ pub enum Key {
     /// Any of these values: a collection argument's elements, each once,
     /// never more than [`MAX_ELEMENT_KEYS`].
     OneOf(Vec<EvalValue>),
+    /// The seed's values and every value reached from them through
+    /// `link`. A loader walks the link in the database.
+    Reached {
+        seed: Box<Key>,
+        link: Link,
+    },
 }
 
 /// The most elements a collection may hold and still key a read; a
@@ -87,6 +109,7 @@ impl Key {
             Key::Field { predicate, of, .. } => {
                 these.contains(predicate) || of.iter().any(|(_, key)| key.reads_any(these))
             }
+            Key::Reached { seed, link } => these.contains(&link.predicate) || seed.reads_any(these),
         }
     }
 }
@@ -173,43 +196,53 @@ fn resolve_coordinates(
 ) -> Option<Vec<(usize, Key)>> {
     coordinates
         .iter()
-        .map(|(position, term)| {
-            let key = match term {
-                KnownTerm::Literal(v) => Key::Value(EvalValue::from(v)),
-                KnownTerm::Actor => Key::Value(EvalValue::Subject(transition.actor.clone())),
-                KnownTerm::Parameter(p) => {
-                    let index = transformation.parameters.iter().position(|q| q == p)?;
-                    Key::Value(transition.args.get(index)?.clone())
-                }
-                KnownTerm::Field {
-                    predicate,
-                    position,
-                    of,
-                } => Key::Field {
-                    predicate: predicate.clone(),
-                    position: *position,
-                    of: resolve_coordinates(of, transformation, transition)?,
-                },
-                KnownTerm::Element(p) => {
-                    let index = transformation.parameters.iter().position(|q| q == p)?;
-                    let EvalValue::Collection(items) = transition.args.get(index)? else {
-                        return None;
-                    };
-                    let mut distinct: Vec<EvalValue> = Vec::with_capacity(items.len());
-                    for item in items {
-                        if !distinct.contains(item) {
-                            distinct.push(item.clone());
-                        }
-                    }
-                    if distinct.len() > MAX_ELEMENT_KEYS {
-                        return None;
-                    }
-                    Key::OneOf(distinct)
-                }
-            };
-            Some((*position, key))
-        })
+        .map(|(position, term)| Some((*position, resolve_term(term, transformation, transition)?)))
         .collect()
+}
+
+fn resolve_term(
+    term: &KnownTerm,
+    transformation: &Transformation,
+    transition: &Transition,
+) -> Option<Key> {
+    let key = match term {
+        KnownTerm::Literal(v) => Key::Value(EvalValue::from(v)),
+        KnownTerm::Actor => Key::Value(EvalValue::Subject(transition.actor.clone())),
+        KnownTerm::Parameter(p) => {
+            let index = transformation.parameters.iter().position(|q| q == p)?;
+            Key::Value(transition.args.get(index)?.clone())
+        }
+        KnownTerm::Field {
+            predicate,
+            position,
+            of,
+        } => Key::Field {
+            predicate: predicate.clone(),
+            position: *position,
+            of: resolve_coordinates(of, transformation, transition)?,
+        },
+        KnownTerm::Element(p) => {
+            let index = transformation.parameters.iter().position(|q| q == p)?;
+            let EvalValue::Collection(items) = transition.args.get(index)? else {
+                return None;
+            };
+            let mut distinct: Vec<EvalValue> = Vec::with_capacity(items.len());
+            for item in items {
+                if !distinct.contains(item) {
+                    distinct.push(item.clone());
+                }
+            }
+            if distinct.len() > MAX_ELEMENT_KEYS {
+                return None;
+            }
+            Key::OneOf(distinct)
+        }
+        KnownTerm::Reached { seed, link } => Key::Reached {
+            seed: Box::new(resolve_term(seed, transformation, transition)?),
+            link: link.clone(),
+        },
+    };
+    Some(key)
 }
 
 /// A transformation's reads and admits, by predicate.
@@ -607,10 +640,25 @@ impl Walker<'_> {
                 }
                 definitions.enter(name, seen, |def, seen| {
                     // A condition that calls itself reads its claims
-                    // again under other arguments, which the first
-                    // call's do not bound: nothing is known in its body.
+                    // again under other arguments. When it walks one
+                    // link up from a known argument, every argument it
+                    // asks about is reached from that one; otherwise
+                    // nothing is known in its body.
                     let inner: Env = if crate::recursion::asks_itself(def) {
-                        Env::new()
+                        crate::recursion::single_link(def)
+                            .and_then(|walk| {
+                                let seed = known_term(args.get(walk.walked)?, known)?;
+                                let mut inner = Env::new();
+                                inner.insert(
+                                    def.parameters[walk.walked].clone(),
+                                    KnownTerm::Reached {
+                                        seed: Box::new(seed),
+                                        link: walk.link,
+                                    },
+                                );
+                                Some(inner)
+                            })
+                            .unwrap_or_default()
                     } else {
                         def.parameters
                             .iter()

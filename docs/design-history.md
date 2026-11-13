@@ -1451,3 +1451,16 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** the InvenTree spike (#727). Stock of any variant below a line's part may fill the line. Without recursion the host listed every ancestor of every part as claims, and three rules held the list to the tree. Location trees and bills of materials have the same shape.
 
 **Landed:** a `define` whose body calls it, in `examples/25_stock_allocation/`: `descends_from` follows the variant tree, and the allocation gate reads it. It means the least set of answers its body allows. Validation holds it to one call to itself per branch, every parameter taken from a claim or that call, and every argument of that call a parameter or an earlier claim's variable, so no answer holds a value the record does not. The kernel keeps a table per question and answers only the call it was asked: building the whole relation first cost 169 ms for a gate on a tree of eleven thousand parts, and the walk costs a claim per step. A rule over such a condition is checked whole and stays interpreted; the tree's predicates are loaded whole. Premise T1 of the termination argument gained the exception and T7 its bound; no decision of an existing programme changed.
+
+### A tree read follows the chain
+
+**Forced by:** the InvenTree spike's measure of #768 (#727). On a tree of 4,884 parts, with nobody editing it, sixteen allocators retried 2.04 to 2.34 times per commit against 0.20 for the closure-as-claims programme, and committed about 55 a second against 1,250. Each allocation read the whole tree, and PostgreSQL held that read as one lock on the claims table.
+
+**Landed:** a read plan key for the one shape a gate on a tree uses, a condition walking a single link up from a known argument. The load seeks the starting value and then each step up by index, so an allocation reads the chain above one part. A hand-written query on the spike's database showed the plan and the locks first: three rows instead of 4,880, and no relation lock. In a batch the walk is read whole after an act that admits the link or the row its start was read from. The kernel is unchanged.
+
+**Measured:**
+- On the 4,884-part tree, the branch retried 0.188 to 0.212 times per commit against the baseline's 0.190 to 0.198.
+- On a 50,435-part tree at PostgreSQL's default lock limits, the walk's few extra locks pushed half the allocations over the limit at which PostgreSQL turns a transaction's predicate locks into one lock on the whole claims table. The baseline stayed under it.
+- With `max_pred_locks_per_transaction = 256`, both programmes retried about 0.2 times per commit and none gave up. The branch stayed about 6% above the baseline.
+- The required setting is in the embedder guide.
+

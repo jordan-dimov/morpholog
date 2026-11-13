@@ -1025,9 +1025,82 @@ fn seek_all(
                     quote_literal(predicate.as_str())
                 )
             }
+            Key::Reached { seed, link } => {
+                let reached = reached_keys(seed, link, binds, depth)?;
+                format!("{sought} = ANY(ARRAY({reached}))")
+            }
         });
     }
     Ok(conjuncts.join(" AND "))
+}
+
+/// The keys of a value set, as a one-column select. A value set is a key's
+/// values with no row to compare them to: a reached key's seed.
+fn keys_of(
+    key: &Key,
+    binds: &mut Vec<serde_json::Value>,
+    depth: &mut usize,
+) -> Result<String, PgError> {
+    Ok(match key {
+        Key::Value(value) => {
+            binds.push(serde_json::to_value(value)?);
+            format!(
+                "SELECT morpholog.claim_digest(morpholog.value_key_v1(${}::jsonb))",
+                binds.len()
+            )
+        }
+        Key::OneOf(values) if values.is_empty() => "SELECT NULL::bytea WHERE FALSE".to_string(),
+        Key::OneOf(values) => {
+            let mut keys = Vec::with_capacity(values.len());
+            for value in values {
+                binds.push(serde_json::to_value(value)?);
+                keys.push(format!(
+                    "morpholog.claim_digest(morpholog.value_key_v1(${}::jsonb))",
+                    binds.len()
+                ));
+            }
+            format!("SELECT unnest(ARRAY[{}])", keys.join(", "))
+        }
+        Key::Field {
+            predicate,
+            position: held,
+            of,
+        } => {
+            *depth += 1;
+            let alias = format!("f{depth}");
+            let inner = format!("{alias}.");
+            let matching = seek_all(of, &inner, binds, depth)?;
+            format!(
+                "SELECT {} FROM morpholog.claims {alias} WHERE {alias}.predicate_name = {} AND {matching}",
+                crate::compiled::seek_expression(&inner, *held),
+                quote_literal(predicate.as_str())
+            )
+        }
+        Key::Reached { seed, link } => reached_keys(seed, link, binds, depth)?,
+    })
+}
+
+/// The seed's keys and every key reached from them through the link, one
+/// step per round of a recursive query: each step an index seek on the
+/// link's `from` coordinate, which a pattern keyed by this reached key
+/// already asks `provision indexes` for. `UNION`, not `UNION ALL`, so a
+/// loop in the data ends.
+fn reached_keys(
+    seed: &Key,
+    link: &morpholog_core::Link,
+    binds: &mut Vec<serde_json::Value>,
+    depth: &mut usize,
+) -> Result<String, PgError> {
+    let seeds = keys_of(seed, binds, depth)?;
+    *depth += 1;
+    let (walk, edge) = (format!("r{depth}"), format!("e{depth}"));
+    let at = format!("{edge}.");
+    Ok(format!(
+        "WITH RECURSIVE {walk}(k) AS ({seeds} UNION SELECT {} FROM morpholog.claims {edge} JOIN {walk} ON {} = {walk}.k WHERE {edge}.predicate_name = {}) SELECT k FROM {walk}",
+        crate::compiled::seek_expression(&at, link.to),
+        crate::compiled::seek_expression(&at, link.from),
+        quote_literal(link.predicate.as_str())
+    ))
 }
 
 /// The most parameters PostgreSQL binds in one statement (the count is a
@@ -1040,6 +1113,7 @@ fn parameters_of(key: &Key) -> usize {
         Key::Value(_) => 1,
         Key::OneOf(values) => values.len(),
         Key::Field { of, .. } => of.iter().map(|(_, key)| parameters_of(key)).sum(),
+        Key::Reached { seed, .. } => parameters_of(seed),
     }
 }
 
@@ -1225,6 +1299,41 @@ fn key_matches(key: &Key, value: &EvalValue, full: &State) -> bool {
         } => full
             .claims_for(predicate.as_str())
             .any(|row| row.args.get(*position) == Some(value) && matches_all(of, &row.args, full)),
+        Key::Reached { .. } => key_values(key, full).contains(value),
+    }
+}
+
+/// Every value a key stands for, over the whole state.
+#[cfg(test)]
+fn key_values(key: &Key, full: &State) -> Vec<EvalValue> {
+    match key {
+        Key::Value(v) => vec![v.clone()],
+        Key::OneOf(values) => values.clone(),
+        Key::Field {
+            predicate,
+            position,
+            of,
+        } => full
+            .claims_for(predicate.as_str())
+            .filter(|row| matches_all(of, &row.args, full))
+            .filter_map(|row| row.args.get(*position).cloned())
+            .collect(),
+        Key::Reached { seed, link } => {
+            let mut reached = key_values(seed, full);
+            let mut next = 0;
+            while let Some(at) = reached.get(next).cloned() {
+                next += 1;
+                for row in full.claims_for(link.predicate.as_str()) {
+                    if row.args.get(link.from) == Some(&at)
+                        && let Some(to) = row.args.get(link.to)
+                        && !reached.contains(to)
+                    {
+                        reached.push(to.clone());
+                    }
+                }
+            }
+            reached
+        }
     }
 }
 
