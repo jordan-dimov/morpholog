@@ -595,14 +595,20 @@ impl Walker<'_> {
                     trace.through.push(name.clone());
                 }
                 definitions.enter(name, seen, |def, seen| {
-                    let inner: Env = def
-                        .parameters
-                        .iter()
-                        .zip(args)
-                        .filter_map(|(param, arg)| {
-                            known_term(arg, known).map(|term| (param.clone(), term))
-                        })
-                        .collect();
+                    // A condition that calls itself reads its claims
+                    // again under other arguments, which the first
+                    // call's do not bound: nothing is known in its body.
+                    let inner: Env = if crate::recursion::asks_itself(def) {
+                        Env::new()
+                    } else {
+                        def.parameters
+                            .iter()
+                            .zip(args)
+                            .filter_map(|(param, arg)| {
+                                known_term(arg, known).map(|term| (param.clone(), term))
+                            })
+                            .collect()
+                    };
                     if let Some(body) = def.body.as_prop() {
                         self.prop(body, &inner, seen);
                     }

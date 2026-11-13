@@ -2824,6 +2824,13 @@ fn call_frame<'a>(
             detail: format!("arity mismatch on {name}"),
         });
     }
+    // Every call is rendered by inlining its body, which a body that
+    // calls itself has no end to.
+    if def.calls_itself() {
+        return Err(CompileReason::Construct {
+            construct: "a definition that calls itself",
+        });
+    }
     let mut frame = Env::new();
     for (param, arg) in def.parameters.iter().zip(args) {
         match arg {

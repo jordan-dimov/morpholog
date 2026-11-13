@@ -1406,6 +1406,54 @@ fn check_json_reports_the_cases_beside_the_route() {
     );
 }
 
+/// A rule over a condition that calls itself is checked whole and by the
+/// kernel, and the report names the call for both, whether the rule
+/// calls the condition itself or reaches it through another.
+#[test]
+fn check_json_names_a_condition_that_calls_itself() {
+    let tmp = temp_morph(
+        "program tree
+predicate Parent(part: Subject, parent: Subject)
+predicate Filled(line_part: Subject, item_part: Subject)
+define descends_from(part, ancestor):
+    Parent(part, ancestor) or (Parent(part, between) and descends_from(between, ancestor))
+define fits(item_part, line_part):
+    item_part = line_part or descends_from(item_part, line_part)
+invariant no_loop:
+    Parent(p, _) implies not descends_from(p, p)
+invariant still_fits:
+    Filled(l, i) implies fits(i, l)
+transformation link(part, parent):
+    admit Parent(part, parent)
+transformation fill(l, i):
+    require fits(i, l)
+    admit Filled(l, i)
+",
+    );
+    let (payload, ok) = check_json(tmp.path(), false);
+    assert!(ok, "got: {payload}");
+    for (row, name) in payload["invariants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(["no_loop", "still_fits"])
+    {
+        assert_eq!(row["name"], name, "got: {payload}");
+        assert_eq!(row["route"], "interpreted", "got: {payload}");
+        assert_eq!(row["refusal"]["kind"], "construct", "got: {payload}");
+        assert_eq!(
+            row["refusal"]["message"],
+            "`a definition that calls itself` is outside the compiled fragment",
+            "got: {payload}"
+        );
+        assert_eq!(
+            row["cases"],
+            serde_json::json!({ "because": "`descends_from` calls itself", "kind": "whole" }),
+            "got: {payload}"
+        );
+    }
+}
+
 /// The undercount hint carets the rule that holds the sum and names the
 /// wildcarded parameter; `--strict` makes it an error.
 #[test]

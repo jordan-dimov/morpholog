@@ -238,7 +238,8 @@ fn defined_call_into(node: &Node<'_>, out: &mut BTreeSet<DefinitionName>) {
 
 /// Order definitions so each one comes after the definitions it calls.
 /// `Err` carries the sorted names in a call cycle. Calls to names that are
-/// not definitions are ignored; other checks report those.
+/// not definitions are ignored; other checks report those. A condition's
+/// call to itself is not a cycle here: its shape is judged on its own.
 pub(crate) fn definition_topo_order(definitions: &[Definition]) -> Result<Vec<usize>, Vec<String>> {
     let position: HashMap<&str, usize> = definitions
         .iter()
@@ -252,6 +253,9 @@ pub(crate) fn definition_topo_order(definitions: &[Definition]) -> Result<Vec<us
         .map(|d| {
             let mut names = BTreeSet::new();
             defined_calls_in_body(&d.body, &mut names);
+            if d.body.as_prop().is_some() {
+                names.remove(&d.name);
+            }
             names
                 .iter()
                 .filter_map(|n| position.get(n.as_str()).copied())

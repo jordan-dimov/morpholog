@@ -294,6 +294,22 @@ fn every_out_of_fragment_family_refuses_with_its_typed_reason() {
             },
         ),
         (
+            // A call is rendered by inlining its body, and this body
+            // has no end; the kernel checks the rule.
+            "a condition that calls itself",
+            "define reach(x, y):\n    Link(x, y) or (Link(x, m) and reach(m, y))\n\ninvariant r:\n    A(x) and B(y) implies reach(x, y)\n",
+            CompileReason::Construct {
+                construct: "a definition that calls itself",
+            },
+        ),
+        (
+            "a condition that calls itself, reached through another",
+            "define reach(x, y):\n    Link(x, y) or (Link(x, m) and reach(m, y))\n\ndefine near(x, y):\n    reach(x, y)\n\ninvariant r:\n    A(x) and B(y) implies near(x, y)\n",
+            CompileReason::Construct {
+                construct: "a definition that calls itself",
+            },
+        ),
+        (
             "computed sum target",
             "invariant r:\n    Cap(cap) implies sum(n * 2 | Amount(_, n)) <= cap\n",
             CompileReason::SumShape {
@@ -315,6 +331,7 @@ predicate Lasting(x: Subject, d: Duration)
 predicate Cx(x: Subject, c: Collection)
 predicate Cx2(x: Subject, c: Collection)
 predicate Anything(x: Subject, v: Any)
+predicate Link(x: Subject, y: Subject)
 
 ";
     for (family, invariant_src, expected) in cases {

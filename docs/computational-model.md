@@ -2,7 +2,7 @@
 
 Status: design doctrine. Companion to [`scope-and-ambition.md`](scope-and-ambition.md), whose algebra this document makes computational: a programme, the admitted state and a proposal give a decision.
 
-Morpholog gives up general computation on purpose. A decision about what may become true should be finite, inspectable and reproducible, and a language that can loop, call out or consult the clock cannot promise any of the three. So the language has no `while`, no recursion, no host functions and no ambient clock. Applications decide what they want to do; Morpholog decides what they are allowed to make true.
+Morpholog gives up general computation on purpose. A decision about what may become true should be finite, inspectable and reproducible, and a language that can loop, call out or consult the clock cannot promise any of the three. So the language has no `while`, no host functions and no ambient clock, and the one recursion it allows, a condition that calls itself, only finds what the admitted claims already imply. Applications decide what they want to do; Morpholog decides what they are allowed to make true.
 
 The intended headline is **validated Morpholog is computationally total for governed state transitions**. The word *validated* is load-bearing, and the types enforce it: nothing outside the kernel can evaluate a programme that has not passed validation. The [termination section](#termination) states the theorem and the one condition the implementation still adds.
 
@@ -14,8 +14,8 @@ This document states eight guarantees. For each it names what makes it true toda
 
 A decision over a validated programme, finite admitted state and a finite proposal takes finitely many steps.
 
-- **Holds by:** definitions call each other acyclically; nesting is bounded; everything evaluation ranges over is finite; a transformation body reads the state before it, never its own writes. The argument is [below](#termination).
-- **Checked by:** `crates/morpholog-examples/tests/definitions.rs` (cycles refused), `crates/morpholog-core/src/kernel_tests/definitions_adversarial.rs` and `crates/morpholog-core/tests/check_properties.rs` (depth refused, not overflowed), `crates/morpholog-core/src/check/tests.rs` (no rule or derived claim reads a derived claim), `crates/morpholog-examples/tests/computational_model.rs` (every construct names what it ranges over; a body never reads what it admits).
+- **Holds by:** definitions call each other acyclically, and a condition that calls itself is held to a shape whose answers are finite; nesting is bounded; everything evaluation ranges over is finite; a transformation body reads the state before it, never its own writes. The argument is [below](#termination).
+- **Checked by:** `crates/morpholog-examples/tests/definitions.rs` (cycles refused), `crates/morpholog-examples/tests/recursive_definitions.rs` (a recursion that could make a new value refused by name) and `crates/morpholog-core/src/kernel_tests/recursion.rs` (the answers are the least fixpoint's, on graphs with cycles; a chain deeper than any nesting limit is walked), `crates/morpholog-core/src/kernel_tests/definitions_adversarial.rs` and `crates/morpholog-core/tests/check_properties.rs` (depth refused, not overflowed), `crates/morpholog-core/src/check/tests.rs` (no rule or derived claim reads a derived claim), `crates/morpholog-examples/tests/computational_model.rs` (every construct names what it ranges over; a body never reads what it admits).
 - **Gap:** a deeply nested value can exhaust the host stack before the steps finish (see [the implementation](#the-statement)).
 
 ### 2. Deterministic decisions
@@ -94,7 +94,7 @@ Give every node of a validated programme an evaluation rank:
 - a definition call ranks one above its definition's body;
 - an `xor` ranks one above its lowering, `(a or b) and not (a and b)`.
 
-The rank is finite. Definitions call each other acyclically, so ranking them in call order (callees first) never waits on itself, and validation refuses a cycle. The `xor` lowering is larger than the `xor`, because it copies both operands, but its rank is fixed by those operands, which rank lower. Copying changes cost, not termination.
+The rank is finite. Definitions call each other acyclically, so ranking them in call order (callees first) never waits on itself, and validation refuses a cycle. A condition's call to itself is the one exception, and it is not a step into the body: inside the body it reads a table of answers, and ranks as a leaf. The `xor` lowering is larger than the `xor`, because it copies both operands, but its rank is fixed by those operands, which rank lower. Copying changes cost, not termination.
 
 Every recursive step of the evaluator goes to a node of strictly lower rank: proposition to sub-proposition, value to sub-value, call to body, `xor` to its lowering, `for` to its body. Evaluating the same node against another state (`pre(...)`), another definition frame or other bindings recurses into the same lower-ranked nodes.
 
@@ -114,18 +114,20 @@ The argument works at the level of the language's own operations. Library operat
 - `period_index` searches by halving: its bounds start a fixed distance apart (twice the number of days in the calendar, plus four) and the gap halves each step;
 - `periods` walks from the period holding `from` towards `until` one positive step at a time, so the distance left strictly falls; how far it could have been is fixed by the window gate validation requires ahead of every grid, a literal duration in the rule, never a figure from the proposal;
 - an exact result being fitted to a decimal, a sum's total or a `+`, `-` or `*`, sheds one trailing zero per step, and its scale strictly falls;
+- a call to a condition that calls itself keeps a table of answers for each question it meets, a question being the call with its known arguments. It evaluates a question's body, which is finite work by the argument above since the call to itself only reads a table, and evaluates it again only after a table it read has grown. Each evaluation is paid for by a question met for the first time or an answer added to a table, and both are bounded: by T7 every coordinate of a question or an answer is one of the outer call's arguments or a value in an admitted claim, so there are finitely many of either, and a table never loses an answer;
 - a calendar span's text is consumed as it is parsed.
 
 ### The premises
 
 | | Premise | Pinned by |
 |---|---|---|
-| T1 | Definitions call each other acyclically. | `DefinitionCycle`; `crates/morpholog-examples/tests/definitions.rs` |
+| T1 | Definitions call each other acyclically, except that a condition may call itself under T7. | `DefinitionCycle`; `crates/morpholog-examples/tests/definitions.rs` |
 | T2 | Nesting, counting a definition call at its body's depth, stays within a fixed limit. This bounds the evaluator's call stack. | `NestingTooDeep`; `crates/morpholog-core/tests/check_properties.rs`, `crates/morpholog-core/src/kernel_tests/definitions_adversarial.rs` |
 | T3 | No construct ranges over anything but the finite state, a finite collection, its own children, a definition's body or the subject input, apart from the self-bounded loops above. | the construct census, `crates/morpholog-examples/tests/computational_model.rs` |
 | T4 | Derived claims form one layer: a derived claim is computed from admitted claims only, and no rule reads one. There are no recursive views. | `crates/morpholog-core/src/check/tests.rs` |
 | T5 | A body never reads its own staged writes, so nothing feeds back into the state it reads. | `a_transformation_never_reads_what_it_admits` |
 | T6 | The subject input answers each request, with a subject or with nothing left, in finite time. A subject source is caller code. | the `SubjectSource` contract |
+| T7 | A condition that calls itself does so once per branch, as a conjunct of the branch; every branch takes every parameter from a claim pattern or from that call; and every argument of that call is a parameter or a variable an earlier claim pattern in the branch binds. So no answer and no question holds a value that is not in an admitted claim or the outer call. | `RecursionNotBounded`; `crates/morpholog-examples/tests/recursive_definitions.rs`, `crates/morpholog-core/src/kernel_tests/recursion.rs` |
 
 The compiled route runs SQL the compiler writes, which is never recursive, over finite tables. That it decides what the kernel decides is guarantee 7.
 
@@ -151,4 +153,4 @@ It also names the proof it relies on, in the cheapest honest form: a static refu
 
 The forcing-example rule still holds: a new construct needs a worked case. A forcing example can justify a feature. It cannot quietly weaken a guarantee.
 
-The questions this is for: a `while`, a recursive `define`, a host function, a clock, a random value, an external lookup, a new optimiser or execution route. Each of them moves at least one guarantee, and the review should say which before code lands.
+The questions this is for: a `while`, a wider recursion than T7 allows, a host function, a clock, a random value, an external lookup, a new optimiser or execution route. Each of them moves at least one guarantee, and the review should say which before code lands.

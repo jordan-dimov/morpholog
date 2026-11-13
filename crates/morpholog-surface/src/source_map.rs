@@ -136,6 +136,7 @@ impl SourceMap {
                 .iter()
                 .find_map(|n| self.decl_span(DeclKind::Definition, n)),
             ValidationError::ParameterNotReferenced { definition, .. }
+            | ValidationError::RecursionNotBounded { definition, .. }
             | ValidationError::DuplicateParameter { definition, .. } => {
                 self.decl_span(DeclKind::Definition, definition)
             }

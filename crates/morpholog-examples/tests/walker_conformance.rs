@@ -270,6 +270,32 @@ derived Allocated(item):
     value quantity = allocated(item)
 ";
 
+/// A condition that calls itself, reached from a gate and a rule through
+/// a plain condition and from a derived domain directly: every walker
+/// must enter its body once, keep its footprint and come back out.
+const RECURSIVE_DEFINITION: &str = "\
+program recursive_definition
+predicate Parent(part: Subject, parent: Subject)
+predicate Line(line: Subject, part: Subject)
+predicate Filled(line: Subject, part: Subject)
+predicate Lineage(part: Subject, ancestor: Subject, links: Decimal)
+define descends_from(part, ancestor):
+    Parent(part, ancestor) or (Parent(part, between) and descends_from(between, ancestor))
+define fits(item_part, line_part):
+    item_part = line_part or descends_from(item_part, line_part)
+invariant fills_fit:
+    Filled(line, part) and Line(line, line_part) implies fits(part, line_part)
+transformation link(part, parent):
+    admit Parent(part, parent)
+transformation fill(line, part):
+    bind Line(line, line_part)
+    require fits: fits(part, line_part)
+    admit Filled(line, part)
+derived Lineage(part, ancestor):
+    over descends_from(part, ancestor)
+    value links = 1
+";
+
 /// A rule ranging over a grid built from a claim's bounds, with a
 /// definition called inside the grid's body and a sum over it: every
 /// walker must take the grid as `in`'s source and descend the body.
@@ -548,6 +574,7 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ("if_across_branches", IF_ACROSS_BRANCHES),
         ("for_over_a_pattern", FOR_OVER_A_PATTERN),
         ("figure_across_positions", FIGURE_ACROSS_POSITIONS),
+        ("recursive_definition", RECURSIVE_DEFINITION),
         ("grid_in_a_rule", GRID_IN_A_RULE),
         ("digest_in_rule_and_gate", DIGEST_IN_RULE_AND_GATE),
         ("unsupplied_through_defined", UNSUPPLIED_THROUGH_DEFINED),

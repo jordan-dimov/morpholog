@@ -655,6 +655,112 @@ transformation publish(day):
     }
 }
 
+/// A condition that calls itself: a gate follows a tree any number of
+/// steps, through a tree with a loop in it too, a rule reads it with one
+/// variable for both arguments, and a derived read lists the whole
+/// relation.
+fn recursion_cases(out: &mut BTreeMap<String, Fingerprints>) {
+    use morpholog_test_support::subj;
+    let program = morpholog_surface::parse_program(
+        "
+program variant_tree
+
+predicate Parent(part: Subject, parent: Subject)
+predicate Filled(line_part: Subject, item_part: Subject)
+predicate Lineage(part: Subject, ancestor: Subject, links: Decimal)
+
+define descends_from(part, ancestor):
+    Parent(part, ancestor)
+    or (Parent(part, between) and descends_from(between, ancestor))
+
+define fits(item_part, line_part):
+    item_part = line_part or descends_from(item_part, line_part)
+
+invariant no_part_descends_from_itself:
+    Parent(p, _) implies not descends_from(p, p)
+
+transformation link(part, parent):
+    admit Parent(part, parent)
+
+transformation fill(line_part, item_part):
+    require same_part: fits(item_part, line_part)
+    admit Filled(line_part, item_part)
+
+derived Lineage(part, ancestor):
+    over descends_from(part, ancestor)
+    value links = 1
+",
+    )
+    .unwrap();
+    let parent = |part: &str, of: &str| morpholog_core::ClaimInstance {
+        predicate: "Parent".into(),
+        args: vec![subj(part), subj(of)],
+    };
+    let tree = State::from_claims(vec![
+        parent("frame", "root"),
+        parent("red_frame", "frame"),
+        parent("large_red_frame", "red_frame"),
+        parent("blue_frame", "frame"),
+    ]);
+    let fill = program.transformation("fill").unwrap();
+    let link = program.transformation("link").unwrap();
+    let pair = |a: &str, b: &str| vec![subj(a), subj(b)];
+    for (case, t, args) in [
+        (
+            "fixture/recursion/gate_three_steps",
+            fill,
+            pair("root", "large_red_frame"),
+        ),
+        (
+            "fixture/recursion/gate_same_part",
+            fill,
+            pair("frame", "frame"),
+        ),
+        (
+            "fixture/recursion/gate_sibling",
+            fill,
+            pair("red_frame", "blue_frame"),
+        ),
+        (
+            "fixture/recursion/gate_upwards",
+            fill,
+            pair("red_frame", "frame"),
+        ),
+        (
+            "fixture/recursion/rule_admits_a_leaf",
+            link,
+            pair("wheel", "root"),
+        ),
+        (
+            "fixture/recursion/rule_refuses_a_loop",
+            link,
+            pair("root", "large_red_frame"),
+        ),
+        (
+            "fixture/recursion/rule_refuses_a_self_link",
+            link,
+            pair("wheel", "wheel"),
+        ),
+    ] {
+        let (input, decided) = proposal_case(&program, t, args, &tree);
+        record(out, case.to_string(), &input, &decided);
+    }
+    let input = json!({
+        "derived": morpholog_core::format::canonical_hash(&program),
+        "predicate": "Lineage",
+        "state": claims(&tree),
+    });
+    let result = validated(&program)
+        .enumerate_derived("Lineage", &tree)
+        .map(|rows| json!(rows.expect("the programme derives it")));
+    record(
+        out,
+        "fixture/recursion/derived_read".to_string(),
+        &input,
+        &answer(&result),
+    );
+}
+
 /// A reveal held to a commitment: a matching reveal is admitted, so is
 /// one at another scale, and a wrong amount or a wrong salt is refused.
 fn digest_cases(out: &mut BTreeMap<String, Fingerprints>) {
@@ -998,6 +1104,7 @@ fn corpus() -> BTreeMap<String, Fingerprints> {
     bounded_fixtures(&mut out);
     kind_fixtures(&mut out);
     digest_cases(&mut out);
+    recursion_cases(&mut out);
     out
 }
 
