@@ -155,3 +155,91 @@ pub(crate) fn refusal(def: &Definition) -> Option<RecursionRefusal> {
     }
     None
 }
+
+/// A condition that walks one link: which parameter it walks, and the
+/// link.
+pub(crate) struct SingleLink {
+    pub(crate) walked: usize,
+    pub(crate) link: crate::reads::Link,
+}
+
+/// The one shape a load follows through the database:
+///
+/// ```text
+/// define reaches(x, y):
+///     Edge(x, y) or (Edge(x, next) and reaches(next, y))
+/// ```
+///
+/// with the parameters in either order, the branches in either order, and
+/// `Edge` any two-place predicate. Every argument the condition asks
+/// about for `x` is the caller's, or the `y` side of an `Edge` row whose
+/// `x` side it already asked about. `None` for any other body.
+pub(crate) fn single_link(def: &Definition) -> Option<SingleLink> {
+    if def.parameters.len() != 2 {
+        return None;
+    }
+    let Some(Prop::Or(branches)) = def.body.as_prop() else {
+        return None;
+    };
+    let [a, b] = branches.as_slice() else {
+        return None;
+    };
+    let (base, step) = match (a, b) {
+        (Prop::Claim { .. }, Prop::And(_)) => (a, b),
+        (Prop::And(_), Prop::Claim { .. }) => (b, a),
+        _ => return None,
+    };
+    let Prop::Claim { predicate, args } = base else {
+        return None;
+    };
+    let Prop::And(step) = step else {
+        return None;
+    };
+    let [
+        Prop::Claim {
+            predicate: step_predicate,
+            args: step_args,
+        },
+        Prop::Defined {
+            name,
+            args: call_args,
+        },
+    ] = step.as_slice()
+    else {
+        return None;
+    };
+    if step_predicate != predicate || name != &def.name || args.len() != 2 {
+        return None;
+    }
+    let var = |term: &Term| match term {
+        Term::Var(v) => Some(v.clone()),
+        _ => None,
+    };
+    for from in 0..2 {
+        let to = 1 - from;
+        let (walked, carried) = (var(&args[from])?, var(&args[to])?);
+        let walked_at = def.parameters.iter().position(|p| p == &walked)?;
+        let carried_at = def.parameters.iter().position(|p| p == &carried)?;
+        if walked_at == carried_at {
+            return None;
+        }
+        let Some(next) = step_args.get(to).and_then(var) else {
+            continue;
+        };
+        let walks = step_args.get(from).and_then(var).as_ref() == Some(&walked)
+            && !def.parameters.contains(&next)
+            && call_args.get(walked_at).and_then(var).as_ref() == Some(&next)
+            && call_args.get(carried_at).and_then(var).as_ref() == Some(&carried);
+        if walks {
+            return Some(SingleLink {
+                walked: walked_at,
+                link: crate::reads::Link {
+                    predicate: predicate.clone(),
+                    from,
+                    to,
+                },
+            });
+        }
+    }
+    None
+}

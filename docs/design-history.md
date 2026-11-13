@@ -1451,3 +1451,10 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** the InvenTree spike (#727). Stock of any variant below a line's part may fill the line. Without recursion the host listed every ancestor of every part as claims, and three rules held the list to the tree. Location trees and bills of materials have the same shape.
 
 **Landed:** a `define` whose body calls it, in `examples/25_stock_allocation/`: `descends_from` follows the variant tree, and the allocation gate reads it. It means the least set of answers its body allows. Validation holds it to one call to itself per branch, every parameter taken from a claim or that call, and every argument of that call a parameter or an earlier claim's variable, so no answer holds a value the record does not. The kernel keeps a table per question and answers only the call it was asked: building the whole relation first cost 169 ms for a gate on a tree of eleven thousand parts, and the walk costs a claim per step. A rule over such a condition is checked whole and stays interpreted; the tree's predicates are loaded whole. Premise T1 of the termination argument gained the exception and T7 its bound; no decision of an existing programme changed.
+
+### A tree read follows the chain
+
+**Forced by:** the InvenTree spike's measure of #768 (#727). On a tree of 4,884 parts, with nobody editing it, sixteen allocators retried 2.04 to 2.34 times per commit against 0.20 for the closure-as-claims programme, and committed about 55 a second against 1,250. Each allocation read the whole tree, and PostgreSQL held that read as one lock on the claims table.
+
+**Landed:** a read plan key for the one shape a gate on a tree uses, a condition walking a single link up from a known argument. The load seeks the starting value and then each step up by index, so an allocation reads the chain above one part. A hand-written query on the spike's database showed the plan and the locks first: three rows instead of 4,880, and no relation lock. In a batch the walk is read whole after an act that admits the link or the row its start was read from. The kernel is unchanged.
+

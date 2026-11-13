@@ -553,3 +553,70 @@ async fn a_predicate_only_the_loop_reads_is_loaded_for_it() {
         assert_eq!(got, expected, "{route}: relabel");
     }
 }
+
+/// One batch receives stock of a variant three steps below the line's
+/// part, then allocates it. The second act's walk starts from a part it
+/// reads off a stock item the first act admitted, which the snapshot
+/// does not hold, so the walk must not be keyed from the snapshot.
+#[tokio::test]
+async fn an_allocation_of_stock_received_earlier_in_the_batch_follows_the_tree() {
+    use morpholog_core::Transition;
+    use morpholog_postgres::{PgAtomicOutcome, Proposal, propose_all_against_pg};
+    let pool = test_pool().await;
+    for (route, pg) in routes() {
+        stocked_and_allocated(&pool, &pg).await;
+        let mut setup = vec![(stock_allocation::add_part(), vec![subj("frame")])];
+        for (part, of) in [
+            ("red_frame", "frame"),
+            ("large_red_frame", "red_frame"),
+            ("signed_large_red_frame", "large_red_frame"),
+        ] {
+            setup.push((stock_allocation::add_variant(), vec![subj(part), subj(of)]));
+        }
+        setup.push((
+            stock_allocation::add_line(),
+            vec![subj("frames"), subj("order"), subj("frame"), dec(4)],
+        ));
+        for (t, args) in setup {
+            expect_committed(
+                common::propose_pg_with_test_actor(&pool, &pg, &t, args)
+                    .await
+                    .unwrap(),
+            );
+        }
+        let act = |t: &morpholog_core::Transformation, args: Vec<EvalValue>| {
+            Proposal::gateway(&Transition {
+                transformation_name: t.name.clone(),
+                args,
+                actor: morpholog_test_support::test_actor(),
+                decided_at: None,
+            })
+        };
+        let outcome = propose_all_against_pg(
+            &pool,
+            &pg,
+            &[
+                act(
+                    &stock_allocation::receive(),
+                    vec![subj("fresh"), subj("signed_large_red_frame"), dec(4)],
+                ),
+                act(
+                    &stock_allocation::allocate(),
+                    vec![
+                        subj("a_fresh"),
+                        subj("frames"),
+                        subj("shipment"),
+                        subj("fresh"),
+                        dec(1),
+                    ],
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(outcome, PgAtomicOutcome::Committed { .. }),
+            "{route}: {outcome:?}"
+        );
+    }
+}

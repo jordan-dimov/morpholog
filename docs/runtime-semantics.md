@@ -541,8 +541,18 @@ asked and reads the answers found so far.
 A rule that reads such a condition is checked whole on any change to a
 claim the condition reads, and is left alone by a change to anything
 else (`check` names the call under `cases`). The compiled route does
-not render it, so the kernel checks that rule, and an act's load takes
-the predicates the condition reads whole.
+not render it, so the kernel checks that rule.
+
+An act's load follows one shape through the database: a condition that
+walks a single link, `Edge(x, y) or (Edge(x, next) and reaches(next,
+y))`, called with `x` known. The load seeks the rows of `Edge` whose
+`x` side is that value or a value reached from it, one index seek per
+step, so a gate on a tree reads the chain above one part, not the
+tree. Any other shape, and a call whose `x` is not known before the
+act runs, loads the predicates it reads whole, and `check -v` lists
+those reads. In a batch, a walk is read whole after an earlier act
+admits a step of the link or anything the walk's starting value was
+read from, since the snapshot holds neither.
 
 **Diagnostics keep both levels.** A failing call renders as the named
 condition first and the responsible body conjunct second (`inside

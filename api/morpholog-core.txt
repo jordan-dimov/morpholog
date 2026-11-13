@@ -932,6 +932,9 @@ pub morpholog_core::Key::Field::of: alloc::vec::Vec<(usize, morpholog_core::Key)
 pub morpholog_core::Key::Field::position: usize
 pub morpholog_core::Key::Field::predicate: morpholog_core::PredicateName
 pub morpholog_core::Key::OneOf(alloc::vec::Vec<morpholog_core::EvalValue>)
+pub morpholog_core::Key::Reached
+pub morpholog_core::Key::Reached::link: morpholog_core::Link
+pub morpholog_core::Key::Reached::seed: alloc::boxed::Box<morpholog_core::Key>
 pub morpholog_core::Key::Value(morpholog_core::EvalValue)
 impl morpholog_core::Key
 pub fn morpholog_core::Key::reads_any(&self, &alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>) -> bool
@@ -960,6 +963,9 @@ pub morpholog_core::KnownTerm::Field::position: usize
 pub morpholog_core::KnownTerm::Field::predicate: morpholog_core::PredicateName
 pub morpholog_core::KnownTerm::Literal(morpholog_core::Value)
 pub morpholog_core::KnownTerm::Parameter(morpholog_core::Var)
+pub morpholog_core::KnownTerm::Reached
+pub morpholog_core::KnownTerm::Reached::link: morpholog_core::Link
+pub morpholog_core::KnownTerm::Reached::seed: alloc::boxed::Box<morpholog_core::KnownTerm>
 impl core::clone::Clone for morpholog_core::KnownTerm
 pub fn morpholog_core::KnownTerm::clone(&self) -> morpholog_core::KnownTerm
 impl core::cmp::Eq for morpholog_core::KnownTerm
@@ -3010,6 +3016,26 @@ impl core::fmt::Debug for morpholog_core::Layering
 pub fn morpholog_core::Layering::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for morpholog_core::Layering
 impl core::marker::StructuralPartialEq for morpholog_core::Layering
+pub struct morpholog_core::Link
+pub morpholog_core::Link::from: usize
+pub morpholog_core::Link::predicate: morpholog_core::PredicateName
+pub morpholog_core::Link::to: usize
+impl core::clone::Clone for morpholog_core::Link
+pub fn morpholog_core::Link::clone(&self) -> morpholog_core::Link
+impl core::cmp::Eq for morpholog_core::Link
+pub fn morpholog_core::Link::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_core::Link
+pub fn morpholog_core::Link::eq(&self, &morpholog_core::Link) -> bool
+impl core::fmt::Debug for morpholog_core::Link
+pub fn morpholog_core::Link::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_core::Link
+impl core::marker::Freeze for morpholog_core::Link
+impl core::marker::Send for morpholog_core::Link
+impl core::marker::Sync for morpholog_core::Link
+impl core::marker::Unpin for morpholog_core::Link
+impl core::marker::UnsafeUnpin for morpholog_core::Link
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::Link
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Link
 pub struct morpholog_core::LiteralDecimal(_)
 impl morpholog_core::LiteralDecimal
 pub const morpholog_core::LiteralDecimal::ZERO: Self

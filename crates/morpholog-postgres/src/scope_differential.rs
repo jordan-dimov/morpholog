@@ -536,6 +536,63 @@ transformation t(part, wanted):
     admit Out(part)
 ",
     ),
+    // A walk up from a part bound by an earlier `bind`: the load seeks
+    // the item's part, then the chain above it.
+    (
+        "recursive_condition_from_a_bind",
+        "program recursive_condition_from_a_bind
+predicate Parent(part: Subject, parent: Subject)
+predicate Item(item: Subject, part: Subject)
+predicate Out(item: Subject)
+define descends_from(part, ancestor):
+    Parent(part, ancestor) or (Parent(part, between) and descends_from(between, ancestor))
+transformation t(item, ancestor):
+    bind Item(item, part)
+    require descends_from(part, ancestor)
+    admit Out(item)
+",
+    ),
+    // A walk down from the far argument and a step that also tests
+    // another claim, each read whole; and a link that follows the
+    // predicate from its second coordinate to its first, which is
+    // followed.
+    (
+        "recursive_condition_far_argument_only",
+        "program recursive_condition_far_argument_only
+predicate Parent(part: Subject, parent: Subject)
+predicate Out(part: Subject)
+define descends_from(part, ancestor):
+    Parent(part, ancestor) or (Parent(part, between) and descends_from(between, ancestor))
+transformation t(ancestor):
+    require descends_from(_, ancestor)
+    admit Out(ancestor)
+",
+    ),
+    (
+        "recursive_condition_with_a_filter",
+        "program recursive_condition_with_a_filter
+predicate Parent(part: Subject, parent: Subject)
+predicate Active(part: Subject)
+predicate Out(part: Subject)
+define descends_from(part, ancestor):
+    Parent(part, ancestor) or (Parent(part, between) and Active(between) and descends_from(between, ancestor))
+transformation t(part, ancestor):
+    require descends_from(part, ancestor)
+    admit Out(part)
+",
+    ),
+    (
+        "recursive_condition_walking_down",
+        "program recursive_condition_walking_down
+predicate Parent(part: Subject, parent: Subject)
+predicate Out(part: Subject)
+define above(ancestor, part):
+    Parent(part, ancestor) or (Parent(between, ancestor) and above(between, part))
+transformation t(ancestor, part):
+    require above(ancestor, part)
+    admit Out(part)
+",
+    ),
     (
         "mints",
         "program mints
@@ -750,6 +807,42 @@ fn the_read_plan_keys_what_the_body_fixes_and_nothing_else() {
         position,
         of: of.to_vec(),
     };
+
+    // A walk up from a known part: both of the body's patterns fix the
+    // part, and the narrower one (part and ancestor) is subsumed.
+    let reached = |seed: KnownTerm, from: usize, to: usize| KnownTerm::Reached {
+        seed: Box::new(seed),
+        link: morpholog_core::Link {
+            predicate: "Parent".into(),
+            from,
+            to,
+        },
+    };
+    let p = plan("recursive_condition", "t");
+    assert_eq!(
+        p.reads[&"Parent".into()],
+        keyed(&[&[(0, reached(param("part"), 0, 1))]])
+    );
+    let p = plan("recursive_condition_from_a_bind", "t");
+    assert_eq!(
+        p.reads[&"Parent".into()],
+        keyed(&[&[(0, reached(field("Item", 1, &[(0, param("item"))]), 0, 1))]])
+    );
+    let p = plan("recursive_condition_walking_down", "t");
+    assert_eq!(
+        p.reads[&"Parent".into()],
+        keyed(&[&[(1, reached(param("ancestor"), 1, 0))]])
+    );
+    for whole in [
+        "recursive_condition_far_argument_only",
+        "recursive_condition_with_a_filter",
+    ] {
+        assert_eq!(
+            plan(whole, "t").reads[&"Parent".into()],
+            ReadFilter::Whole,
+            "{whole}"
+        );
+    }
 
     let p = plan("bind_key_deferred", "clear");
     assert_eq!(p.reads[&"Owner".into()], keyed(&[&[(0, param("k"))]]));
@@ -993,25 +1086,127 @@ fn a_loop_over_a_collection_parameter_reads_only_its_elements() {
     assert_eq!(projected.claims_for("Stock").count(), 1);
 }
 
-/// A gate that follows a tree four steps: the load must hold every step,
-/// whether the gate calls the recursive condition itself or reaches it
-/// through another condition.
-#[test]
-fn a_condition_that_calls_itself_reads_its_claims_whole() {
+/// A tree with a chain four steps long, a second chain beside it, and a
+/// loop.
+pub(crate) fn a_forest() -> Vec<morpholog_core::ClaimInstance> {
     use morpholog_test_support::{claim_instance, subj};
-    let full = vec![
+    vec![
         claim_instance("Parent", &[subj("b"), subj("a")]),
         claim_instance("Parent", &[subj("c"), subj("b")]),
         claim_instance("Parent", &[subj("d"), subj("c")]),
         claim_instance("Parent", &[subj("e"), subj("d")]),
+        claim_instance("Parent", &[subj("s"), subj("c")]),
         claim_instance("Parent", &[subj("x"), subj("y")]),
-    ];
+        claim_instance("Parent", &[subj("y"), subj("x")]),
+    ]
+}
+
+/// A gate that follows a tree four steps loads the chain above the part
+/// and nothing else, and decides as the whole state does, whether it
+/// calls the recursive condition itself or reaches it through another,
+/// up, down, sideways and round a loop.
+#[test]
+fn a_walk_up_from_a_known_part_loads_the_chain_above_it() {
+    use morpholog_test_support::subj;
     for fragment in ["recursive_condition", "recursive_condition_through_another"] {
-        let (shown, projected) = stage_over(fragment, vec![subj("e"), subj("a")], full.clone());
+        for (part, ancestor, admitted, chain) in [
+            ("e", "a", true, 4),
+            ("e", "c", true, 4),
+            ("a", "e", false, 0),
+            ("e", "s", false, 4),
+            ("s", "b", true, 3),
+            ("x", "x", true, 2),
+            ("x", "a", false, 2),
+            ("nobody", "a", false, 0),
+        ] {
+            let (shown, projected) =
+                stage_over(fragment, vec![subj(part), subj(ancestor)], a_forest());
+            assert_eq!(
+                shown.starts_with("staged:"),
+                admitted,
+                "{fragment} {part} {ancestor}: {shown}"
+            );
+            assert_eq!(
+                projected.claims_for("Parent").count(),
+                chain,
+                "{fragment} {part} {ancestor}"
+            );
+        }
+    }
+}
+
+/// The seed is the part an earlier `bind` found: the load seeks the
+/// item, then the chain above its part.
+#[test]
+fn a_walk_up_from_a_bound_part_loads_the_item_and_its_chain() {
+    use morpholog_test_support::{claim_instance, subj};
+    let mut full = a_forest();
+    full.push(claim_instance("Item", &[subj("i1"), subj("e")]));
+    full.push(claim_instance("Item", &[subj("i2"), subj("s")]));
+    let (shown, projected) = stage_over(
+        "recursive_condition_from_a_bind",
+        vec![subj("i1"), subj("b")],
+        full.clone(),
+    );
+    assert!(shown.starts_with("staged:"), "{shown}");
+    assert_eq!(projected.claims_for("Item").count(), 1);
+    assert_eq!(projected.claims_for("Parent").count(), 4);
+    let (shown, _) = stage_over(
+        "recursive_condition_from_a_bind",
+        vec![subj("i2"), subj("d")],
+        full,
+    );
+    assert!(!shown.starts_with("staged:"), "{shown}");
+}
+
+/// The shapes the load cannot follow read the tree whole, and still
+/// decide as the whole state does.
+#[test]
+fn a_shape_the_load_cannot_follow_reads_the_tree_whole() {
+    use morpholog_test_support::{claim_instance, subj};
+    let mut full = a_forest();
+    for part in ["b", "c", "d", "e"] {
+        full.push(claim_instance("Active", &[subj(part)]));
+    }
+    for (fragment, args) in [
+        ("recursive_condition_far_argument_only", vec![subj("a")]),
+        (
+            "recursive_condition_with_a_filter",
+            vec![subj("e"), subj("a")],
+        ),
+    ] {
+        let (shown, projected) = stage_over(fragment, args, full.clone());
         assert!(shown.starts_with("staged:"), "{fragment}: {shown}");
-        assert_eq!(projected.claims_for("Parent").count(), 5, "{fragment}");
-        let (shown, _) = stage_over(fragment, vec![subj("a"), subj("e")], full.clone());
-        assert!(!shown.starts_with("staged:"), "{fragment}: {shown}");
+        assert_eq!(projected.claims_for("Parent").count(), 7, "{fragment}");
+    }
+}
+
+/// A condition that walks from a parent to its children follows the
+/// link the other way: the load holds the rows below the part.
+#[test]
+fn a_link_followed_from_its_second_coordinate_loads_the_rows_below() {
+    use morpholog_test_support::subj;
+    for (ancestor, part, admitted, below) in [
+        ("a", "e", true, 5),
+        ("c", "s", true, 3),
+        ("d", "s", false, 1),
+        ("x", "x", true, 2),
+    ] {
+        let (shown, projected) = stage_over(
+            "recursive_condition_walking_down",
+            vec![subj(ancestor), subj(part)],
+            a_forest(),
+        );
+        assert_eq!(
+            shown.starts_with("staged:"),
+            admitted,
+            "{ancestor} {part}: {shown}"
+        );
+        assert_eq!(
+            projected.claims_for("Parent").count(),
+            below,
+            "{ancestor} {part}"
+        );
     }
 }
 
@@ -1393,6 +1588,51 @@ transformation ship(a):
     assert_eq!(alone.filters[&"Stock".into()], LoadFilter::Whole);
 }
 
+/// A walk up the tree from a bound part, in a batch: an earlier act that
+/// admits a step of the tree, or the item the walk starts from, makes the
+/// tree whole, since the snapshot holds neither; one that admits
+/// anything else leaves the walk keyed.
+#[test]
+fn a_walk_up_the_tree_reads_whole_after_an_act_that_admits_what_it_follows() {
+    use crate::propose::LoadFilter;
+    use morpholog_core::Key;
+    use std::collections::BTreeSet;
+    let program = hostile_program("recursive_condition_from_a_bind");
+    let t = &program.transformations[0];
+    let transition = morpholog_core::Transition {
+        transformation_name: t.name.clone(),
+        args: vec![
+            morpholog_test_support::subj("i1"),
+            morpholog_test_support::subj("a"),
+        ],
+        actor: morpholog_test_support::test_actor(),
+        decided_at: None,
+    };
+    let scope = || {
+        compute_load_scope(
+            t,
+            Some(&transition),
+            &program.invariants,
+            &program.definitions,
+            Reads::Body,
+        )
+    };
+    let untouched = scope();
+    assert!(matches!(
+        &untouched.filters[&"Parent".into()],
+        LoadFilter::Keyed(patterns) if matches!(&patterns[0][0].1, Key::Reached { .. })
+    ));
+    for (admitted, whole) in [("Parent", true), ("Item", true), ("Out", false)] {
+        let mut after = scope();
+        after.after_admissions_of(&BTreeSet::from([admitted.into()]));
+        assert_eq!(
+            after.filters[&"Parent".into()] == LoadFilter::Whole,
+            whole,
+            "after an act admitting {admitted}"
+        );
+    }
+}
+
 /// A mixed execution loads what its interpreted invariants read, whole,
 /// and nothing for the invariants the database checks or for the admits:
 /// the table decides membership there.
@@ -1511,11 +1751,29 @@ fn the_parameter_count_is_the_loader_s_bind_count() {
                 },
             )],
             vec![(0, Key::OneOf(vec![subj("f"), subj("g")]))],
+            vec![(
+                0,
+                Key::Reached {
+                    seed: Box::new(Key::Reached {
+                        seed: Box::new(Key::OneOf(vec![subj("h"), subj("i")])),
+                        link: morpholog_core::Link {
+                            predicate: "R".into(),
+                            from: 1,
+                            to: 0,
+                        },
+                    }),
+                    link: morpholog_core::Link {
+                        predicate: "K".into(),
+                        from: 0,
+                        to: 1,
+                    },
+                },
+            )],
         ]),
     );
     let (_, binds) = load_sql(&scope).unwrap();
     assert_eq!(scope.parameters(), binds.len());
-    assert_eq!(binds.len(), 2 + 1 + 3 + 2);
+    assert_eq!(binds.len(), 2 + 1 + 3 + 2 + 2);
 }
 
 /// At the limit nothing changes; one over, the largest element key goes,
