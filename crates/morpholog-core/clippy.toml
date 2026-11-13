@@ -18,9 +18,16 @@ disallowed-methods = [
     { path = "std::time::Instant::now", reason = "the kernel reads no clock; take the instant as an input" },
     { path = "jiff::Timestamp::now", reason = "the kernel reads no clock; take the instant as an input" },
     { path = "jiff::Zoned::now", reason = "the kernel reads no clock; take the instant as an input" },
-    { path = "jiff::tz::TimeZone::system", reason = "the system time zone comes from the environment", allow-invalid = true },
-    { path = "jiff::tz::TimeZone::try_system", reason = "the system time zone comes from the environment", allow-invalid = true },
-    { path = "jiff::tz::db", reason = "the time zone database is read from disk", allow-invalid = true },
+    { path = "jiff::tz::TimeZone::system", reason = "the system time zone comes from the environment" },
+    { path = "jiff::tz::TimeZone::try_system", reason = "the system time zone comes from the environment" },
+    { path = "jiff::tz::db", reason = "the time zone database is read from disk" },
+    { path = "jiff::tz::TimeZoneDatabase::from_env", reason = "the time zone database is read from disk" },
+    { path = "jiff::tz::TimeZoneDatabase::from_dir", reason = "the time zone database is read from disk" },
+    { path = "jiff::tz::TimeZone::get", reason = "a named time zone is looked up in the database on disk" },
+    { path = "jiff::Timestamp::in_tz", reason = "a named time zone is looked up in the database on disk" },
+    { path = "jiff::Zoned::in_tz", reason = "a named time zone is looked up in the database on disk" },
+    { path = "jiff::civil::Date::in_tz", reason = "a named time zone is looked up in the database on disk" },
+    { path = "jiff::civil::DateTime::in_tz", reason = "a named time zone is looked up in the database on disk" },
     { path = "std::env::var", reason = "the kernel reads no environment" },
     { path = "std::env::var_os", reason = "the kernel reads no environment" },
     { path = "std::env::vars", reason = "the kernel reads no environment" },
@@ -44,6 +51,8 @@ disallowed-methods = [
 ]
 
 disallowed-types = [
+    { path = "jiff::Zoned", reason = "a zoned time names its zone, which is looked up in the database on disk, parsing included" },
+    { path = "jiff::tz::TimeZoneDatabase", reason = "the time zone database is read from disk" },
     { path = "std::time::SystemTime", reason = "the kernel reads no clock" },
     { path = "std::time::Instant", reason = "the kernel reads no clock" },
     { path = "std::fs::File", reason = "the kernel touches no files" },
