@@ -22,6 +22,7 @@ mod period_start_of_semantics;
 mod periods;
 mod propose;
 mod quantity_values;
+mod recursion;
 mod rehearsal_locality;
 mod round_semantics;
 mod state;

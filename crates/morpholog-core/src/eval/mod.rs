@@ -258,6 +258,9 @@ pub(crate) struct EvalContext<'a> {
     /// Results computed elsewhere for particular `Sum` nodes, keyed by
     /// the node: a sum found here is not evaluated against the state.
     sums: Option<&'a SumResults<'a>>,
+    /// The answer tables of the recursive condition whose body is being
+    /// evaluated, if one is.
+    tables: Option<&'a recursion::Tables>,
 }
 
 type SumResults<'a> = std::collections::HashMap<*const ValueExpr, &'a Result<EvalValue, EvalError>>;
@@ -295,6 +298,7 @@ impl<'a> EvalContext<'a> {
             transition,
             definitions,
             sums: None,
+            tables: None,
         }
     }
 
@@ -327,6 +331,7 @@ impl<'a> EvalContext<'a> {
             transition: None,
             definitions: self.definitions,
             sums: None,
+            tables: None,
         }
     }
 }
@@ -543,7 +548,11 @@ fn find_defined_matches(
         )));
     };
     let frame = definition_call_frame(def, args, ctx)?;
-    let body_matches = find_matches(body, &ctx.enter_definition(&frame))?;
+    let body_matches = match ctx.tables {
+        Some(tables) if tables.answers(name) => tables.read(def, &frame),
+        _ if crate::recursion::asks_itself(def) => recursion::solve(def, body, &frame, ctx)?,
+        _ => find_matches(body, &ctx.enter_definition(&frame))?,
+    };
 
     // Every match extends the same bindings with the same argument
     // variables, so two matches are equal exactly when those variables
@@ -2173,6 +2182,10 @@ pub(crate) fn find_failure(prop: &Prop, ctx: &EvalContext<'_>) -> Option<Failure
         // part, with parameter names rather than values.
         Prop::Defined { name, args } => {
             let def = ctx.definitions.get(name)?;
+            // A condition that calls itself is named, not drilled into.
+            if crate::recursion::asks_itself(def) {
+                return None;
+            }
             let body = def.body.as_prop()?;
             let frame = definition_call_frame(def, args, ctx).ok()?;
             let body_ctx = ctx.enter_definition(&frame);
@@ -2252,6 +2265,9 @@ pub(crate) fn unsatisfied_positive_claims(
             let Some(body) = def.body.as_prop() else {
                 return vec![];
             };
+            if crate::recursion::asks_itself(def) {
+                return vec![];
+            }
             let Ok(frame) = definition_call_frame(def, args, ctx) else {
                 return vec![];
             };
@@ -2402,5 +2418,6 @@ fn compare_ordered(
     })
 }
 
+mod recursion;
 #[cfg(test)]
 mod tests;

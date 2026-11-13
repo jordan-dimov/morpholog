@@ -269,63 +269,30 @@ fn a_sibling_for_an_absent_field_goes_with_its_parent() {
     assert_eq!(state.len(), 0, "the cascade left claims behind");
 }
 
-/// A closure the host lists is held to the tree: a complete one is
-/// admitted, and one missing a parent or an ancestor, naming a wrong one,
-/// or closing a cycle, is refused, each by the rule it breaks.
+/// The tree's one act keeps it free of loops: a step onto itself and a
+/// step that would close a loop are refused, each by its gate, and a
+/// part may move under another branch.
 #[test]
-fn a_host_kept_closure_is_held_to_the_tree() {
-    use morpholog_test_support::coll;
+fn the_tree_s_one_act_refuses_a_loop() {
     let (_, source) = sheet_blocks()
         .into_iter()
         .find(|(_, s)| s.contains("program variant_tree\n"))
         .expect("the variant-tree block");
-    let p = parse_program(&format!(
-        "{source}\ntransformation record_parent_only(part, parent):\n    admit VariantOf(part, parent)\n\
-         transformation record_pair(x, y):\n    admit VariantOf(x, y)\n    admit VariantOf(y, x)\n\
-         \x20   admit DescendsFrom(x, y)\n    admit DescendsFrom(y, x)\n\
-         \x20   admit DescendsFrom(x, x)\n    admit DescendsFrom(y, y)\n"
-    ))
-    .expect("parses");
-    let record = |part: &str, parent: &str, ancestors: &[&str], state: &State| {
-        act(
-            &p,
-            "record_variant",
-            vec![
-                subj(part),
-                subj(parent),
-                coll(ancestors.iter().map(|a| subj(a)).collect()),
-            ],
-            state,
-        )
+    let p = parse_program(&source).expect("parses");
+    let set = |part: &str, parent: &str, state: &State| {
+        act(&p, "set_parent", vec![subj(part), subj(parent)], state)
     };
-    refused_by(
-        act(
-            &p,
-            "record_parent_only",
-            vec![subj("b"), subj("a")],
-            &State::default(),
-        ),
-        "a_variant_descends_from_its_parent",
-    );
-    let state = accepted(record("b", "a", &[], &State::default()));
-    refused_by(record("c", "b", &[], &state), "descent_is_transitive");
-    refused_by(
-        record("c", "b", &["a", "z"], &state),
-        "descent_follows_the_tree",
-    );
-    let state = accepted(record("c", "b", &["a"], &state));
-    accepted(record("d", "c", &["b", "a"], &state));
-    refused_by(
-        record("e", "e", &[], &State::default()),
-        "no_part_descends_from_itself",
-    );
-    refused_by(
-        act(
-            &p,
-            "record_pair",
-            vec![subj("x"), subj("y")],
-            &State::default(),
-        ),
-        "no_part_descends_from_itself",
-    );
+    refused_by(set("a", "a", &State::default()), "not_its_own_parent");
+    let mut state = State::default();
+    for (part, parent) in [("b", "a"), ("c", "b"), ("d", "c"), ("e", "a")] {
+        state = accepted(set(part, parent, &state));
+    }
+    // Three steps round, and two.
+    refused_by(set("a", "d", &state), "no_loop");
+    refused_by(set("b", "c", &state), "no_loop");
+    // A move to another branch replaces the old parent.
+    let state = accepted(set("c", "e", &state));
+    assert_eq!(state.claims_for("VariantOf").count(), 4);
+    // `b` no longer has `c` beneath it, so it may go under `d`.
+    accepted(set("b", "d", &state));
 }

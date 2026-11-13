@@ -507,6 +507,35 @@ transformation touch(x):
     admit Out(x)
 ",
     ),
+    // A condition that calls itself reads its claims again under other
+    // arguments. Keying them by the first call's argument would load one
+    // step of the tree and refuse a grandchild.
+    (
+        "recursive_condition",
+        "program recursive_condition
+predicate Parent(part: Subject, parent: Subject)
+predicate Out(part: Subject)
+define descends_from(part, ancestor):
+    Parent(part, ancestor) or (Parent(part, between) and descends_from(between, ancestor))
+transformation t(part, ancestor):
+    require descends_from(part, ancestor)
+    admit Out(part)
+",
+    ),
+    (
+        "recursive_condition_through_another",
+        "program recursive_condition_through_another
+predicate Parent(part: Subject, parent: Subject)
+predicate Out(part: Subject)
+define descends_from(part, ancestor):
+    Parent(part, ancestor) or (Parent(part, between) and descends_from(between, ancestor))
+define fits(part, wanted):
+    part = wanted or descends_from(part, wanted)
+transformation t(part, wanted):
+    require fits(part, wanted)
+    admit Out(part)
+",
+    ),
     (
         "mints",
         "program mints
@@ -962,6 +991,28 @@ fn a_loop_over_a_collection_parameter_reads_only_its_elements() {
     );
     assert!(shown.starts_with("staged:"), "{shown}");
     assert_eq!(projected.claims_for("Stock").count(), 1);
+}
+
+/// A gate that follows a tree four steps: the load must hold every step,
+/// whether the gate calls the recursive condition itself or reaches it
+/// through another condition.
+#[test]
+fn a_condition_that_calls_itself_reads_its_claims_whole() {
+    use morpholog_test_support::{claim_instance, subj};
+    let full = vec![
+        claim_instance("Parent", &[subj("b"), subj("a")]),
+        claim_instance("Parent", &[subj("c"), subj("b")]),
+        claim_instance("Parent", &[subj("d"), subj("c")]),
+        claim_instance("Parent", &[subj("e"), subj("d")]),
+        claim_instance("Parent", &[subj("x"), subj("y")]),
+    ];
+    for fragment in ["recursive_condition", "recursive_condition_through_another"] {
+        let (shown, projected) = stage_over(fragment, vec![subj("e"), subj("a")], full.clone());
+        assert!(shown.starts_with("staged:"), "{fragment}: {shown}");
+        assert_eq!(projected.claims_for("Parent").count(), 5, "{fragment}");
+        let (shown, _) = stage_over(fragment, vec![subj("a"), subj("e")], full.clone());
+        assert!(!shown.starts_with("staged:"), "{fragment}: {shown}");
+    }
 }
 
 /// The merge act's own shape: a positive membership test inside a

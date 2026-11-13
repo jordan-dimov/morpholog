@@ -1229,6 +1229,31 @@ impl core::marker::Unpin for morpholog_core::ReadFilter
 impl core::marker::UnsafeUnpin for morpholog_core::ReadFilter
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::ReadFilter
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::ReadFilter
+pub enum morpholog_core::RecursionRefusal
+pub morpholog_core::RecursionRefusal::ArgumentNotFromClaim
+pub morpholog_core::RecursionRefusal::ArgumentNotFromClaim::argument: alloc::string::String
+pub morpholog_core::RecursionRefusal::ParameterNotFromClaim
+pub morpholog_core::RecursionRefusal::ParameterNotFromClaim::parameter: alloc::string::String
+pub morpholog_core::RecursionRefusal::Position
+pub morpholog_core::RecursionRefusal::SeveralSelfCalls
+impl core::clone::Clone for morpholog_core::RecursionRefusal
+pub fn morpholog_core::RecursionRefusal::clone(&self) -> morpholog_core::RecursionRefusal
+impl core::cmp::Eq for morpholog_core::RecursionRefusal
+pub fn morpholog_core::RecursionRefusal::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_core::RecursionRefusal
+pub fn morpholog_core::RecursionRefusal::eq(&self, &morpholog_core::RecursionRefusal) -> bool
+impl core::fmt::Debug for morpholog_core::RecursionRefusal
+pub fn morpholog_core::RecursionRefusal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for morpholog_core::RecursionRefusal
+pub fn morpholog_core::RecursionRefusal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_core::RecursionRefusal
+impl core::marker::Freeze for morpholog_core::RecursionRefusal
+impl core::marker::Send for morpholog_core::RecursionRefusal
+impl core::marker::Sync for morpholog_core::RecursionRefusal
+impl core::marker::Unpin for morpholog_core::RecursionRefusal
+impl core::marker::UnsafeUnpin for morpholog_core::RecursionRefusal
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::RecursionRefusal
+impl core::panic::unwind_safe::UnwindSafe for morpholog_core::RecursionRefusal
 pub enum morpholog_core::RefusalKind
 pub morpholog_core::RefusalKind::Bind
 pub morpholog_core::RefusalKind::Invariant
@@ -1799,6 +1824,9 @@ pub morpholog_core::ValidationError::PeriodsUnbounded::from: alloc::string::Stri
 pub morpholog_core::ValidationError::PeriodsUnbounded::until: alloc::string::String
 pub morpholog_core::ValidationError::PreNotAvailable
 pub morpholog_core::ValidationError::PreNotAvailable::context: morpholog_core::ValidationContext
+pub morpholog_core::ValidationError::RecursionNotBounded
+pub morpholog_core::ValidationError::RecursionNotBounded::definition: alloc::string::String
+pub morpholog_core::ValidationError::RecursionNotBounded::refusal: morpholog_core::RecursionRefusal
 pub morpholog_core::ValidationError::RetractsAppendOnly
 pub morpholog_core::ValidationError::RetractsAppendOnly::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::RetractsAppendOnly::predicate: alloc::string::String
@@ -1988,6 +2016,7 @@ pub morpholog_core::Widening::In
 pub morpholog_core::Widening::NoCaseVariable(morpholog_core::PredicateName)
 pub morpholog_core::Widening::Or
 pub morpholog_core::Widening::Pre
+pub morpholog_core::Widening::RecursiveCall(morpholog_core::DefinitionName)
 pub morpholog_core::Widening::ScopeReadsBeforeBinding(morpholog_core::Var)
 pub morpholog_core::Widening::SumOverExpression
 pub morpholog_core::Widening::UnfollowedCall(morpholog_core::DefinitionName)
@@ -2280,6 +2309,8 @@ pub morpholog_core::Definition::body: morpholog_core::DefinitionBody
 pub morpholog_core::Definition::name: morpholog_core::DefinitionName
 pub morpholog_core::Definition::origin: morpholog_core::DefinitionOrigin
 pub morpholog_core::Definition::parameters: alloc::vec::Vec<morpholog_core::Var>
+impl morpholog_core::Definition
+pub fn morpholog_core::Definition::calls_itself(&self) -> bool
 impl core::clone::Clone for morpholog_core::Definition
 pub fn morpholog_core::Definition::clone(&self) -> morpholog_core::Definition
 impl core::cmp::Eq for morpholog_core::Definition

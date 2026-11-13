@@ -73,6 +73,9 @@ pub enum Widening {
     ConditionalValue,
     SumOverExpression,
     UnfollowedCall(DefinitionName),
+    /// A condition that calls itself: a change to a claim it reads can
+    /// reach a case any number of calls away.
+    RecursiveCall(DefinitionName),
     /// A claim pattern binding no case variable: a delta touching it has
     /// no case to be bounded to.
     NoCaseVariable(PredicateName),
@@ -97,6 +100,7 @@ impl fmt::Display for Widening {
             Widening::UnfollowedCall(name) => {
                 write!(f, "`{name}` is a call that could not be followed")
             }
+            Widening::RecursiveCall(name) => write!(f, "`{name}` calls itself"),
             Widening::NoCaseVariable(p) => write!(f, "`{p}` binds no case variable"),
             Widening::ScopeReadsBeforeBinding(v) => {
                 write!(f, "`{v}` is read inside a scope before the rule binds it")
@@ -450,9 +454,19 @@ fn follow(
             follow(Body::of(&def.body), &callee, table, seen, out, &inner);
             true
         });
-        // An undeclared or cyclic call contributes nothing to a walker
-        // that only reads; here nothing would be unsound.
-        if !followed {
+        // A condition's call to itself reaches claims beyond the ones
+        // the first call traced, so no case bounds it. Its body was
+        // walked once already, so the footprint holds every predicate it
+        // reads and is kept.
+        let recursive = !followed
+            && seen.contains(&name)
+            && table.get(&name).is_some_and(crate::recursion::asks_itself);
+        if recursive {
+            out.widening
+                .get_or_insert_with(|| Widening::RecursiveCall(name.clone()));
+        } else if !followed {
+            // An undeclared or cyclic call contributes nothing to a
+            // walker that only reads; here nothing would be unsound.
             out.widening
                 .get_or_insert_with(|| Widening::UnfollowedCall(name.clone()));
             out.footprint = None;

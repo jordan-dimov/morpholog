@@ -573,6 +573,13 @@ pub enum ValidationError {
         .names.join(", ")
     )]
     DefinitionCycle { names: Vec<String> },
+    /// A condition calls itself in a shape whose answers are not held to
+    /// the values admitted claims carry.
+    #[error("definition `{definition}` calls itself, and {refusal}")]
+    RecursionNotBounded {
+        definition: String,
+        refusal: crate::recursion::RecursionRefusal,
+    },
     /// A predicate declared `partial` that some invariant also declares
     /// `total over`.
     ///
@@ -850,6 +857,23 @@ pub(crate) fn structural_errors(p: &Program) -> Result<(), Vec<ValidationError>>
             return Err(errors);
         }
     };
+
+    // A condition that calls itself is judged before anything follows a
+    // call into it.
+    let unbounded: Vec<ValidationError> = p
+        .definitions
+        .iter()
+        .filter(|d| crate::recursion::calls_itself(d))
+        .filter_map(|d| {
+            crate::recursion::refusal(d).map(|refusal| ValidationError::RecursionNotBounded {
+                definition: d.name.to_string(),
+                refusal,
+            })
+        })
+        .collect();
+    if !unbounded.is_empty() {
+        return Err(unbounded);
+    }
 
     // The depth guard runs next and short-circuits, because `check`
     // recurses over every body and a deep enough one would overflow it.

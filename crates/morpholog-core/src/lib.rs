@@ -44,6 +44,7 @@ mod lint;
 mod prepared;
 mod propose;
 mod reads;
+mod recursion;
 pub mod rehearse;
 pub mod schema;
 mod score;
@@ -98,6 +99,7 @@ pub use propose::{
 #[doc(hidden)]
 pub use propose::{Decided, decide_staged_delta_with};
 pub use reads::{Key, KeyedPattern, KnownTerm, MAX_ELEMENT_KEYS, ReadFilter, ReadPlan, WholeRead};
+pub use recursion::RecursionRefusal;
 pub use rehearse::{
     Effect, REHEARSAL_CONTRACT, REHEARSAL_FORMAT_VERSION, RecordedProposal, Rehearsal,
     RehearsalReport, RowClass, RowReport, RuleRefusals, Totals, Unreplayable, UnreplayableTotals,

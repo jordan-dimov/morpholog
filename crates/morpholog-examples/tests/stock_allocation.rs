@@ -315,6 +315,111 @@ fn cancelling_an_order_takes_every_line_and_allocation_with_it() {
     );
 }
 
+/// A frame, a red frame under it and a large red frame under that; a
+/// blue frame beside the red one. Stock of each variant on the shelf,
+/// and `line` moved to order frames.
+fn with_frames() -> State {
+    let mut state = stocked(10, 8);
+    state = ex().must_accept(&stock_allocation::add_part(), vec![subj("frame")], state);
+    for (part, of) in [
+        ("red_frame", "frame"),
+        ("large_red_frame", "red_frame"),
+        ("blue_frame", "frame"),
+    ] {
+        state = ex().must_accept(
+            &stock_allocation::add_variant(),
+            vec![subj(part), subj(of)],
+            state,
+        );
+    }
+    for part in ["frame", "red_frame", "large_red_frame", "blue_frame"] {
+        state = ex().must_accept(
+            &stock_allocation::receive(),
+            vec![subj(&format!("{part}_stock")), subj(part), dec(5)],
+            state,
+        );
+    }
+    for (line, part) in [("frames", "frame"), ("red_frames", "red_frame")] {
+        state = ex().must_accept(
+            &stock_allocation::add_line(),
+            vec![subj(line), subj("order"), subj(part), dec(8)],
+            state,
+        );
+    }
+    state
+}
+
+fn allocation_of(line: &str, item: &str) -> Vec<EvalValue> {
+    vec![
+        subj(&format!("{line}_{item}")),
+        subj(line),
+        subj("shipment"),
+        subj(item),
+        dec(1),
+    ]
+}
+
+// A line for a part takes stock of that part or of any variant below
+// it, however many steps down, and of nothing else. The record holds
+// only each variant's own parent.
+#[test]
+fn a_line_takes_stock_of_any_variant_below_its_part() {
+    let mut state = with_frames();
+    for item in ["frame_stock", "red_frame_stock", "blue_frame_stock"] {
+        state = ex().must_accept(
+            &stock_allocation::allocate(),
+            allocation_of("frames", item),
+            state,
+        );
+    }
+    state = ex().must_accept(
+        &stock_allocation::allocate(),
+        allocation_of("red_frames", "large_red_frame_stock"),
+        state,
+    );
+    // A sibling, the part above, and a part outside the tree.
+    for item in ["blue_frame_stock", "frame_stock", "pallet"] {
+        refused_by(
+            &ex().must_reject(
+                &stock_allocation::allocate(),
+                allocation_of("red_frames", item),
+                &state,
+            ),
+            "same_part",
+        );
+    }
+}
+
+// A variant is a new part under a known one, so no act can close a loop.
+#[test]
+fn a_variant_is_a_new_part_under_a_known_one() {
+    let state = with_frames();
+    refused_by(
+        &ex().must_reject(
+            &stock_allocation::add_variant(),
+            vec![subj("frame"), subj("large_red_frame")],
+            &state,
+        ),
+        "new_part",
+    );
+    refused_by(
+        &ex().must_reject(
+            &stock_allocation::add_variant(),
+            vec![subj("green_frame"), subj("unknown")],
+            &state,
+        ),
+        "known_part",
+    );
+    refused_by(
+        &ex().must_reject(
+            &stock_allocation::add_variant(),
+            vec![subj("green_frame"), subj("green_frame")],
+            &state,
+        ),
+        "known_part",
+    );
+}
+
 #[test]
 fn the_rules_refuse_what_the_acts_may_not_do() {
     let state = stocked(10, 8);

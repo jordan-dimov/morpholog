@@ -418,6 +418,101 @@ transformation relabel(item):
         admit Seen(item, label, new Subject())
 ";
 
+/// A line for a part takes stock of a variant three steps below it. The
+/// gate follows the variant tree through a condition that calls itself,
+/// so the adapter must load every step of the tree, not the one the
+/// item's own part names.
+#[tokio::test]
+async fn a_gate_that_follows_the_variant_tree_decides_as_the_kernel_does() {
+    let pool = test_pool().await;
+    for (route, pg) in routes() {
+        stocked_and_allocated(&pool, &pg).await;
+        let mut setup = vec![(stock_allocation::add_part(), vec![subj("frame")])];
+        for (part, of) in [
+            ("red_frame", "frame"),
+            ("large_red_frame", "red_frame"),
+            ("signed_large_red_frame", "large_red_frame"),
+            ("blue_frame", "frame"),
+        ] {
+            setup.push((stock_allocation::add_variant(), vec![subj(part), subj(of)]));
+        }
+        for part in ["signed_large_red_frame", "blue_frame"] {
+            setup.push((
+                stock_allocation::receive(),
+                vec![subj(&format!("{part}_stock")), subj(part), dec(4)],
+            ));
+        }
+        setup.push((
+            stock_allocation::receive(),
+            vec![subj("spare"), subj("signed_large_red_frame"), dec(4)],
+        ));
+        for (line, part) in [("frames", "frame"), ("red_frames", "red_frame")] {
+            setup.push((
+                stock_allocation::add_line(),
+                vec![subj(line), subj("order"), subj(part), dec(4)],
+            ));
+        }
+        for (t, args) in setup {
+            expect_committed(
+                common::propose_pg_with_test_actor(&pool, &pg, &t, args)
+                    .await
+                    .unwrap(),
+            );
+        }
+
+        let allocation = |name: &str, line: &str, item: &str| {
+            vec![subj(name), subj(line), subj("shipment"), subj(item), dec(1)]
+        };
+        for (name, line, item, verdict) in [
+            // A sibling's stock is no variant of the red frame.
+            (
+                "a1",
+                "red_frames",
+                "blue_frame_stock",
+                "rejected by same_part",
+            ),
+            // A bolt is outside the tree.
+            ("a2", "frames", "pallet", "rejected by same_part"),
+            // Three steps down from the red frame, four from the frame.
+            (
+                "a3",
+                "red_frames",
+                "signed_large_red_frame_stock",
+                "committed",
+            ),
+        ] {
+            let args = allocation(name, line, item);
+            let expected = by_the_kernel(
+                &pool,
+                &stock_allocation::program(),
+                &stock_allocation::allocate(),
+                args.clone(),
+            )
+            .await;
+            assert!(
+                expected.verdict.starts_with(verdict),
+                "{route}: {expected:?}"
+            );
+            let got = by_the_database(&pool, &pg, &stock_allocation::allocate(), args).await;
+            assert_eq!(got, expected, "{route}: allocate {item} to {line}");
+        }
+
+        // The same gate without a trace. A traced proposal is decided
+        // over a wider load, which would hide a tree loaded one step
+        // deep; this one loads only what the act's own reads ask for.
+        expect_committed(
+            common::propose_pg_with_test_actor(
+                &pool,
+                &pg,
+                &stock_allocation::allocate(),
+                allocation("a4", "frames", "spare"),
+            )
+            .await
+            .unwrap(),
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_predicate_only_the_loop_reads_is_loaded_for_it() {
     let pool = test_pool().await;

@@ -346,6 +346,18 @@ struct DefinitionSig {
     result: Option<InferredKind>,
 }
 
+/// An `or` keeps no kind for what its branches refine. A parameter every
+/// use in the body observed as one kind has that kind.
+fn agreed_kinds(observed: &[BTreeSet<PredicateArgKind>]) -> Vec<InferredKind> {
+    observed
+        .iter()
+        .map(|kinds| match kinds.iter().next() {
+            Some(kind) if kinds.len() == 1 => InferredKind::Known(kind.clone()),
+            _ => InferredKind::UnknownOrAny,
+        })
+        .collect()
+}
+
 /// What one checker run found.
 pub(crate) struct Checked {
     pub(crate) errors: Vec<ValidationError>,
@@ -438,10 +450,61 @@ pub(crate) fn check_program(program: &Program) -> Checked {
             let context = cx.context.clone();
             cx.errors.push(ValidationError::PreNotAvailable { context });
         }
+        // A condition that calls itself is checked against its own
+        // signature, which is not known yet. A first walk, its errors
+        // discarded, takes each parameter's kind from the claims the
+        // body reads; the real walk below then holds the call to itself
+        // to that. Its shape rules already make every branch bind every
+        // parameter, and the call to itself binds what it is passed.
+        let recursive = crate::recursion::calls_itself(def);
+        if recursive && let crate::ir::DefinitionBody::Prop(body) = &def.body {
+            let arity = def.parameters.len();
+            cx.definition_sigs.insert(
+                def.name.to_string(),
+                DefinitionSig {
+                    param_kinds: vec![InferredKind::UnknownOrAny; arity],
+                    param_observed: vec![BTreeSet::new(); arity],
+                    generator: vec![true; arity],
+                    result: None,
+                },
+            );
+            let mut first = Scope::new();
+            for param in &def.parameters {
+                first.bound.bind(param);
+                let _ = first
+                    .kinds
+                    .observe(param, InferredKind::UnknownOrAny, &mut cx.cells);
+            }
+            let kept = std::mem::take(&mut cx.errors);
+            cx.walk_prop(body, &mut first);
+            cx.errors = kept;
+            let param_observed: Vec<BTreeSet<PredicateArgKind>> = def
+                .parameters
+                .iter()
+                .map(|p| {
+                    first
+                        .kinds
+                        .cell(p)
+                        .map(|c| cx.cells.observed(c).clone())
+                        .unwrap_or_default()
+                })
+                .collect();
+            let param_kinds = agreed_kinds(&param_observed);
+            cx.definition_sigs.insert(
+                def.name.to_string(),
+                DefinitionSig {
+                    param_kinds,
+                    param_observed,
+                    generator: vec![true; arity],
+                    result: None,
+                },
+            );
+        }
         // Probe walk: which parameters does the body bind? Parameters
         // start unbound and the probe's errors are discarded. A figure's
         // parameters are inputs only, so none is a generator.
         let generator: Vec<bool> = match &def.body {
+            crate::ir::DefinitionBody::Prop(_) if recursive => vec![true; def.parameters.len()],
             crate::ir::DefinitionBody::Prop(body) => {
                 let mut probe = Scope::new();
                 let kept = std::mem::take(&mut cx.errors);
@@ -486,12 +549,7 @@ pub(crate) fn check_program(program: &Program) -> Checked {
                 });
             }
         }
-        let param_kinds = def
-            .parameters
-            .iter()
-            .map(|p| scope.kinds.lookup(p))
-            .collect();
-        let param_observed = def
+        let param_observed: Vec<BTreeSet<PredicateArgKind>> = def
             .parameters
             .iter()
             .map(|p| {
@@ -502,6 +560,16 @@ pub(crate) fn check_program(program: &Program) -> Checked {
                     .unwrap_or_default()
             })
             .collect();
+        // A condition that calls itself is an `or` at its root, so its
+        // callers are held to the same kinds its call to itself is.
+        let param_kinds = if recursive {
+            agreed_kinds(&param_observed)
+        } else {
+            def.parameters
+                .iter()
+                .map(|p| scope.kinds.lookup(p))
+                .collect()
+        };
         cx.definition_sigs.insert(
             def.name.to_string(),
             DefinitionSig {

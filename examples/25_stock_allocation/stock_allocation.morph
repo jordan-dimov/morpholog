@@ -26,6 +26,16 @@ program stock_allocation
 -- A part the warehouse stocks and sells.
 predicate Part(part: Subject)
 
+-- A part may be a variant of another: a red frame is a frame, and a
+-- large red frame is a red frame. Each variant names the one part it
+-- is a variant of. A customer who orders a frame can be sent any of
+-- them. The record holds only these single steps. Nothing keeps a
+-- list of every ancestor of every part, which would have to be put
+-- right each time the tree changed.
+predicate VariantOf(part: Subject, of: Subject)
+    unique by (part)
+    append only
+
 -- An item of stock: one part, some quantity of it. The quantity changes
 -- as the item is split, so this is not append only.
 predicate StockItem(item: Subject, part: Subject, quantity: Decimal)
@@ -114,6 +124,15 @@ invariant allocations_name_real_things:
     Allocation(allocation, line, shipment, item, _)
     implies SalesLine(line, order, _, _) and Shipment(shipment, order) and StockItem(item, _, _)
 
+-- Whether one part is a variant of another, however many steps apart.
+-- Either the record says so directly, or the part is a variant of
+-- something that is. The condition names itself, so it follows the
+-- tree as far as the tree goes, and it reads nothing but the steps
+-- the record holds.
+define descends_from(part, ancestor):
+    VariantOf(part, ancestor)
+    or (VariantOf(part, between) and descends_from(between, ancestor))
+
 -- How much of an item is reserved. One figure, defined once, read by
 -- the `allocate` gate, by the rule below and by the `Allocated` view.
 -- The systems this is modelled on keep several copies of this sum in
@@ -149,6 +168,17 @@ transformation add_part(part):
     require new_part: not Part(part)
     admit Part(part)
 
+-- A variant is always a new part under a part that exists. Every part
+-- is on record as a `Part` before anything can be made a variant of
+-- it, so a part with no `Part` claim is nothing's ancestor, and the
+-- tree can never loop back on itself. No rule has to check for a
+-- loop, because no act can make one.
+transformation add_variant(part, of):
+    require new_part: not Part(part)
+    require known_part: Part(of)
+    admit Part(part)
+    admit VariantOf(part, of)
+
 transformation receive(item, part, quantity):
     require positive: 0 < quantity
     require known_part: Part(part)
@@ -174,15 +204,16 @@ transformation open_shipment(shipment, order):
     admit Shipment(shipment, order)
 
 -- Reserve some of an item for a line, on a shipment. The lookups do
--- the checking: the shipment is looked up by the line's order, and the
--- item by the line's part.
+-- most of the checking: the shipment is looked up by the line's order.
+-- The item must be of the line's part, or of any variant of it.
 transformation allocate(allocation, line, shipment, item, quantity):
     require positive: 0 < quantity
     require new_allocation: not Allocation(allocation: allocation, ..)
-    bind SalesLine(line, order, part, ordered)
+    bind SalesLine(line, order, line_part, ordered)
     bind on_the_order: Shipment(shipment, order)
     require not_yet_shipped: not ShipmentShipped(shipment)
-    bind same_part: StockItem(item, part, on_hand)
+    bind known_item: StockItem(item, item_part, on_hand)
+    require same_part: item_part = line_part or descends_from(item_part, line_part)
     require in_stock: InStock(item)
     require once_per_shipment: not Allocation(shipment: shipment, item: item, ..)
     require within_stock: allocated(item) + quantity <= on_hand

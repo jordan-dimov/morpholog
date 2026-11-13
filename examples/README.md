@@ -84,6 +84,7 @@ one act is a margin-call run.
 | range over the claims a pattern matches, one pass per claim | [25_stock_allocation](25_stock_allocation/) | `for Allocation(allocation, line, shipment, item, quantity):` |
 | name a figure once and read it from a gate, a rule and a view | [25_stock_allocation](25_stock_allocation/) | `define allocated(item) = (sum(q | Allocation(item: item, quantity: q, ..)))` |
 | declare a parameter's kind where the body gives it none | [25_stock_allocation](25_stock_allocation/) | `force: Bool` |
+| follow a tree any number of steps, with only each single step on record | [25_stock_allocation](25_stock_allocation/) | a condition that calls itself: `descends_from(between, ancestor)` |
 | hold a reveal to a commitment made before it | [26_sealed_bids](26_sealed_bids/) | `digest(#sealed_bid_v1, lot, bidder, amount, salt) = commitment` |
 | call Morpholog from an application | [etrm_embedder](etrm_embedder/) | the generated Python client |
 

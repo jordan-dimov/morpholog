@@ -512,12 +512,11 @@ after the `bind`, as a claim's fields are. A parameter fixed by `=` is
 an input, not a result. A value a condition chooses is a figure, with
 `if(...)` in its body.
 
-**A tree the host closes.** Without recursion, a rule that asks whether
-one part descends from another reads a closure the host keeps as claims:
-every ancestor of every part. Four rules hold that closure to the tree,
-so a missing ancestor, a wrong one and a cycle are each refused by name:
-each parent is in it, it is transitive, each entry follows the tree, and
-no part descends from itself.
+**A tree the rules follow.** A condition may call itself. `descends_from`
+below holds when the record says so directly, or when the part's parent
+descends from the ancestor. It follows the tree as far as the tree goes
+and reads only the single steps the record holds, so nothing keeps a list
+of every ancestor of every part.
 
 ```morph
 program variant_tree
@@ -525,27 +524,40 @@ program variant_tree
 -- Each part's parent, as the host records it.
 predicate VariantOf(part: Subject, parent: Subject)
     unique by (part)
--- Every ancestor of every part, which the host lists.
-predicate DescendsFrom(part: Subject, ancestor: Subject)
 
-invariant a_variant_descends_from_its_parent:
-    VariantOf(p, q) implies DescendsFrom(p, q)
+define descends_from(part, ancestor):
+    VariantOf(part, ancestor)
+    or (VariantOf(part, between) and descends_from(between, ancestor))
 
-invariant descent_is_transitive:
-    DescendsFrom(a, b) and DescendsFrom(b, c) implies DescendsFrom(a, c)
-
-invariant descent_follows_the_tree:
-    DescendsFrom(a, c) implies VariantOf(a, c) or (VariantOf(a, b) and DescendsFrom(b, c))
-
-invariant no_part_descends_from_itself:
-    DescendsFrom(a, b) implies a != b
-
-transformation record_variant(part, parent, ancestors):
+-- The one act that changes the tree, one step at a time. The step
+-- closes a loop only if the new parent is the part, or already
+-- descends from it.
+transformation set_parent(part, parent):
+    require not_its_own_parent: part != parent
+    require no_loop: not descends_from(parent, part)
+    retract VariantOf(part, _)
     admit VariantOf(part, parent)
-    admit DescendsFrom(part, parent)
-    for a in ancestors:
-        admit DescendsFrom(part, a)
 ```
+
+A condition that calls itself means the smallest set of answers its body
+allows over the admitted claims. `check` holds it to a shape that keeps
+that set finite, and refuses anything else by name:
+
+- it calls itself once in a branch, as one of the conditions an `and`
+  joins, never under `not`, `exists`, `forall` or a `sum`;
+- every branch takes every parameter from a claim pattern or from the
+  call to itself, so a branch like `part = ancestor` goes to the caller:
+  `part = wanted or descends_from(part, wanted)`;
+- what it passes itself is a parameter, or a variable a claim pattern
+  earlier in the branch bound;
+- two definitions that call each other are still refused.
+
+The two gates keep the tree free of loops as long as `set_parent` is the
+only act that writes it and the tree started without one. Where other
+acts write the tree, or the record was imported, state it as a rule:
+`VariantOf(p, _) implies not descends_from(p, p)`. The rule is the
+stronger promise and the dearer one. Any change to the tree checks it
+for every part, one walk each, where the gate walks once.
 
 A call yields each distinct projection of its named arguments once. So a `sum` over a call with `_` for an argument counts claims that differ only there as one: `sum(q | alloc(_, item, q))` counts two allocations of the same quantity on one item once. Name the argument when each claim must count; `check` hints when a sum takes a variable from such a call. A call that only tests rows a claim pattern supplies collapses nothing and is not hinted: `sum(q | Alloc(a, item, q) and permitted(_, item))` counts every allocation of a permitted item. The other way round, an `or` keeps every branch's matches, so a sum over `q > 0 or q < 10` counts an amount of 5 twice; `check` hints when a sum holds an `or` whose branches can hold together, and is silent for equalities of one variable against distinct literals, the `in (a, b)` form.
 

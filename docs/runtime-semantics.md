@@ -506,10 +506,43 @@ gate as in an invariant. The actor is passed as an ordinary call
 argument where a gate needs it (`investigator_delegated_on(actor, ...)`),
 resolving against the proposing transition at the call site; a call
 *wrapped* in `pre(...)` works, because the context swap applies to the
-body's evaluation. Definitions may call definitions; cycles are a
-validation error, and the nesting-depth guard charges each call its
-callee's expanded depth, so a chain of shallow definitions cannot
-smuggle an over-deep body past the budget.
+body's evaluation. Definitions may call definitions; a cycle through
+another definition is a validation error, and the nesting-depth guard
+charges each call its callee's expanded depth, so a chain of shallow
+definitions cannot smuggle an over-deep body past the budget.
+
+**A condition may call itself.** It then means the least set of
+argument tuples that satisfies its body over one state: a call matches
+that set as any call does, each distinct projection once, in the
+canonical value order. `descends_from(part, ancestor)`, defined as a
+parent claim or a parent that descends from the ancestor, follows a
+tree any number of steps. The shape is held at validation, and each
+breach is refused by name:
+
+- only a direct call to itself, and only in a condition, never a
+  figure;
+- the call is one of the conditions joined by `and` in a branch of the
+  body's `or`, once per branch, so a larger set of answers never means
+  fewer matches;
+- every branch takes every parameter from a claim pattern or from the
+  call to itself;
+- every argument of the call to itself is a parameter, or a variable a
+  claim pattern earlier in the same branch binds.
+
+The last two keep every answer, and every question asked on the way to
+it, inside the values admitted claims already hold: nothing in the body
+can make a new one. The kernel answers the call it was asked, not the
+whole relation. A gate with both arguments bound walks from the one
+part towards the other and reads one claim per step; a call with an
+argument free costs the size of its answer. A cycle in the claims needs
+no rule and no depth limit: the walk meets a question it has already
+asked and reads the answers found so far.
+
+A rule that reads such a condition is checked whole on any change to a
+claim the condition reads, and is left alone by a change to anything
+else (`check` names the call under `cases`). The compiled route does
+not render it, so the kernel checks that rule, and an act's load takes
+the predicates the condition reads whole.
 
 **Diagnostics keep both levels.** A failing call renders as the named
 condition first and the responsible body conjunct second (`inside
@@ -758,7 +791,7 @@ A receipt proves its statement, not its origin. It is unsigned, so a receipt rew
 
 ## Admission: case-local revalidation
 
-An invariant says what lawful state means, and the verifiers ask exactly that of a whole state. Admitting a transition asks less, on purpose, and `explain` and `evaluate` ask the same as admission: it charges a candidate invariant exactly where the commit gate would have refused, case-local, never the whole state. The runtime computes the transition's effective delta - what the candidate holds that the pre-state did not, and the reverse, so a duplicate admit, a retract of what is absent, or a retract followed by a re-admit change nothing - and revalidates each invariant over the cases that delta could affect: untouched cases may remain as history left them; every touched case must satisfy the invariant afterwards; where the impact cannot be bounded safely (`pre`, an `or` in the antecedent, `xor`, membership, a value lookup, a conditional value, a sum over an expression, a defined call the plan could not follow, a closed scope in the antecedent that reads a case variable before the conjunction binds it, or a change to a claim pattern that binds no case variable), the whole invariant is checked. An `or` anywhere else is a truth test over the case's claims, so it bounds as a conjunction does. `check` reports this per rule as `cases`, bound or whole with the construct responsible, from the plans admission applies. Arithmetic, an extremum or a builtin over terms the pattern bound reads nothing and bounds nothing wider. A transition that changes nothing is admitted whatever the history holds, and so is one that changes no predicate the invariant reads, whatever its shape, unless the rule reads `pre(...)`, which judges the change itself and is checked on every one. Inherited dirt therefore blocks only the transitions that touch it, which is what adopting a stricter rule version on a live ledger and admitting exception claims both need, and touching a dirty case without fully repairing it still refuses.
+An invariant says what lawful state means, and the verifiers ask exactly that of a whole state. Admitting a transition asks less, on purpose, and `explain` and `evaluate` ask the same as admission: it charges a candidate invariant exactly where the commit gate would have refused, case-local, never the whole state. The runtime computes the transition's effective delta - what the candidate holds that the pre-state did not, and the reverse, so a duplicate admit, a retract of what is absent, or a retract followed by a re-admit change nothing - and revalidates each invariant over the cases that delta could affect: untouched cases may remain as history left them; every touched case must satisfy the invariant afterwards; where the impact cannot be bounded safely (`pre`, an `or` in the antecedent, `xor`, membership, a value lookup, a conditional value, a sum over an expression, a defined call the plan could not follow, a condition that calls itself, a closed scope in the antecedent that reads a case variable before the conjunction binds it, or a change to a claim pattern that binds no case variable), the whole invariant is checked. An `or` anywhere else is a truth test over the case's claims, so it bounds as a conjunction does. `check` reports this per rule as `cases`, bound or whole with the construct responsible, from the plans admission applies. Arithmetic, an extremum or a builtin over terms the pattern bound reads nothing and bounds nothing wider. A transition that changes nothing is admitted whatever the history holds, and so is one that changes no predicate the invariant reads, whatever its shape, unless the rule reads `pre(...)`, which judges the change itself and is checked on every one. Inherited dirt therefore blocks only the transitions that touch it, which is what adopting a stricter rule version on a live ledger and admitting exception claims both need, and touching a dirty case without fully repairing it still refuses.
 
 The same rule runs on both evaluators: one impact plan per invariant, built once beside the programme, tells the interpreter which bindings to evaluate and the compiled checker which cases to bound its SQL to. A case is traced through defined calls: an argument carries a case variable into the claims the definition reads, while the definition's own variables carry none, so a change reached only through them checks the whole invariant. A refusal's witness is drawn from the touched cases, never from a case the transition did not reach; the trace records only the obligations actually evaluated; an evaluation error anywhere in an evaluated obligation dominates a violation in it, and an untouched case can raise none. The audit row's `invariants_checked` names every active invariant the transition was admitted under, each discharged because the delta could not affect it, because every affected case satisfied it, or because the whole invariant was evaluated and held.
 
@@ -813,7 +846,7 @@ The check is one traversal of every invariant, transformation, and derived-claim
 
 6. **Disciplines**: clause fields must exist on the predicate; a key set covering every field (or none) is vacuous; duplicate clauses are refused; `append only` + `current pointer by` is a contradiction; a `superseded via` lineage must be a declared two-argument non-pointer predicate and must accompany `current pointer by`; no transformation may `retract` an append-only predicate (declared, or lineage of a `superseded via`) - checked through nested `for` bodies; and every discipline that lowers must find its generated invariant present (hand-built IR that skipped `lower_disciplines` fails loudly).
 
-7. **Definitions**: the reference graph must be acyclic (checked before anything walks through calls); a definition may not share a name with a predicate; `actor` and `pre(...)` inside a body are refused (bodies are context-free); every parameter must be referenced by the body; call arity must match; a call argument for a use-only parameter must arrive bound; and the depth guard charges each call its callee's expanded depth, computed callees-first. Parameter kinds are inferred from the body (callees-first) and call arguments check against them, so a kind mistake at a call site reports like any claim-argument mismatch.
+7. **Definitions**: the reference graph must be acyclic apart from a condition's call to itself, whose shape is held instead (both checked before anything walks through calls); a definition may not share a name with a predicate; `actor` and `pre(...)` inside a body are refused (bodies are context-free); every parameter must be referenced by the body; call arity must match; a call argument for a use-only parameter must arrive bound; and the depth guard charges each call its callee's expanded depth, computed callees-first. Parameter kinds are inferred from the body (callees-first) and call arguments check against them, so a kind mistake at a call site reports like any claim-argument mismatch.
 
 The kind and binding-flow walks share the require/bind_one/let/for quartet's export rules over one scoped environment, so a `require` body's refinements and bindings stay local while `bind_one` and `let` flow forward; `Sum`'s body is walked under a scoped env so iteration-variable refinements stay local, and the target must resolve to a kind a sum can add; `ValueOf`'s extraction slot determines its result kind and its optional default must agree. `Any` is treated as *unconstrained*, not as "compatible with everything forever once attached to a variable": a variable seen first in an `Any` slot stays open, and a later specific use refines it. `Any` is an escape hatch for declarations, not a kind-eraser for inference.
 
