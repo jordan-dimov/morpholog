@@ -9,8 +9,6 @@
 //! Small bespoke scenarios are inline `.morph`, so they read as models
 //! rather than IR construction.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 
 use common::{claim_instance, dec, subj};

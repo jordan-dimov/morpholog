@@ -17,7 +17,11 @@
 //! To regenerate after a deliberate contract change:
 //! `UPDATE_GOLDENS=1 cargo test -p morpholog-cli --test result_schema_contract`
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::ir_builder::{
     assert_, claim, div, implies, invariant, le, let_, not, params, predicate, program, require,
@@ -183,7 +187,7 @@ fn atomic_committed() -> PgAtomicOutcome {
         acts: vec![
             AtomicAct {
                 actor: actor.clone(),
-                asserted_claims: asserted_claims.clone(),
+                asserted_claims,
                 drawn_subjects: sample_draws(),
                 emitted_intents: Vec::new(),
                 retracted_claims: Vec::new(),
@@ -1146,7 +1150,7 @@ fn migration_reports_serialize_as_pinned() {
         recorded_version_before: 23,
         recorded_version_after: 26,
         binary_version: 27,
-        applied: behind.pending.clone(),
+        applied: behind.pending,
         pending: vec![morpholog_postgres::MigrationRef {
             version: 27,
             name: "canonical_order".to_string(),
@@ -1326,7 +1330,7 @@ fn audit_rows_serialize_as_pinned() {
             authenticated_by: "morpholog_writer".to_string(),
             authenticated_by_oid: Some(16_384),
         }),
-        ..row.clone()
+        ..row
     };
     assert_golden(
         "audit_row_attested_with_role_oid.json",
@@ -1337,7 +1341,7 @@ fn audit_rows_serialize_as_pinned() {
     // per argument, so the row outlives the programme that wrote it.
     let self_describing = AuditRow {
         parameters: Some(vec!["account_id".to_string()]),
-        ..attested.clone()
+        ..attested
     };
     assert_golden(
         "audit_row_self_describing.json",
@@ -1347,14 +1351,14 @@ fn audit_rows_serialize_as_pinned() {
     // The row as written now: also naming the programme that admitted it.
     let programme_naming = AuditRow {
         model_hash: Some(format!("sha256:{}", "c".repeat(64))),
-        ..self_describing.clone()
+        ..self_describing
     };
     assert_golden("audit_row_model_hash.json", &to_value(&programme_naming));
 
     // The row as written now: also naming the semantics that decided it.
     let semantics_naming = AuditRow {
         semantics_version: Some(1),
-        ..programme_naming.clone()
+        ..programme_naming
     };
     assert_golden(
         "audit_row_semantics_version.json",
@@ -1367,7 +1371,7 @@ fn audit_rows_serialize_as_pinned() {
             Subject::from("01900000-0000-7000-8000-00000000000a"),
             Subject::from("01900000-0000-7000-8000-00000000000b"),
         ]),
-        ..semantics_naming.clone()
+        ..semantics_naming
     };
     assert_golden(
         "audit_row_drawn_subjects.json",
@@ -1398,7 +1402,7 @@ fn audit_rows_serialize_as_pinned() {
                 asserted_in: None,
             },
         ]),
-        ..subjects_recording.clone()
+        ..subjects_recording
     };
     assert_golden("audit_row_ordered.json", &to_value(&ordered));
 
@@ -1445,7 +1449,7 @@ fn audit_rows_serialize_as_pinned() {
         ]),
         act_ordinal: Some(1),
         operations: Some(vec![]),
-        ..chunk.clone()
+        ..chunk
     };
     assert_golden("audit_row_activation.json", &to_value(&activation));
 
@@ -2122,7 +2126,7 @@ fn rehearsal_report_serializes_as_pinned() {
             )],
         ),
         // Unreplayable: an act the candidate lacks.
-        row(4, "vanished", vec![book.clone()], vec![]),
+        row(4, "vanished", vec![book], vec![]),
     ];
     let mut pre = State::from_claims(vec![]);
     for (id, transformation, args, asserted) in &rows {
@@ -2199,7 +2203,7 @@ fn score_reports_serialize_as_pinned() {
                 pack: "case_1.json".to_string(),
                 outcome: CaseOutcome::Scored {
                     transitions_replayed: report.transitions_replayed,
-                    invariants: report.invariants.clone(),
+                    invariants: report.invariants,
                 },
             },
             CaseResult {
@@ -2946,7 +2950,7 @@ fn receipt_envelopes_serialize_as_pinned() {
     }
     let other = ReceiptCheckpoint {
         tree_size: 3,
-        ..receipt.checkpoint.clone()
+        ..receipt.checkpoint
     };
     assert_golden_bytes(
         "receipt_verification_report_mismatched.json",
@@ -2958,7 +2962,7 @@ fn receipt_envelopes_serialize_as_pinned() {
                 pack: other,
             },
             ProgramMatch::Differs {
-                receipt: receipt.program_hash.clone(),
+                receipt: receipt.program_hash,
                 supplied: format!("sha256:{}", "d".repeat(64)),
             },
             Evaluation::NotEvaluated,

@@ -3,7 +3,10 @@
 //! reports shared writes (admit or retract), never reads. "Guarded" means only
 //! what the controls surface means: a top-level admission gate.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::{Lint, Program, shared_writer_lints};
 use morpholog_surface::parse_program;

@@ -1,7 +1,5 @@
 //! Storing external witnesses on a checkpoint.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use morpholog_postgres::{Witness, WitnessScheme, attach_witness, load_checkpoint};
 
 mod common;

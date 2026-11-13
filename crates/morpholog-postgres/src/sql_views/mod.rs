@@ -212,7 +212,7 @@ pub(crate) const CATALOG_VIEW: &str = "_morpholog_catalog";
 /// The seal table: each generated view's stored definition, hashed at
 /// apply time. A table, not a view: it records an observation and is not
 /// part of the surface.
-pub const VIEW_DEFS_TABLE: &str = "_morpholog_view_defs";
+pub(crate) const VIEW_DEFS_TABLE: &str = "_morpholog_view_defs";
 
 /// The SQL `SELECT` expression, the type it yields and the kind note for
 /// one declared argument position. The expression is over the CTE-bound
@@ -515,7 +515,7 @@ pub fn render_views(
         history_view_count: with_history.len(),
         surface: ViewSurface {
             format: VIEW_SURFACE_FORMAT,
-            programme: program.name.to_string(),
+            programme: program.name.clone(),
             model_hash: model_hash.to_string(),
             schema: schema.to_string(),
             catalog: CATALOG_VIEW.to_string(),
@@ -600,7 +600,10 @@ fn sweep(
 
 /// Render the complete atomic script and each view's description.
 /// Assumes the sweep has passed.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input the caller already holds"
+)]
 fn render(
     program: &str,
     schema: &str,
@@ -1211,7 +1214,6 @@ fn render_catalog(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests;
 
 /// Every (predicate, position) a live derived view would seek on, with

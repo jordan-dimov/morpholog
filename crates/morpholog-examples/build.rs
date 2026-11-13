@@ -12,9 +12,11 @@
 //! derived claims are snake-cased from their PascalCase predicate. A name that
 //! is not a plain Rust identifier fails the build with a clear message.
 
-// A build script panics on error by design - a failure here is a build
-// failure, surfaced with the panic message.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "a build script fails the build by panicking with the message"
+)]
 
 use std::collections::BTreeSet;
 use std::fs;

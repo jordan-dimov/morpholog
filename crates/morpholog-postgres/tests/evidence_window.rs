@@ -3,7 +3,10 @@
 //! period's anchor would. The attacker holds the file and edits the pack's
 //! JSON.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_postgres::{
     Checkpoint, PgPool, WindowEvidencePack, WindowStart, WindowVerification, export_window,

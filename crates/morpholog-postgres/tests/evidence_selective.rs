@@ -2,8 +2,6 @@
 //! transitions, verify offline, and check that nothing undisclosed leaks.
 //! The attacker holds the file and edits the pack's JSON.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use morpholog_postgres::{PgError, SelectiveVerification, export_selective, verify_selective};
 use uuid::Uuid;
 

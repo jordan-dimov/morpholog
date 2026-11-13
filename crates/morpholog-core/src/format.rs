@@ -398,15 +398,19 @@ pub(crate) fn format_derived_claim(d: &DerivedClaim, ctx: FormatContext) -> Stri
 // ============================================================
 
 /// `name: ` when a gate has a name, empty otherwise.
-fn rule_label(name: &Option<crate::ir::RuleName>) -> String {
-    name.as_ref().map_or_else(String::new, |n| format!("{n}: "))
+fn rule_label(name: Option<&crate::ir::RuleName>) -> String {
+    name.map_or_else(String::new, |n| format!("{n}: "))
 }
 
 fn fmt_stmt(s: &Stmt, depth: usize, ctx: FormatContext) -> String {
     let pad = indent(depth);
     match s {
         Stmt::Require { prop: p, name } => {
-            format!("{pad}require {}{}", rule_label(name), fmt_prop(p, ctx))
+            format!(
+                "{pad}require {}{}",
+                rule_label(name.as_ref()),
+                fmt_prop(p, ctx)
+            )
         }
         Stmt::BindOne { prop: p, name } => {
             // A claim pattern or a definition call; both render as
@@ -416,7 +420,11 @@ fn fmt_stmt(s: &Stmt, depth: usize, ctx: FormatContext) -> String {
                 matches!(p, Prop::Claim { .. } | Prop::Defined { .. }),
                 "format_stmt: bind takes a claim or a defined call; got {p:?}",
             );
-            format!("{pad}bind {}{}", rule_label(name), fmt_prop(p, ctx))
+            format!(
+                "{pad}bind {}{}",
+                rule_label(name.as_ref()),
+                fmt_prop(p, ctx)
+            )
         }
         Stmt::Let { name, value } => {
             format!("{pad}let {name} = {}", fmt_value(value, ctx))

@@ -4,7 +4,10 @@
 //! `PgError::DeadlockDetected`, nothing of the aborted batch is recorded,
 //! and the same batch commits when submitted again. `DATABASE_URL`-gated.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 

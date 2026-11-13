@@ -1,7 +1,10 @@
 //! `for <claim pattern>:` in a transformation body: what it parses to beside `for x in`,
 //! named fields and wildcards, how it formats and reparses, and what is refused.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::format::format_program;
 use morpholog_core::{Stmt, Term};

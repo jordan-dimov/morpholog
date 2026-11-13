@@ -1,7 +1,10 @@
 //! The SourceMap places declarations, statements, and kernel findings (a ValidationError, a
 //! Lint) back in the `.morph` text. Spans are checked by slicing the source, not by offsets.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::{ValidationContext, ValidationError, lints};
 use morpholog_surface::{DeclKind, SourceMap, line_col, parse_program_with_sources};

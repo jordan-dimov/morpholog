@@ -6,7 +6,10 @@
 //! over one pattern that leaves its claim's key unconstrained. Every
 //! worked example stays clean.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::{Lint, lints};
 use morpholog_surface::parse_program;

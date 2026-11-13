@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 
 /// The canonical Morpholog schema, compiled in so a binary-only
 /// deployment provisions exactly the schema this build expects.
-pub const SCHEMA_SQL: &str = include_str!("../../morpholog-core/sql/schema.sql");
+pub(crate) const SCHEMA_SQL: &str = include_str!("../../morpholog-core/sql/schema.sql");
 
 /// Outcome of [`initialise_schema`]: provisioned now, or found already
 /// provisioned (the caller decides whether that is fine or an error).
@@ -926,7 +926,6 @@ fn least_privilege_sql(roles: &DeploymentRoles) -> String {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

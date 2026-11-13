@@ -156,7 +156,6 @@ fn stamp_stmt(stmt: &mut Stmt, seeds: &Seeds) {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::ir::Definition;
@@ -223,7 +222,7 @@ mod tests {
             predicate: "P".into(),
             args: vec![Term::Wildcard],
         };
-        let dur_sum = sum(duration("PT1H"), body.clone());
+        let dur_sum = sum(duration("PT1H"), body);
         let qty_sum = sum(
             Term::Var(Var::from("q")),
             Prop::Claim {

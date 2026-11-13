@@ -5,7 +5,11 @@
 //! intent, the field, the declared kind and the kind found. It is never a
 //! refusal, and the proposal stages nothing.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::{
     ClaimInstance, EvalError, EvalValue, Outcome, PredicateArgKind, Program, Rejection, State,

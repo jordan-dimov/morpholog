@@ -1,15 +1,18 @@
 //! Shared helpers for the CLI integration suites: the binary path, the
 //! repo root, temp `.morph` writers, and the connecting role.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "each test binary uses a different subset of these helpers"
+)]
 
 use std::path::PathBuf;
 
-pub fn bin() -> &'static str {
+pub(crate) fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_morpholog")
 }
 
-pub fn repo_root() -> PathBuf {
+pub(crate) fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
@@ -17,7 +20,7 @@ pub fn repo_root() -> PathBuf {
 }
 
 /// A temp `.morph` fixture that owns its directory, removed when dropped.
-pub struct Fixture {
+pub(crate) struct Fixture {
     pub path: PathBuf,
     _dir: tempfile::TempDir,
 }
@@ -30,7 +33,7 @@ impl std::ops::Deref for Fixture {
 }
 
 /// Write `content` to a fresh temp `.morph`.
-pub fn write_fixture(name: &str, content: &str) -> Fixture {
+pub(crate) fn write_fixture(name: &str, content: &str) -> Fixture {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join(format!("{name}.morph"));
     std::fs::write(&path, content).expect("write fixture");
@@ -39,7 +42,7 @@ pub fn write_fixture(name: &str, content: &str) -> Fixture {
 
 /// The suites' connection string, from `DATABASE_URL`, with the default
 /// user applied as the binary applies it.
-pub fn database_url() -> String {
+pub(crate) fn database_url() -> String {
     let url = std::env::var("DATABASE_URL").expect(
         "DATABASE_URL must be set for morpholog-cli integration tests \
          (e.g. postgres:///morpholog_dev)",
@@ -48,7 +51,7 @@ pub fn database_url() -> String {
 }
 
 /// The same connection string, naming another database.
-pub fn with_database(url: &str, name: &str) -> String {
+pub(crate) fn with_database(url: &str, name: &str) -> String {
     let (base, query) = url
         .split_once('?')
         .map_or((url, None), |(b, q)| (b, Some(q)));
@@ -64,7 +67,7 @@ pub fn with_database(url: &str, name: &str) -> String {
 
 /// Truncate the schema before a test, so the suites run serially
 /// without crosstalk.
-pub async fn reset_db() {
+pub(crate) async fn reset_db() {
     let pool = morpholog_postgres::PgPool::connect(&database_url())
         .await
         .expect("connect to test DB");
@@ -74,7 +77,7 @@ pub async fn reset_db() {
 }
 
 /// The connecting role's name, via a throwaway pool.
-pub async fn session_user(database_url: &str) -> String {
+pub(crate) async fn session_user(database_url: &str) -> String {
     let pool = morpholog_postgres::PgPool::connect(database_url)
         .await
         .expect("connect");

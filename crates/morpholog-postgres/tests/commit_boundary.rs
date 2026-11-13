@@ -3,7 +3,11 @@
 //! the claim under test is that each is named for what it is: a known
 //! non-commit, or a decided-but-unrecorded rejection.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_postgres::{PgError, PgPool, PgProposalOutcome};
 use morpholog_surface::parse_program;

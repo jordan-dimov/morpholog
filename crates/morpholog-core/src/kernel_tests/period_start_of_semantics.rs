@@ -5,8 +5,6 @@
 //! never clamped; a zero span and a fractional index are refused by name
 //! at both tiers.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use crate::ir_builder::{
     date, dec, eq, params, period_index, period_start_of, require, span, term, transformation,
 };

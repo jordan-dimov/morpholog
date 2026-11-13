@@ -2324,7 +2324,10 @@ impl CheckCtx<'_> {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a distinct input the caller already holds"
+    )]
     fn check_one_arg(
         &mut self,
         vocabulary: VocabularyKind,

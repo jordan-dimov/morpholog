@@ -12,7 +12,10 @@
 //! order with stock already shipped, forcing that cancellation without
 //! the authority to, and a flag that is not a Boolean.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 use std::sync::OnceLock;

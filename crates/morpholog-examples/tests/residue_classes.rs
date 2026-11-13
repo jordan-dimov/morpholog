@@ -15,7 +15,10 @@
 //! recorded by a login that is not the checker. The login binding itself
 //! is a database policy, tested in the CLI suite.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 use std::sync::OnceLock;

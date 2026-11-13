@@ -4,8 +4,6 @@
 //! authoring time, while an outer binding is visible inside the
 //! target exactly as it is inside the body.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use crate::derive::eval_invariant;
 use crate::ir_builder::{
     and, claim, cond, dec, duration_le, invariant, le, mul, predicate, program, qty, sum, term,

@@ -3,7 +3,10 @@
 //! Run over every worked example, to show the derivation is a mechanical
 //! reading of any programme's invariants, not tuned to one example.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 

@@ -2,7 +2,10 @@
 //! JSON Schema on stdout, stderr, and exit codes. Per-kind property shapes
 //! are pinned in morpholog-core; this covers the CLI wiring.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 use common::{bin, repo_root};

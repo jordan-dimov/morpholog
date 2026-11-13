@@ -4,8 +4,6 @@
 //! tables. A coordinated rewrite of both is self-consistent and passes a
 //! bare verify; only an anchor held outside the database catches it.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use morpholog_postgres::{
     Checkpoint, CheckpointOutcome, CheckpointSigner, TreeVerification, create_checkpoint,
     generate_signing_key, render_public_key, verify_audit_tree,

@@ -8,8 +8,6 @@
 //! would return rows in key order and hide that loss;
 //! `tests/plan_shapes.rs` pins the index use. `DATABASE_URL`-gated.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use jiff::Timestamp;
 use uuid::Uuid;
 

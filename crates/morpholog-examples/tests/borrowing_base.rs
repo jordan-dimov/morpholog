@@ -5,8 +5,6 @@
 //! invariant multiplies (`drawn <= advance_rate * collateral`), and the
 //! `FacilityUtilisation` derived claim divides (`drawn / collateral`).
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 use std::sync::OnceLock;
 

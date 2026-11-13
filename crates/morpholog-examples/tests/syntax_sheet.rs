@@ -3,7 +3,11 @@
 //! the lints leave alone: a sheet that drifts from the parser teaches the
 //! wrong spelling.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::lints;
 use morpholog_surface::parse_program;

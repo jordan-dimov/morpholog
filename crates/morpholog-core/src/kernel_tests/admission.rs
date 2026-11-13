@@ -5,8 +5,6 @@
 //! changes nothing is admitted whatever the history holds. The
 //! invariant itself keeps its whole-state meaning.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use crate::derive::eval_invariant;
 use crate::ir_builder::{
     assert_, claim, eq, implies, invariant, params, predicate, program, retract, sum, term,

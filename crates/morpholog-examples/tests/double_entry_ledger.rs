@@ -6,8 +6,6 @@
 //! `Supersedes`; an entry cannot be restated twice; a period cannot be
 //! closed twice.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 use std::sync::OnceLock;
 

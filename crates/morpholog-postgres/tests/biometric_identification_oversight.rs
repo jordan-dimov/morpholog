@@ -8,7 +8,11 @@
 //! name reaches the record only over a login granted it. Gate
 //! rejections are tested in memory.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_examples::biometric_identification_oversight as bio;
 use morpholog_postgres::{
@@ -441,7 +445,7 @@ async fn walk_the_boundary() {
         .unwrap();
         assert!(
             matches!(&outcome, PgProposalOutcome::Rejected { reason, .. }
-                if reason.to_string().contains("DeployedSystem(_, _)")),
+                if reason.clone().contains("DeployedSystem(_, _)")),
             "a second deployment proposed as {name}: {outcome:?}"
         );
     }

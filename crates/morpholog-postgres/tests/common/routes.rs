@@ -3,7 +3,10 @@
 //! witness variables, the rejection log, and the persisted rows with
 //! generated identities normalised.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "each test binary uses a different subset of these helpers"
+)]
 
 use morpholog_core::{ClaimInstance, EvalError, Transition};
 use morpholog_postgres::{
@@ -13,7 +16,7 @@ use morpholog_test_support::differential::normalize_uuids;
 
 use super::{attested, reset_db, seed_claims};
 
-pub async fn count(pool: &PgPool, sql: &'static str) -> i64 {
+pub(crate) async fn count(pool: &PgPool, sql: &'static str) -> i64 {
     sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
 }
 
@@ -21,31 +24,31 @@ pub async fn count(pool: &PgPool, sql: &'static str) -> i64 {
 /// that minted different subjects compare equal. Audit rows drop their
 /// transition id and time, claims the transition that asserted them,
 /// outbox rows their ids and the key derived from one.
-pub async fn persisted(pool: &PgPool, sql: &'static str) -> Vec<String> {
+pub(crate) async fn persisted(pool: &PgPool, sql: &'static str) -> Vec<String> {
     let rows: Vec<String> = sqlx::query_scalar(sql).fetch_all(pool).await.unwrap();
     let mut rows: Vec<String> = rows.iter().map(|r| normalize_uuids(r)).collect();
     rows.sort();
     rows
 }
 
-pub const AUDIT_ROWS: &str = "SELECT jsonb_build_object(
+pub(crate) const AUDIT_ROWS: &str = "SELECT jsonb_build_object(
         'transformation', transformation_name, 'arguments', arguments, 'actor', actor,
         'epoch', invariant_epoch, 'checked', invariants_checked,
         'asserted', asserted_claims, 'retracted', retracted_claims,
         'emitted', emitted_intents, 'attestation', attestation, 'parameters', parameters
     )::text FROM morpholog.audit";
 
-pub const CLAIM_ROWS: &str =
+pub(crate) const CLAIM_ROWS: &str =
     "SELECT jsonb_build_object('predicate', predicate_name, 'arguments', arguments)::text
      FROM morpholog.claims";
 
-pub const OUTBOX_ROWS: &str =
+pub(crate) const OUTBOX_ROWS: &str =
     "SELECT jsonb_build_object('intent', intent_type, 'arguments', arguments)::text
      FROM morpholog.outbox";
 
 /// What one proposal left behind that both routes must agree on.
 #[derive(Debug, PartialEq, Eq)]
-pub struct Observed {
+pub(crate) struct Observed {
     pub outcome: String,
     pub rejection: Option<String>,
     pub audit: Vec<String>,
@@ -56,13 +59,13 @@ pub struct Observed {
 /// A route's answer, typed: a decision with what it left behind, the
 /// kernel's own evaluation error, or an operational failure.
 #[derive(Debug, PartialEq, Eq)]
-pub enum RouteObservation {
+pub(crate) enum RouteObservation {
     Decided(Observed),
     Kernel(EvalError),
     Operational(String),
 }
 
-pub async fn observe(
+pub(crate) async fn observe(
     pool: &PgPool,
     program: &PgProgram,
     seeded: &[ClaimInstance],

@@ -5,7 +5,10 @@
 //! re-home a proof; whoever can propose can bring their own authority. The verifier must judge
 //! what it can and say plainly what it cannot.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_witness::{
     Anchors, Refusal, WitnessStatus, build_request, check_response, verify_rfc3161,

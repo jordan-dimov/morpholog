@@ -3,7 +3,10 @@
 //! `docs/outbox-sketch.md`). The state-changing helpers are tested in
 //! `outbox_helpers.rs`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use std::time::Duration;
 

@@ -6,8 +6,6 @@
 //! name each iteration binds afresh, a refusal partway through, and an
 //! error partway through. `UPDATE_GOLDENS=1` regenerates the golden.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 
 use std::path::PathBuf;

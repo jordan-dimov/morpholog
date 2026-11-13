@@ -20,8 +20,6 @@
 //!   participant after `proto_v1`'s window closes must enrol
 //!   under `proto_v2`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 use std::sync::OnceLock;
 

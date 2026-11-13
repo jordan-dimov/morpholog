@@ -6,7 +6,11 @@
 //! The README's `createdb` and `init` steps are the test database's own
 //! setup, which `reset_db` stands in for.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 use common::{database_url, repo_root, reset_db};

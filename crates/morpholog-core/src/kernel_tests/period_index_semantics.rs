@@ -4,8 +4,6 @@
 //! drift. Negative before the anchor, total over representable dates,
 //! and a zero span refused by name at both tiers.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use crate::ir_builder::{date, dec, eq, params, period_index, require, span, term, transformation};
 use crate::kernel_tests::support::propose_with_test_actor;
 use crate::{Outcome, Prop, State};

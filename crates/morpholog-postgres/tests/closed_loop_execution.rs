@@ -16,7 +16,11 @@
 //! own order identifiers. It does not deduplicate on the client
 //! reference, which is what makes a lease-loss redelivery act twice.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

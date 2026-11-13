@@ -5,8 +5,6 @@
 //! witness is the first failing match of the earliest case in the plan's
 //! order, whatever order the state holds the claims in.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::collections::BTreeMap;
 
 use crate::definitions::DefinitionTable;

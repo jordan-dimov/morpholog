@@ -5,7 +5,11 @@
 //! the replay: the tamper case models an operator with write access to the
 //! claims table, who can change the column without touching the audit log.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 use common::{database_url, reset_db};

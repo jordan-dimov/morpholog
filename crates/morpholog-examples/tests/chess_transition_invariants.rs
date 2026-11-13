@@ -6,7 +6,10 @@
 //! the one `move_piece` that covers quiet moves and captures, and square
 //! colour, `(file + rank) % 2`, used by `bishops_on_opposite_square_colors`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 

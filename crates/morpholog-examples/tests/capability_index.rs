@@ -9,7 +9,10 @@
 //! resolves. So each row's construct must also appear in the example it
 //! points at.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

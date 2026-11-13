@@ -6,7 +6,10 @@
 //! a robustness property, tested apart: same input, same key; the
 //! function never raises.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 
@@ -81,7 +84,7 @@ fn corpus() -> Vec<EvalValue> {
     for _ in 0..20 {
         deep = coll(vec![deep]);
     }
-    values.push(deep.clone());
+    values.push(deep);
     let mut deep2 = dec_str("1.00");
     for _ in 0..20 {
         deep2 = coll(vec![deep2]);

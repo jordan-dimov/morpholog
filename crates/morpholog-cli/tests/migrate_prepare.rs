@@ -1,7 +1,11 @@
 //! `migrate --prepare` does everything except the step that pauses
 //! writers, and `--check` reports where that preparation stands and what
 //! the cutover would cost, so an operator schedules the pause knowing it.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 

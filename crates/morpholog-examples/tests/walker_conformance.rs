@@ -12,8 +12,6 @@
 //! The rule: a new construct, or a new walker, adds a fragment or an
 //! assertion here first.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use morpholog_core::{
     CoverageTracker, PredicateName, PreparedProgram, Program, controls, format::format_program,
     lints, predicates_referenced_by_prop, transformation_param_kinds,

@@ -46,7 +46,7 @@ use crate::verify::{VerifyPass, VerifyProgress};
 /// What an `AuditSigningKey` claim authorises a key for. Bound into the
 /// signed payload, so a checkpoint key cannot sign another kind of
 /// artefact by accident. The authority check matches this exact value.
-pub const AUDIT_CHECKPOINT_PURPOSE: &str = "audit_checkpoint_v1";
+pub(crate) const AUDIT_CHECKPOINT_PURPOSE: &str = "audit_checkpoint_v1";
 
 /// A signing identity for [`create_checkpoint`]: the private key and the
 /// `key_id` it is published under. The key never enters the database.

@@ -1938,5 +1938,4 @@ async fn run() -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod cli_tests;

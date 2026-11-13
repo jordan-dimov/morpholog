@@ -6,7 +6,10 @@
 //! trial balances in one database. `list_derived` sees only the last;
 //! the as-of helpers must recover the other two.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::{ClaimInstance, EvalValue};
 use morpholog_examples::{approval_controls, double_entry_ledger, verified_revenue};

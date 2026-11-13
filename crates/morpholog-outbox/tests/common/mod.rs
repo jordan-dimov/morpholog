@@ -3,7 +3,11 @@
 //! A small copy of `morpholog-postgres`'s test `common` module, which another crate's tests
 //! cannot import.
 
-#![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::{PreparedProgram, Subject, Transition};
 use morpholog_examples::double_entry_ledger;
@@ -12,7 +16,7 @@ use morpholog_test_support::{dec, subj};
 use uuid::Uuid;
 
 /// Connect to the integration-test database named by `DATABASE_URL`.
-pub async fn test_pool() -> PgPool {
+pub(crate) async fn test_pool() -> PgPool {
     let url = std::env::var("DATABASE_URL").expect(
         "DATABASE_URL must be set for morpholog-outbox integration tests \
          (e.g. postgres:///morpholog_dev)",
@@ -24,14 +28,14 @@ pub async fn test_pool() -> PgPool {
 }
 
 /// Truncate the governed `morpholog.*` tables on test entry.
-pub async fn reset_db(pool: &PgPool) {
+pub(crate) async fn reset_db(pool: &PgPool) {
     morpholog_postgres::testing::reset_database(pool)
         .await
         .expect("failed to truncate test DB");
 }
 
 /// Unwrap a committed outcome's transition id, panicking on rejection.
-pub fn expect_committed(outcome: PgProposalOutcome) -> Uuid {
+pub(crate) fn expect_committed(outcome: PgProposalOutcome) -> Uuid {
     match outcome {
         PgProposalOutcome::Committed { transition_id, .. } => transition_id,
         PgProposalOutcome::Rejected { reason, .. } => {
@@ -42,7 +46,7 @@ pub fn expect_committed(outcome: PgProposalOutcome) -> Uuid {
 
 /// Commit one balanced ledger entry, whose `emit` puts one row in the outbox.
 /// Returns the committed transition id.
-pub async fn commit_simple_entry(pool: &PgPool, entry_id: &str, period: &str) -> Uuid {
+pub(crate) async fn commit_simple_entry(pool: &PgPool, entry_id: &str, period: &str) -> Uuid {
     let transformation = double_entry_ledger::post_simple_entry();
     let transition = Transition {
         transformation_name: transformation.name.clone(),

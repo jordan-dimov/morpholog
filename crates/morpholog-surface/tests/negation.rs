@@ -3,8 +3,6 @@
 //! formatter prints the subtraction back as `-x` in source form only;
 //! the canonical encoding and display text are unchanged.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use morpholog_core::format::{canonical_hash, format_program, format_prop_inline};
 use morpholog_core::{Program, ValidationError};
 use morpholog_surface::{parse_expression, parse_program};

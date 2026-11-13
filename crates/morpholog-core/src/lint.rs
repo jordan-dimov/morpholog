@@ -236,7 +236,7 @@ pub enum Lint {
 }
 
 /// Above this many periods per proposal, a grid earns [`Lint::LargeGrid`].
-pub const LARGE_GRID_PERIODS: u128 = 10_000;
+pub(crate) const LARGE_GRID_PERIODS: u128 = 10_000;
 
 /// A writing transformation on the other side of a [`Lint::SharedWriter`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,7 +272,7 @@ pub fn shared_writer_lints(this: &Program, other: &Program) -> Vec<Lint> {
                 transformation: t.name.to_string(),
                 predicate: predicate.to_string(),
                 guarded: has_admission_gate(t),
-                other_program: other.name.to_string(),
+                other_program: other.name.clone(),
                 other_writers,
             });
         }
@@ -1902,7 +1902,6 @@ fn positive_value_claims(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::definitions::DefinitionTable;

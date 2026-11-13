@@ -8,7 +8,10 @@
 //! cache to the replay over each case a replay must get right, for every
 //! place a snapshot can be kept and every target after it.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 

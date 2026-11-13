@@ -2454,7 +2454,10 @@ impl AsOfLog {
 /// The as-of case: one immutable fabricated log, reused across
 /// repeats; one `reconstruct_state_at` plus one `list_derived_at` per
 /// repeat against the `--at`-selected target.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each command-line setting is passed through as it is"
+)]
 async fn measure_as_of(
     implementation: Implementation,
     pool: &PgPool,
@@ -2644,7 +2647,10 @@ async fn run_as_of(args: AsOfArgs) -> Result<()> {
 /// One concurrent burst: W workers, `ops` operations each, against a
 /// freshly-built pre-state. Returns the summed tally and the elapsed
 /// wall time of the concurrent phase.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each command-line setting is passed through as it is"
+)]
 async fn contend_burst(
     implementation: Implementation,
     pool: &PgPool,
@@ -2690,7 +2696,10 @@ async fn contend_burst(
 /// same burst over it. With `require_clean`, any failed or rejected
 /// operation is an error: a change must not look faster because work
 /// stopped succeeding.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each command-line setting is passed through as it is"
+)]
 async fn measure_contend(
     implementation: Implementation,
     pool: &PgPool,
@@ -2875,7 +2884,10 @@ struct Tally {
 /// more periods do not relieve contention. With `--disjoint` each
 /// worker's footprint is its own predicate. Each proposal retries on
 /// serialization failure (see [`one_op`]).
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each command-line setting is passed through as it is"
+)]
 async fn contend_worker(
     implementation: Implementation,
     pool: PgPool,
@@ -4138,7 +4150,7 @@ async fn run_suite(args: SuiteArgs) -> Result<()> {
 
 fn posting(i: usize, tag: &str) -> Transition {
     Transition {
-        transformation_name: double_entry_ledger::post_simple_entry().name.clone(),
+        transformation_name: double_entry_ledger::post_simple_entry().name,
         args: vec![
             subj(&format!("entry_{tag}_{i}")),
             subj("d_2026_05_17"),
@@ -4191,7 +4203,10 @@ async fn transact_once(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each command-line setting is passed through as it is"
+)]
 async fn measure_transact(
     implementation: Implementation,
     pool: &PgPool,

@@ -7,8 +7,6 @@
 //! than passing emptily, the invoice total rounds per line, then sums, and
 //! a credit note is the billed line negated, computed rather than proposed.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 use std::sync::OnceLock;
 

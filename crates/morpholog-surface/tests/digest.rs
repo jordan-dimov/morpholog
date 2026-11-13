@@ -3,8 +3,6 @@
 //! is a kind error; a collection or a calendar span is refused by name;
 //! a definition cannot take its name.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use morpholog_core::ValidationError;
 use morpholog_core::format::format_program;
 use morpholog_surface::parse_program;

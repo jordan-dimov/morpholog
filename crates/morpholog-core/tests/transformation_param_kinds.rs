@@ -2,7 +2,11 @@
 //! contract embedders build against. The `trade_lifecycle` integration
 //! tests rely on the smaller rules pinned here.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::ir_builder::*;
 use morpholog_core::{

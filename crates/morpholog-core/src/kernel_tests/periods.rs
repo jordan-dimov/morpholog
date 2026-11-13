@@ -4,8 +4,6 @@
 //! at the period holding `from`, division is Euclidean before 1970, and
 //! a start off the timeline is refused by name rather than clamped.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use crate::EvalError;
 use crate::eval::period_starts;
 use crate::state::EvalValue;

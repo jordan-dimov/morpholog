@@ -5,7 +5,10 @@
 //! the load; a claim retracted by the first act no longer blocks the
 //! second's negative gate although its row was loaded.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 

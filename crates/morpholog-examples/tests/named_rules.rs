@@ -6,7 +6,10 @@
 //! whenever someone rewords the rule, so these tests reword on purpose and
 //! check that the name a caller holds does not move.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::{Program, RejectionReason, State, ValidationError};
 use morpholog_surface::parse_program;

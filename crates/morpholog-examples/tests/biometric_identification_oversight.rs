@@ -7,8 +7,6 @@
 //! verification, and exact instants, all from earlier examples, combine to
 //! enforce a statute with nothing new in the language.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 use std::sync::OnceLock;
 

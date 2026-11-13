@@ -5,8 +5,6 @@
 //! settled against the time the voyage ran over - so every assertion is
 //! a business behaviour.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use crate::ir_builder::{
     and, assert_, claim, div, duration, implies, invariant, le, mul, params, predicate, program,
     qty, sum, term, transformation, var,

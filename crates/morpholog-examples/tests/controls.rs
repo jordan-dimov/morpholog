@@ -2,7 +2,10 @@
 //! from each gate to the invariant it pre-checks. Run over the real examples,
 //! including a `sum(..) <= ..` cap that correctly gets no link.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 

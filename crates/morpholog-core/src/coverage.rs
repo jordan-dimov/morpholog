@@ -93,7 +93,10 @@ pub struct InvariantCoverage {
     pub not_in_programme: bool,
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)]
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes a reference"
+)]
 fn is_zero(n: &u64) -> bool {
     *n == 0
 }

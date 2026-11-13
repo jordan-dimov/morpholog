@@ -11,8 +11,6 @@
 //! second evaluator: the same inputs give the same explanation, and it
 //! names the decision the proposal actually reached.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 
 use std::collections::BTreeSet;

@@ -7,7 +7,10 @@
 //! Spotting references is still a heuristic: it knows the two shapes prose
 //! uses, and an unexpected shape can slip through.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use std::collections::BTreeSet;
 use std::path::Path;

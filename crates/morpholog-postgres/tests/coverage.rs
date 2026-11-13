@@ -3,7 +3,10 @@
 //! it and reports which rules ever fired, which never did, and which
 //! transformations were ever used.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::CoverageVerdict;
 use morpholog_examples::double_entry_ledger;

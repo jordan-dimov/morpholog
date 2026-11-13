@@ -2,7 +2,11 @@
 //! the declaration, the checker holds the body to it, the kernel holds the
 //! argument to it, and a declaration never says less than the body shows.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 

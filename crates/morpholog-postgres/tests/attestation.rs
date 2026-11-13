@@ -8,8 +8,6 @@
 //! with full DDL control that drops the database's refusal and then
 //! rewrites or strips the lineage; the Merkle tree catches the second.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 use common::{expect_committed, pg_program, propose_pg_with_test_actor, reset_db, test_pool};
 

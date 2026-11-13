@@ -1030,14 +1030,14 @@ impl<'a> CandidateBucket<'a> {
 /// restore a loop's frame, so each value is a [`Bound`]: a copy costs
 /// the map's entries, not the size of what they hold (an act's
 /// collection argument, say).
-pub type Bindings = HashMap<Var, Bound>;
+pub(crate) type Bindings = HashMap<Var, Bound>;
 
 /// A bound value: shared when it owns heap memory, so copying a binding
 /// map never copies it; inline otherwise, where a copy costs nothing and
 /// a shared box would cost an allocation.
 #[doc(hidden)]
 #[derive(Debug, Clone)]
-pub enum Bound {
+pub(crate) enum Bound {
     Inline(EvalValue),
     Shared(Arc<EvalValue>),
 }

@@ -251,7 +251,7 @@ pub fn check_named_programs(programs: &[&PgProgram]) -> Result<(), PgError> {
     }
     let mut seen = BTreeSet::new();
     for program in programs {
-        let name = program.prepared().program().name.to_string();
+        let name = program.prepared().program().name.clone();
         if !seen.insert(name.clone()) {
             return Err(PgError::ProgramNamedTwice(name));
         }
@@ -560,7 +560,7 @@ async fn reconcile(
     let mut named: Vec<Named> = programs
         .iter()
         .map(|program| Named {
-            identity: program.prepared().program().name.to_string(),
+            identity: program.prepared().program().name.clone(),
             hash: canonical_hash(program.prepared().program()),
             needs: program.index_needs(),
         })

@@ -3,8 +3,6 @@
 //! grid's elements are timestamps before anyone uses them; and the
 //! lint tier hints when the bound still allows a very large grid.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use morpholog_core::format::format_program;
 use morpholog_core::{Lint, PreparedProgram, ValidationError, lints};
 use morpholog_surface::parse_program;

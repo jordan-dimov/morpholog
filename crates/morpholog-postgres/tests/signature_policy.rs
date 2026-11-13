@@ -7,7 +7,10 @@
 //! The pin only narrows the authorised keys: a pinned key the log never
 //! authorised is still refused intrinsically, not by policy.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 use common::{authorize_signing_key, commit_entry, make_checkpoint_at, reset_db, test_pool};

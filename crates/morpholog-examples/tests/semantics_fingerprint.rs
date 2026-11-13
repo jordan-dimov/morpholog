@@ -23,7 +23,11 @@
 //! `new Subject()` draws included. This catches a change the corpus can
 //! see; it does not prove nothing else changed.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

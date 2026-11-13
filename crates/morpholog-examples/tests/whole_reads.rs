@@ -3,8 +3,6 @@
 //! went through, outermost first. The analysis is the loader's own, so the
 //! report and `ReadPlan::of` must agree on which predicates are whole.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use morpholog_core::{ReadFilter, ReadPlan, WholeRead};
 use morpholog_surface::parse_program;
 

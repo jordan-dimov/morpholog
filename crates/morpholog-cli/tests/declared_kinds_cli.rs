@@ -6,7 +6,11 @@
 //! written under one declaration, rehearsed under a declaration it no
 //! longer fits, shows each row as `would_error` with that kind.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 use common::{database_url, reset_db};
@@ -143,7 +147,7 @@ async fn every_path_answers_a_misfit_with_the_same_coded_error() {
     assert_eq!(code, 1, "{out}");
     assert_misfit("transact", &json_line(&out, 0));
 
-    let mut request = row.clone();
+    let mut request = row;
     request["op"] = json!("propose");
     let (_, out) = bin(&["session", path], Some(&format!("{request}\n")));
     let receipt = json_line(&out, 1);

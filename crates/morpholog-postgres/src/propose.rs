@@ -461,7 +461,10 @@ pub(crate) async fn propose_against_pg_run(
 /// over the loaded state plus the staged lists, both classifying impact
 /// from the one effective delta the table reported. The first violation
 /// or error in programme order is the answer, as the kernel's would be.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input the caller already holds"
+)]
 async fn check_in_order(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     route: Route<'_>,
@@ -822,7 +825,10 @@ pub(crate) async fn record_refusal(
 
 /// Persist a decided act: record and commit it, or roll back and log
 /// the refusal.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input the caller already holds"
+)]
 async fn finalise_outcome(
     pool: &PgPool,
     mut tx: Transaction<'_, Postgres>,
@@ -1588,7 +1594,10 @@ pub(crate) async fn write_claim_delta(
 /// Persist an accepted outcome whole: the claim delta, then the
 /// acceptance record. The interpreted paths call this; the compiled
 /// route writes the delta first, checks, then records.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input the caller already holds"
+)]
 async fn write_accepted(
     tx: &mut Transaction<'_, Postgres>,
     transition_id: Uuid,
@@ -1623,7 +1632,10 @@ async fn write_accepted(
 /// per emitted intent, written after every invariant is discharged.
 /// `invariants_checked` lists all of the programme's invariants on either
 /// route, so the audit leaf does not depend on the route.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input the caller already holds"
+)]
 async fn write_acceptance_record(
     tx: &mut Transaction<'_, Postgres>,
     transition_id: Uuid,

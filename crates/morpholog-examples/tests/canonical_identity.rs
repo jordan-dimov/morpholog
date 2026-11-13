@@ -12,7 +12,11 @@
 //! removed source fails until the golden is regenerated, so the new
 //! identity shows in review.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

@@ -105,7 +105,10 @@ pub fn parse_calendar_span(s: &str) -> Result<CalendarSpan, String> {
     if months > MAX_COMPONENT || days > MAX_COMPONENT {
         return Err("calendar span component out of range".to_string());
     }
-    #[allow(clippy::cast_possible_truncation)] // bounded by the checks above
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "bounded by the checks above"
+    )]
     Ok(CalendarSpan {
         months: months as i32,
         days: days as i32,

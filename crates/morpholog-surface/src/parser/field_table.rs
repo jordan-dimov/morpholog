@@ -386,7 +386,7 @@ mod tests {
                     .map(|d| {
                         (
                             d.name.to_string(),
-                            DeclFields::Usable(d.args.iter().map(|a| a.name.to_string()).collect()),
+                            DeclFields::Usable(d.args.iter().map(|a| a.name.clone()).collect()),
                         )
                     })
                     .collect();
@@ -402,7 +402,7 @@ mod tests {
                     .map(|d| {
                         (
                             d.name.to_string(),
-                            DeclFields::Usable(d.args.iter().map(|a| a.name.to_string()).collect()),
+                            DeclFields::Usable(d.args.iter().map(|a| a.name.clone()).collect()),
                         )
                     })
                     .collect();

@@ -6,8 +6,6 @@
 //! That is a review obligation the compiler enforces, not a proof that
 //! the classification is honest.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 
 use std::collections::BTreeSet;

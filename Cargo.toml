@@ -58,6 +58,9 @@ debug = "line-tables-only"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+# `pub` on an item nothing outside its crate can reach claims an API that
+# is not there.
+unreachable_pub = "warn"
 
 [workspace.lints.clippy]
 unwrap_used = "warn"
@@ -80,3 +83,9 @@ uninlined_format_args = "warn"
 redundant_closure_for_method_calls = "warn"
 single_char_pattern = "warn"
 stable_sort_primitive = "warn"
+# A suppression says why, and is an `expect`, which fails once the lint
+# it silences stops firing. A module-level `allow` stays where an
+# `expect` cannot hold, such as a test module each binary uses
+# differently.
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"

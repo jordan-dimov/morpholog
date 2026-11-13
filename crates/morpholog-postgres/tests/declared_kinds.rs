@@ -9,7 +9,10 @@
 //! also agree on what fits, so the kinds read back from the claims table
 //! are held to the kinds of the values that were admitted.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 

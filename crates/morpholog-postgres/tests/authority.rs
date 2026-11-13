@@ -4,8 +4,6 @@
 //! `UnauthorizedKey`. Signing refuses such a key, so the attacker here
 //! is one who edits the signatures column or supplies a forged anchor.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use ed25519_dalek::SigningKey;
 use morpholog_postgres::{
     Checkpoint, CheckpointOutcome, CheckpointSigner, PgError, PgPool, TreeHead, TreeHeadSignature,

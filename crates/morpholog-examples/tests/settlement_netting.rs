@@ -5,8 +5,6 @@
 //! and full `propose()` runs: good netting commits, an already-`Netted` line
 //! is refused at the gate, and double-netting is caught on the candidate state.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 use std::sync::OnceLock;
 
@@ -225,7 +223,7 @@ fn propose_rejects_when_line_already_netted() {
     let pre = netting_pre_state(extra);
     let t = settlement_netting::create_net_settlement();
     let transition = Transition {
-        transformation_name: t.name.clone(),
+        transformation_name: t.name,
         args: netting_args(),
         actor: Subject::from("test_actor"),
         decided_at: None,

@@ -19,8 +19,6 @@
 //! expected. Anywhere else they fail the suite like any kernel error, and a
 //! panic fails it everywhere.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 use common::all_programs;
 

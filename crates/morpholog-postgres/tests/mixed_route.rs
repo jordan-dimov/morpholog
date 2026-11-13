@@ -12,7 +12,10 @@
 //! The proposition, on top of `compiled_route`'s: composing SQL and the
 //! kernel in declaration order is kernel-equivalent.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 

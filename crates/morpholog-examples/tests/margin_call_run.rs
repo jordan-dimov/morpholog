@@ -5,8 +5,6 @@
 //! a *missing* call is refused, not just a wrong one. Also covered: no
 //! adequately-margined account may be called, and each call is the exact top-up.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 use std::sync::OnceLock;
 

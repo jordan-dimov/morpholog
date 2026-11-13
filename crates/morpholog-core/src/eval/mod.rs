@@ -724,7 +724,7 @@ fn runtime_kind_label(v: &EvalValue) -> String {
 fn shift_date(d: Date, months: i64, days: i64) -> Option<Date> {
     let total = i64::from(d.year()) * 12 + i64::from(d.month()) - 1 + months;
     let year = i16::try_from(total.div_euclid(12)).ok()?;
-    #[allow(clippy::cast_possible_truncation)] // rem_euclid(12) is 0..=11
+    #[expect(clippy::cast_possible_truncation, reason = "rem_euclid(12) is 0 to 11")]
     let month = (total.rem_euclid(12) + 1) as i8;
     let first = Date::new(year, month, 1).ok()?;
     let day = d.day().min(first.days_in_month());

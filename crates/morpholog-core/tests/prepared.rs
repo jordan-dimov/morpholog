@@ -4,8 +4,6 @@
 //! checked, alongside the validate-on-construct gate and the
 //! `validated()` bridge to the analysis API.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use morpholog_core::ir_builder::{
     assert_, claim, defined, definition, implies, invariant, params, predicate, program,
     transformation, var,

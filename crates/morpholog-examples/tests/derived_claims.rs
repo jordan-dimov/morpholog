@@ -4,8 +4,6 @@
 //! one row per account with the right balance, a stable row order, no
 //! derived rows written into state, and the subtraction contract on its own.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 use std::sync::OnceLock;
 

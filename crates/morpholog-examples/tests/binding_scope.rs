@@ -5,7 +5,11 @@
 //! variable. The acceptance tests propose too, so a shape `check` lets
 //! through is shown to run.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 
@@ -38,7 +42,7 @@ fn unbound_names(rest: &str) -> Vec<String> {
     errors
         .iter()
         .map(|e| match e {
-            ValidationError::UnboundVariable { variable, .. } => variable.to_string(),
+            ValidationError::UnboundVariable { variable, .. } => variable.clone(),
             other => panic!("expected only unbound variables, got {other}"),
         })
         .collect()

@@ -45,9 +45,10 @@ pub struct TransitionRef {
 /// Admissible, or rejected with a structured reason.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-// Built once per dry run and read, never moved in bulk; boxing the
-// rejection would change every consumer's match for nothing.
-#[allow(clippy::large_enum_variant)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "built once per dry run and never moved in bulk; boxing the rejection would change every consumer's match"
+)]
 pub enum Verdict {
     Admissible,
     Rejected(Rejection),
@@ -296,7 +297,7 @@ fn verdict_from_rejection(
             GateKind::Require,
             directly_missing_claims,
             witness,
-            compared.clone(),
+            compared,
         ),
         Some(TraceEntry::BindOne {
             expression,
@@ -313,7 +314,7 @@ fn verdict_from_rejection(
             GateKind::BindOne,
             directly_missing_claims,
             witness,
-            compared.clone(),
+            compared,
         ),
         Some(TraceEntry::InvariantCheck {
             name, expression, ..

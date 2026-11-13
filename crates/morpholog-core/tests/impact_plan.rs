@@ -2,8 +2,6 @@
 //! decided once in core. Pinned here because both the kernel and the
 //! PostgreSQL compiler act on these answers.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::collections::BTreeMap;
 
 use morpholog_core::ir_builder::{

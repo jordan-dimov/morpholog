@@ -1,7 +1,10 @@
 //! `if <proposition>:` with an optional `else:` in a transformation body: what it parses to,
 //! how it formats and reparses, and that a mint inside a branch is named there.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::format::format_program;
 use morpholog_core::{Prop, Stmt, Term};

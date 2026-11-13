@@ -6,8 +6,6 @@
 //! compaction policy would have rebuilt it. The structural property
 //! behind the bench's `--noise` ruler, held without a clock.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use crate::ir_builder::{
     and, assert_, claim, eq, implies, invariant, params, predicate, program, retract, term,
     transformation, var, wildcard,

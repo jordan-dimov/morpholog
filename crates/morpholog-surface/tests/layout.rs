@@ -2,7 +2,10 @@
 //! confusing parse errors. Each test checks the tokens with Indent/Dedent inserted, or the
 //! diagnostics.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_surface::layout::apply_layout;
 use morpholog_surface::lexer::{Token, lex};

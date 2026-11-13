@@ -7,7 +7,11 @@
 //! non-ASCII, and enough entropy that compression cannot hide the size -
 //! across admit, a repeat admit as a no-op, and retract.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 use common::{pg_program, propose_pg_with_test_actor, reset_db, subj, test_pool};
