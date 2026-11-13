@@ -548,7 +548,8 @@ walks a single link, `Edge(x, y) or (Edge(x, next) and reaches(next,
 y))`, called with `x` known. The load seeks the rows of `Edge` whose
 `x` side is that value or a value reached from it, one index seek per
 step, so a gate on a tree reads the chain above one part, not the
-tree. Any other shape, and a call whose `x` is not known before the
+tree. A condition written to walk down from a known part reads the
+whole subtree below it, which can be as large as the tree. Any other shape, and a call whose `x` is not known before the
 act runs, loads the predicates it reads whole, and `check -v` lists
 those reads. In a batch, a walk is read whole after an earlier act
 admits a step of the link or anything the walk's starting value was

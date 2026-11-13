@@ -807,18 +807,48 @@ fn filling(item: &str, line_part: &str) -> Contender {
     }
 }
 
-/// The plan the loader's own statement gets for a scope, unforced: every
-/// node type, with the index each scan uses.
-async fn load_plan(pool: &PgPool, scope: &LoadScope) -> Vec<String> {
+/// The plan the loader's own statement gets for a scope: every node
+/// type, with the index each scan uses. Unforced, or `generic`: the
+/// statement prepared and planned as PostgreSQL may plan it once cached,
+/// without its values.
+async fn load_plan(pool: &PgPool, scope: &LoadScope, generic: bool) -> Vec<String> {
     let (sql, binds) = crate::propose::load_sql(scope).unwrap();
-    // Safe: the loader's own statement, every value a bound parameter.
-    let mut query = sqlx::query_scalar::<_, serde_json::Value>(sqlx::AssertSqlSafe(format!(
-        "EXPLAIN (FORMAT JSON) {sql}"
-    )));
-    for value in binds {
-        query = query.bind(value);
-    }
-    let plan = query.fetch_one(pool).await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    let plan: serde_json::Value = if generic {
+        // Safe: the loader's own statement; the values are this test's.
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "SET LOCAL plan_cache_mode = force_generic_plan; PREPARE walk AS {sql}"
+        )))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        let args: Vec<String> = binds
+            .iter()
+            .map(|v| format!("'{}'::jsonb", v.to_string().replace('\'', "''")))
+            .collect();
+        let plan = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN (FORMAT JSON) EXECUTE walk({})",
+            args.join(", ")
+        )))
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        sqlx::raw_sql("DEALLOCATE walk")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        plan
+    } else {
+        // Safe: the loader's own statement, every value a bound parameter.
+        let mut query = sqlx::query_scalar::<_, serde_json::Value>(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN (FORMAT JSON) {sql}"
+        )));
+        for value in binds {
+            query = query.bind(value);
+        }
+        query.fetch_one(&mut *tx).await.unwrap()
+    };
+    tx.rollback().await.unwrap();
     fn walk(node: &serde_json::Value, out: &mut Vec<String>) {
         if let Some(kind) = node.get("Node Type").and_then(|t| t.as_str()) {
             let index = node.get("Index Name").and_then(|i| i.as_str());
@@ -841,6 +871,28 @@ async fn load_plan(pool: &PgPool, scope: &LoadScope) -> Vec<String> {
     out
 }
 
+/// Both plans, unforced and generic, are index seeks alone: one on
+/// `index` per step of the walk and one for the rows it reached, and no
+/// scan of the table.
+async fn assert_seeks_only(pool: &PgPool, scope: &LoadScope, index: &str) {
+    for generic in [false, true] {
+        let plan = load_plan(pool, scope, generic).await;
+        assert!(
+            !plan
+                .iter()
+                .any(|node| node.starts_with("Seq Scan") || node.starts_with("Bitmap")),
+            "generic={generic}: {plan:?}"
+        );
+        assert_eq!(
+            plan.iter()
+                .filter(|node| node.starts_with(&format!("Index Scan using {index}")))
+                .count(),
+            2,
+            "generic={generic}: one seek per step, one for the rows reached: {plan:?}"
+        );
+    }
+}
+
 /// Two fills in different branches of an eleven-thousand-row tree, each
 /// walking three steps up from its item's part: both commit, and the
 /// walk leaves no relation-level lock. The loader's statement is index
@@ -849,20 +901,12 @@ async fn load_plan(pool: &PgPool, scope: &LoadScope) -> Vec<String> {
 #[tokio::test]
 async fn two_walks_up_different_branches_commit_together() {
     let pool = variants_pool().await;
-    let plan = load_plan(&pool, &filling("i1.2.3.4", "p1").scope).await;
-    assert!(
-        !plan
-            .iter()
-            .any(|node| node.starts_with("Seq Scan") || node.starts_with("Bitmap")),
-        "{plan:?}"
-    );
-    assert_eq!(
-        plan.iter()
-            .filter(|node| node.starts_with("Index Scan using morpholog_ci_parent_0"))
-            .count(),
-        2,
-        "one seek per step, one for the rows reached: {plan:?}"
-    );
+    assert_seeks_only(
+        &pool,
+        &filling("i1.2.3.4", "p1").scope,
+        "morpholog_ci_parent_0",
+    )
+    .await;
     let (a, b, relation_locks) = race(
         &pool,
         filling("i1.2.3.4", "p1"),
@@ -934,20 +978,7 @@ transformation fill(ancestor, part):
         &program.definitions,
         Reads::Body,
     );
-    let plan = load_plan(&pool, &scope).await;
-    assert!(
-        !plan
-            .iter()
-            .any(|node| node.starts_with("Seq Scan") || node.starts_with("Bitmap")),
-        "{plan:?}"
-    );
-    assert_eq!(
-        plan.iter()
-            .filter(|node| node.starts_with("Index Scan using morpholog_ci_parent_1"))
-            .count(),
-        2,
-        "one seek per step, one for the rows reached: {plan:?}"
-    );
+    assert_seeks_only(&pool, &scope, "morpholog_ci_parent_1").await;
     let mut tx = pool.begin().await.unwrap();
     let loaded = load_state(&mut tx, &scope).await.unwrap();
     tx.rollback().await.unwrap();
