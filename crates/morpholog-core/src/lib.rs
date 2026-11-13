@@ -16,7 +16,9 @@
 //! `EvalError`, never a `panic!`, and it never uses floating point. The lints
 //! below enforce both. Internal `assert!` / `unreachable!` guards on
 //! already-validated IR remain; they catch programmer error, not bad input.
-//! Tests are exempt via `.clippy.toml` (`allow-panic-in-tests`).
+//! Tests are exempt via this crate's `clippy.toml` (`allow-panic-in-tests`).
+//! That file also refuses any clock, environment, file, stream, thread or
+//! process access, and the lints below refuse printing.
 //!
 //! A match over the kernel's enums names every variant it handles, so a new
 //! construct cannot pass through a walker under a `_` arm unnoticed: adding
@@ -27,7 +29,10 @@
     clippy::panic,
     clippy::float_arithmetic,
     clippy::wildcard_enum_match_arm,
-    clippy::iter_over_hash_type
+    clippy::iter_over_hash_type,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    clippy::dbg_macro
 )]
 #![cfg_attr(
     not(feature = "measure"),
