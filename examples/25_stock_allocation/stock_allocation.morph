@@ -168,10 +168,11 @@ transformation add_part(part):
     require new_part: not Part(part)
     admit Part(part)
 
--- A variant is always a new part under a part that exists. So the
--- tree can never loop back on itself: a part that did not exist a
--- moment ago is nothing's ancestor. No rule has to check for a loop,
--- because no act can make one.
+-- A variant is always a new part under a part that exists. Every part
+-- is on record as a `Part` before anything can be made a variant of
+-- it, so a part with no `Part` claim is nothing's ancestor, and the
+-- tree can never loop back on itself. No rule has to check for a
+-- loop, because no act can make one.
 transformation add_variant(part, of):
     require new_part: not Part(part)
     require known_part: Part(of)

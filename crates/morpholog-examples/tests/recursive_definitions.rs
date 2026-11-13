@@ -344,3 +344,43 @@ fn a_call_to_itself_with_the_right_kinds_is_accepted() {
     let program = parse_program(source).expect("the programme parses");
     program.validate().expect("the programme validates");
 }
+
+// A caller is held to those kinds too: a count, bound or written out,
+// is not a part.
+#[test]
+fn a_caller_passing_the_wrong_kind_is_refused() {
+    use morpholog_core::{PredicateArgKind, ValidationContext, VocabularyKind};
+    let with_gate = |binds: &str, gate: &str| {
+        let source = format!(
+            "program p\n\npredicate Parent(part: Subject, parent: Subject)\npredicate Count(part: Subject, n: Decimal)\npredicate Out(part: Subject)\n\ndefine descends_from(part, ancestor):\n    Parent(part, ancestor) or (Parent(part, between) and descends_from(between, ancestor))\n\ntransformation t(part):\n{binds}    require {gate}\n    admit Out(part)\n"
+        );
+        let program = parse_program(&source).expect("the programme parses");
+        program.validate().expect_err("the programme is refused")
+    };
+    assert_eq!(
+        with_gate("    bind Count(part, n)\n", "descends_from(part, n)"),
+        vec![ValidationError::VariableKindConflict {
+            variable: "n".into(),
+            previous: PredicateArgKind::Decimal,
+            new: PredicateArgKind::Subject,
+            context: ValidationContext::Transformation {
+                name: "t".into(),
+                statement: Some(1),
+            },
+        }]
+    );
+    assert_eq!(
+        with_gate("", "descends_from(part, 5)"),
+        vec![ValidationError::ArgKindMismatch {
+            vocabulary: VocabularyKind::Definition,
+            name: "descends_from".into(),
+            position: 1,
+            expected: PredicateArgKind::Subject,
+            actual: PredicateArgKind::Decimal,
+            context: ValidationContext::Transformation {
+                name: "t".into(),
+                statement: Some(0),
+            },
+        }]
+    );
+}

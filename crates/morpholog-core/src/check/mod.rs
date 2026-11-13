@@ -346,6 +346,18 @@ struct DefinitionSig {
     result: Option<InferredKind>,
 }
 
+/// An `or` keeps no kind for what its branches refine. A parameter every
+/// use in the body observed as one kind has that kind.
+fn agreed_kinds(observed: &[BTreeSet<PredicateArgKind>]) -> Vec<InferredKind> {
+    observed
+        .iter()
+        .map(|kinds| match kinds.iter().next() {
+            Some(kind) if kinds.len() == 1 => InferredKind::Known(kind.clone()),
+            _ => InferredKind::UnknownOrAny,
+        })
+        .collect()
+}
+
 /// What one checker run found.
 pub(crate) struct Checked {
     pub(crate) errors: Vec<ValidationError>,
@@ -477,16 +489,7 @@ pub(crate) fn check_program(program: &Program) -> Checked {
                         .unwrap_or_default()
                 })
                 .collect();
-            // An `or` keeps no kind for what its branches refine, and
-            // the body is one. A parameter every branch used as one kind
-            // has that kind.
-            let param_kinds = param_observed
-                .iter()
-                .map(|observed| match observed.iter().next() {
-                    Some(kind) if observed.len() == 1 => InferredKind::Known(kind.clone()),
-                    _ => InferredKind::UnknownOrAny,
-                })
-                .collect();
+            let param_kinds = agreed_kinds(&param_observed);
             cx.definition_sigs.insert(
                 def.name.to_string(),
                 DefinitionSig {
@@ -546,12 +549,7 @@ pub(crate) fn check_program(program: &Program) -> Checked {
                 });
             }
         }
-        let param_kinds = def
-            .parameters
-            .iter()
-            .map(|p| scope.kinds.lookup(p))
-            .collect();
-        let param_observed = def
+        let param_observed: Vec<BTreeSet<PredicateArgKind>> = def
             .parameters
             .iter()
             .map(|p| {
@@ -562,6 +560,16 @@ pub(crate) fn check_program(program: &Program) -> Checked {
                     .unwrap_or_default()
             })
             .collect();
+        // A condition that calls itself is an `or` at its root, so its
+        // callers are held to the same kinds its call to itself is.
+        let param_kinds = if recursive {
+            agreed_kinds(&param_observed)
+        } else {
+            def.parameters
+                .iter()
+                .map(|p| scope.kinds.lookup(p))
+                .collect()
+        };
         cx.definition_sigs.insert(
             def.name.to_string(),
             DefinitionSig {
