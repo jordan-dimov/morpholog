@@ -17,7 +17,15 @@
 //! below enforce both. Internal `assert!` / `unreachable!` guards on
 //! already-validated IR remain; they catch programmer error, not bad input.
 //! Tests are exempt via `.clippy.toml` (`allow-panic-in-tests`).
-#![warn(clippy::panic, clippy::float_arithmetic)]
+//!
+//! A match over the kernel's enums names every variant it handles, so a new
+//! construct cannot pass through a walker under a `_` arm unnoticed: adding
+//! a variant fails the build at each match until that match decides.
+#![warn(
+    clippy::panic,
+    clippy::float_arithmetic,
+    clippy::wildcard_enum_match_arm
+)]
 
 pub mod actor_repr;
 mod admission;
@@ -131,4 +139,8 @@ pub use validate::{ValidatedProgram, ValidationContext, ValidationError, Vocabul
 pub const SEMANTICS_VERSION: u32 = 6;
 
 #[cfg(test)]
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test asserts one expected shape and fails on any other"
+)]
 mod kernel_tests;

@@ -515,7 +515,18 @@ impl Walker<'_> {
                     self.element(x, source, &mut inner);
                 }
                 Prop::In(_, _) => {}
-                _ => break,
+                Prop::Defined { .. }
+                | Prop::Implies { .. }
+                | Prop::Exists { .. }
+                | Prop::And(_)
+                | Prop::Or(_)
+                | Prop::Pre(_)
+                | Prop::Not(_)
+                | Prop::Xor(..)
+                | Prop::Eq(..)
+                | Prop::Neq(..)
+                | Prop::Compare { .. }
+                | Prop::Forall { .. } => break,
             }
         }
         inner
@@ -720,7 +731,13 @@ impl Walker<'_> {
                             ValueExpr::Term(term) => {
                                 known_term(term, known).map(|t| (param.clone(), t))
                             }
-                            _ => None,
+                            ValueExpr::Arith { .. }
+                            | ValueExpr::Sum { .. }
+                            | ValueExpr::Extremum { .. }
+                            | ValueExpr::ValueOf { .. }
+                            | ValueExpr::Cond { .. }
+                            | ValueExpr::Call { .. }
+                            | ValueExpr::Defined { .. } => None,
                         })
                         .collect();
                     if let Some(body) = def.body.as_value() {

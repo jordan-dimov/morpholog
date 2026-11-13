@@ -1,3 +1,8 @@
+#![expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "a test asserts one expected error and fails on any other"
+)]
+
 use super::*;
 
 #[test]

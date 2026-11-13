@@ -86,7 +86,13 @@ impl InferredKind {
 fn render_operand(operand: &ValueExpr) -> String {
     match operand {
         ValueExpr::Term(t) => crate::format::format_term(t),
-        other => format!("{other:?}"),
+        other @ (ValueExpr::Arith { .. }
+        | ValueExpr::Sum { .. }
+        | ValueExpr::Extremum { .. }
+        | ValueExpr::ValueOf { .. }
+        | ValueExpr::Cond { .. }
+        | ValueExpr::Call { .. }
+        | ValueExpr::Defined { .. }) => format!("{other:?}"),
     }
 }
 
@@ -1020,7 +1026,7 @@ impl CheckCtx<'_> {
                     ValueExpr::Term(Term::Wildcard) => {}
                     // A grid: its own checks (kinds, a literal step, a
                     // bound before it), and the element is an instant.
-                    grid if grid::grid_call(grid).is_some() => {
+                    grid @ ValueExpr::Call { .. } if grid::grid_call(grid).is_some() => {
                         let _ = self.infer_value(grid, scope);
                         if let Term::Var(each) = element {
                             self.observe_or_report(
@@ -1045,7 +1051,15 @@ impl CheckCtx<'_> {
                     }
                     // Hand-built IR: the parser never produces another
                     // shape, and no walker is proven over one.
-                    _ => self.report(|context| ValidationError::InSourceShape { context }),
+                    ValueExpr::Arith { .. }
+                    | ValueExpr::Sum { .. }
+                    | ValueExpr::Extremum { .. }
+                    | ValueExpr::ValueOf { .. }
+                    | ValueExpr::Cond { .. }
+                    | ValueExpr::Call { .. }
+                    | ValueExpr::Defined { .. } => {
+                        self.report(|context| ValidationError::InSourceShape { context })
+                    }
                 }
             }
         }
@@ -1104,7 +1118,14 @@ impl CheckCtx<'_> {
                 // name itself is not a kind-bearing position.
                 match value {
                     ValueExpr::Term(Term::Var(of)) => scope.kinds.alias(name, of, &mut self.cells),
-                    _ => scope.kinds.rebind(name, &mut self.cells),
+                    ValueExpr::Term(_)
+                    | ValueExpr::Arith { .. }
+                    | ValueExpr::Sum { .. }
+                    | ValueExpr::Extremum { .. }
+                    | ValueExpr::ValueOf { .. }
+                    | ValueExpr::Cond { .. }
+                    | ValueExpr::Call { .. }
+                    | ValueExpr::Defined { .. } => scope.kinds.rebind(name, &mut self.cells),
                 }
                 self.refine_or_report(scope, name, value_kind);
                 if let Some(element) = self.generated_element(value, scope)
@@ -2040,7 +2061,14 @@ impl CheckCtx<'_> {
                 .kinds
                 .cell(name)
                 .and_then(|cell| self.cells.generated.get(&cell).cloned()),
-            _ => None,
+            ValueExpr::Term(_)
+            | ValueExpr::Arith { .. }
+            | ValueExpr::Sum { .. }
+            | ValueExpr::Extremum { .. }
+            | ValueExpr::ValueOf { .. }
+            | ValueExpr::Cond { .. }
+            | ValueExpr::Call { .. }
+            | ValueExpr::Defined { .. } => None,
         }
     }
 
@@ -2193,7 +2221,7 @@ impl CheckCtx<'_> {
                         });
                     }
                 }
-                other => {
+                other @ (Term::Literal(_) | Term::Actor | Term::DecidedAt) => {
                     if let (InferredKind::Known(expected_kind), InferredKind::Known(actual_kind)) =
                         (expected, term_kind(other))
                         && !kinds_compatible(&expected_kind, &actual_kind)
@@ -2394,7 +2422,14 @@ type EqualityOperand<'a> = (InferredKind, Option<&'a Var>);
 fn value_var_name(expr: &ValueExpr) -> Option<&Var> {
     match expr {
         ValueExpr::Term(Term::Var(name)) => Some(name),
-        _ => None,
+        ValueExpr::Term(_)
+        | ValueExpr::Arith { .. }
+        | ValueExpr::Sum { .. }
+        | ValueExpr::Extremum { .. }
+        | ValueExpr::ValueOf { .. }
+        | ValueExpr::Cond { .. }
+        | ValueExpr::Call { .. }
+        | ValueExpr::Defined { .. } => None,
     }
 }
 
@@ -2404,7 +2439,9 @@ fn value_var_name(expr: &ValueExpr) -> Option<&Var> {
 fn resolved_term_kind(term: &Term, kinds: &KindEnv) -> InferredKind {
     match term {
         Term::Var(name) => kinds.lookup(name),
-        other => term_kind(other),
+        other @ (Term::Wildcard | Term::Literal(_) | Term::Actor | Term::DecidedAt) => {
+            term_kind(other)
+        }
     }
 }
 

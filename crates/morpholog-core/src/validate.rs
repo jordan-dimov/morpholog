@@ -1266,7 +1266,9 @@ fn collect_discipline_errors(p: &Program) -> Vec<ValidationError> {
                 fields.sort_unstable();
                 Discipline::CurrentPointerBy { fields }
             }
-            other => other.clone(),
+            other @ (Discipline::EffectiveBy { .. }
+            | Discipline::AppendOnly
+            | Discipline::SupersededVia { .. }) => other.clone(),
         };
         let canonical_clauses: Vec<Discipline> = decl.disciplines.iter().map(canonical).collect();
         for (i, d) in canonical_clauses.iter().enumerate() {

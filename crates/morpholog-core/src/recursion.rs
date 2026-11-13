@@ -75,7 +75,18 @@ pub(crate) fn asks_itself(def: &Definition) -> bool {
     fn within(prop: &Prop, name: &DefinitionName) -> bool {
         match prop {
             Prop::Or(operands) | Prop::And(operands) => operands.iter().any(|p| within(p, name)),
-            other => is_call_to(other, name),
+            other @ (Prop::Claim { .. }
+            | Prop::Defined { .. }
+            | Prop::Implies { .. }
+            | Prop::Exists { .. }
+            | Prop::Pre(_)
+            | Prop::Not(_)
+            | Prop::Xor(..)
+            | Prop::Eq(..)
+            | Prop::Neq(..)
+            | Prop::Compare { .. }
+            | Prop::Forall { .. }
+            | Prop::In(..)) => is_call_to(other, name),
         }
     }
     def.body
@@ -87,7 +98,19 @@ pub(crate) fn asks_itself(def: &Definition) -> bool {
 fn branches(body: &Prop) -> Vec<&Prop> {
     match body {
         Prop::Or(operands) => operands.iter().flat_map(branches).collect(),
-        other => vec![other],
+        other @ (Prop::Claim { .. }
+        | Prop::Defined { .. }
+        | Prop::Implies { .. }
+        | Prop::Exists { .. }
+        | Prop::And(_)
+        | Prop::Pre(_)
+        | Prop::Not(_)
+        | Prop::Xor(..)
+        | Prop::Eq(..)
+        | Prop::Neq(..)
+        | Prop::Compare { .. }
+        | Prop::Forall { .. }
+        | Prop::In(..)) => vec![other],
     }
 }
 
@@ -96,7 +119,19 @@ fn branches(body: &Prop) -> Vec<&Prop> {
 fn conjuncts(branch: &Prop) -> Vec<&Prop> {
     match branch {
         Prop::And(operands) => operands.iter().flat_map(conjuncts).collect(),
-        other => vec![other],
+        other @ (Prop::Claim { .. }
+        | Prop::Defined { .. }
+        | Prop::Implies { .. }
+        | Prop::Exists { .. }
+        | Prop::Or(_)
+        | Prop::Pre(_)
+        | Prop::Not(_)
+        | Prop::Xor(..)
+        | Prop::Eq(..)
+        | Prop::Neq(..)
+        | Prop::Compare { .. }
+        | Prop::Forall { .. }
+        | Prop::In(..)) => vec![other],
     }
 }
 
@@ -130,7 +165,9 @@ pub(crate) fn refusal(def: &Definition) -> Option<RecursionRefusal> {
                     for arg in args {
                         let from_claim = match arg {
                             Term::Var(v) => def.parameters.contains(v) || bound_so_far.contains(v),
-                            _ => false,
+                            Term::Wildcard | Term::Literal(_) | Term::Actor | Term::DecidedAt => {
+                                false
+                            }
                         };
                         if !from_claim {
                             return Some(RecursionRefusal::ArgumentNotFromClaim {
@@ -140,7 +177,19 @@ pub(crate) fn refusal(def: &Definition) -> Option<RecursionRefusal> {
                     }
                     pattern_variables(args, &mut from_claims);
                 }
-                other => {
+                other @ (Prop::Defined { .. }
+                | Prop::Implies { .. }
+                | Prop::Exists { .. }
+                | Prop::And(_)
+                | Prop::Or(_)
+                | Prop::Pre(_)
+                | Prop::Not(_)
+                | Prop::Xor(..)
+                | Prop::Eq(..)
+                | Prop::Neq(..)
+                | Prop::Compare { .. }
+                | Prop::Forall { .. }
+                | Prop::In(..)) => {
                     if any_prop_node(other, &|p| is_call_to(p, &def.name)) {
                         return Some(RecursionRefusal::Position);
                     }

@@ -590,7 +590,10 @@ mod tests {
             .iter()
             .map(|d| match &d.class {
                 RowClass::Unreplayable { because, .. } => *because,
-                other => panic!("expected unreplayable, got {other:?}"),
+                other @ (RowClass::Same
+                | RowClass::DifferentDelta { .. }
+                | RowClass::WouldReject { .. }
+                | RowClass::WouldError { .. }) => panic!("expected unreplayable, got {other:?}"),
             })
             .collect();
         assert_eq!(

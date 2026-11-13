@@ -820,7 +820,18 @@ fn exclusive_literal_branches(branches: &[Prop]) -> bool {
                 _ => None,
             },
             Prop::And(props) => props.iter().find_map(literal_equality),
-            _ => None,
+            Prop::Claim { .. }
+            | Prop::Defined { .. }
+            | Prop::Implies { .. }
+            | Prop::Exists { .. }
+            | Prop::Or(_)
+            | Prop::Pre(_)
+            | Prop::Not(_)
+            | Prop::Xor(..)
+            | Prop::Neq(..)
+            | Prop::Compare { .. }
+            | Prop::Forall { .. }
+            | Prop::In(..) => None,
         }
     }
     let mut tested: Vec<(&Var, &Value)> = Vec::with_capacity(branches.len());
@@ -868,7 +879,11 @@ fn wildcarded_calls_of<'a>(
     fn sum_body<'a>(node: fold::Node<'a>) -> Option<&'a Prop> {
         match node {
             fold::Node::Value(ValueExpr::Sum { body, .. }) => Some(body),
-            _ => None,
+            fold::Node::Stmt(_)
+            | fold::Node::Prop(_)
+            | fold::Node::Value(_)
+            | fold::Node::Slot(_)
+            | fold::Node::Binder(_) => None,
         }
     }
     let sums: Vec<Sum<'a>> = nodes
@@ -960,11 +975,15 @@ fn binding_sites<'a>(node: fold::Node<'a>, out: &mut Vec<&'a Var>) {
             return;
         }
         fold::Node::Stmt(Stmt::ForEach { args, .. }) => args,
-        _ => return,
+        fold::Node::Stmt(_)
+        | fold::Node::Prop(_)
+        | fold::Node::Value(_)
+        | fold::Node::Slot(_)
+        | fold::Node::Binder(_) => return,
     };
     out.extend(args.iter().filter_map(|arg| match arg {
         Term::Var(v) => Some(v),
-        _ => None,
+        Term::Wildcard | Term::Literal(_) | Term::Actor | Term::DecidedAt => None,
     }));
 }
 
@@ -1086,7 +1105,7 @@ fn change_rechecks_history_findings(
 fn pattern_vars(args: &[Term]) -> impl Iterator<Item = &crate::ir::Var> {
     args.iter().filter_map(|t| match t {
         Term::Var(v) => Some(v),
-        _ => None,
+        Term::Wildcard | Term::Literal(_) | Term::Actor | Term::DecidedAt => None,
     })
 }
 
@@ -1099,7 +1118,11 @@ fn compared_vars(prop: &Prop) -> BTreeSet<&crate::ir::Var> {
             crate::fold::Node::Prop(Prop::Compare { left, right, .. })
             | crate::fold::Node::Prop(Prop::Eq(left, right))
             | crate::fold::Node::Prop(Prop::Neq(left, right)) => &[left, right],
-            _ => return,
+            crate::fold::Node::Stmt(_)
+            | crate::fold::Node::Prop(_)
+            | crate::fold::Node::Value(_)
+            | crate::fold::Node::Slot(_)
+            | crate::fold::Node::Binder(_) => return,
         };
         for operand in operands {
             crate::fold::walk_value(operand, &mut |n| {
@@ -1130,7 +1153,17 @@ fn direct_positive_patterns(prop: &Prop) -> Vec<(&PredicateName, &[Term])> {
                     go(p, positive, out);
                 }
             }
-            _ => {}
+            Prop::Defined { .. }
+            | Prop::Implies { .. }
+            | Prop::Exists { .. }
+            | Prop::Or(_)
+            | Prop::Pre(_)
+            | Prop::Xor(..)
+            | Prop::Eq(..)
+            | Prop::Neq(..)
+            | Prop::Compare { .. }
+            | Prop::Forall { .. }
+            | Prop::In(..) => {}
         }
     }
     let mut out = Vec::new();
@@ -1191,7 +1224,13 @@ fn bind_only_to_retract_findings(
             Stmt::Let { name, .. } | Stmt::LetNewSubject { name } => {
                 bound.insert(name);
             }
-            _ => {}
+            Stmt::Require { .. }
+            | Stmt::Assert(_)
+            | Stmt::Retract { .. }
+            | Stmt::For { .. }
+            | Stmt::ForEach { .. }
+            | Stmt::If { .. }
+            | Stmt::Emit(_) => {}
         }
     }
 }
@@ -1211,7 +1250,9 @@ fn pattern_without(
         .enumerate()
         .filter_map(|(i, term)| match term {
             Term::Var(v) if !dropped.contains(v) => Some((i, v)),
-            _ => None,
+            Term::Var(_) | Term::Wildcard | Term::Literal(_) | Term::Actor | Term::DecidedAt => {
+                None
+            }
         })
         .collect();
     let all_vars = kept.len() + dropped.len() == args.len();
@@ -1230,7 +1271,11 @@ fn pattern_without(
             .iter()
             .map(|term| match term {
                 Term::Var(v) if dropped.contains(v) => Term::Wildcard,
-                other => other.clone(),
+                other @ (Term::Var(_)
+                | Term::Wildcard
+                | Term::Literal(_)
+                | Term::Actor
+                | Term::DecidedAt) => other.clone(),
             })
             .collect(),
     })
@@ -1321,7 +1366,7 @@ impl<'a> Rematch<'a, '_> {
                 let mut inner = bound.clone();
                 inner.extend(args.iter().filter_map(|arg| match arg {
                     Term::Var(v) => Some(v),
-                    _ => None,
+                    Term::Wildcard | Term::Literal(_) | Term::Actor | Term::DecidedAt => None,
                 }));
                 for s in body {
                     self.visit(s, index, &mut inner);
@@ -1351,7 +1396,7 @@ fn named_here<'a>(stmt: &'a crate::ir::Stmt) -> Vec<&'a crate::ir::Var> {
     use crate::fold::Node;
     let term = |node: Node<'a>| match node {
         Node::Slot(t) | Node::Value(ValueExpr::Term(t)) => Some(t),
-        _ => None,
+        Node::Stmt(_) | Node::Prop(_) | Node::Value(_) | Node::Binder(_) => None,
     };
     let mut local: BTreeSet<*const Term> = BTreeSet::new();
     crate::fold::walk_stmt(stmt, &mut |node| match node {
@@ -1369,7 +1414,7 @@ fn named_here<'a>(stmt: &'a crate::ir::Stmt) -> Vec<&'a crate::ir::Var> {
                 local.insert(std::ptr::from_ref(t));
             }
         }),
-        _ => {}
+        Node::Stmt(_) | Node::Prop(_) | Node::Value(_) | Node::Slot(_) | Node::Binder(_) => {}
     });
     let mut out = Vec::new();
     let mut take = |node: Node<'a>, scope: &[&'a crate::ir::Var]| {
@@ -1392,7 +1437,13 @@ fn named_here<'a>(stmt: &'a crate::ir::Stmt) -> Vec<&'a crate::ir::Var> {
         crate::ir::Stmt::If { when, .. } => {
             crate::fold::walk_prop_scoped(when, &mut take);
         }
-        other => crate::fold::walk_stmt_scoped(other, &mut take),
+        other @ crate::ir::Stmt::Require { .. }
+        | other @ crate::ir::Stmt::BindOne { .. }
+        | other @ crate::ir::Stmt::Let { .. }
+        | other @ crate::ir::Stmt::LetNewSubject { .. }
+        | other @ crate::ir::Stmt::Assert(_)
+        | other @ crate::ir::Stmt::Retract { .. }
+        | other @ crate::ir::Stmt::Emit(_) => crate::fold::walk_stmt_scoped(other, &mut take),
     }
     out
 }
@@ -1407,7 +1458,7 @@ fn matched_by(prop: &Prop) -> BTreeSet<&crate::ir::Var> {
             .iter()
             .filter_map(|t| match t {
                 Term::Var(v) => Some(v),
-                _ => None,
+                Term::Wildcard | Term::Literal(_) | Term::Actor | Term::DecidedAt => None,
             })
             .collect(),
         Prop::And(props) => props.iter().flat_map(matched_by).collect(),

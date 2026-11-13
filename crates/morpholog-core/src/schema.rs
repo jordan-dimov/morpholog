@@ -244,7 +244,15 @@ fn concrete_kind_description(kind: &PredicateArgKind, ctx: SchemaContext) -> Opt
                  (`Decimal[{u}]`) and is not sent with the value."
             ));
         }
-        _ => match kind {
+        PredicateArgKind::Subject
+        | PredicateArgKind::Decimal
+        | PredicateArgKind::Date
+        | PredicateArgKind::Timestamp
+        | PredicateArgKind::Duration
+        | PredicateArgKind::Bool
+        | PredicateArgKind::Collection
+        | PredicateArgKind::CalendarSpan
+        | PredicateArgKind::Any => match kind {
             PredicateArgKind::Subject => Some(
                 "opaque Morpholog subject identifier or domain symbol. \
              `new Subject()` receives an opaque fresh subject from the \

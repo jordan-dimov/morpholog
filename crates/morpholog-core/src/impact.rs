@@ -379,7 +379,7 @@ fn follow(
     body.walk(&mut |n| {
         let here = match &n {
             Node::Prop(q) => Some(std::ptr::from_ref(*q)),
-            _ => None,
+            Node::Stmt(_) | Node::Value(_) | Node::Slot(_) | Node::Binder(_) => None,
         };
         match classify_node(&n, antecedent) {
             NodeKind::Claim(predicate, args) => {
@@ -520,7 +520,13 @@ fn call_terms(args: &[ValueExpr]) -> Option<Vec<Term>> {
     args.iter()
         .map(|a| match a {
             ValueExpr::Term(t) => Some(t.clone()),
-            _ => None,
+            ValueExpr::Arith { .. }
+            | ValueExpr::Sum { .. }
+            | ValueExpr::Extremum { .. }
+            | ValueExpr::ValueOf { .. }
+            | ValueExpr::Cond { .. }
+            | ValueExpr::Call { .. }
+            | ValueExpr::Defined { .. } => None,
         })
         .collect()
 }
@@ -534,7 +540,18 @@ fn antecedent_nodes(body: &Prop) -> HashSet<*const Prop> {
     match body {
         Prop::Implies { left, .. } => every_node(left),
         Prop::Forall { source, .. } => every_node(source),
-        _ => HashSet::new(),
+        Prop::Claim { .. }
+        | Prop::Defined { .. }
+        | Prop::Exists { .. }
+        | Prop::And(_)
+        | Prop::Or(_)
+        | Prop::Pre(_)
+        | Prop::Not(_)
+        | Prop::Xor(..)
+        | Prop::Eq(..)
+        | Prop::Neq(..)
+        | Prop::Compare { .. }
+        | Prop::In(..) => HashSet::new(),
     }
 }
 
@@ -632,7 +649,17 @@ fn antecedent_scope_read(
         Prop::Implies { left, .. } => left,
         Prop::Forall { source, .. } => source,
         Prop::Not(inner) => inner,
-        _ => return None,
+        Prop::Claim { .. }
+        | Prop::Defined { .. }
+        | Prop::Exists { .. }
+        | Prop::And(_)
+        | Prop::Or(_)
+        | Prop::Pre(_)
+        | Prop::Xor(..)
+        | Prop::Eq(..)
+        | Prop::Neq(..)
+        | Prop::Compare { .. }
+        | Prop::In(..) => return None,
     };
     let mut bound = BTreeSet::new();
     scope_read(antecedent, frame, &mut bound, table, seen)
@@ -699,7 +726,11 @@ fn scope_read(
                     .zip(args)
                     .filter_map(|(param, arg)| match arg {
                         Term::Var(v) if callee_bound.contains(param) => Some(v.clone()),
-                        _ => None,
+                        Term::Var(_)
+                        | Term::Wildcard
+                        | Term::Literal(_)
+                        | Term::Actor
+                        | Term::DecidedAt => None,
                     })
                     .collect();
                 (found, exported)
@@ -761,7 +792,7 @@ fn case_read(n: &Node<'_>, frame: &Frame, bound: &BTreeSet<Var>) -> Option<Var> 
     let name = match n {
         Node::Slot(Term::Var(v)) | Node::Value(ValueExpr::Term(Term::Var(v))) => v,
         Node::Binder(v) => v,
-        _ => return None,
+        Node::Stmt(_) | Node::Prop(_) | Node::Value(_) | Node::Slot(_) => return None,
     };
     match frame.get(name) {
         Some(Traced::Case(case)) if !bound.contains(name) => Some(case.clone()),
@@ -787,7 +818,18 @@ fn candidate_case_variables(body: &Prop) -> BTreeSet<Var> {
                     through_and(q, out);
                 }
             }
-            _ => {}
+            Prop::Defined { .. }
+            | Prop::Implies { .. }
+            | Prop::Exists { .. }
+            | Prop::Or(_)
+            | Prop::Pre(_)
+            | Prop::Not(_)
+            | Prop::Xor(..)
+            | Prop::Eq(..)
+            | Prop::Neq(..)
+            | Prop::Compare { .. }
+            | Prop::Forall { .. }
+            | Prop::In(..) => {}
         }
     }
     let mut vars = BTreeSet::new();
@@ -795,7 +837,17 @@ fn candidate_case_variables(body: &Prop) -> BTreeSet<Var> {
         Prop::Implies { left, .. } => through_and(left, &mut vars),
         Prop::Forall { source, .. } => through_and(source, &mut vars),
         Prop::Not(inner) => through_and(inner, &mut vars),
-        _ => {}
+        Prop::Claim { .. }
+        | Prop::Defined { .. }
+        | Prop::Exists { .. }
+        | Prop::And(_)
+        | Prop::Or(_)
+        | Prop::Pre(_)
+        | Prop::Xor(..)
+        | Prop::Eq(..)
+        | Prop::Neq(..)
+        | Prop::Compare { .. }
+        | Prop::In(..) => {}
     }
     vars
 }
