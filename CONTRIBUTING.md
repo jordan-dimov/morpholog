@@ -8,7 +8,7 @@ Using Morpholog rather than developing it? The prebuilt-binary path is
 [`docs/install.md`](docs/install.md); everything below is for working on
 the source.
 
-- **Rust 1.95+** (edition 2024). Stable toolchain; `rustup default stable` suffices.
+- **Rust 1.100+** (edition 2024). Stable toolchain; `rustup default stable` suffices.
 - **PostgreSQL 18+**, system-wide on Ubuntu or equivalent. PG-only; portability is not a goal. The adapter uses SSI, JSONB, and generated columns.
 - **`cargo-audit`** for the dependency-vulnerability check: `cargo install cargo-audit`.
 - **A pinned nightly and `cargo-public-api`** for the public-API check, which precommit never skips. The exact pins live in [`scripts/public_api.sh`](scripts/public_api.sh), and the script prints both install commands if either is missing. Nightly is used only to render rustdoc JSON; the compiler contract stays stable and the declared floor.
