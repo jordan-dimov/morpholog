@@ -1332,6 +1332,87 @@ an operator, its first grants) as the service's OS user with the
 operator's login, the one route to that login, so no caller can race to
 become the trust root.
 
+## One view for every write
+
+A web application usually writes through a view per change. Each view restates the change: a serializer for its fields, the validation, a call into the model, and a mapping of errors to responses. In Morpholog the transformation already says all of that, through its parameters, their kinds and the rules that refuse a change. So one view in the host's own framework can serve every write it exposes. It stays as it is when a rule changes, because it holds no rule.
+
+The view does four things:
+
+1. **Expose by name.** An allow-list maps a public name to a transformation. Any other name answers 404, so nothing is callable that the host did not list.
+2. **Pass the body through.** The body's JSON object goes to `Session.propose` as named arguments, as it came. A list of objects goes to `Session.transact`: every act commits, or none does. The view validates nothing itself. The client's codec refuses a malformed argument, and the rules refuse a well-formed one.
+3. **Take the actor from the login.** The actor is the authenticated user, never the body. A body that names an actor is refused without being read.
+4. **Answer by outcome.** Each answer is mapped by its type and code, never by its message text:
+
+| Outcome | Status | The body carries |
+|---|---|---|
+| `Committed`, `AtomicCommitted` | 201 | the transition ids and `drawn_subjects` |
+| `invalid_arguments`, `invalid_request` | 400 | `code`, and `parameter` when one argument is at fault |
+| a name not on the list, `unknown_transformation` | 404 | |
+| `Rejected`, `AtomicRejected` | 422 | `rule`, `reason`, and `act` for a list |
+| `actor_assertion_unauthorised` | 403 | `code` |
+| a retriable code, still failing after a bounded retry | 503 | `code` |
+| `MorphologOutcomeUnknown` | 502 | `code: "outcome_unknown"` |
+| anything else | 500 | `code` |
+
+```python
+import json
+import random
+import time
+
+from morpholog_client import MorphologOutcomeUnknown, MorphologRequestError
+from morpholog_client.envelopes import AtomicRejected, Committed, Rejected
+
+EXPOSED = {"allocations": "allocate", "variants": "add_variant"}
+STATUS = {
+    "invalid_arguments": 400,
+    "invalid_request": 400,
+    "unknown_transformation": 404,
+    "actor_assertion_unauthorised": 403,
+}
+
+
+def write(session, name: str, raw_body: bytes, user: str) -> tuple[int, dict]:
+    transformation = EXPOSED.get(name)
+    if transformation is None:
+        return 404, {"title": "No such operation"}
+    body = json.loads(raw_body)
+    items = body if isinstance(body, list) else [body]
+    if any("actor" in item for item in items):
+        return 400, {"title": "The actor is the authenticated user"}
+    for attempt in range(8):
+        try:
+            if isinstance(body, list):
+                acts = [{"transformation": transformation, "actor": user, "args_named": i} for i in items]
+                out = session.transact(acts)
+            else:
+                out = session.propose(transformation, user, body)
+        except MorphologOutcomeUnknown:
+            return 502, {"code": "outcome_unknown"}
+        except MorphologRequestError as err:
+            if err.retriable:
+                time.sleep(random.uniform(0, 0.02 * 2**attempt))
+                continue
+            return STATUS.get(err.code, 500), {"code": err.code, "parameter": err.parameter}
+        if isinstance(out, (Rejected, AtomicRejected)):
+            return 422, {"rule": out.rule, "reason": out.reason}
+        if isinstance(out, Committed):
+            return 201, {"transition_id": out.transition_id, "drawn_subjects": out.drawn_subjects}
+        return 201, {"transition_ids": [a.outcome.transition_id for a in out.acts]}
+    return 503, {"code": "serialization_failure"}
+```
+
+A real view also answers 400 to a body that is not JSON, or is not an object or a list of objects, and takes its session from the host's own pool.
+
+**An unknown outcome is never sent again.** On a 502 the change may already be committed. The view's retry loop stops there. Anything between the caller and the view must not retry a 502 on its own either, because a second request is a new proposal. The caller reads the record first.
+
+The InvenTree spike built this view for one family of writes (#728). Its handler and allow-list replaced that family's serializers and views:
+- 106 of the 232 lines of write plumbing went, and more would follow if the host's own fields moved off one request.
+- Through the view, the spike's scenario left the same audit and rejection rows as through the CLI.
+- 139 checks covered every status above, the actor and an incomplete list.
+- Three rule changes later touched the programme only. The view and its allow-list changed by no lines.
+
+What the host gives up is a public contract shaped for its existing clients, such as field names, OpenAPI and translated messages. Each of those is work on the host's side.
+
 ## Running the action outside the proposer
 
 `serve` keeps the agent from writing the record. The action in the world
