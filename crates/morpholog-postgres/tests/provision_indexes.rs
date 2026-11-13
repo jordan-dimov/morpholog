@@ -3,7 +3,10 @@
 //! Attacker capability where one is modelled: an operator with DDL on
 //! the claims table, who may have created indexes of their own, in
 //! Morpholog's namespace or outside it.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 

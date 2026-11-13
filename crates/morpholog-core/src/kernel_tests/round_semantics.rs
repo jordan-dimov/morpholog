@@ -4,8 +4,6 @@
 //! A non-positive quantum is refused by name; non-decimal operands are a
 //! type error.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use crate::ir_builder::{dec, eq, params, require, round, term, transformation};
 use crate::kernel_tests::support::propose_with_test_actor;
 use crate::{Outcome, Prop, State};

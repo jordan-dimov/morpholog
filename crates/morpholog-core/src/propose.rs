@@ -894,7 +894,10 @@ pub(crate) fn finish_staged_inner(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input the caller already holds"
+)]
 pub(crate) fn execute_stmt(
     vocabulary: Vocabulary<'_>,
     stmt: &Stmt,
@@ -1288,7 +1291,10 @@ pub(crate) fn execute_stmt(
 
 /// Run `block` in order, stopping at the first statement that refuses or
 /// errors. With `entries`, each statement's trace lands there.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input the caller already holds"
+)]
 fn run_block(
     vocabulary: Vocabulary<'_>,
     block: &[Stmt],

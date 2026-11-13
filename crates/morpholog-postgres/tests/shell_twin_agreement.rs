@@ -5,7 +5,10 @@
 //! call the Rust one. Two copies of one rule drift silently, so these
 //! tests run both over the same cases.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use std::process::Command;
 

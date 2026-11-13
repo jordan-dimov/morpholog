@@ -4,8 +4,6 @@
 //! `lower_disciplines` (which would otherwise carry a silently
 //! unenforced commitment).
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use morpholog_core::ir_builder::{
     claim, invariant, params, predicate, program, transformation, var,
 };

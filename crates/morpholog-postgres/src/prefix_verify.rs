@@ -125,7 +125,7 @@ impl<'a> PrefixVerifier<'a> {
                 .map(|detail| TreeVerification::ActivationFaulty { detail })
                 .or(self.unauthorized)
                 .or(self.anchor_unauthorized)
-                .unwrap_or(TreeVerification::Intact {
+                .unwrap_or_else(|| TreeVerification::Intact {
                     checkpoints: self.checkpoints.len(),
                     tree_size: self.checkpoints.last().map_or(0, |c| c.tree_size),
                 }),

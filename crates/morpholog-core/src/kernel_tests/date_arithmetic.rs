@@ -6,8 +6,6 @@
 //! type error, and a span is expression-only: storage and wire refuse it
 //! by name.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use crate::ir_builder::{
     add, assert_, date, dec, eq, params, require, span, sub, term, transformation, var,
 };

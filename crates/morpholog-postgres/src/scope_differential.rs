@@ -630,7 +630,7 @@ pub(crate) fn corpus_with_hostiles() -> Vec<(String, Program)> {
 fn corpus() -> Vec<(String, Program)> {
     morpholog_examples::all_programs()
         .into_iter()
-        .map(|p| (p.name.to_string(), p))
+        .map(|p| (p.name.clone(), p))
         .chain(hostile_programs())
         .collect()
 }
@@ -728,7 +728,7 @@ fn scoped_loading_is_observationally_equivalent_to_full_state() {
                 let full = sample_state(program, 2, salt);
                 let transition = morpholog_core::Transition {
                     transformation_name: t.name.clone(),
-                    args: args.clone(),
+                    args,
                     actor: morpholog_test_support::test_actor(),
                     decided_at: None,
                 };
@@ -1306,7 +1306,7 @@ fn a_rebound_parameter_reads_its_predicate_whole() {
     let args = vec![morpholog_test_support::subj("k")];
     let transition = morpholog_core::Transition {
         transformation_name: t.name.clone(),
-        args: args.clone(),
+        args,
         actor: morpholog_test_support::test_actor(),
         decided_at: None,
     };

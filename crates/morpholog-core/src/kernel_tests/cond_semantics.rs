@@ -4,8 +4,6 @@
 //! error in the condition propagates rather than picking `otherwise`.
 //! Branch kinds need not be ordered, so subject tags and booleans work.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use crate::ir_builder::{
     assert_, claim, cond, dec, div, eq, invariant, let_, params, predicate, program, require, subj,
     term, transformation, value_of, var, wildcard,

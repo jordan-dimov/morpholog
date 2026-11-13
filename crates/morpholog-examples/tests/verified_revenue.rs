@@ -12,8 +12,6 @@
 //!   different decisions on the same figure. Standing can be revoked;
 //!   the figure never changes, and past decisions survive.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 use std::sync::OnceLock;
 
@@ -361,7 +359,7 @@ fn decision_admits_only_with_matching_standing() {
     use morpholog_test_support::propose_with_trace;
     let t = verified_revenue::admit_debt_service_revenue();
     let transition = Transition {
-        transformation_name: t.name.clone(),
+        transformation_name: t.name,
         args: vec![
             asset(),
             period(),

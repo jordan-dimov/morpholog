@@ -8,8 +8,6 @@
 //! wrong decision value, an incomplete seal, a sighted baseline, and a
 //! joint that invents or forgets member information.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 use std::sync::OnceLock;
 

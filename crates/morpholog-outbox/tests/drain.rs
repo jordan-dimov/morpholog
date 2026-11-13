@@ -4,8 +4,6 @@
 //! - rows not yet due are not picked up;
 //! - outcomes like `LeaseLost` do not stop the drain.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 use common::{commit_simple_entry, reset_db, test_pool};
 

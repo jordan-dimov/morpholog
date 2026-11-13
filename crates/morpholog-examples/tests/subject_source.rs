@@ -5,8 +5,6 @@
 //! depth-first, and nothing after execution stops. A recorded sequence
 //! replays only if this order holds.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use morpholog_core::{EvalError, Outcome, State, Subject, TraceEntry};
 use morpholog_surface::parse_program;
 use morpholog_test_support::propose_with_trace;

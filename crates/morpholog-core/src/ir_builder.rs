@@ -73,7 +73,10 @@ pub fn subj(s: &str) -> Term {
 /// A literal from fixed text. The text is part of the programme the
 /// author wrote, so a malformed one is a programming error here, not a
 /// value to carry: it panics at construction, never at evaluation.
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "a malformed literal in hand-built IR is a programming error"
+)]
 fn literal(parsed: Result<Value, String>) -> Term {
     Term::Literal(parsed.expect("a literal in hand-built IR is well-formed"))
 }

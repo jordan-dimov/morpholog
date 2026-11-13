@@ -4,9 +4,18 @@
 //! The async PostgreSQL wrappers live here: in test-support they would
 //! create a dependency cycle and pull tokio and sqlx into every user.
 
-#![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
+#![allow(
+    dead_code,
+    unused_imports,
+    reason = "each test binary uses a different subset of these helpers"
+)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
-pub mod routes;
+pub(crate) mod routes;
 
 use morpholog_core::{
     ClaimInstance, EvalValue, PreparedProgram, Program, Subject, Transformation, Transition,
@@ -19,7 +28,7 @@ use uuid::Uuid;
 
 /// Insert claims straight into the table, as a pre-state for a test.
 /// They carry the nil transition id, which marks them as fixture rows.
-pub async fn seed_claims(pool: &PgPool, claims: &[ClaimInstance]) {
+pub(crate) async fn seed_claims(pool: &PgPool, claims: &[ClaimInstance]) {
     for claim in claims {
         sqlx::query(
             "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
@@ -37,7 +46,7 @@ pub async fn seed_claims(pool: &PgPool, claims: &[ClaimInstance]) {
 /// Connect to the integration-test database named by `DATABASE_URL`.
 /// These suites share one schema and TRUNCATE it on entry, so point
 /// `DATABASE_URL` at a disposable database (`postgres:///morpholog_dev`).
-pub async fn test_pool() -> PgPool {
+pub(crate) async fn test_pool() -> PgPool {
     let url = std::env::var("DATABASE_URL").expect(
         "DATABASE_URL must be set for morpholog-postgres integration tests \
          (e.g. postgres:///morpholog_dev)",
@@ -55,7 +64,7 @@ pub async fn test_pool() -> PgPool {
 /// pool closes asynchronously, and a transaction still open lowers the
 /// audit watermark, so this test's checkpoints could cover none of its
 /// own rows.
-pub async fn reset_db(pool: &PgPool) {
+pub(crate) async fn reset_db(pool: &PgPool) {
     drain_open_transactions(pool).await;
     morpholog_postgres::testing::reset_database(pool)
         .await
@@ -65,7 +74,7 @@ pub async fn reset_db(pool: &PgPool) {
 /// `reset_db` plus the `morpholog_read.*` derived cache. **Only** for the
 /// tests that exercise the derived read cache or SQL views; do not make
 /// this the default reset - everything else uses [`reset_db`].
-pub async fn reset_db_and_read_cache(pool: &PgPool) {
+pub(crate) async fn reset_db_and_read_cache(pool: &PgPool) {
     morpholog_postgres::testing::reset_database(pool)
         .await
         .expect("reset");
@@ -80,7 +89,7 @@ pub async fn reset_db_and_read_cache(pool: &PgPool) {
 
 /// Unwrap a committed outcome's transition id, panicking on rejection -
 /// the common shape for tests that set up state they expect to commit.
-pub fn expect_committed(outcome: PgProposalOutcome) -> Uuid {
+pub(crate) fn expect_committed(outcome: PgProposalOutcome) -> Uuid {
     match outcome {
         PgProposalOutcome::Committed { transition_id, .. } => transition_id,
         PgProposalOutcome::Rejected { reason, .. } => {
@@ -89,15 +98,13 @@ pub fn expect_committed(outcome: PgProposalOutcome) -> Uuid {
     }
 }
 
-// Each test file uses a different subset, so unused imports are allowed.
-#[allow(unused_imports)]
-pub use morpholog_test_support::{
+pub(crate) use morpholog_test_support::{
     bool_, claim_instance, coll, date, dec, dec_str, has_claim, intent_instance, role, subj,
     test_actor, test_transition,
 };
 
 /// Refused by the invariant or the named gate `rule`.
-pub fn refused_by(outcome: &PgProposalOutcome, rule: &str) {
+pub(crate) fn refused_by(outcome: &PgProposalOutcome, rule: &str) {
     match outcome {
         PgProposalOutcome::Rejected { rule: Some(r), .. } => assert_eq!(r, rule),
         other => panic!("expected a refusal by `{rule}`, got {other:?}"),
@@ -106,18 +113,18 @@ pub fn refused_by(outcome: &PgProposalOutcome, rule: &str) {
 
 /// Prepare a test programme and bind it to PostgreSQL, on
 /// whatever route it is eligible for.
-pub fn pg_program(program: Program) -> PgProgram {
+pub(crate) fn pg_program(program: Program) -> PgProgram {
     PgProgram::new(PreparedProgram::new(program).expect("test programme is valid"))
 }
 
 /// Wrap a kernel transition in a gateway-attested proposal - the shape
 /// the durable commit paths accept.
-pub fn attested(transition: &Transition) -> Proposal {
+pub(crate) fn attested(transition: &Transition) -> Proposal {
     Proposal::gateway(transition)
 }
 
 /// Propose `transformation` with `args` as `test_actor()`.
-pub async fn propose_pg_with_test_actor(
+pub(crate) async fn propose_pg_with_test_actor(
     pool: &PgPool,
     pg: &PgProgram,
     transformation: &Transformation,
@@ -129,7 +136,12 @@ pub async fn propose_pg_with_test_actor(
 
 /// Admit an `AuditSigningKey(key_id, purpose, public_key)` claim, so a
 /// checkpoint signed with that key verifies as authorised.
-pub async fn authorize_signing_key(pool: &PgPool, key_id: &str, purpose: &str, public_key: &str) {
+pub(crate) async fn authorize_signing_key(
+    pool: &PgPool,
+    key_id: &str,
+    purpose: &str,
+    public_key: &str,
+) {
     use morpholog_core::ir_builder::{assert_, params, predicate, program, transformation, var};
     let t = transformation(
         "authorize_signing_key",
@@ -161,7 +173,12 @@ pub async fn authorize_signing_key(pool: &PgPool, key_id: &str, purpose: &str, p
 }
 
 /// Retract an `AuditSigningKey(...)` claim, revoking the key.
-pub async fn retract_signing_key(pool: &PgPool, key_id: &str, purpose: &str, public_key: &str) {
+pub(crate) async fn retract_signing_key(
+    pool: &PgPool,
+    key_id: &str,
+    purpose: &str,
+    public_key: &str,
+) {
     use morpholog_core::ir_builder::{params, predicate, program, retract, transformation, var};
     let t = transformation(
         "retract_signing_key",
@@ -193,7 +210,7 @@ pub async fn retract_signing_key(pool: &PgPool, key_id: &str, purpose: &str, pub
 }
 
 /// `propose_pg_with_test_actor` plus structured trace.
-pub async fn propose_pg_with_trace_using_test_actor(
+pub(crate) async fn propose_pg_with_trace_using_test_actor(
     pool: &PgPool,
     pg: &PgProgram,
     transformation: &Transformation,
@@ -204,7 +221,7 @@ pub async fn propose_pg_with_trace_using_test_actor(
 }
 
 /// Propose as an explicit actor.
-pub async fn propose_pg_as(
+pub(crate) async fn propose_pg_as(
     pool: &PgPool,
     pg: &PgProgram,
     transformation: &Transformation,
@@ -222,7 +239,7 @@ pub async fn propose_pg_as(
 
 /// Commit one balanced double-entry-ledger posting and return its
 /// transition id.
-pub async fn commit_entry(pool: &PgPool, id: &str) -> Uuid {
+pub(crate) async fn commit_entry(pool: &PgPool, id: &str) -> Uuid {
     let pg = pg_program(morpholog_examples::double_entry_ledger::program());
     let t = morpholog_examples::double_entry_ledger::post_simple_entry();
     let outcome = propose_pg_with_test_actor(pool, &pg, &t, ledger_args(id))
@@ -233,7 +250,7 @@ pub async fn commit_entry(pool: &PgPool, id: &str) -> Uuid {
 
 /// A balanced ledger posting's arguments, keyed by `id` so each is its own
 /// entry and pair of accounts.
-pub fn ledger_args(id: &str) -> Vec<EvalValue> {
+pub(crate) fn ledger_args(id: &str) -> Vec<EvalValue> {
     vec![
         morpholog_test_support::subj(id),
         morpholog_test_support::subj("d_2026_05_17"),
@@ -250,7 +267,7 @@ pub fn ledger_args(id: &str) -> Vec<EvalValue> {
 ///
 /// On timeout this panics, listing the offending sessions. Carrying on
 /// would fail later with a misleading symptom instead.
-pub async fn drain_open_transactions(pool: &PgPool) {
+pub(crate) async fn drain_open_transactions(pool: &PgPool) {
     for _ in 0..300 {
         let open: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM pg_stat_activity
@@ -289,13 +306,13 @@ pub async fn drain_open_transactions(pool: &PgPool) {
 
 /// A checkpoint over every audit row committed so far. Rows the
 /// watermark withholds are waited for, not silently left out.
-pub async fn make_checkpoint(pool: &PgPool) -> morpholog_postgres::Checkpoint {
+pub(crate) async fn make_checkpoint(pool: &PgPool) -> morpholog_postgres::Checkpoint {
     checkpoint_everything(pool, None).await
 }
 
 /// [`make_checkpoint`], signed. A head that already covers every row
 /// takes the signature instead of a new checkpoint.
-pub async fn make_signed_checkpoint(
+pub(crate) async fn make_signed_checkpoint(
     pool: &PgPool,
     signer: &morpholog_postgres::CheckpointSigner,
 ) -> morpholog_postgres::Checkpoint {
@@ -321,7 +338,10 @@ async fn checkpoint_everything(
 /// is retried. A short checkpoint that was created is persisted, and a
 /// retry would chain onto it, so that fails at once, naming who held
 /// the watermark back.
-pub async fn make_checkpoint_at(pool: &PgPool, tree_size: i64) -> morpholog_postgres::Checkpoint {
+pub(crate) async fn make_checkpoint_at(
+    pool: &PgPool,
+    tree_size: i64,
+) -> morpholog_postgres::Checkpoint {
     checkpoint_at(pool, tree_size, None).await
 }
 
@@ -379,7 +399,7 @@ async fn open_transaction_census(pool: &PgPool) -> Vec<(i32, String, String)> {
 
 /// Round-trip a serialisable value through a JSON edit - the tamper
 /// harness every pack suite uses.
-pub fn edit_json<T: serde::Serialize + serde::de::DeserializeOwned>(
+pub(crate) fn edit_json<T: serde::Serialize + serde::de::DeserializeOwned>(
     value: &T,
     edit: impl FnOnce(&mut serde_json::Value),
 ) -> T {
@@ -389,7 +409,7 @@ pub fn edit_json<T: serde::Serialize + serde::de::DeserializeOwned>(
 }
 
 /// The connecting role's name.
-pub async fn session_user(pool: &PgPool) -> String {
+pub(crate) async fn session_user(pool: &PgPool) -> String {
     let (name,): (String,) = sqlx::query_as("SELECT session_user::text")
         .fetch_one(pool)
         .await
@@ -400,7 +420,7 @@ pub async fn session_user(pool: &PgPool) -> String {
 /// Hand-write one attested audit row inside an open transaction, to act
 /// as an in-flight writer. `committed_at` defaults to the transaction's
 /// start.
-pub async fn insert_in_flight_audit_row(conn: &mut sqlx::PgConnection, transition_id: Uuid) {
+pub(crate) async fn insert_in_flight_audit_row(conn: &mut sqlx::PgConnection, transition_id: Uuid) {
     sqlx::query(
         "INSERT INTO morpholog.audit (
             transition_id, transformation_name, arguments, actor,
@@ -422,7 +442,7 @@ pub async fn insert_in_flight_audit_row(conn: &mut sqlx::PgConnection, transitio
 
 /// Whether the connecting role is a superuser. Tests that need to act
 /// as another role need this.
-pub async fn session_is_superuser(pool: &PgPool) -> bool {
+pub(crate) async fn session_is_superuser(pool: &PgPool) -> bool {
     let (rolsuper,): (bool,) =
         sqlx::query_as("SELECT rolsuper FROM pg_roles WHERE rolname = session_user")
             .fetch_one(pool)
@@ -437,7 +457,7 @@ pub async fn session_is_superuser(pool: &PgPool) -> bool {
 /// Roles are cluster-wide and outlive `reset_db` and the test binary. A
 /// leftover role that can write `morpholog.audit` breaks the writer-role
 /// census in other suites, so each test uses its own roles and drops them.
-pub async fn recreate_roles(pool: &PgPool, roles: &[&str], setup: &[&str]) {
+pub(crate) async fn recreate_roles(pool: &PgPool, roles: &[&str], setup: &[&str]) {
     drop_roles_if_present(pool, roles).await;
     for statement in setup {
         // Audited: `setup` is a literal slice each caller writes inline.
@@ -451,7 +471,7 @@ pub async fn recreate_roles(pool: &PgPool, roles: &[&str], setup: &[&str]) {
 /// Drop roles that exist, leaving absent ones alone - the entry half
 /// of [`recreate_roles`], and the safe form for a cleanup path that
 /// may run after a test failed partway.
-pub async fn drop_roles_if_present(pool: &PgPool, roles: &[&str]) {
+pub(crate) async fn drop_roles_if_present(pool: &PgPool, roles: &[&str]) {
     for role in roles {
         // DDL takes no bind parameters, so the name is checked here.
         assert!(
@@ -483,7 +503,7 @@ pub async fn drop_roles_if_present(pool: &PgPool, roles: &[&str]) {
 /// The keys `morpholog.value_key_v1` gives a fixed corpus, pinned: a
 /// fresh database and one migrated to 017 must both produce these, and a
 /// key that changes is a new function, never this one.
-pub fn pinned_value_keys() -> Vec<(serde_json::Value, serde_json::Value)> {
+pub(crate) fn pinned_value_keys() -> Vec<(serde_json::Value, serde_json::Value)> {
     use serde_json::json;
     vec![
         (
@@ -524,7 +544,7 @@ pub fn pinned_value_keys() -> Vec<(serde_json::Value, serde_json::Value)> {
 
 /// [`insert_in_flight_audit_row`] whose arguments name a subject, for the
 /// filtered tail's withholding test.
-pub async fn insert_in_flight_audit_row_mentioning(
+pub(crate) async fn insert_in_flight_audit_row_mentioning(
     conn: &mut sqlx::PgConnection,
     transition_id: Uuid,
     subject: &str,
@@ -551,7 +571,7 @@ pub async fn insert_in_flight_audit_row_mentioning(
 
 /// Logins standing in for gateway processes. Each can hold its own
 /// session and reach the governed tables, like a real embedder.
-pub async fn recreate_gateway_roles(pool: &PgPool, roles: &[&str]) {
+pub(crate) async fn recreate_gateway_roles(pool: &PgPool, roles: &[&str]) {
     let statements: Vec<String> = roles
         .iter()
         .flat_map(|r| {
@@ -567,7 +587,7 @@ pub async fn recreate_gateway_roles(pool: &PgPool, roles: &[&str]) {
 }
 
 /// A pool that presents itself as `role`: one simulated gateway.
-pub async fn gateway_pool(role: impl Into<String>) -> PgPool {
+pub(crate) async fn gateway_pool(role: impl Into<String>) -> PgPool {
     let role = role.into();
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let url = morpholog_postgres::with_default_user(&url);
@@ -592,7 +612,7 @@ pub async fn gateway_pool(role: impl Into<String>) -> PgPool {
 /// Run `scenario` with these cluster-wide gateway roles, dropping them
 /// afterwards even when it panics: left behind, they would fail other
 /// suites' census of who can write the audit log.
-pub async fn with_gateway_roles(
+pub(crate) async fn with_gateway_roles(
     pool: &PgPool,
     roles: &[&str],
     scenario: impl std::future::Future<Output = ()> + Send + 'static,
@@ -609,7 +629,7 @@ pub async fn with_gateway_roles(
 // Scratch deployments
 // ============================================================
 
-pub fn with_database(url: &str, name: &str) -> String {
+pub(crate) fn with_database(url: &str, name: &str) -> String {
     let (base, query) = url
         .split_once('?')
         .map_or((url, None), |(b, q)| (b, Some(q)));
@@ -623,7 +643,7 @@ pub fn with_database(url: &str, name: &str) -> String {
     }
 }
 
-pub async fn run_sql(pool: &PgPool, sql: &str) {
+pub(crate) async fn run_sql(pool: &PgPool, sql: &str) {
     sqlx::raw_sql(sqlx::AssertSqlSafe(sql.to_string()))
         .execute(pool)
         .await
@@ -634,7 +654,7 @@ pub async fn run_sql(pool: &PgPool, sql: &str) {
 /// least-privilege role names (not yet provisioned), and a superuser pool
 /// on it. Removed before it starts, in case an earlier run died, and by
 /// `finish`.
-pub struct Deployment {
+pub(crate) struct Deployment {
     pub admin: PgPool,
     pub pool: PgPool,
     pub name: String,
@@ -642,7 +662,7 @@ pub struct Deployment {
 }
 
 impl Deployment {
-    pub async fn new(name: &str) -> Self {
+    pub(crate) async fn new(name: &str) -> Self {
         let base = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
         let admin = PgPool::connect(&morpholog_postgres::with_default_user(&with_database(
             &base, "postgres",
@@ -668,12 +688,12 @@ impl Deployment {
         }
     }
 
-    pub fn executor(&self) -> &str {
+    pub(crate) fn executor(&self) -> &str {
         self.roles.executor().expect("a provisioned executor")
     }
 
     /// A pool whose every connection acts with `role`'s privileges only.
-    pub async fn acting_as(&self, role: &str) -> PgPool {
+    pub(crate) async fn acting_as(&self, role: &str) -> PgPool {
         let set = format!("SET ROLE \"{role}\"");
         let base = std::env::var("DATABASE_URL").unwrap();
         sqlx::postgres::PgPoolOptions::new()
@@ -693,7 +713,7 @@ impl Deployment {
             .unwrap()
     }
 
-    pub async fn finish(self) {
+    pub(crate) async fn finish(self) {
         self.pool.close().await;
         clean(&self.admin, &self.name, &self.roles).await;
     }

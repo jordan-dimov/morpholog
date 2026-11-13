@@ -372,8 +372,6 @@ mod tests {
     //! The settled resolver reads the horizon before the log, held with a
     //! pause only the crate can reach. `DATABASE_URL`-gated.
 
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
-
     use super::*;
 
     async fn pool() -> PgPool {

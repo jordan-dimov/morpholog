@@ -8,7 +8,11 @@
 //! which layer it broke. It cannot catch a rewrite into another true
 //! statement: an unsigned receipt proves its statement, not its origin.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 use common::{database_url, reset_db, write_fixture};
@@ -754,7 +758,7 @@ async fn a_receipt_states_a_finding_over_base_claims_through_its_derived_predica
 
     // A receipt claiming the venue reported nothing unauthorised does
     // not recompute.
-    let mut denial = receipt.clone();
+    let mut denial = receipt;
     denial["answer"] = json!([]);
     let path = write(dir.path(), "denial.json", &denial.to_string());
     let (passed, report) = verify(&closed_loop(), &path, &pack, &[]);

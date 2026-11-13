@@ -3,7 +3,10 @@
 //! these hold the rows the migration writes to their shape, with the
 //! chunk bounds made small, and hold replay and the as-of reads to them.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 

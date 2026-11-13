@@ -3,8 +3,6 @@
 //! are two. A canonical spelling renders back byte for byte, and a
 //! malformed literal is a diagnostic at its span, never a value.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use morpholog_core::format::{canonical_hash, format_program};
 use morpholog_core::{Program, State};
 use morpholog_surface::parse_program;

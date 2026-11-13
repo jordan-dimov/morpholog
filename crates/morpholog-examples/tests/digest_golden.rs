@@ -5,7 +5,10 @@
 //! rewrites the golden; a change to an existing case's bytes is a change
 //! to every outstanding commitment and is never re-pinned quietly.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::EvalValue;
 use morpholog_core::digest::{digest, preimage};

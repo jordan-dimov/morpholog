@@ -5,8 +5,6 @@
 //! shape minus the guarantee" - capture attempts, unresolved calls,
 //! missing definitions, and the expanded-depth budget.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use crate::ir_builder::{
     and, claim, defined, definition, eq, invariant, params, predicate, program, require, term,
     transformation, var,

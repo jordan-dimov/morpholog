@@ -2,7 +2,10 @@
 //! per-transformation preconditions and the invariant guarantees,
 //! derived mechanically from a parsed programme.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::ir_builder::{
     and, assert_, bind_one, claim, for_, implies, invariant, neq, not, params, predicate, program,

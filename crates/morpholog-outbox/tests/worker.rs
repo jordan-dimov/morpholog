@@ -3,8 +3,6 @@
 //! [`MockClock`] records sleeps without sleeping and [`FixedJitter`] fixes the factor, so the
 //! tests check the requested sleep durations deterministically and in no real time.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 use common::{commit_simple_entry, reset_db, test_pool};
 

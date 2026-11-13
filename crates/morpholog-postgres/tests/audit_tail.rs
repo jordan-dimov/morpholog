@@ -4,7 +4,11 @@
 //! a later writer has already committed, so everything from its order on
 //! must be withheld now and surfaced next time, never lost.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 use common::{drop_roles_if_present, recreate_roles, reset_db, session_is_superuser, test_pool};

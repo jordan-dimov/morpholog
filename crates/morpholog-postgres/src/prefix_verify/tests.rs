@@ -450,7 +450,7 @@ fn cases() -> Vec<Case> {
     );
     case(
         "a chain key outranks an anchor key",
-        rows.clone(),
+        rows,
         {
             let mut c = base.clone();
             sign(&mut c[3], &k1, "k1");

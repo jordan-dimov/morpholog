@@ -3,7 +3,11 @@
 //! A new document in `docs/` that the guide never links is invisible to a
 //! reader who starts there, and a renamed one leaves a dead link behind.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

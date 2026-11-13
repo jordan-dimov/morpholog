@@ -2,7 +2,10 @@
 //! real `.morph` files, through the built binary: file reading, JSON
 //! output, diagnostics, exit codes.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 use common::bin;

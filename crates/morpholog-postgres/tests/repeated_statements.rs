@@ -4,7 +4,10 @@
 //! an admission must not hide the change the first one made, so each
 //! route must reach the interpreter's decision and leave the same claims.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 

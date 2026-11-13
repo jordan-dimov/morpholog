@@ -6,7 +6,11 @@
 //! role-creation right. Every probe is a statement that reads or writes no
 //! rows, so it is refused for privilege or not at all.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_postgres::{
     DeploymentRoles, apply_migrations, databases_also_reached, deployment_roles, initialise_schema,

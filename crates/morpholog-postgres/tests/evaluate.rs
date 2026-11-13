@@ -2,7 +2,10 @@
 //! ledger transitions, then replay them under invariants that were never
 //! deployed.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::CaseOutcome;
 use morpholog_core::Program;
@@ -230,7 +233,7 @@ async fn pack_row_order_is_not_load_bearing() {
     .unwrap();
     // The verifier re-sorts; so must scoring. A shuffled pack scores
     // identically.
-    let mut shuffled = pack.clone();
+    let mut shuffled = pack;
     shuffled.rows.reverse();
     let reshuffled = score_candidate_against_pack(
         &morpholog_test_support::validated(&candidate),

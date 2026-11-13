@@ -4,8 +4,6 @@
 //! refusal case is a well-typed input; the remainder case pins the one
 //! operator with no reachable overflow.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use crate::ir_builder::{
     add, claim, dec, div, eq, modulo, mul, params, qty, require, sub, sum, term, transformation,
     var,

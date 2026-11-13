@@ -189,7 +189,7 @@ pub(crate) enum Stage {
     /// Used by the differential: on governed history it must agree with
     /// `CaseBound`; on dirty history it is the whole-state question
     /// `evaluate` asks.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "only the differentials use it"))]
     Full,
     CaseBound,
 }
@@ -376,7 +376,7 @@ impl CompiledInvariantSet {
     /// binding is a sum meeting a value other than a decimal, the kernel
     /// decides that invariant instead (`fallback`).
     /// Production walks runs; the differentials check a set whole.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "only the differentials use it"))]
     pub(crate) async fn first_violation(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -401,7 +401,10 @@ impl CompiledInvariantSet {
     /// [`Self::first_violation`] over one run of the set's invariants, so
     /// an execution that interleaves this evaluator with the kernel keeps
     /// the programme's order.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a distinct input the caller already holds"
+    )]
     pub(crate) async fn first_violation_in(
         &self,
         run: std::ops::Range<usize>,
@@ -769,7 +772,7 @@ impl IndexSpec {
 
     /// The seek expression over a query alias (`qualifier` is the alias
     /// followed by a dot), spelled as the compiled SQL spells it.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "only the differentials use it"))]
     pub(crate) fn seek_expression(&self, qualifier: &str) -> String {
         seek_expression(qualifier, self.position)
     }
@@ -1751,7 +1754,7 @@ pub(crate) fn compile_each(program: &ValidatedProgram<'_>) -> Compilation {
 /// Compile every invariant of a validated programme, or report every
 /// refusal: nothing compiles unless everything does. What the
 /// differentials ask of a whole-in-fragment programme.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(test), expect(dead_code, reason = "only the differentials use it"))]
 pub(crate) fn compile_invariants(
     program: &ValidatedProgram<'_>,
 ) -> Result<CompiledInvariantSet, Vec<CompileRefusal>> {
@@ -3597,7 +3600,7 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
                         "jsonb_build_object('type', 'decimal', 'value', ({total})::text)"
                     ),
                 },
-                dd: Some((total.clone(), "NULL::text".to_string())),
+                dd: Some((total, "NULL::text".to_string())),
                 static_unit: Some(None),
             })
         }
@@ -3638,20 +3641,18 @@ fn literal_operand(value: &Value) -> Result<Operand, CompileReason> {
     let ordered = match &ev {
         EvalValue::Decimal(d) => Ordered::Numeric {
             sql: format!("{}::numeric", quote_literal(&d.to_string())),
-            tagged: tagged.clone(),
+            tagged,
         },
-        EvalValue::Quantity { .. } => Ordered::Quantity {
-            tagged: tagged.clone(),
-        },
+        EvalValue::Quantity { .. } => Ordered::Quantity { tagged },
         EvalValue::Timestamp(t) => Ordered::Timestamp {
             nanos: format!("{}::numeric", t.as_nanosecond()),
             well_typed: "true".to_string(),
-            tagged: tagged.clone(),
+            tagged,
         },
         EvalValue::Date(d) => Ordered::Date {
             ordinal: format!("{}::integer", date_ordinal(*d)),
             well_typed: "true".to_string(),
-            tagged: tagged.clone(),
+            tagged,
         },
         _ => Ordered::None(None),
     };

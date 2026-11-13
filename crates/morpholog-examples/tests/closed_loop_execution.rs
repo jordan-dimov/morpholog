@@ -9,7 +9,10 @@
 //! ambiguous. The login binding of each name is adapter-level and is
 //! tested against PostgreSQL.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 use std::sync::OnceLock;
@@ -474,10 +477,7 @@ fn an_order_the_venue_reports_on_the_same_terms_is_matched_and_nothing_else() {
         vec![vec![order.clone(), dec(10)]]
     );
     let (s, rep) = report(&s, 1, order.clone(), "V-1001", "buy", 10, "48.5");
-    assert_eq!(
-        rows(&s, &cle::matched()),
-        vec![vec![order.clone(), rep.clone(), dec(10)]]
-    );
+    assert_eq!(rows(&s, &cle::matched()), vec![vec![order, rep, dec(10)]]);
     assert!(rows(&s, &cle::unobserved()).is_empty());
     assert!(rows(&s, &cle::unauthorised()).is_empty());
     assert!(rows(&s, &cle::mismatched()).is_empty());
@@ -488,7 +488,7 @@ fn an_order_the_venue_reports_on_the_same_terms_is_matched_and_nothing_else() {
 fn a_report_naming_no_authorised_order_is_the_unauthorised_finding() {
     let s = desk();
     let (s, order) = place(&s, "buy", 10, "48.5");
-    let (s, _) = report(&s, 1, order.clone(), "V-1001", "buy", 10, "48.5");
+    let (s, _) = report(&s, 1, order, "V-1001", "buy", 10, "48.5");
     let (s, ghost) = report(
         &s,
         2,
@@ -528,7 +528,7 @@ fn a_report_under_an_authorised_reference_on_other_terms_is_mismatched_not_match
         rows(&s, &cle::unobserved()).is_empty(),
         "the venue did report on the order, just not the order"
     );
-    let (s, _) = report(&s, 2, order.clone(), "V-1003", "sell", 10, "48.5");
+    let (s, _) = report(&s, 2, order, "V-1003", "sell", 10, "48.5");
     assert_eq!(
         rows(&s, &cle::mismatched()).len(),
         2,
@@ -550,7 +550,7 @@ fn two_venue_orders_for_one_authorisation_is_ambiguous_and_both_match() {
     let (s, _) = report(&s, 3, order.clone(), "V-1002", "buy", 10, "48.5");
     assert_eq!(
         rows(&s, &cle::ambiguous()),
-        vec![vec![order.clone(), dec(3)]],
+        vec![vec![order, dec(3)]],
         "one row per order, whichever way the pair is read"
     );
     assert_eq!(rows(&s, &cle::matched()).len(), 3);

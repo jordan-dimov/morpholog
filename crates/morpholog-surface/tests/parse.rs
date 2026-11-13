@@ -1,8 +1,6 @@
 //! The programme parser: hand-written `.morph` text, checked against the parsed
 //! [`morpholog_core::Program`] or the diagnostics it produces.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use morpholog_core::PredicateArgKind;
 use morpholog_surface::parse_program;
 

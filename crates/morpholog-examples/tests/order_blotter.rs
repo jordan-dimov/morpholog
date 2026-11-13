@@ -6,8 +6,6 @@
 //! reaches only its own cancel's order, and a breach on one order blocks
 //! no act on another.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 use std::sync::OnceLock;
 

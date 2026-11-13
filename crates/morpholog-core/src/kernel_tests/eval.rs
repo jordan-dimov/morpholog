@@ -110,8 +110,8 @@ fn claim_candidates_narrow_by_predicate_position_and_value() {
     };
     let state = State::from_claims(vec![
         line_for_entry_a.clone(),
-        line_for_entry_b.clone(),
-        je_for_entry_a.clone(),
+        line_for_entry_b,
+        je_for_entry_a,
     ]);
 
     let entry_a = EvalValue::Subject("entry_a".into());
@@ -554,7 +554,7 @@ fn or_returns_union_of_branch_binding_sets() {
     };
 
     // Both branches match: two A extensions + one B extension = 3.
-    let both = Prop::Or(vec![a_x.clone(), b_x.clone()]);
+    let both = Prop::Or(vec![a_x.clone(), b_x]);
     let matches = find_matches(&both, &ctx(&state, &Bindings::new())).unwrap();
     assert_eq!(
         matches.len(),
@@ -635,7 +635,7 @@ fn xor_holds_for_exactly_one_operand() {
     assert!(holds(vec![l_claim.clone()]), "left only: xor holds");
     assert!(holds(vec![r_claim.clone()]), "right only: xor holds");
     assert!(
-        !holds(vec![l_claim.clone(), r_claim]),
+        !holds(vec![l_claim, r_claim]),
         "both: xor fails (not exclusive)"
     );
     assert!(!holds(vec![]), "neither: xor fails");

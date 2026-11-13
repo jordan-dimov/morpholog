@@ -10,7 +10,11 @@
 //! ask, because a backdated amendment arrives in between. A date-carrying
 //! claim plus the audit log is enough; no temporal database is needed.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::{ClaimInstance, EvalValue, State, Transformation};
 use morpholog_examples::trade_lifecycle;

@@ -5,7 +5,10 @@
 //! `mark_outbox_failed` and `record_compensation`. Lease helpers are in
 //! `outbox_lease.rs`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use jiff::{SignedDuration, Timestamp};
 use morpholog_examples::double_entry_ledger;

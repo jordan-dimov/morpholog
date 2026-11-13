@@ -1,7 +1,10 @@
 //! An inline `new Subject()` in an `admit` or `emit` argument: the short form and its two-line
 //! twin give the same `Program` and the same hash; a mint anywhere else is refused by name.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::format::{canonical_hash, format_program};
 use morpholog_core::{Stmt, Term};

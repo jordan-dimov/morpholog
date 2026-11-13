@@ -1,8 +1,6 @@
 //! Smoke test for [`morpholog_outbox::StdoutDeliverer`]: a committed row drained through it
 //! ends up `delivered`. The printed output is not checked.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::time::Duration;
 
 mod common;

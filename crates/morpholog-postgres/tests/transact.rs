@@ -3,7 +3,11 @@
 //! see earlier acts (state and actor policy alike), audit order is act
 //! order, and intents reach the outbox only on commit.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::{EvalValue, PreparedProgram, Program, Subject, Transition};
 use morpholog_postgres::{

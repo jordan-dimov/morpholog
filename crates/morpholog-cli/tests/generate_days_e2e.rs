@@ -6,7 +6,11 @@
 //! The zone is read from a committed zoneinfo fixture, so the dates and
 //! the version stamp do not depend on the machine's tzdata.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 use common::{bin, database_url, repo_root, reset_db};
@@ -469,7 +473,10 @@ fn tzif_with_a_gap_across_midnight() -> Vec<u8> {
     // isutcnt, isstdcnt, leapcnt, timecnt, typecnt, charcnt
     let counts = [0, 0, 0, 1, 2, 8];
     let mut file = header(counts);
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "version 1 of the format stores 32 bits, and this instant fits"
+    )]
     file.extend(types((transition_at as i32).to_be_bytes().to_vec()));
     file.extend(header(counts));
     file.extend(types(transition_at.to_be_bytes().to_vec()));

@@ -4,8 +4,6 @@
 //! `transformation(name)` and `invariant(name)` find items or return `None`,
 //! and the results equal the per-example accessors.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 
 use morpholog_examples::{

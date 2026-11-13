@@ -6,8 +6,6 @@
 //! where they are, and that a result off the calendar is refused by name
 //! rather than wrapped, clamped or panicked.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use jiff::civil::Date;
 use proptest::prelude::*;
 use rust_decimal::Decimal;

@@ -3,7 +3,10 @@
 //! a live re-read against that seal - so an in-place redefinition, a
 //! dropped view, or a deleted seal row is named, not silent.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::format::canonical_hash;
 use morpholog_examples::double_entry_ledger;

@@ -21,10 +21,20 @@
 //! A match over the kernel's enums names every variant it handles, so a new
 //! construct cannot pass through a walker under a `_` arm unnoticed: adding
 //! a variant fails the build at each match until that match decides.
+//! No loop runs over a hash map or set, whose order changes from run to
+//! run, so the order of what a decision reports cannot depend on it.
 #![warn(
     clippy::panic,
     clippy::float_arithmetic,
-    clippy::wildcard_enum_match_arm
+    clippy::wildcard_enum_match_arm,
+    clippy::iter_over_hash_type
+)]
+#![cfg_attr(
+    not(feature = "measure"),
+    allow(
+        unreachable_pub,
+        reason = "the measurement surface is public only under `measure`; the gate builds with every feature, so the lint still sees each item"
+    )
 )]
 
 pub mod actor_repr;

@@ -13,8 +13,6 @@
 //!   extracts the FIRST wildcard. Only a named lookup can skip an earlier
 //!   coordinate to read a later one.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use morpholog_core::{State, ir_builder as b};
 use morpholog_test_support::enumerate_derived;
 use morpholog_test_support::{claim_instance, dec, subj};
@@ -104,7 +102,7 @@ fn non_key_value_reference_is_refused_by_validation() {
     );
     let program = b::program("probe")
         .predicates(predicates)
-        .derived_claims(vec![derived.clone()])
+        .derived_claims(vec![derived])
         .build();
 
     let errs = program

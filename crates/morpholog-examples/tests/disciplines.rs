@@ -3,7 +3,11 @@
 //! is checked statically. Most scenarios are inline `.morph`; a few run
 //! against the worked examples the disciplines tightened.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 
@@ -1403,7 +1407,7 @@ fn a_generated_item_that_is_not_the_exact_lowering_is_refused() {
 
     // A generated invariant moved behind an authored one: the same items,
     // but a refusal would name a different rule first.
-    let mut reordered = base.clone();
+    let mut reordered = base;
     let moved = reordered.invariants.remove(generated);
     reordered.invariants.push(moved);
     let name = reordered.invariants[0].name.to_string();

@@ -2,8 +2,6 @@
 //! broken checklist rule is refused through `propose()`, matched on the rule's
 //! name, never on display text.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 use std::sync::OnceLock;
 

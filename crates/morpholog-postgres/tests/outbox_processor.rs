@@ -18,7 +18,11 @@
 //! entry, and the compensation posts the reversal with debit and credit
 //! swapped.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use std::time::Duration;
 

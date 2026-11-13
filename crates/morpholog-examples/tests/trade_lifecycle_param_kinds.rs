@@ -8,7 +8,10 @@
 //!   with the expected `type`. Core's unit tests pin the fragments; this
 //!   checks they compose on a real model.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::{
     IntentName, ParamKind, PredicateArgKind, TransformationName, intent_arg_schema,

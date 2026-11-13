@@ -7,7 +7,10 @@
 //! Each test `reset_db`s (TRUNCATE) before its scenario. Run with
 //! `--test-threads=1` so tests do not race on the shared schema.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::ir_builder::transformation;
 use morpholog_core::{
@@ -1987,7 +1990,7 @@ async fn approval_controls_full_chain_through_pg() {
     .expect("propose should not error");
     assert!(
         matches!(&outcome, PgProposalOutcome::Rejected { reason, .. }
-            if reason.to_string().contains("DocumentAmount")),
+            if reason.clone().contains("DocumentAmount")),
         "{outcome:?}"
     );
 
@@ -2412,7 +2415,6 @@ async fn a_refusal_is_explained_by_the_draws_that_refused() {
         .expect("a refusal is explained");
     let state = refused
         .rejection_state
-        .clone()
         .expect("a refusal carries its state");
     let rendered = format!("{replayed:?}");
     assert!(rendered.contains(drawn_subjects[0].as_str()), "{rendered}");

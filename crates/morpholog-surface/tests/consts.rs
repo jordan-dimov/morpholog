@@ -1,7 +1,10 @@
 //! Programme-level `const`: a named figure and its hand-inlined spelling give the same `Program`
 //! and hash in every kind of body. Refusals carry spans; nothing of a const reaches the IR.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::format::canonical_hash;
 use morpholog_surface::parse_program;

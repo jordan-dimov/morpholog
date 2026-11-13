@@ -12,7 +12,10 @@
 //! They recurse into each other (comparators hold values, `sum` holds a
 //! proposition), each through a bounded copy of the other.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 use morpholog_core::ir_builder::*;
 use morpholog_core::{
@@ -358,7 +361,7 @@ proptest! {
     /// validation never finds an unfaithful seed, whatever else it finds.
     #[test]
     fn lowered_seeds_are_always_faithful(p in arb_program()) {
-        let mut lowered = p.clone();
+        let mut lowered = p;
         lower_sum_seeds(&mut lowered);
         if let Err(errors) = lowered.validate() {
             for error in errors {

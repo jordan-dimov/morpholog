@@ -8,7 +8,10 @@
 //! The query texts are copies of the production ones (`sqlx::query!` takes
 //! a literal), so a change to either belongs here too.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 use common::test_pool;

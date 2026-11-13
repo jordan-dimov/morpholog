@@ -11,7 +11,7 @@ use uuid::Uuid;
 /// [`CompensationSpec`]). The audit row's attestation still records the
 /// login role the worker connected as, so these commits carry real
 /// lineage.
-pub fn system_actor() -> Subject {
+pub(crate) fn system_actor() -> Subject {
     Subject::from("morpholog-system")
 }
 /// The `morpholog.outbox.status` vocabulary, the same closed set as the
@@ -666,7 +666,7 @@ pub trait Deliverer: Send + Sync {
 /// Maps the failed outbox row to the compensating transformation's
 /// arguments. Boxed so callers can pass `None` for the
 /// `Option<&CompensationSpec>` without a type annotation.
-pub type CompensationArgsFromRow = Box<dyn Fn(&OutboxRow) -> Vec<EvalValue> + Send + Sync>;
+pub(crate) type CompensationArgsFromRow = Box<dyn Fn(&OutboxRow) -> Vec<EvalValue> + Send + Sync>;
 /// What to run when delivery returns `NonRetryable`.
 ///
 /// `args_from_row` runs after [`begin_compensation`] claims the lease, so
@@ -758,7 +758,6 @@ pub enum ProcessOutcome {
 /// [`begin_compensation`]).
 ///
 /// `claim_before`: see [`claim_pending_outbox_row`].
-#[allow(clippy::too_many_arguments)]
 pub async fn process_one_outbox_row<D>(
     pool: &PgPool,
     worker_id: &str,

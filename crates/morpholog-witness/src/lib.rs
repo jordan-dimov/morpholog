@@ -320,7 +320,7 @@ fn examine(
             return Err(invalid("the response's nonce is not the request's"));
         }
     }
-    let validity_at: DateTime<Utc> = tst.gen_time.clone().into();
+    let validity_at: DateTime<Utc> = tst.gen_time.into();
     let attested_at = Timestamp::new(
         validity_at.timestamp(),
         i32::try_from(validity_at.timestamp_subsec_nanos()).unwrap_or(i32::MAX),
@@ -1232,7 +1232,6 @@ mod tests {
         })
         .unwrap();
         let (version, serial, inner_alg, rest) = tbs
-            .clone()
             .decode(|cons| {
                 cons.take_sequence(|c| {
                     Ok((
@@ -1244,10 +1243,7 @@ mod tests {
                 })
             })
             .unwrap();
-        let mut inner = inner_alg
-            .clone()
-            .decode(AlgorithmIdentifier::take_from)
-            .unwrap();
+        let mut inner = inner_alg.decode(AlgorithmIdentifier::take_from).unwrap();
         assert_eq!(inner.algorithm.as_ref(), OID_ECDSA_WITH_SHA256);
         inner.parameters = Some(null_parameter());
         let patched_cert = bcder::encode::sequence((
@@ -1465,7 +1461,7 @@ mod tests {
             OID_ECDSA_WITH_SHA384
         );
         assert_ne!(der(&view), der(&raw));
-        let mut restored = view.clone();
+        let mut restored = view;
         restored.signer_infos[0].signature_algorithm.algorithm =
             raw.signer_infos[0].signature_algorithm.algorithm.clone();
         assert_eq!(der(&restored), der(&raw));
@@ -1546,7 +1542,7 @@ mod tests {
             Err(WitnessStatus::Invalid { .. })
         ));
         // A byte inside `r`, still well-formed DER.
-        let mut other_signature = signature.clone();
+        let mut other_signature = signature;
         other_signature[6] ^= 1;
         assert!(matches!(
             check_ecdsa_sha512(&curve, &key, &digest, &other_signature),
@@ -1570,7 +1566,7 @@ mod tests {
             .windows(signature.len())
             .position(|w| w == signature.as_ref())
             .expect("the signature is in the token as stored");
-        let mut changed = proof.clone();
+        let mut changed = proof;
         changed[at + 6] ^= 1;
         assert!(matches!(
             verify_rfc3161(&changed, &fixture("genesis_payload.bin"), None),

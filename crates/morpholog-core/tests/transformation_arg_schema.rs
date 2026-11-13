@@ -3,8 +3,6 @@
 //! from; the trade_lifecycle integration tests live in
 //! `morpholog-examples`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use morpholog_core::ir_builder::*;
 use morpholog_core::{AnalysisError, TransformationName, transformation_arg_schema};
 use serde_json::json;

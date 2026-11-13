@@ -6,7 +6,11 @@
 //! The histories follow the real chronology: legacy rows, the activation
 //! record, then ordered rows.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 

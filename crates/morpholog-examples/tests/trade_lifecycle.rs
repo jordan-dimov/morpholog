@@ -8,8 +8,6 @@
 //! Every refusal is matched by the name of the rule that refused, on its
 //! own variant: an invariant or a gate.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 
 use common::{Example, date, dec, has_claim, subj};

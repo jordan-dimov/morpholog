@@ -5,8 +5,6 @@
 //! intervals summed against an allowance - so every assertion is a
 //! business behaviour.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use crate::EvalValue;
 use crate::Outcome;
 use crate::ir_builder::{
@@ -203,7 +201,7 @@ fn commencement_before_the_notice_violates_the_ordering_invariant() {
     let state = must_accept(
         p.transformation("commence_at").unwrap(),
         vec![subj("v1"), ts("2026-10-24T14:00:00Z")],
-        state.clone(),
+        state,
         &p.invariants,
         &p.definitions,
     );

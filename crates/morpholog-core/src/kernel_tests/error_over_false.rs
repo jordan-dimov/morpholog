@@ -4,8 +4,6 @@
 //! cap that one bucket breaks while another bucket's total leaves the
 //! decimal range must report the range error under both claim orders.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use crate::derive::eval_invariant;
 use crate::ir_builder::{
     claim, forall, implies, invariant, le, predicate, program, sum, term, transformation, var,

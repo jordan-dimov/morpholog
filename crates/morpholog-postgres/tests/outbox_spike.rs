@@ -10,8 +10,6 @@
 //!
 //! [`docs/outbox-sketch.md`]: ../../../docs/outbox-sketch.md
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use morpholog_core::{EvalValue, IntentInstance, Transformation};
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{PgPool, PgProposalOutcome, list_audit_rows, list_pending_outbox};
@@ -34,7 +32,7 @@ use common::{expect_committed, reset_db, test_pool};
 enum DeliveryOutcome {
     Delivered,
     /// Retry after `retry_after_ms`; not exercised here.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "the spike never retries")]
     Transient {
         retry_after_ms: u64,
     },

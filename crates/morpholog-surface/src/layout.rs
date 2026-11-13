@@ -49,14 +49,13 @@ pub fn apply_layout(
             let line_start_in_source = prev_end + last_nl_offset + 1;
             let indent_text = &source[line_start_in_source..span.start];
 
-            let mut tab_diagnosed_for_this_gap = false;
-            if indent_text.contains('\t') {
+            // Carry on after a tab so later errors still surface; depths may be off.
+            let tab_diagnosed_for_this_gap = indent_text.contains('\t');
+            if tab_diagnosed_for_this_gap {
                 diagnostics.push(Diagnostic::error(
                     "tab characters are not allowed in indentation; use spaces",
                     line_start_in_source..span.start,
                 ));
-                tab_diagnosed_for_this_gap = true;
-                // Carry on so later errors still surface; depths may be off.
             }
             // Blank and comment-only lines in the gap produce no tokens, so check their
             // indentation for tabs too. One diagnostic per gap is enough.

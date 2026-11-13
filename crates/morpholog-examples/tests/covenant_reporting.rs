@@ -4,8 +4,6 @@
 //! the 45-day window decides Timely standing, and an overdue notice
 //! carries the record's own day count - in both proposal orders.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 use std::sync::OnceLock;
 

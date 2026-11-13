@@ -6,8 +6,6 @@
 //! invariants, the `PolicyLimitUsage` projection, headroom conservation,
 //! and the per-claim deductible-and-limit layer.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 use std::sync::OnceLock;
 
@@ -202,7 +200,7 @@ fn authorise_settlement_without_authority_is_rejected_at_require() {
     };
     let t = insurance_claim_settlement::authorise_settlement();
     let transition = Transition {
-        transformation_name: t.name.clone(),
+        transformation_name: t.name,
         args: vec![subj("claim_001"), subj("settlement_001"), dec(30_000)],
         actor: Subject::from("alex"),
         decided_at: None,
@@ -373,7 +371,7 @@ fn second_settlement_over_aggregate_is_rejected_at_require() {
     let pre = report(pre, "claim_002", "policy_001", 50_000);
     let t = insurance_claim_settlement::authorise_settlement();
     let transition = Transition {
-        transformation_name: t.name.clone(),
+        transformation_name: t.name,
         args: vec![subj("claim_002"), subj("settlement_002"), dec(50_000)],
         actor: Subject::from("alex"),
         decided_at: None,

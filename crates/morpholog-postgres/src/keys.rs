@@ -31,7 +31,7 @@ pub(crate) const AUDIT_SIGNING_KEY_PREDICATE: &str = "AuditSigningKey";
 
 /// The exact authorisation a checkpoint signature must match:
 /// `(key_id, purpose, public_key)`.
-pub type KeyTriple = (String, String, String);
+pub(crate) type KeyTriple = (String, String, String);
 
 /// Read an `AuditSigningKey(key_id, purpose, public_key)` claim as its
 /// triple, or `None` for any other claim or a wrong-shaped one.

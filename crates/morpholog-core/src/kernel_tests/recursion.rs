@@ -2,8 +2,6 @@
 //! whole relation: start empty, evaluate the body with the call to
 //! itself reading the table so far, stop when a round adds nothing.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::collections::BTreeSet;
 
 use proptest::prelude::*;

@@ -321,7 +321,6 @@ pub async fn load_scoped_state(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::stored_kind;
     use morpholog_core::{EvalValue, PredicateArgKind};

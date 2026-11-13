@@ -9,8 +9,6 @@
 //! The compiler cannot express this rule, and it is easy to break by
 //! hand, so a test enforces it.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::path::Path;
 
 /// The statement a byte offset sits in: back to the previous `;`, `{` or `}`.

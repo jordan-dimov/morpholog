@@ -4,7 +4,10 @@
 //! rules, every fraction width the codec trims to, year zero and negative
 //! years, plus a pseudo-random sweep of the whole range.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 

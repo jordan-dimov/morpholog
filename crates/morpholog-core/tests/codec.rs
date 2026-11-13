@@ -6,8 +6,6 @@
 //! it) and the exactness contract (decimals serialise as JSON
 //! **strings**, never as JSON numbers).
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use morpholog_core::{
     ClaimInstance, EvalValue, IntentInstance, Subject, Transition, WitnessBinding,
 };

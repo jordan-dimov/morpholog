@@ -822,11 +822,7 @@ const MINIMUM_CORPUS: &[&str] = &[
 pub(crate) fn whole_in_fragment() -> Vec<Program> {
     morpholog_examples::all_programs()
         .into_iter()
-        .filter(|p| {
-            p.validated()
-                .ok()
-                .is_some_and(|v| compile_invariants(&v).is_ok())
-        })
+        .filter(|p| p.validated().is_ok_and(|v| compile_invariants(&v).is_ok()))
         .collect()
 }
 

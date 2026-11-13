@@ -3,7 +3,11 @@
 //! any depth, never as a substring; the actor is not searched; the
 //! cursor and the horizon apply exactly as on the whole tail.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 use common::{dec, reset_db, subj, test_pool};

@@ -9,7 +9,11 @@
 //! is a checker that reports falsely: the record attributes a report and
 //! pins what it was about, never that the checker ran.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 use common::{database_url, reset_db};

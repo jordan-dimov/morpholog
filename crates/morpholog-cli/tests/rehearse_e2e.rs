@@ -1,7 +1,11 @@
 //! `rehearse` over a ledger the test builds: every committed proposal
 //! re-decided under a candidate, against the prefix state before it.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 use common::{database_url, reset_db};
@@ -261,10 +265,7 @@ async fn every_recorded_proposal_is_re_decided_under_the_candidate() {
     let report = rehearse(&arity);
     assert_eq!(
         classes(&report),
-        vec![
-            (t1.clone(), "unreplayable".into()),
-            (t2.clone(), "unreplayable".into())
-        ]
+        vec![(t1, "unreplayable".into()), (t2, "unreplayable".into())]
     );
     assert!(
         report["differences"][0]["reason"]
@@ -290,10 +291,7 @@ async fn every_recorded_proposal_is_re_decided_under_the_candidate() {
     let report = rehearse(&erring);
     assert_eq!(
         classes(&report),
-        vec![
-            (over.clone(), "would_error".into()),
-            (under.clone(), "would_error".into())
-        ]
+        vec![(over, "would_error".into()), (under, "would_error".into())]
     );
     assert!(
         report["differences"][0]["error"]
@@ -312,10 +310,7 @@ async fn every_recorded_proposal_is_re_decided_under_the_candidate() {
         ),
     );
     let report = rehearse(&drawing);
-    assert_eq!(
-        classes(&report),
-        vec![(opened.clone(), "unreplayable".into())]
-    );
+    assert_eq!(classes(&report), vec![(opened, "unreplayable".into())]);
     assert!(
         report["differences"][0]["reason"]
             .as_str()

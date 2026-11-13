@@ -2,8 +2,6 @@
 //! verify it offline, as a third party would, with real rows and
 //! checkpoints. The attacker holds the file and edits the pack's JSON.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use morpholog_postgres::{
     Checkpoint, PackError, TreeVerification, WindowStart, export_pack, export_selective,
     export_window, verify_pack,
@@ -36,7 +34,7 @@ async fn export_then_verify_offline_is_intact_and_matches_the_anchor() {
     ));
 
     // Row order in the file is irrelevant - the verifier re-sorts.
-    let mut shuffled = pack.clone();
+    let mut shuffled = pack;
     shuffled.rows.reverse();
     assert!(matches!(
         verify_pack(&shuffled, None).unwrap(),
@@ -102,7 +100,7 @@ async fn editing_an_earlier_checkpoint_breaks_the_chain() {
 
     // Rewrite the earlier checkpoint's root without fixing its hash. The
     // manifest names the last checkpoint, so the break is in the chain.
-    let mut broken = pack.clone();
+    let mut broken = pack;
     broken.checkpoints[0].root_hash =
         "sha256:0000000000000000000000000000000000000000000000000000000000000000"
             .parse()

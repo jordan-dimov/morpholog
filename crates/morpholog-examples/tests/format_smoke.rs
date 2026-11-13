@@ -1,8 +1,6 @@
 //! Smoke test that pins each example's pretty-printer output starts
 //! sensibly. Not byte-for-byte; we assert key tokens are present.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 
 use common::all_programs;

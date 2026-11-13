@@ -2,8 +2,6 @@
 //! one. Every call-free rule in the gallery keeps exactly the plan the
 //! conservative planner gives it.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 
 use common::all_programs;

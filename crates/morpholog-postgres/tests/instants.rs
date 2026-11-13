@@ -4,8 +4,6 @@
 //! spells it and decoded, so the encoding is checked apart from the
 //! decoder.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use jiff::Timestamp;
 use jiff_sqlx::ToSqlx;
 

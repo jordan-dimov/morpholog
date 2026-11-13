@@ -276,7 +276,7 @@ fn zero_is_the_genesis_boundary_not_a_negative_size() {
     let covering = real_checkpoint(&leaves, 2, Some(&genesis));
     let pack = EvidencePack {
         manifest: manifest_for(&covering),
-        checkpoints: vec![genesis.clone(), covering],
+        checkpoints: vec![genesis, covering],
         rows,
     };
     assert!(
@@ -678,7 +678,7 @@ fn selective_envelope_rules_are_each_enforced() {
     p.inclusion_proofs.pop();
     expect_malformed(&p, "inclusion proofs");
 
-    let mut p = pack.clone();
+    let mut p = pack;
     p.rows.clear();
     p.inclusion_proofs.clear();
     expect_malformed(&p, "at least one row");

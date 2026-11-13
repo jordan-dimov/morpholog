@@ -10,7 +10,11 @@
 //!   - an empty source gives an empty projection;
 //!   - `propose` never touches the read model.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 use common::{reset_db_and_read_cache, test_pool};

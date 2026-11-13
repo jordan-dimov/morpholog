@@ -13,7 +13,10 @@
 //! A bad fixture is a test-author bug, so helpers panic with a clear message rather than
 //! return errors.
 
-#![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "a bad fixture is a test-author bug, so helpers panic with a clear message"
+)]
 
 pub mod differential;
 

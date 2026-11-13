@@ -5,8 +5,6 @@
 //! smallest behaviour that makes its arm observable, so a mutant that
 //! flips the arm fails a named test.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use crate::ir_builder::{
     add, assert_, claim, defined, div, duration, eq, mul, params, predicate, program, qty, require,
     sum, term, timestamp, transformation, var,

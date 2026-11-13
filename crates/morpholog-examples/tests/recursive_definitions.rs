@@ -5,7 +5,10 @@
 //!
 //! The evaluator is held to a reference in `morpholog-core`'s own tests.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 

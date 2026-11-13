@@ -3,7 +3,10 @@
 //! Always compiled, so integration tests can use them without a feature flag. Production code
 //! should not import them.
 
-#![allow(clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "test doubles panic on misuse, as test code does"
+)]
 
 use jiff::Timestamp;
 use std::future::Future;

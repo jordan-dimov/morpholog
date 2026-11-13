@@ -3,7 +3,10 @@
 //! a full day and a day with an hour unpriced as the kernel does over the
 //! whole record.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 

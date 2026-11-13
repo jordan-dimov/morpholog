@@ -5,8 +5,6 @@
 //! wearing the wrong source's figure is refused by name - whichever
 //! act proposes it.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 use std::sync::OnceLock;
 

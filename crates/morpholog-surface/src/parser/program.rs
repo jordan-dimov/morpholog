@@ -352,9 +352,7 @@ where
         .then(unit.or_not())
         .validate(|(kind, unit), e, emitter| match (kind, unit) {
             (k, None) => k,
-            (PredicateArgKind::Decimal, Some(u)) => {
-                PredicateArgKind::Quantity(Unit::from(u.clone()))
-            }
+            (PredicateArgKind::Decimal, Some(u)) => PredicateArgKind::Quantity(Unit::from(u)),
             (k, Some(_)) => {
                 let span: SimpleSpan = e.span();
                 emitter.emit(Rich::custom(

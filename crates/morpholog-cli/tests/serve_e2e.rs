@@ -10,7 +10,11 @@
 //! modelled by mapping only a uid that is not the test's own; the
 //! several-users deployment is the auth proof recorded on #475.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 use common::{database_url, reset_db};

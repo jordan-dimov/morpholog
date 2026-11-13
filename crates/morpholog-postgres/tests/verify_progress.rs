@@ -2,7 +2,10 @@
 //! each report the rows they have read, page by page, ending at the rows
 //! they set out to read.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 

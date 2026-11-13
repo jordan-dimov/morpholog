@@ -2,7 +2,10 @@
 //! atomically, and a committed transition's audit row lists it by its
 //! generated name among the rules checked.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
 
 mod common;
 use common::{reset_db, test_pool};

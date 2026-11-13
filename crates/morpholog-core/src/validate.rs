@@ -1522,7 +1522,7 @@ mod tests {
             for _ in 0..depth {
                 deep = Prop::Not(Box::new(deep));
             }
-            for (left, right) in [(deep.clone(), leaf()), (leaf(), deep.clone())] {
+            for (left, right) in [(deep.clone(), leaf()), (leaf(), deep)] {
                 let lowered = crate::eval::lower_xor(&left, &right);
                 let xor = Prop::Xor(Box::new(left), Box::new(right));
                 for budget in 0usize..16 {

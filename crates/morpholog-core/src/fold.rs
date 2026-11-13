@@ -205,11 +205,7 @@ fn value_scoped<'a>(
     }
 }
 
-fn slots<'a>(
-    args: &'a [Term],
-    visit: &mut dyn FnMut(Node<'a>, &[&'a Var]),
-    scope: &mut Vec<&'a Var>,
-) {
+fn slots<'a>(args: &'a [Term], visit: &mut dyn FnMut(Node<'a>, &[&'a Var]), scope: &[&'a Var]) {
     for a in args {
         visit(Node::Slot(a), scope);
     }
@@ -262,7 +258,6 @@ fn term_of<'a>(node: Node<'a>) -> Option<&'a Term> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::ir::SumSeed;

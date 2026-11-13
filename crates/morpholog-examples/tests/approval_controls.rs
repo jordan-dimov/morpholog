@@ -18,8 +18,6 @@
 //!   route, and no sequence of submissions can give a document an amount, or
 //!   take one away, after it is registered.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 mod common;
 use std::sync::OnceLock;
 

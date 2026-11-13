@@ -9,8 +9,6 @@
 //! Each property runs 256 cases by default (proptest's default) with
 //! shrinking on failure, so a counterexample comes back minimised.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use jiff::civil::Date;
 use morpholog_core::{ClaimInstance, EvalValue, IntentInstance, PredicateName};
 use morpholog_test_support::{claim_instance, intent_instance};
