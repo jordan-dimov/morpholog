@@ -512,7 +512,7 @@ pub(crate) fn definition_call_frame(
             }
             // Literals and `actor` resolve at the call site; the body sees
             // the actor only as an ordinary subject value.
-            other => {
+            other @ (Term::Literal(_) | Term::Actor | Term::DecidedAt) => {
                 frame.insert(
                     param.clone(),
                     Bound::from(resolve_term(other, ctx.bindings, ctx.transition)?),
@@ -562,7 +562,7 @@ fn find_defined_matches(
         args.iter()
             .filter_map(|arg| match arg {
                 Term::Var(v) => b.get(v).cloned(),
-                _ => None,
+                Term::Wildcard | Term::Literal(_) | Term::Actor | Term::DecidedAt => None,
             })
             .collect()
     };
@@ -1063,7 +1063,15 @@ fn match_args<'a>(
             }
             Term::Literal(Value::Subject(s)) => match v {
                 EvalValue::Subject(id) if id == s => {}
-                _ => return None,
+                EvalValue::Decimal(_)
+                | EvalValue::Subject(_)
+                | EvalValue::Bool(_)
+                | EvalValue::Collection(_)
+                | EvalValue::Date(_)
+                | EvalValue::Timestamp(_)
+                | EvalValue::Duration(_)
+                | EvalValue::CalendarSpan(_)
+                | EvalValue::Quantity { .. } => return None,
             },
             // A stored value is never a calendar span, so the pattern
             // cannot match one.
@@ -1151,7 +1159,13 @@ pub(crate) fn find_in_matches(
     let transition = ctx.transition;
     let coll_val = match coll {
         ValueExpr::Term(t) => resolve_term_shared(t, base, transition)?,
-        grid => Bound::from(eval_value(grid, ctx)?),
+        grid @ (ValueExpr::Arith { .. }
+        | ValueExpr::Sum { .. }
+        | ValueExpr::Extremum { .. }
+        | ValueExpr::ValueOf { .. }
+        | ValueExpr::Cond { .. }
+        | ValueExpr::Call { .. }
+        | ValueExpr::Defined { .. }) => Bound::from(eval_value(grid, ctx)?),
     };
     let EvalValue::Collection(items) = &*coll_val else {
         return Err(EvalError::TypeMismatch("In expects a collection".into()));
@@ -1254,7 +1268,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                     let shifted = match op {
                         ArithOp::Add => t.checked_add(d),
                         ArithOp::Sub => t.checked_sub(d),
-                        _ => {
+                        ArithOp::Mul | ArithOp::Div | ArithOp::Mod => {
                             return Err(EvalError::TypeMismatch(format!(
                                 "{op} is not defined for timestamp and duration"
                             )));
@@ -1266,9 +1280,11 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                 }
                 (EvalValue::Timestamp(a), EvalValue::Timestamp(b)) => match op {
                     ArithOp::Sub => Ok(EvalValue::Duration(a.duration_since(b))),
-                    _ => Err(EvalError::TypeMismatch(format!(
-                        "{op} is not defined for two timestamps (only `-`: the gap between them)"
-                    ))),
+                    ArithOp::Add | ArithOp::Mul | ArithOp::Div | ArithOp::Mod => {
+                        Err(EvalError::TypeMismatch(format!(
+                            "{op} is not defined for two timestamps (only `-`: the gap between them)"
+                        )))
+                    }
                 },
                 // A calendar span shifts a date: months first, clamping
                 // the day (Jan 31 + P1M is Feb 28 or 29), then days.
@@ -1280,7 +1296,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                     let shifted = match op {
                         ArithOp::Add => shift_date(d, months, days),
                         ArithOp::Sub => shift_date(d, -months, -days),
-                        _ => {
+                        ArithOp::Mul | ArithOp::Div | ArithOp::Mod => {
                             return Err(EvalError::TypeMismatch(format!(
                                 "{op} is not defined for date and calendar span"
                             )));
@@ -1294,16 +1310,20 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                 // as a decimal.
                 (EvalValue::Date(a), EvalValue::Date(b)) => match op {
                     ArithOp::Sub => Ok(EvalValue::Decimal(Decimal::from(days_between(b, a)))),
-                    _ => Err(EvalError::TypeMismatch(format!(
-                        "{op} is not defined for two dates (only `-`: the days between them)"
-                    ))),
+                    ArithOp::Add | ArithOp::Mul | ArithOp::Div | ArithOp::Mod => {
+                        Err(EvalError::TypeMismatch(format!(
+                            "{op} is not defined for two dates (only `-`: the days between them)"
+                        )))
+                    }
                 },
                 (EvalValue::Duration(a), EvalValue::Duration(b)) => match op {
                     ArithOp::Add | ArithOp::Sub => {
                         let result = match op {
                             ArithOp::Add => a.checked_add(b),
                             ArithOp::Sub => a.checked_sub(b),
-                            _ => unreachable!("outer match restricts the op"),
+                            ArithOp::Mul | ArithOp::Div | ArithOp::Mod => {
+                                unreachable!("outer match restricts the op")
+                            }
                         };
                         result.map(EvalValue::Duration).ok_or_else(|| {
                             EvalError::ArithOutOfRange(format!("duration {op} duration"))
@@ -1324,7 +1344,7 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                             divisor,
                         )?))
                     }
-                    _ => Err(EvalError::TypeMismatch(format!(
+                    ArithOp::Mul | ArithOp::Mod => Err(EvalError::TypeMismatch(format!(
                         "{op} is not defined for durations"
                     ))),
                 },
@@ -1359,20 +1379,24 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
                         amount: checked_decimal_op(*op, a, b)?,
                         unit,
                     }),
-                    _ => Err(EvalError::TypeMismatch(format!(
-                        "{op} is not defined for Decimal[{unit}] and a bare decimal \
+                    ArithOp::Add | ArithOp::Sub | ArithOp::Mod => {
+                        Err(EvalError::TypeMismatch(format!(
+                            "{op} is not defined for Decimal[{unit}] and a bare decimal \
                          (only Mul/Div: a bare decimal scales a quantity)"
-                    ))),
+                        )))
+                    }
                 },
                 (EvalValue::Decimal(a), EvalValue::Quantity { amount: b, unit }) => match op {
                     ArithOp::Mul => Ok(EvalValue::Quantity {
                         amount: checked_decimal_op(*op, a, b)?,
                         unit,
                     }),
-                    _ => Err(EvalError::TypeMismatch(format!(
-                        "{op} is not defined for a bare decimal and Decimal[{unit}] \
+                    ArithOp::Add | ArithOp::Sub | ArithOp::Div | ArithOp::Mod => {
+                        Err(EvalError::TypeMismatch(format!(
+                            "{op} is not defined for a bare decimal and Decimal[{unit}] \
                          (only Mul: a bare decimal scales a quantity)"
-                    ))),
+                        )))
+                    }
                 },
                 (l, r) => Err(EvalError::TypeMismatch(format!(
                     "no arithmetic rule for {} {op} {}",
@@ -1577,7 +1601,12 @@ pub(crate) fn eval_builtin(builtin: Builtin, args: &[EvalValue]) -> Result<EvalV
                 unit: unit.clone(),
             }),
             EvalValue::Duration(d) => Ok(EvalValue::Duration(d.abs())),
-            other => Err(EvalError::TypeMismatch(format!(
+            other @ (EvalValue::Subject(_)
+            | EvalValue::Bool(_)
+            | EvalValue::Collection(_)
+            | EvalValue::Date(_)
+            | EvalValue::Timestamp(_)
+            | EvalValue::CalendarSpan(_)) => Err(EvalError::TypeMismatch(format!(
                 "abs is defined on decimals, quantities, and durations, not {}",
                 runtime_kind_label(other)
             ))),
@@ -1800,7 +1829,7 @@ fn checked_decimal_op(op: ArithOp, a: Decimal, b: Decimal) -> Result<Decimal, Ev
             let fitted = match op {
                 ArithOp::Add => a.checked_add(b),
                 ArithOp::Sub => a.checked_sub(b),
-                _ => a.checked_mul(b),
+                ArithOp::Mul | ArithOp::Div | ArithOp::Mod => a.checked_mul(b),
             };
             // rust_decimal's own result where it is the exact one, so a
             // value that fits keeps the digits it has today.
@@ -1858,7 +1887,7 @@ fn exact_fast(op: ArithOp, a: Decimal, b: Decimal) -> Option<Decimal> {
             a.scale() + b.scale(),
             a.checked_mul(b),
         ),
-        _ => return None,
+        ArithOp::Div | ArithOp::Mod => return None,
     };
     if scale <= 28 && fits_mantissa(m) {
         fitted.or_else(|| Decimal::try_from_i128_with_scale(m, scale).ok())
@@ -1889,7 +1918,7 @@ impl Exact {
                 let units = if op == ArithOp::Add { x + y } else { x - y };
                 Self { units, scale }
             }
-            _ => Self {
+            ArithOp::Mul | ArithOp::Div | ArithOp::Mod => Self {
                 units: num_bigint::BigInt::from(a.mantissa())
                     * num_bigint::BigInt::from(b.mantissa()),
                 scale: a.scale() + b.scale(),
@@ -2036,7 +2065,9 @@ pub(crate) fn resolve_term_shared(
             .get(name)
             .cloned()
             .ok_or_else(|| EvalError::UnboundVariable(name.to_string())),
-        other => resolve_term(other, bindings, transition).map(Bound::from),
+        other @ (Term::Wildcard | Term::Literal(_) | Term::Actor | Term::DecidedAt) => {
+            resolve_term(other, bindings, transition).map(Bound::from)
+        }
     }
 }
 
@@ -2078,7 +2109,17 @@ pub(crate) fn compared_at(prop: &Prop, ctx: &EvalContext<'_>) -> Option<Compared
         } => (crate::format::compare_token(*op, *domain), left, right),
         Prop::Eq(left, right) => ("=", left, right),
         Prop::Neq(left, right) => ("!=", left, right),
-        _ => return None,
+        Prop::Claim { .. }
+        | Prop::Defined { .. }
+        | Prop::Implies { .. }
+        | Prop::Exists { .. }
+        | Prop::And(_)
+        | Prop::Or(_)
+        | Prop::Pre(_)
+        | Prop::Not(_)
+        | Prop::Xor(..)
+        | Prop::Forall { .. }
+        | Prop::In(..) => return None,
     };
     let left = eval_value(left, ctx).ok()?;
     let right = eval_value(right, ctx).ok()?;
@@ -2293,14 +2334,35 @@ pub(crate) fn unsatisfied_positive_claims(
                     return match c {
                         Prop::Claim { .. } => vec![render_claim(c, &fctx)],
                         Prop::Defined { .. } => unsatisfied_positive_claims(c, &fctx),
-                        _ => vec![],
+                        Prop::Implies { .. }
+                        | Prop::Exists { .. }
+                        | Prop::And(_)
+                        | Prop::Or(_)
+                        | Prop::Pre(_)
+                        | Prop::Not(_)
+                        | Prop::Xor(..)
+                        | Prop::Eq(..)
+                        | Prop::Neq(..)
+                        | Prop::Compare { .. }
+                        | Prop::Forall { .. }
+                        | Prop::In(..) => vec![],
                     };
                 }
                 current = next;
             }
             vec![]
         }
-        _ => vec![],
+        Prop::Implies { .. }
+        | Prop::Exists { .. }
+        | Prop::Or(_)
+        | Prop::Pre(_)
+        | Prop::Not(_)
+        | Prop::Xor(..)
+        | Prop::Eq(..)
+        | Prop::Neq(..)
+        | Prop::Compare { .. }
+        | Prop::Forall { .. }
+        | Prop::In(..) => vec![],
     }
 }
 
@@ -2367,7 +2429,10 @@ fn ensure_ordered(value: &EvalValue, op: crate::ir::ExtremumOp) -> Result<(), Ev
         | EvalValue::Timestamp(_)
         | EvalValue::Duration(_)
         | EvalValue::Quantity { .. } => Ok(()),
-        other => Err(EvalError::TypeMismatch(format!(
+        other @ (EvalValue::Subject(_)
+        | EvalValue::Bool(_)
+        | EvalValue::Collection(_)
+        | EvalValue::CalendarSpan(_)) => Err(EvalError::TypeMismatch(format!(
             "{} needs an ordered kind, got {other:?}",
             op.as_str()
         ))),

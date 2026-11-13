@@ -170,7 +170,13 @@ impl EvalValue {
         match self {
             EvalValue::CalendarSpan(_) => true,
             EvalValue::Collection(items) => items.iter().any(Self::contains_calendar_span),
-            _ => false,
+            EvalValue::Decimal(_)
+            | EvalValue::Subject(_)
+            | EvalValue::Bool(_)
+            | EvalValue::Date(_)
+            | EvalValue::Timestamp(_)
+            | EvalValue::Duration(_)
+            | EvalValue::Quantity { .. } => false,
         }
     }
 
@@ -1042,7 +1048,12 @@ impl From<EvalValue> for Bound {
             EvalValue::Subject(_) | EvalValue::Collection(_) | EvalValue::Quantity { .. } => {
                 Bound::Shared(Arc::new(value))
             }
-            inline => Bound::Inline(inline),
+            inline @ (EvalValue::Decimal(_)
+            | EvalValue::Bool(_)
+            | EvalValue::Date(_)
+            | EvalValue::Timestamp(_)
+            | EvalValue::Duration(_)
+            | EvalValue::CalendarSpan(_)) => Bound::Inline(inline),
         }
     }
 }

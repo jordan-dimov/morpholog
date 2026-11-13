@@ -396,7 +396,14 @@ fn failing_entry(trace: &[TraceEntry]) -> Option<&TraceEntry> {
                     return Some(inner);
                 }
             }
-            _ => {}
+            TraceEntry::Require { .. }
+            | TraceEntry::BindOne { .. }
+            | TraceEntry::Let { .. }
+            | TraceEntry::LetNewSubject { .. }
+            | TraceEntry::Assert { .. }
+            | TraceEntry::Retract { .. }
+            | TraceEntry::Emit { .. }
+            | TraceEntry::InvariantCheck { .. } => {}
         }
     }
     None

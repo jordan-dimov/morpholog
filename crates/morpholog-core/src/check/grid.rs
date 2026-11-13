@@ -19,7 +19,19 @@ pub(crate) struct WindowBound<'a> {
 pub(crate) fn conjuncts(prop: &Prop) -> Vec<&Prop> {
     match prop {
         Prop::And(parts) => parts.iter().flat_map(conjuncts).collect(),
-        other => vec![other],
+        other @ (Prop::Claim { .. }
+        | Prop::Defined { .. }
+        | Prop::Implies { .. }
+        | Prop::Exists { .. }
+        | Prop::Or(_)
+        | Prop::Pre(_)
+        | Prop::Not(_)
+        | Prop::Xor(..)
+        | Prop::Eq(..)
+        | Prop::Neq(..)
+        | Prop::Compare { .. }
+        | Prop::Forall { .. }
+        | Prop::In(..)) => vec![other],
     }
 }
 
@@ -71,7 +83,14 @@ pub(crate) fn grid_call(expr: &ValueExpr) -> Option<(&ValueExpr, &ValueExpr, &Va
             builtin: Builtin::Periods,
             args,
         } if args.len() == 3 => Some((&args[0], &args[1], &args[2])),
-        _ => None,
+        ValueExpr::Term(_)
+        | ValueExpr::Arith { .. }
+        | ValueExpr::Sum { .. }
+        | ValueExpr::Extremum { .. }
+        | ValueExpr::ValueOf { .. }
+        | ValueExpr::Cond { .. }
+        | ValueExpr::Call { .. }
+        | ValueExpr::Defined { .. } => None,
     }
 }
 

@@ -508,7 +508,17 @@ fn fmt_prop(p: &Prop, ctx: FormatContext) -> String {
             Prop::Defined { name, args } => fmt_defined_call(name.as_str(), args, ctx),
             // `pre(...)` is function-call-shape; no outer parens needed.
             Prop::Pre(inner) => format!("pre({})", fmt_prop(inner, ctx)),
-            _ => format!("({})", fmt_prop(p, ctx)),
+            Prop::Implies { .. }
+            | Prop::Exists { .. }
+            | Prop::And(_)
+            | Prop::Or(_)
+            | Prop::Not(_)
+            | Prop::Xor(..)
+            | Prop::Eq(..)
+            | Prop::Neq(..)
+            | Prop::Compare { .. }
+            | Prop::Forall { .. }
+            | Prop::In(..) => format!("({})", fmt_prop(p, ctx)),
         }
     }
 
@@ -575,7 +585,20 @@ fn fmt_prop(p: &Prop, ctx: FormatContext) -> String {
             // same way, and any other source as a proposition.
             let source_text = match source.as_ref() {
                 Prop::In(Term::Var(b), coll) if b == binding => fmt_value(coll, ctx),
-                _ => prop_primary(source, ctx),
+                Prop::Claim { .. }
+                | Prop::Defined { .. }
+                | Prop::Implies { .. }
+                | Prop::Exists { .. }
+                | Prop::And(_)
+                | Prop::Or(_)
+                | Prop::Pre(_)
+                | Prop::Not(_)
+                | Prop::Xor(..)
+                | Prop::Eq(..)
+                | Prop::Neq(..)
+                | Prop::Compare { .. }
+                | Prop::Forall { .. }
+                | Prop::In(..) => prop_primary(source, ctx),
             };
             format!("forall {binding} in {source_text}: {}", fmt_prop(body, ctx))
         }
@@ -599,7 +622,12 @@ fn value_primary(e: &ValueExpr, ctx: FormatContext) -> String {
         ValueExpr::Arith { .. } => {
             format!("({})", fmt_value(e, ctx))
         }
-        _ => fmt_value(e, ctx),
+        ValueExpr::Sum { .. }
+        | ValueExpr::Extremum { .. }
+        | ValueExpr::ValueOf { .. }
+        | ValueExpr::Cond { .. }
+        | ValueExpr::Call { .. }
+        | ValueExpr::Defined { .. } => fmt_value(e, ctx),
     }
 }
 

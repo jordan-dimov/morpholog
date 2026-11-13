@@ -16,7 +16,14 @@ pub fn serialize<S: Serializer>(actor: &Subject, serializer: S) -> Result<S::Ok,
 pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Subject, D::Error> {
     match EvalValue::deserialize(deserializer)? {
         EvalValue::Subject(s) => Ok(s),
-        other => Err(serde::de::Error::custom(format!(
+        other @ (EvalValue::Decimal(_)
+        | EvalValue::Bool(_)
+        | EvalValue::Collection(_)
+        | EvalValue::Date(_)
+        | EvalValue::Timestamp(_)
+        | EvalValue::Duration(_)
+        | EvalValue::CalendarSpan(_)
+        | EvalValue::Quantity { .. }) => Err(serde::de::Error::custom(format!(
             "actor must be a subject, got {other:?}"
         ))),
     }

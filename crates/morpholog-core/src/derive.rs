@@ -132,7 +132,17 @@ pub(crate) fn eval_invariant_cases_over(
             })?;
             Ok(!matched)
         }
-        _ => Ok(!find_matches(&inv.body, ctx)?.is_empty()),
+        Prop::Claim { .. }
+        | Prop::Defined { .. }
+        | Prop::Exists { .. }
+        | Prop::And(_)
+        | Prop::Or(_)
+        | Prop::Pre(_)
+        | Prop::Xor(..)
+        | Prop::Eq(..)
+        | Prop::Neq(..)
+        | Prop::Compare { .. }
+        | Prop::In(..) => Ok(!find_matches(&inv.body, ctx)?.is_empty()),
     })
 }
 
@@ -166,7 +176,17 @@ pub(crate) fn invariant_witness_cases_over(
             Prop::Not(_) => return Ok(Diagnosis::default()),
             // A body with nothing to descend into, a comparison for one,
             // is its own leaf: no bindings, and its operands if it is one.
-            _ => {
+            Prop::Claim { .. }
+            | Prop::Defined { .. }
+            | Prop::Exists { .. }
+            | Prop::And(_)
+            | Prop::Or(_)
+            | Prop::Pre(_)
+            | Prop::Xor(..)
+            | Prop::Eq(..)
+            | Prop::Neq(..)
+            | Prop::Compare { .. }
+            | Prop::In(..) => {
                 return Ok(Diagnosis::of(
                     find_failure(&inv.body, ctx).unwrap_or_else(|| Failure::here(&inv.body, ctx)),
                 ));

@@ -232,7 +232,7 @@ fn defined_call_into(node: &Node<'_>, out: &mut BTreeSet<DefinitionName>) {
         Node::Prop(Prop::Defined { name, .. }) | Node::Value(ValueExpr::Defined { name, .. }) => {
             out.insert(name.clone());
         }
-        _ => {}
+        Node::Stmt(_) | Node::Prop(_) | Node::Value(_) | Node::Slot(_) | Node::Binder(_) => {}
     }
 }
 

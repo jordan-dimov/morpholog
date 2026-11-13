@@ -54,7 +54,19 @@ pub fn guarantees(prepared: &PreparedProgram) -> Vec<Guarantee> {
             // names its bad state this directly.
             forbids: match &inv.body {
                 Prop::Not(inner) => Some(format::format_prop_inline(inner)),
-                _ => None,
+                Prop::Claim { .. }
+                | Prop::Defined { .. }
+                | Prop::Implies { .. }
+                | Prop::Exists { .. }
+                | Prop::And(_)
+                | Prop::Or(_)
+                | Prop::Pre(_)
+                | Prop::Xor(..)
+                | Prop::Eq(..)
+                | Prop::Neq(..)
+                | Prop::Compare { .. }
+                | Prop::Forall { .. }
+                | Prop::In(..) => None,
             },
             from: provenance.get(inv.name.as_str()).cloned(),
         })

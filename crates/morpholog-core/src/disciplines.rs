@@ -239,7 +239,14 @@ fn in_force_define(decl: &PredicateDecl, keys: &[String], on: &str) -> Option<De
         PredicateArgKind::Date => OrderedDomain::Date,
         PredicateArgKind::Timestamp => OrderedDomain::Timestamp,
         // Validation refuses any other kind; don't invent an ordering.
-        _ => return None,
+        PredicateArgKind::Subject
+        | PredicateArgKind::Decimal
+        | PredicateArgKind::Duration
+        | PredicateArgKind::Bool
+        | PredicateArgKind::Collection
+        | PredicateArgKind::Quantity(_)
+        | PredicateArgKind::CalendarSpan
+        | PredicateArgKind::Any => return None,
     };
 
     // The as-of parameter follows the keys, counted as fields so a repeated key cannot shift it.

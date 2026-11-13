@@ -32,7 +32,12 @@ pub fn value_key_v1(value: &EvalValue) -> Result<Json, String> {
                     .collect::<Result<Vec<_>, _>>()?,
             ),
         ]),
-        other => {
+        other @ (EvalValue::Subject(_)
+        | EvalValue::Bool(_)
+        | EvalValue::Date(_)
+        | EvalValue::Timestamp(_)
+        | EvalValue::Duration(_)
+        | EvalValue::CalendarSpan(_)) => {
             let tagged = serde_json::to_value(other).map_err(|e| e.to_string())?;
             Json::Array(vec![tagged["type"].clone(), tagged["value"].clone()])
         }

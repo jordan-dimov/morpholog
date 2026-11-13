@@ -248,7 +248,16 @@ mod tests {
                     value: ValueExpr::Sum { seed, .. },
                     ..
                 } => seed.clone(),
-                other => panic!("let-sum expected, got {other:?}"),
+                other @ (Stmt::Require { .. }
+                | Stmt::BindOne { .. }
+                | Stmt::Let { .. }
+                | Stmt::LetNewSubject { .. }
+                | Stmt::Assert(_)
+                | Stmt::Retract { .. }
+                | Stmt::For { .. }
+                | Stmt::ForEach { .. }
+                | Stmt::If { .. }
+                | Stmt::Emit(_)) => panic!("let-sum expected, got {other:?}"),
             })
             .collect();
         assert_eq!(
