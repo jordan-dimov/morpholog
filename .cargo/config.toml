@@ -13,3 +13,10 @@ SQLX_OFFLINE = "true"
 # explicitly; this makes a plain `cargo test` safe too. Total test runtime is
 # sub-second, so serial execution costs nothing.
 RUST_TEST_THREADS = "1"
+
+# `cargo update` skips any version published in the last week, so a
+# hijacked release has time to be found before it reaches the lockfile.
+# For an urgent fix to one crate:
+#   CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo update <crate> --precise <version>
+[registry]
+global-min-publish-age = "7 days"

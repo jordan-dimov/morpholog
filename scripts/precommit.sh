@@ -84,8 +84,8 @@ step 'public Rust API snapshots (scripts/public_api.sh)'
 
 step 'declared Rust floor (cargo check on rust-version)'
 floor=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml","rb"))["workspace"]["package"]["rust-version"])')
-# `rust-version` is two-part ("1.95") while rustup installs three-part
-# ("1.95.0"), so match by prefix - asking rustup for "1.95" directly
+# `rust-version` is two-part ("1.100") while rustup installs three-part
+# ("1.100.0"), so match by prefix - asking rustup for "1.100" directly
 # fails and would make this step skip forever without saying why.
 installed=$(rustup toolchain list | awk '{print $1}' | grep -E "^${floor}(\.|-)" | head -1)
 if [ -n "$installed" ]; then
