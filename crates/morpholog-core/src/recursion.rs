@@ -262,7 +262,7 @@ pub(crate) fn single_link(def: &Definition) -> Option<SingleLink> {
     }
     let var = |term: &Term| match term {
         Term::Var(v) => Some(v.clone()),
-        _ => None,
+        Term::Wildcard | Term::Literal(_) | Term::Actor | Term::DecidedAt => None,
     };
     for from in 0..2 {
         let to = 1 - from;
