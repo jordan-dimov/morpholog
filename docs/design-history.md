@@ -1458,3 +1458,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 
 **Landed:** a read plan key for the one shape a gate on a tree uses, a condition walking a single link up from a known argument. The load seeks the starting value and then each step up by index, so an allocation reads the chain above one part. A hand-written query on the spike's database showed the plan and the locks first: three rows instead of 4,880, and no relation lock. In a batch the walk is read whole after an act that admits the link or the row its start was read from. The kernel is unchanged.
 
+**Measured:**
+- On the 4,884-part tree, the branch retried 0.188 to 0.212 times per commit against the baseline's 0.190 to 0.198.
+- On a 50,435-part tree at PostgreSQL's default lock limits, the walk's few extra locks pushed half the allocations over the limit at which PostgreSQL turns a transaction's predicate locks into one lock on the whole claims table. The baseline stayed under it.
+- With `max_pred_locks_per_transaction = 256`, both programmes retried about 0.2 times per commit and none gave up. The branch stayed about 6% above the baseline.
+- The required setting is in the embedder guide.
+
