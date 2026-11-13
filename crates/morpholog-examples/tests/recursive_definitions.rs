@@ -384,3 +384,49 @@ fn a_caller_passing_the_wrong_kind_is_refused() {
         }]
     );
 }
+
+// Two answers that would each raise a different error. Which one is
+// reported follows the order of the claims, as it does for any
+// condition; the tables add no order of their own, so the same claims
+// in the same order report the same error on every run, each run with
+// freshly seeded hash maps.
+#[test]
+fn competing_errors_are_chosen_by_claim_order_alone() {
+    use morpholog_core::EvalError;
+    let source = "program errors\n\npredicate Step(part: Subject, next: Subject)\npredicate Weight(part: Subject, w: Decimal)\npredicate Probe(part: Subject)\n\ndefine reaches(x, y):\n    Step(x, y)\n    or (Step(x, m) and reaches(m, y) and 1 / (value Weight(y, _)) > 0)\n\ninvariant nothing_is_reached:\n    Probe(p) implies not reaches(p, _)\n";
+    let p = parse_program(source).expect("the programme parses");
+    p.validate().expect("the programme validates");
+    let rule = p.invariant("nothing_is_reached").unwrap();
+    // From `a` through `m`: `zero` weighs nothing, so dividing by its
+    // weight fails; `none` has no weight to look up.
+    let mut claims = vec![
+        claim_instance("Probe", &[subj("a")]),
+        claim_instance("Step", &[subj("a"), subj("m")]),
+        claim_instance("Step", &[subj("m"), subj("zero")]),
+        claim_instance("Step", &[subj("m"), subj("none")]),
+        claim_instance("Weight", &[subj("m"), dec(1)]),
+        claim_instance("Weight", &[subj("zero"), dec(0)]),
+    ];
+    let mut seen = Vec::new();
+    for _ in 0..2 {
+        let first = eval_invariant(&p, rule, &State::from_claims(claims.clone()), None)
+            .expect_err("one of the two errors");
+        for _ in 0..32 {
+            let again = eval_invariant(&p, rule, &State::from_claims(claims.clone()), None)
+                .expect_err("one of the two errors");
+            assert_eq!(format!("{again:?}"), format!("{first:?}"));
+        }
+        seen.push(first);
+        claims.reverse();
+    }
+    assert!(
+        matches!(seen[0], EvalError::DivisionByZero),
+        "{:?}",
+        seen[0]
+    );
+    assert!(
+        matches!(&seen[1], EvalError::ValueOfZeroMatches(predicate) if predicate.as_str() == "Weight"),
+        "{:?}",
+        seen[1]
+    );
+}
