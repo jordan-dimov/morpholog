@@ -56,6 +56,13 @@ ariadne = "0.6"
 # wants variable inspection can pass `--config profile.dev.debug=true`.
 debug = "line-tables-only"
 
+[profile.release]
+# Integer overflow panics in a release build too, instead of wrapping.
+# A wrapped date shift or duration sum would decide on a wrong value; a
+# panic refuses to decide. The kernel's decimal arithmetic is exact
+# and unaffected.
+overflow-checks = true
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 # `pub` on an item nothing outside its crate can reach claims an API that
