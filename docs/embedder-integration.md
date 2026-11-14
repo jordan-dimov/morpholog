@@ -1360,7 +1360,7 @@ import random
 import time
 
 from morpholog_client import MorphologOutcomeUnknown, MorphologRequestError
-from morpholog_client.envelopes import AtomicRejected, Committed, Rejected
+from morpholog_client.envelopes import AtomicCommitted, AtomicRejected, Committed, Rejected
 
 EXPOSED = {"allocations": "allocate", "variants": "add_variant"}
 STATUS = {
@@ -1375,8 +1375,13 @@ def write(session, name: str, raw_body: bytes, user: str) -> tuple[int, dict]:
     transformation = EXPOSED.get(name)
     if transformation is None:
         return 404, {"title": "No such operation"}
-    body = json.loads(raw_body)
+    try:
+        body = json.loads(raw_body)
+    except ValueError:
+        return 400, {"title": "The body is not JSON"}
     items = body if isinstance(body, list) else [body]
+    if not items or not all(isinstance(item, dict) for item in items):
+        return 400, {"title": "The body is an object or a list of objects"}
     if any("actor" in item for item in items):
         return 400, {"title": "The actor is the authenticated user"}
     for attempt in range(8):
@@ -1393,15 +1398,19 @@ def write(session, name: str, raw_body: bytes, user: str) -> tuple[int, dict]:
                 time.sleep(random.uniform(0, 0.02 * 2**attempt))
                 continue
             return STATUS.get(err.code, 500), {"code": err.code, "parameter": err.parameter}
-        if isinstance(out, (Rejected, AtomicRejected)):
+        if isinstance(out, Rejected):
             return 422, {"rule": out.rule, "reason": out.reason}
+        if isinstance(out, AtomicRejected):
+            return 422, {"rule": out.rule, "reason": out.reason, "act": out.act}
         if isinstance(out, Committed):
             return 201, {"transition_id": out.transition_id, "drawn_subjects": out.drawn_subjects}
-        return 201, {"transition_ids": [a.outcome.transition_id for a in out.acts]}
+        if isinstance(out, AtomicCommitted):
+            return 201, {"acts": [{"transition_id": a.outcome.transition_id, "drawn_subjects": a.outcome.drawn_subjects} for a in out.acts]}
+        return 500, {"code": "unrecognised_outcome"}
     return 503, {"code": "serialization_failure"}
 ```
 
-A real view also answers 400 to a body that is not JSON, or is not an object or a list of objects, and takes its session from the host's own pool.
+A real view takes its session from the host's own pool.
 
 **An unknown outcome is never sent again.** On a 502 the change may already be committed. The view's retry loop stops there. Anything between the caller and the view must not retry a 502 on its own either, because a second request is a new proposal. The caller reads the record first.
 
