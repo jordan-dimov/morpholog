@@ -1466,12 +1466,13 @@
       }
     },
     "check_report": {
-      "description": "The findings for one file, and, when parsing and validation left a programme, the route this binary plans for each of its invariants in programme order. The route is a property of the programme and the binary together: another version may plan differently.",
+      "description": "The findings for one programme, and, when parsing and validation left a programme, the route this binary plans for each of its invariants in programme order. The route is a property of the programme and the binary together: another version may plan differently. file is the path given: a .morph file, or the .parts manifest of a programme in parts, whose files parts lists in programme order.",
       "type": "object",
       "additionalProperties": false,
       "required": ["file", "diagnostics"],
       "properties": {
         "file": { "type": "string" },
+        "parts": { "type": "array", "items": { "type": "string" } },
         "invariants": {
           "type": "array",
           "items": { "$ref": "#/$defs/checked_invariant" }
@@ -1479,12 +1480,14 @@
         "diagnostics": {
           "type": "array",
           "items": {
+            "description": "One finding. A finding with a source anchor names the file it points into, and its byte offsets, 1-based line and column within that file; one without an anchor carries only severity and message.",
             "type": "object",
             "additionalProperties": false,
             "required": ["severity", "message"],
             "properties": {
               "severity": { "enum": ["error", "hint"] },
               "message": { "type": "string" },
+              "file": { "type": "string" },
               "start": { "type": "integer" },
               "end": { "type": "integer" },
               "line": { "type": "integer" },

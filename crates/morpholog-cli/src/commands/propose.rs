@@ -176,8 +176,8 @@ fn print_rule_location(reason: &str, parsed: &ParsedSource) {
     else {
         return;
     };
-    let (line, col) = morpholog_surface::line_col(&parsed.source, span.start);
-    eprintln!("rule at {}:{line}:{col} ({name})", parsed.source_name);
+    let at = parsed.source.locate(span.start);
+    eprintln!("rule at {}:{}:{} ({name})", at.file, at.line, at.column);
 }
 
 /// One NDJSON batch row: a transition naming its own transformation and

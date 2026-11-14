@@ -120,7 +120,7 @@ Trust comes from these parts working together. No single feature supplies all of
 
 A set of business actions that changes the same governed records should be checked by the rules that apply to those records. Splitting those actions across unrelated rulebooks can leave gaps.
 
-A large programme may be organised into smaller source files. That should make teamwork easier, not change the rules. The deployed programme still has one identity and one set of decisions. Work on [programmes in parts](https://github.com/jordan-dimov/morpholog/issues/785) follows this principle.
+A large programme may be organised into smaller source files. That should make teamwork easier, not change the rules. The deployed programme still has one identity and one set of decisions. A `.parts` manifest lists the files in order, and the runtime reads them as one text, so the programme hashes as one file holding them would.
 
 Separate programmes make sense when responsibilities and write ownership really are separate.
 

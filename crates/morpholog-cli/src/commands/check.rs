@@ -2,7 +2,6 @@
 
 use crate::CheckArgs;
 use crate::commands::{AlreadyReported, colour, print_json};
-use anyhow::Context;
 use morpholog_cli::envelopes::{
     CheckDiagnostic, CheckRefusal, CheckReport, CheckedCases, CheckedInvariant,
 };
@@ -12,7 +11,7 @@ use morpholog_core::{
     predicates_written_by,
 };
 use morpholog_postgres::{CompileReason, InvariantPlan, PgProgram, StoredShape};
-use morpholog_surface::{DeclKind, Diagnostic, SourceMap, Span, parse_program_with_sources};
+use morpholog_surface::{DeclKind, Diagnostic, SourceMap, SourceText, Span};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -40,9 +39,12 @@ pub(crate) async fn run(args: CheckArgs) -> anyhow::Result<()> {
         _ => None,
     };
     let verbose_summary = match (&collected.prepared, &routes) {
-        (Some(prepared), Some(routes)) if args.verbose => {
-            Some(summary(prepared.program(), routes, &args.file))
-        }
+        (Some(prepared), Some(routes)) if args.verbose => Some(summary(
+            prepared.program(),
+            routes,
+            &args.file,
+            &collected.parts,
+        )),
         _ => None,
     };
     if args.json {
@@ -54,29 +56,27 @@ pub(crate) async fn run(args: CheckArgs) -> anyhow::Result<()> {
                     CheckDiagnostic::new(
                         f.severity,
                         f.message.clone(),
-                        f.diagnostic
-                            .as_ref()
-                            .filter(|_| f.foreign.is_none())
-                            .map(|d| d.primary.clone()),
-                        &collected.source,
+                        f.diagnostic.as_ref().map(|d| d.primary.clone()),
+                        f.foreign.as_ref().unwrap_or(&collected.source),
                     )
                 })
                 .collect(),
             file: args.file.display().to_string(),
             invariants: routes,
+            parts: collected.parts.clone(),
         };
         print_json(&payload)?;
     } else {
         for f in &collected.findings {
-            match (&f.diagnostic, &f.foreign) {
-                (Some(d), Some((name, source))) => eprint!("{}", d.render(name, source, colour())),
-                (Some(d), None) => {
-                    eprint!(
-                        "{}",
-                        d.render(&collected.source_name, &collected.source, colour())
-                    );
-                }
-                (None, _) => eprintln!("{}: {}", f.severity, f.message),
+            match &f.diagnostic {
+                Some(d) => eprint!(
+                    "{}",
+                    f.foreign
+                        .as_ref()
+                        .unwrap_or(&collected.source)
+                        .render(d, colour())
+                ),
+                None => eprintln!("{}: {}", f.severity, f.message),
             }
         }
     }
@@ -93,16 +93,15 @@ pub(crate) async fn run(args: CheckArgs) -> anyhow::Result<()> {
 }
 
 /// One finding, with its caret-located diagnostic when a source map places
-/// it. A finding about another file (a broken `--against` programme)
-/// carries that file's source for its carets. The JSON report has one
-/// `file`, so there such a finding has no location rather than a wrong one.
+/// it. A finding about another programme (a broken `--against` one)
+/// carries that programme's text, which places its carets and its `file`.
 struct Finding {
     severity: &'static str,
     message: String,
     diagnostic: Option<Diagnostic>,
-    /// `(source_name, source)` of the file the diagnostic points into,
-    /// when that is not the file being checked.
-    foreign: Option<(String, String)>,
+    /// The text the diagnostic points into, when that is not the
+    /// programme being checked.
+    foreign: Option<SourceText>,
 }
 
 impl Finding {
@@ -114,18 +113,11 @@ impl Finding {
             foreign: None,
         }
     }
-    fn foreign_error(
-        message: String,
-        diagnostic: Option<Diagnostic>,
-        path: &Path,
-        source: &str,
-    ) -> Self {
+    fn foreign_error(message: String, diagnostic: Option<Diagnostic>, source: &SourceText) -> Self {
         Self {
             severity: "error",
             message,
-            foreign: diagnostic
-                .as_ref()
-                .map(|_| (path.display().to_string(), source.to_string())),
+            foreign: diagnostic.as_ref().map(|_| source.clone()),
             diagnostic,
         }
     }
@@ -147,8 +139,9 @@ impl Finding {
 struct Collected {
     findings: Vec<Finding>,
     failed: bool,
-    source: String,
-    source_name: String,
+    source: SourceText,
+    /// The files of a programme in parts, in order.
+    parts: Option<Vec<String>>,
     /// The prepared programme, for the invariant routes, `--verbose` and
     /// `--ir`; absent when parsing or validation failed.
     prepared: Option<PreparedProgram>,
@@ -156,16 +149,16 @@ struct Collected {
 
 /// Every finding for the file, in the order the layers run.
 async fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
-    let source = std::fs::read_to_string(&args.file)
-        .with_context(|| format!("read source file {}", args.file.display()))?;
+    let source = crate::commands::read_source(&args.file)?;
     let mut out = Collected {
         findings: Vec::new(),
         failed: false,
+        parts: crate::commands::parts::is_manifest(&args.file)
+            .then(|| source.files().map(String::from).collect()),
         source,
-        source_name: args.file.display().to_string(),
         prepared: None,
     };
-    let (program, map) = match parse_program_with_sources(&out.source) {
+    let (program, map) = match out.source.parse() {
         Ok(parsed) => parsed,
         Err(diagnostics) => {
             out.failed = true;
@@ -407,20 +400,15 @@ fn refuse_self_comparison(file: &Path, against: &Path) -> anyhow::Result<()> {
 /// lints). On failure, the findings name the path and carry its source.
 fn load_against(path: &Path) -> Result<Program, Vec<Finding>> {
     let against = path.display();
-    let source = std::fs::read_to_string(path).map_err(|e| {
-        vec![Finding::error(
-            format!("against {against}: read source file: {e}"),
-            None,
-        )]
-    })?;
-    let (program, map) = parse_program_with_sources(&source).map_err(|diagnostics| {
+    let source = crate::commands::read_source(path)
+        .map_err(|e| vec![Finding::error(format!("against {against}: {e:#}"), None)])?;
+    let (program, map) = source.parse().map_err(|diagnostics| {
         diagnostics
             .into_iter()
             .map(|d| {
                 Finding::foreign_error(
                     format!("against {against}: {}", d.message),
                     Some(d),
-                    path,
                     &source,
                 )
             })
@@ -434,7 +422,7 @@ fn load_against(path: &Path) -> Result<Program, Vec<Finding>> {
                 let diagnostic = map
                     .span_for_error(e)
                     .map(|span| Diagnostic::error(message.clone(), span));
-                Finding::foreign_error(message, diagnostic, path, &source)
+                Finding::foreign_error(message, diagnostic, &source)
             })
             .collect::<Vec<_>>()
     })?;
@@ -614,9 +602,18 @@ fn refusal_kind(reason: &CompileReason) -> anyhow::Result<&'static str> {
 /// per declaration kind, how invariants are checked (compiled to SQL,
 /// interpreted, or mixed, with each refusal named), and which a change
 /// may check whole, with the construct responsible.
-fn summary(p: &Program, routes: &[CheckedInvariant], file: &Path) -> String {
+fn summary(
+    p: &Program,
+    routes: &[CheckedInvariant],
+    file: &Path,
+    parts: &Option<Vec<String>>,
+) -> String {
+    let parts = parts
+        .as_ref()
+        .map(|files| format!("  parts: {}\n", files.join(", ")))
+        .unwrap_or_default();
     let mut out = format!(
-        "ok: {}\nprogram: {}\n  predicates: {}\n  definitions: {}\n  invariants: {}\n  transformations: {}\n  intents: {}\n  derived claims: {}\n",
+        "ok: {}\nprogram: {}\n{parts}  predicates: {}\n  definitions: {}\n  invariants: {}\n  transformations: {}\n  intents: {}\n  derived claims: {}\n",
         file.display(),
         p.name,
         p.predicates.len(),
@@ -756,7 +753,12 @@ mod tests {
     fn summary_names_the_program_and_counts_each_declaration_kind() {
         let p = PgProgram::new(PreparedProgram::new(program("demo").build()).unwrap());
         let routes = invariant_routes(&p).unwrap();
-        let s = summary(p.prepared().program(), &routes, Path::new("demo.morph"));
+        let s = summary(
+            p.prepared().program(),
+            &routes,
+            Path::new("demo.morph"),
+            &None,
+        );
         assert_eq!(
             s,
             "ok: demo.morph\nprogram: demo\n  predicates: 0\n  definitions: 0\n  invariants: 0\n  transformations: 0\n  intents: 0\n  derived claims: 0\n  invariant checks: compiled\n  invariant cases: all bound\n  body reads: all keyed\n"

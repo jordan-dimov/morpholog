@@ -243,14 +243,14 @@ predicate Foo(b: Decimal)
 fn render_produces_ariadne_output() {
     let source = "predicate Foo(a: Subject)\n";
     let errs = parse_program(source).expect_err("missing header should fail");
-    let plain = errs[0].render("test.morph", source, false);
+    let plain = morpholog_surface::SourceText::file("test.morph", source).render(&errs[0], false);
     assert!(plain.contains("test.morph"));
     assert!(plain.contains("predicate Foo(a: Subject)"), "{plain}");
     assert!(
         !plain.contains('\u{1b}'),
         "no escape codes without colour: {plain:?}"
     );
-    let coloured = errs[0].render("test.morph", source, true);
+    let coloured = morpholog_surface::SourceText::file("test.morph", source).render(&errs[0], true);
     assert!(
         coloured.contains('\u{1b}'),
         "colour when asked: {coloured:?}"

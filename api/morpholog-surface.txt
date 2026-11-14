@@ -144,7 +144,6 @@ pub morpholog_surface::Diagnostic::severity: morpholog_surface::Severity
 impl morpholog_surface::Diagnostic
 pub fn morpholog_surface::Diagnostic::error(impl core::convert::Into<alloc::string::String>, morpholog_surface::Span) -> Self
 pub fn morpholog_surface::Diagnostic::hint(impl core::convert::Into<alloc::string::String>, morpholog_surface::Span) -> Self
-pub fn morpholog_surface::Diagnostic::render(&self, &str, &str, bool) -> alloc::string::String
 pub fn morpholog_surface::Diagnostic::with_secondary(self, morpholog_surface::Span, impl core::convert::Into<alloc::string::String>) -> Self
 impl core::clone::Clone for morpholog_surface::Diagnostic
 pub fn morpholog_surface::Diagnostic::clone(&self) -> morpholog_surface::Diagnostic
@@ -162,6 +161,29 @@ impl core::marker::Unpin for morpholog_surface::Diagnostic
 impl core::marker::UnsafeUnpin for morpholog_surface::Diagnostic
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_surface::Diagnostic
 impl core::panic::unwind_safe::UnwindSafe for morpholog_surface::Diagnostic
+pub struct morpholog_surface::Location<'a>
+pub morpholog_surface::Location::column: usize
+pub morpholog_surface::Location::file: &'a str
+pub morpholog_surface::Location::line: usize
+pub morpholog_surface::Location::offset: usize
+impl<'a> core::clone::Clone for morpholog_surface::Location<'a>
+pub fn morpholog_surface::Location<'a>::clone(&self) -> morpholog_surface::Location<'a>
+impl<'a> core::clone::TrivialClone for morpholog_surface::Location<'a>
+impl<'a> core::cmp::Eq for morpholog_surface::Location<'a>
+pub fn morpholog_surface::Location<'a>::assert_fields_are_eq(&self)
+impl<'a> core::cmp::PartialEq for morpholog_surface::Location<'a>
+pub fn morpholog_surface::Location<'a>::eq(&self, &morpholog_surface::Location<'a>) -> bool
+impl<'a> core::fmt::Debug for morpholog_surface::Location<'a>
+pub fn morpholog_surface::Location<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for morpholog_surface::Location<'a>
+impl<'a> core::marker::StructuralPartialEq for morpholog_surface::Location<'a>
+impl<'a> core::marker::Freeze for morpholog_surface::Location<'a>
+impl<'a> core::marker::Send for morpholog_surface::Location<'a>
+impl<'a> core::marker::Sync for morpholog_surface::Location<'a>
+impl<'a> core::marker::Unpin for morpholog_surface::Location<'a>
+impl<'a> core::marker::UnsafeUnpin for morpholog_surface::Location<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for morpholog_surface::Location<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for morpholog_surface::Location<'a>
 pub struct morpholog_surface::SourceMap
 impl morpholog_surface::SourceMap
 pub fn morpholog_surface::SourceMap::decl_span(&self, morpholog_surface::DeclKind, &str) -> core::option::Option<morpholog_surface::Span>
@@ -179,6 +201,27 @@ impl core::marker::Unpin for morpholog_surface::SourceMap
 impl core::marker::UnsafeUnpin for morpholog_surface::SourceMap
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_surface::SourceMap
 impl core::panic::unwind_safe::UnwindSafe for morpholog_surface::SourceMap
+pub struct morpholog_surface::SourceText
+impl morpholog_surface::SourceText
+pub fn morpholog_surface::SourceText::file(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn morpholog_surface::SourceText::files(&self) -> impl core::iter::traits::iterator::Iterator<Item = &str>
+pub fn morpholog_surface::SourceText::local_span(&self, &morpholog_surface::Span) -> (&str, morpholog_surface::Span)
+pub fn morpholog_surface::SourceText::locate(&self, usize) -> morpholog_surface::Location<'_>
+pub fn morpholog_surface::SourceText::parse(&self) -> core::result::Result<(morpholog_core::ir::Program, morpholog_surface::SourceMap), alloc::vec::Vec<morpholog_surface::Diagnostic>>
+pub fn morpholog_surface::SourceText::parts(impl core::iter::traits::collect::IntoIterator<Item = (alloc::string::String, alloc::string::String)>) -> core::option::Option<Self>
+pub fn morpholog_surface::SourceText::render(&self, &morpholog_surface::Diagnostic, bool) -> alloc::string::String
+pub fn morpholog_surface::SourceText::text(&self) -> &str
+impl core::clone::Clone for morpholog_surface::SourceText
+pub fn morpholog_surface::SourceText::clone(&self) -> morpholog_surface::SourceText
+impl core::fmt::Debug for morpholog_surface::SourceText
+pub fn morpholog_surface::SourceText::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for morpholog_surface::SourceText
+impl core::marker::Send for morpholog_surface::SourceText
+impl core::marker::Sync for morpholog_surface::SourceText
+impl core::marker::Unpin for morpholog_surface::SourceText
+impl core::marker::UnsafeUnpin for morpholog_surface::SourceText
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_surface::SourceText
+impl core::panic::unwind_safe::UnwindSafe for morpholog_surface::SourceText
 pub fn morpholog_surface::line_col(&str, usize) -> (usize, usize)
 pub fn morpholog_surface::parse_expression(&str) -> core::result::Result<morpholog_core::ir::Prop, alloc::vec::Vec<morpholog_surface::Diagnostic>>
 pub fn morpholog_surface::parse_program(&str) -> core::result::Result<morpholog_core::ir::Program, alloc::vec::Vec<morpholog_surface::Diagnostic>>

@@ -43,6 +43,19 @@ pub fn parse_program_with_sources(source: &str) -> Result<(Program, SourceMap), 
         )]);
     }
 
+    if let Some((first, span)) = raw_tokens.first()
+        && *first != Token::KwProgram
+    {
+        return Err(vec![Diagnostic::error(
+            format!(
+                "expected `program` header first, found {first}; a file that starts with \
+                 declarations may be one part of a programme, read through the `.parts` \
+                 manifest that lists it"
+            ),
+            span.clone(),
+        )]);
+    }
+
     let tokens = crate::layout::apply_layout(source, raw_tokens)?;
 
     let stream = token_stream(&tokens);

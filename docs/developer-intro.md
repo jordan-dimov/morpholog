@@ -100,7 +100,7 @@ that can later change - approvals against invoice amounts, payouts against
 claim values, settlements against prices. Handled casually, the correction
 quietly corrupts your audit trail.
 
-A Morpholog program is one `.morph` file, and we will build it in sections. If
+This program is one `.morph` file, and we will build it in sections. If
 you would rather have a runnable file from the start, paste
 [the complete `revenue.morph`](#the-complete-revenuemorph) from the end of this
 guide into your working directory now and read along; the snippets below are
@@ -935,7 +935,9 @@ runtime lookup table.
 
 **"Does this scale beyond one small file?"**
 The programmes are deliberately small, and `.morph` has no imports or
-namespaces by design: one programme, one file, so a rule is read whole. What exists now
+namespaces by design, so a rule is read whole. A large programme may be split into
+files that a `.parts` manifest lists in order; it is still one programme with one
+hash, read as their concatenation. What exists now
 for keeping a rule set legible: named conditions (`define`) keep large gates
 readable, claim disciplines put the structural rules on the declarations
 (the previous section), `morpholog inspect guarantees` lists what a model

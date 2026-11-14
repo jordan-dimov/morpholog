@@ -655,6 +655,17 @@ class CheckRoutes(unittest.TestCase):
         self.assertEqual(report.invariants[1].refusal.kind, "construct")
         self.assertEqual(report.route, "mixed")
 
+    def test_a_programme_in_parts_names_each_finding_s_file(self):
+        report = envelopes.CheckReport.from_json(golden("check_report_parts.json"))
+        self.assertEqual(report.file, "model/shop.parts")
+        self.assertEqual(report.parts[-1], "model/20_stock.morph")
+        placed, unplaced = report.diagnostics
+        self.assertEqual((placed.file, placed.line), ("model/20_stock.morph", 3))
+        self.assertIsNone(unplaced.file)
+        one_file = envelopes.CheckReport.from_json(golden("check_report.json"))
+        self.assertIsNone(one_file.parts)
+        self.assertEqual(one_file.diagnostics[0].file, "model.morph")
+
     def test_no_invariants_is_an_empty_plan_and_compiled(self):
         report = envelopes.CheckReport.from_json(golden("check_report_no_invariants.json"))
         self.assertEqual(report.invariants, [])

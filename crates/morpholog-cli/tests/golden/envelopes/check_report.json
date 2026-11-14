@@ -3,6 +3,7 @@
     {
       "column": 1,
       "end": 447,
+      "file": "model.morph",
       "line": 19,
       "message": "undeclared predicate `Ghost` referenced in invariant `cap`",
       "severity": "error",

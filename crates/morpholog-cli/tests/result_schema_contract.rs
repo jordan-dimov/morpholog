@@ -1800,6 +1800,7 @@ fn report_envelopes_serialize_as_pinned() {
             diagnostics: vec![CheckDiagnostic {
                 column: Some(1),
                 end: Some(447),
+                file: Some("model.morph".to_string()),
                 line: Some(19),
                 message: "undeclared predicate `Ghost` referenced in invariant `cap`".to_string(),
                 severity: "error",
@@ -1807,6 +1808,44 @@ fn report_envelopes_serialize_as_pinned() {
             }],
             file: "model.morph".to_string(),
             invariants: None,
+            parts: None,
+        }),
+    );
+    // A programme in parts: each diagnostic names its part, offsets local
+    // to it; a finding with no anchor names none.
+    assert_golden(
+        "check_report_parts.json",
+        &to_value(&CheckReport {
+            diagnostics: vec![
+                CheckDiagnostic {
+                    column: Some(1),
+                    end: Some(61),
+                    file: Some("model/20_stock.morph".to_string()),
+                    line: Some(3),
+                    message: "undeclared predicate `Ghost` referenced in invariant `cap`"
+                        .to_string(),
+                    severity: "error",
+                    start: Some(26),
+                },
+                CheckDiagnostic {
+                    column: None,
+                    end: None,
+                    file: None,
+                    line: None,
+                    message: "--against model/shop.parts is the file being checked; a \
+                              programme cannot collide with itself"
+                        .to_string(),
+                    severity: "error",
+                    start: None,
+                },
+            ],
+            file: "model/shop.parts".to_string(),
+            invariants: None,
+            parts: Some(vec![
+                "model/00_shop.morph".to_string(),
+                "model/10_part.morph".to_string(),
+                "model/20_stock.morph".to_string(),
+            ]),
         }),
     );
     assert_golden(
@@ -1831,6 +1870,7 @@ fn report_envelopes_serialize_as_pinned() {
                     route: "interpreted",
                 },
             ]),
+            parts: None,
         }),
     );
     // Route and cases are independent: every combination serializes.
@@ -1871,6 +1911,7 @@ fn report_envelopes_serialize_as_pinned() {
                     route: "interpreted",
                 },
             ]),
+            parts: None,
         }),
     );
     assert_golden(
@@ -1879,6 +1920,7 @@ fn report_envelopes_serialize_as_pinned() {
             diagnostics: vec![],
             file: "model.morph".to_string(),
             invariants: Some(vec![]),
+            parts: None,
         }),
     );
     assert_golden(
