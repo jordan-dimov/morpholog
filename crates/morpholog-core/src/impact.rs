@@ -856,7 +856,14 @@ fn candidate_case_variables(body: &Prop) -> BTreeSet<Var> {
 /// delta value. A literal of any other kind matches every value, so it
 /// narrows nothing.
 fn literal_narrows(lit: &Value) -> bool {
-    matches!(lit, Value::Subject(_) | Value::Bool(_) | Value::Decimal(_))
+    match lit {
+        Value::Subject(_) | Value::Bool(_) | Value::Decimal(_) => true,
+        Value::Date(_)
+        | Value::Timestamp(_)
+        | Value::Duration(_)
+        | Value::CalendarSpan(_)
+        | Value::Quantity { .. } => false,
+    }
 }
 
 /// A literal guard against a delta value. Kinds the bounding proof does
@@ -866,10 +873,15 @@ fn literal_matches(lit: &Value, ev: &EvalValue) -> bool {
     if !literal_narrows(lit) {
         return true;
     }
-    match (lit, ev) {
-        (Value::Subject(a), EvalValue::Subject(b)) => a == b,
-        (Value::Bool(a), EvalValue::Bool(b)) => a == b,
-        (Value::Decimal(a), EvalValue::Decimal(b)) => a.value() == *b,
-        _ => true,
+    // A delta value of another kind than the literal also matches.
+    match lit {
+        Value::Subject(a) => !matches!(ev, EvalValue::Subject(b) if a != b),
+        Value::Bool(a) => !matches!(ev, EvalValue::Bool(b) if a != b),
+        Value::Decimal(a) => !matches!(ev, EvalValue::Decimal(b) if a.value() != *b),
+        Value::Date(_)
+        | Value::Timestamp(_)
+        | Value::Duration(_)
+        | Value::CalendarSpan(_)
+        | Value::Quantity { .. } => true,
     }
 }

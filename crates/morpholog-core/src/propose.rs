@@ -100,22 +100,49 @@ impl Compared {
     pub fn holds(&self) -> Option<bool> {
         use std::cmp::Ordering;
         let ordering = || -> Option<Ordering> {
-            match (&self.left, &self.right) {
-                (EvalValue::Decimal(l), EvalValue::Decimal(r)) => Some(l.cmp(r)),
-                (
-                    EvalValue::Quantity {
-                        amount: l,
-                        unit: lu,
-                    },
-                    EvalValue::Quantity {
+            // A right operand of another kind orders nothing.
+            match &self.left {
+                EvalValue::Decimal(l) => {
+                    let EvalValue::Decimal(r) = &self.right else {
+                        return None;
+                    };
+                    Some(l.cmp(r))
+                }
+                EvalValue::Quantity {
+                    amount: l,
+                    unit: lu,
+                } => {
+                    let EvalValue::Quantity {
                         amount: r,
                         unit: ru,
-                    },
-                ) if lu == ru => Some(l.cmp(r)),
-                (EvalValue::Date(l), EvalValue::Date(r)) => Some(l.cmp(r)),
-                (EvalValue::Timestamp(l), EvalValue::Timestamp(r)) => Some(l.cmp(r)),
-                (EvalValue::Duration(l), EvalValue::Duration(r)) => Some(l.cmp(r)),
-                _ => None,
+                    } = &self.right
+                    else {
+                        return None;
+                    };
+                    (lu == ru).then(|| l.cmp(r))
+                }
+                EvalValue::Date(l) => {
+                    let EvalValue::Date(r) = &self.right else {
+                        return None;
+                    };
+                    Some(l.cmp(r))
+                }
+                EvalValue::Timestamp(l) => {
+                    let EvalValue::Timestamp(r) = &self.right else {
+                        return None;
+                    };
+                    Some(l.cmp(r))
+                }
+                EvalValue::Duration(l) => {
+                    let EvalValue::Duration(r) = &self.right else {
+                        return None;
+                    };
+                    Some(l.cmp(r))
+                }
+                EvalValue::Subject(_)
+                | EvalValue::Bool(_)
+                | EvalValue::Collection(_)
+                | EvalValue::CalendarSpan(_) => None,
             }
         };
         match self.op.as_str() {

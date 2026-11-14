@@ -12,6 +12,9 @@
 //!   known kind (polymorphic, unconstrained, ambiguous, or a collection of
 //!   unknown items) are refused too, and the error points to `--args`.
 
+// A new value kind or construct must be decided here, not defaulted.
+#![warn(clippy::wildcard_enum_match_arm)]
+
 use anyhow::{Context, anyhow, bail};
 use jiff::civil::Date;
 use morpholog_core::{
@@ -532,5 +535,43 @@ mod tests {
         // Each item is decoded by the element kind, so a bad one fails.
         let raw = json!(["acct_a", 42]);
         assert!(decode_value("accounts", &subject_collection(), &raw).is_err());
+    }
+    /// Every kind either crosses the named codec unchanged or is refused by
+    /// it. Which, is decided here kind by kind: a new kind does not compile
+    /// until it is.
+    #[test]
+    fn every_kind_crosses_the_named_codec_or_is_refused() {
+        use morpholog_test_support::kinds::{every_kind, kind_samples};
+        let carried = |kind: &PredicateArgKind| match kind {
+            PredicateArgKind::Subject
+            | PredicateArgKind::Decimal
+            | PredicateArgKind::Date
+            | PredicateArgKind::Timestamp
+            | PredicateArgKind::Duration
+            | PredicateArgKind::Bool
+            | PredicateArgKind::Quantity(_) => true,
+            // A collection is decoded by its element kind, and `Any` has no
+            // one kind to decode by; a span is never a value on the wire.
+            PredicateArgKind::Collection
+            | PredicateArgKind::Any
+            | PredicateArgKind::CalendarSpan => false,
+        };
+        for kind in every_kind() {
+            let samples = kind_samples(&kind);
+            let values = samples
+                .distinct
+                .iter()
+                .filter(|v| kind.holds(&v.kind()))
+                .chain(samples.refused.iter());
+            for v in values {
+                let bare = super::eval_value_to_bare_json(v);
+                let decoded = decode_value("p", &ParamKind::Concrete(kind.clone()), &bare);
+                if carried(&kind) {
+                    assert_eq!(decoded.as_ref().ok(), Some(v), "{kind}: {bare} reads back");
+                } else {
+                    assert!(decoded.is_err(), "{kind}: {bare} is refused: {decoded:?}");
+                }
+            }
+        }
     }
 }

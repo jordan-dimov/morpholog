@@ -1141,6 +1141,10 @@ pub morpholog_core::PredicateArgKind::Subject
 pub morpholog_core::PredicateArgKind::Timestamp
 impl morpholog_core::PredicateArgKind
 pub fn morpholog_core::PredicateArgKind::holds(&self, &morpholog_core::PredicateArgKind) -> bool
+pub fn morpholog_core::PredicateArgKind::is_declarable(&self) -> bool
+pub fn morpholog_core::PredicateArgKind::is_ordered(&self) -> bool
+pub fn morpholog_core::PredicateArgKind::is_signed(&self) -> bool
+pub fn morpholog_core::PredicateArgKind::sum_seed(&self) -> core::option::Option<morpholog_core::SumSeed>
 impl core::clone::Clone for morpholog_core::PredicateArgKind
 pub fn morpholog_core::PredicateArgKind::clone(&self) -> morpholog_core::PredicateArgKind
 impl core::cmp::Eq for morpholog_core::PredicateArgKind

@@ -742,3 +742,32 @@ fn indented(indent: usize, head: &str, value: &str) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::kind_supported;
+    use morpholog_test_support::kinds::every_kind;
+
+    /// The generated client carries a kind exactly when its every-kind
+    /// fixture declares one, so the model tests generated from it reach
+    /// every kind the client supports.
+    #[test]
+    fn the_every_kind_fixture_declares_each_kind_the_client_carries() {
+        let fixture = morpholog_surface::parse_program(include_str!(
+            "../../tests/fixtures/every_generated_kind.morph"
+        ))
+        .expect("the fixture parses");
+        let declared: Vec<_> = fixture
+            .predicates
+            .iter()
+            .flat_map(|p| p.args.iter().map(|a| a.kind.clone()))
+            .collect();
+        for kind in every_kind() {
+            assert_eq!(
+                kind_supported(&kind),
+                declared.contains(&kind),
+                "{kind}: the client carries it exactly when the fixture declares it"
+            );
+        }
+    }
+}

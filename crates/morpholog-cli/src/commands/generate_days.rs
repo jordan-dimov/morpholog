@@ -11,6 +11,9 @@
 //! The whole batch is validated before the first row is written, so a
 //! refusal leaves stdout empty.
 
+// A new value kind or construct must be decided here, not defaulted.
+#![warn(clippy::wildcard_enum_match_arm)]
+
 use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::{Component, Path, PathBuf};
@@ -255,7 +258,10 @@ fn fixed_value(kind: &ParamKind, text: &str) -> Value {
         ParamKind::Collection(_) => serde_json::from_str::<Value>(text)
             .ok()
             .filter(Value::is_array),
-        _ => None,
+        ParamKind::Concrete(_)
+        | ParamKind::Polymorphic
+        | ParamKind::Unconstrained
+        | ParamKind::Ambiguous(_) => None,
     };
     typed.unwrap_or_else(|| Value::String(text.to_string()))
 }

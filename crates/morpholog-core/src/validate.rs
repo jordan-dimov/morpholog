@@ -404,11 +404,11 @@ pub enum ValidationError {
         found: usize,
         context: ValidationContext,
     },
-    /// A `digest` argument of a kind no claim can carry: a collection or
-    /// a calendar span. The encoding is the stored value's, so only a
-    /// storable kind has one.
+    /// A `digest` argument that is not a single value: a collection, or
+    /// a calendar span, which nothing stores. A digest commits to single
+    /// values, each in its stored encoding.
     #[error(
-        "digest takes the kinds a claim can carry, not {kind} (argument {position}) in {context}"
+        "digest takes single values (a subject, decimal, quantity, date, timestamp, duration or bool), not {kind} (argument {position}) in {context}"
     )]
     DigestArgumentKind {
         kind: PredicateArgKind,
@@ -1161,8 +1161,9 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
         duplicated(p.predicates.iter().map(|d| d.name.as_str())),
     );
 
-    // CalendarSpan is expression-only; the surface cannot declare it,
-    // and hand-built IR is held to the same rule.
+    // A kind that is not declarable (a calendar span, expression-only)
+    // cannot be declared from the surface, and hand-built IR is held to
+    // the same rule.
     let declared_args = || {
         p.predicates
             .iter()
@@ -1175,7 +1176,7 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
     };
     for (_, name, args) in declared_args() {
         for arg in args {
-            if arg.kind == crate::ir::PredicateArgKind::CalendarSpan {
+            if !arg.kind.is_declarable() {
                 errors.push(ValidationError::CalendarSpanNotDeclarable {
                     declaration: name.clone(),
                     argument: arg.name.clone(),

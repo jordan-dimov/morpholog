@@ -1689,7 +1689,7 @@ pub(crate) fn eval_builtin(builtin: Builtin, args: &[EvalValue]) -> Result<EvalV
             for arg in args {
                 if matches!(arg, EvalValue::Collection(_) | EvalValue::CalendarSpan(_)) {
                     return Err(EvalError::TypeMismatch(format!(
-                        "digest takes the kinds a claim can carry, got {}",
+                        "digest takes single values (a subject, decimal, quantity, date, timestamp, duration or bool), got {}",
                         runtime_kind_label(arg)
                     )));
                 }

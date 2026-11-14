@@ -9,6 +9,9 @@
 //! NULL. The kernel itself names the error, over the bindings and sum
 //! results the probe reports.
 
+// A new value kind or construct must be decided here, not defaulted.
+#![warn(clippy::wildcard_enum_match_arm)]
+
 use super::Ctx;
 use super::{
     Bound, CompileReason, Env, ErrorReport, Operand, Ordered, Pending, Probe, RenderedSum, SumPart,
@@ -59,7 +62,7 @@ pub(super) fn computed_operand(
     for p in inner {
         match p {
             Pending::Sum(s) => ctx.pending.push(Pending::Covered(s.lateral)),
-            other => ctx.pending.push(other),
+            other @ (Pending::Covered(_) | Pending::Value(_)) => ctx.pending.push(other),
         }
     }
     let index = ctx.values.len();
@@ -111,7 +114,11 @@ fn render(
                     PredicateArgKind::Timestamp
                     | PredicateArgKind::Date
                     | PredicateArgKind::Duration => return Err(time_arithmetic()),
-                    other => {
+                    other @ (PredicateArgKind::Subject
+                    | PredicateArgKind::Bool
+                    | PredicateArgKind::Collection
+                    | PredicateArgKind::CalendarSpan
+                    | PredicateArgKind::Any) => {
                         return Err(CompileReason::ArgumentKind {
                             kind: other.clone(),
                         });
@@ -415,7 +422,12 @@ fn bound_vars(
             }
             Ok(())
         }
-        _ => Ok(()),
+        ValueExpr::Term(_)
+        | ValueExpr::Sum { .. }
+        | ValueExpr::Extremum { .. }
+        | ValueExpr::ValueOf { .. }
+        | ValueExpr::Cond { .. }
+        | ValueExpr::Defined { .. } => Ok(()),
     }
 }
 

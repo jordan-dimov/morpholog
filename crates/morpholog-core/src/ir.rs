@@ -1254,6 +1254,65 @@ impl PredicateArgKind {
     pub fn holds(&self, found: &PredicateArgKind) -> bool {
         *self == PredicateArgKind::Any || self == found
     }
+
+    // What a kind is, in one place. Each answer is an exhaustive match, so
+    // a new kind does not compile until someone decides each of them.
+
+    /// Whether comparators, `min`/`max` and the extremum order values of
+    /// this kind. `Any` is not ordered: it is no one kind.
+    pub fn is_ordered(&self) -> bool {
+        OrderedDomain::for_concrete_kind(self).is_some()
+    }
+
+    /// Whether a value of this kind has a sign, so `abs` keeps its kind.
+    pub fn is_signed(&self) -> bool {
+        match self {
+            PredicateArgKind::Decimal
+            | PredicateArgKind::Quantity(_)
+            | PredicateArgKind::Duration => true,
+            PredicateArgKind::Subject
+            | PredicateArgKind::Date
+            | PredicateArgKind::Timestamp
+            | PredicateArgKind::Bool
+            | PredicateArgKind::Collection
+            | PredicateArgKind::CalendarSpan
+            | PredicateArgKind::Any => false,
+        }
+    }
+
+    /// The zero a `sum` over values of this kind starts from, or `None`
+    /// when this kind cannot be summed.
+    pub fn sum_seed(&self) -> Option<SumSeed> {
+        match self {
+            PredicateArgKind::Decimal => Some(SumSeed::Decimal),
+            PredicateArgKind::Duration => Some(SumSeed::Duration),
+            PredicateArgKind::Quantity(unit) => Some(SumSeed::Quantity(unit.clone())),
+            PredicateArgKind::Subject
+            | PredicateArgKind::Date
+            | PredicateArgKind::Timestamp
+            | PredicateArgKind::Bool
+            | PredicateArgKind::Collection
+            | PredicateArgKind::CalendarSpan
+            | PredicateArgKind::Any => None,
+        }
+    }
+
+    /// Whether a predicate or an intent may declare a field of this kind,
+    /// so that a claim, an intent and an argument can carry it.
+    pub fn is_declarable(&self) -> bool {
+        match self {
+            PredicateArgKind::Subject
+            | PredicateArgKind::Decimal
+            | PredicateArgKind::Date
+            | PredicateArgKind::Timestamp
+            | PredicateArgKind::Duration
+            | PredicateArgKind::Bool
+            | PredicateArgKind::Collection
+            | PredicateArgKind::Quantity(_)
+            | PredicateArgKind::Any => true,
+            PredicateArgKind::CalendarSpan => false,
+        }
+    }
 }
 
 /// Renders the declaration syntax (`Decimal[USD]`, never "Quantity"), so

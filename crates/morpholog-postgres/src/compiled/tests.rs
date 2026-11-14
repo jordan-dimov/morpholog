@@ -139,7 +139,9 @@ fn post_simple_entry_delta_bounds_every_ledger_invariant_to_the_entry() {
 fn bounded(filter: CaseFilter) -> String {
     match filter {
         CaseFilter::Bounded(cases) => cases.filter(),
-        other => panic!("expected a bounded filter, got {other:?}"),
+        other @ (CaseFilter::Untouched | CaseFilter::Unbounded) => {
+            panic!("expected a bounded filter, got {other:?}")
+        }
     }
 }
 
