@@ -51,7 +51,7 @@ pub(crate) async fn test_pool() -> PgPool {
         "DATABASE_URL must be set for morpholog-postgres integration tests \
          (e.g. postgres:///morpholog_dev)",
     );
-    let url = morpholog_postgres::with_default_user(&url);
+    let url = morpholog_postgres::with_connection_defaults(&url);
     PgPool::connect(&url)
         .await
         .expect("failed to connect to PostgreSQL test database")
@@ -590,7 +590,7 @@ pub(crate) async fn recreate_gateway_roles(pool: &PgPool, roles: &[&str]) {
 pub(crate) async fn gateway_pool(role: impl Into<String>) -> PgPool {
     let role = role.into();
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let url = morpholog_postgres::with_default_user(&url);
+    let url = morpholog_postgres::with_connection_defaults(&url);
     sqlx::postgres::PgPoolOptions::new()
         .max_connections(2)
         .after_connect(move |conn, _| {
@@ -664,17 +664,17 @@ pub(crate) struct Deployment {
 impl Deployment {
     pub(crate) async fn new(name: &str) -> Self {
         let base = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-        let admin = PgPool::connect(&morpholog_postgres::with_default_user(&with_database(
-            &base, "postgres",
-        )))
+        let admin = PgPool::connect(&morpholog_postgres::with_connection_defaults(
+            &with_database(&base, "postgres"),
+        ))
         .await
         .expect("maintenance database");
         let roles = morpholog_postgres::DeploymentRoles::with_prefix(&format!("{name}_")).unwrap();
         clean(&admin, name, &roles).await;
         run_sql(&admin, &format!("CREATE DATABASE {name}")).await;
-        let pool = PgPool::connect(&morpholog_postgres::with_default_user(&with_database(
-            &base, name,
-        )))
+        let pool = PgPool::connect(&morpholog_postgres::with_connection_defaults(
+            &with_database(&base, name),
+        ))
         .await
         .expect("scratch database");
         morpholog_postgres::initialise_schema(&pool)
@@ -706,9 +706,9 @@ impl Deployment {
                     Ok(())
                 })
             })
-            .connect(&morpholog_postgres::with_default_user(&with_database(
-                &base, &self.name,
-            )))
+            .connect(&morpholog_postgres::with_connection_defaults(
+                &with_database(&base, &self.name),
+            ))
             .await
             .unwrap()
     }

@@ -221,7 +221,7 @@ pub(crate) async fn connect(url: &str) -> anyhow::Result<PgPool> {
 pub(crate) async fn connect_unchecked(url: &str) -> anyhow::Result<PgPool> {
     // `postgres:///mydb` means "the OS user" to every other Postgres
     // tool; sqlx 0.9 alone reads it as `anonymous`.
-    let url = morpholog_postgres::with_default_user(url);
+    let url = morpholog_postgres::with_connection_defaults(url);
     PgPool::connect(&url)
         .await
         .context("failed to connect to PostgreSQL")
@@ -232,7 +232,7 @@ pub(crate) async fn connect_unchecked(url: &str) -> anyhow::Result<PgPool> {
 /// hold a session open. Checked the same way, so a session on a database
 /// this binary cannot serve refuses before its ready line.
 pub(crate) async fn connect_single(url: &str) -> anyhow::Result<PgPool> {
-    let url = morpholog_postgres::with_default_user(url);
+    let url = morpholog_postgres::with_connection_defaults(url);
     let pool = morpholog_postgres::single_connection_pool(&url)
         .await
         .context("failed to connect to PostgreSQL")?;

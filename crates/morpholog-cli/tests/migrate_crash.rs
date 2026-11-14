@@ -49,9 +49,9 @@ struct Scratch {
 async fn scratch(tag: &str) -> Option<Scratch> {
     let base = std::env::var("DATABASE_URL").ok()?;
     let name = format!("morpholog_crash_{tag}_{}", std::process::id());
-    let admin = PgPool::connect(&morpholog_postgres::with_default_user(&with_database(
-        &base, "postgres",
-    )))
+    let admin = PgPool::connect(&morpholog_postgres::with_connection_defaults(
+        &with_database(&base, "postgres"),
+    ))
     .await
     .unwrap();
     ddl(
@@ -61,7 +61,7 @@ async fn scratch(tag: &str) -> Option<Scratch> {
     .await;
     ddl(&admin, &format!("CREATE DATABASE {name}")).await;
     let url = with_database(&base, &name);
-    let pool = PgPool::connect(&morpholog_postgres::with_default_user(&url))
+    let pool = PgPool::connect(&morpholog_postgres::with_connection_defaults(&url))
         .await
         .unwrap();
     sqlx::raw_sql(BASELINE_SCHEMA)
@@ -87,7 +87,7 @@ impl Scratch {
     }
 
     async fn connection(&self) -> PgConnection {
-        PgConnection::connect(&morpholog_postgres::with_default_user(&self.url))
+        PgConnection::connect(&morpholog_postgres::with_connection_defaults(&self.url))
             .await
             .unwrap()
     }

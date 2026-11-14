@@ -5300,7 +5300,7 @@ async fn every_command_refuses_a_schema_behind_or_ahead_of_the_binary() {
 /// with no `morpholog` schema is not one: it fails with no report.
 #[tokio::test(flavor = "current_thread")]
 async fn migrate_check_reports_nothing_about_an_unprovisioned_database() {
-    let base = morpholog_postgres::with_default_user(&database_url());
+    let base = morpholog_postgres::with_connection_defaults(&database_url());
     let name = format!("morpholog_cli_unprovisioned_{}", std::process::id());
     let admin = PgPool::connect(&common::with_database(&base, "postgres"))
         .await

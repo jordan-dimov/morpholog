@@ -56,7 +56,7 @@ const REACHABILITY_DEPTH: usize = 2;
 pub(crate) async fn test_pool() -> PgPool {
     let url = std::env::var("DATABASE_URL")
         .expect("DATABASE_URL must be set for this test (e.g. postgres:///morpholog_dev)");
-    let url = crate::with_default_user(&url);
+    let url = crate::with_connection_defaults(&url);
     PgPool::connect(&url)
         .await
         .expect("failed to connect to PostgreSQL test database")

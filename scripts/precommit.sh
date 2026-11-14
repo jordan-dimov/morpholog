@@ -106,7 +106,7 @@ cargo test \
     -p morpholog-test-support \
     --all-targets --locked
 
-# The shell twin of `with_default_user`, shared by both scripts and
+# The shell twin of `with_connection_defaults`, shared by both scripts and
 # pinned against the Rust rule by shell_twin_agreement.rs.
 # shellcheck source=shared/sqlx_url.sh
 source "$(dirname "${BASH_SOURCE[0]}")/shared/sqlx_url.sh"

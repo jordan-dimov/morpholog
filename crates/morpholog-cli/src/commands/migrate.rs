@@ -9,7 +9,7 @@ use anyhow::Context;
 use morpholog_postgres::{
     LockPolicy, MigrateMode, MigrationReport, PgError, PgPool, activation_preflight,
     apply_migrations_with, deployment_roles, migration_status, other_sessions,
-    single_connection_pool, with_default_user,
+    single_connection_pool, with_connection_defaults,
 };
 
 use crate::MigrateArgs;
@@ -21,7 +21,7 @@ const STAGED_VERSION: i32 = 27;
 pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
     // One connection, so the sessions census never counts this command's
     // own second one.
-    let pool = single_connection_pool(&with_default_user(&args.db.database_url))
+    let pool = single_connection_pool(&with_connection_defaults(&args.db.database_url))
         .await
         .context("failed to connect to PostgreSQL")?;
 

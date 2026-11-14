@@ -31,7 +31,7 @@ fn migrate(url: &str, extra: &[&str]) -> (bool, Value, String) {
 
 #[tokio::test(flavor = "current_thread")]
 async fn prepare_stops_before_the_cutover_and_check_reports_it() {
-    let base = morpholog_postgres::with_default_user(&common::database_url());
+    let base = morpholog_postgres::with_connection_defaults(&common::database_url());
     let name = format!("morpholog_cli_prepare_{}", std::process::id());
     let admin = PgPool::connect(&common::with_database(&base, "postgres"))
         .await

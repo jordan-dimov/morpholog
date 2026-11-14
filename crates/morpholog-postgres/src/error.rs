@@ -421,7 +421,7 @@ mod tests {
         let Ok(url) = std::env::var("DATABASE_URL") else {
             return;
         };
-        let url = crate::with_default_user(&url);
+        let url = crate::with_connection_defaults(&url);
         let pool = sqlx::PgPool::connect(&url).await.expect("connect");
         // A genuine 42703 that touches nothing: no DDL, no shared state.
         let err = sqlx::query("SELECT no_such_column FROM (SELECT 1) AS t")

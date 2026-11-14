@@ -55,7 +55,7 @@ pub(crate) async fn run(args: ServeArgs) -> anyhow::Result<()> {
 
     let mut presenters = HashMap::new();
     for (uid, login) in logins {
-        let url = morpholog_postgres::with_user(&args.db.database_url, &login);
+        let url = morpholog_postgres::with_connection_defaults_as(&args.db.database_url, &login);
         let pool = crate::commands::connect_single(&url)
             .await
             .with_context(|| format!("connecting as `{login}` for uid {uid}"))?;

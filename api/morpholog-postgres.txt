@@ -3167,7 +3167,7 @@ pub fn morpholog_postgres::verify_tree_head(&ed25519_dalek::verifying::Verifying
 pub async fn morpholog_postgres::verify_views(&sqlx_postgres::PgPool, &str) -> core::result::Result<morpholog_postgres::ViewsVerification, morpholog_postgres::PgError>
 pub fn morpholog_postgres::verify_window(&morpholog_postgres::WindowEvidencePack, core::option::Option<&morpholog_postgres::Checkpoint>) -> core::result::Result<morpholog_postgres::WindowVerification, morpholog_postgres::PackError>
 pub fn morpholog_postgres::with_anchor_signatures(&[morpholog_postgres::Checkpoint], core::option::Option<&morpholog_postgres::Checkpoint>) -> alloc::vec::Vec<morpholog_postgres::Checkpoint>
-pub fn morpholog_postgres::with_default_user(&str) -> alloc::string::String
-pub fn morpholog_postgres::with_user(&str, &str) -> alloc::string::String
+pub fn morpholog_postgres::with_connection_defaults(&str) -> alloc::string::String
+pub fn morpholog_postgres::with_connection_defaults_as(&str, &str) -> alloc::string::String
 pub fn morpholog_postgres::witnesses_report(&[morpholog_postgres::Checkpoint], core::option::Option<&morpholog_witness::Anchors>) -> core::option::Option<morpholog_postgres::WitnessesReport>
 pub async fn morpholog_postgres::write_activation_record_with(&mut sqlx_core::transaction::Transaction<'_, sqlx_postgres::database::Postgres>, usize, usize) -> core::result::Result<(), morpholog_postgres::PgError>

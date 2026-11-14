@@ -47,7 +47,7 @@ pub(crate) fn database_url() -> String {
         "DATABASE_URL must be set for morpholog-cli integration tests \
          (e.g. postgres:///morpholog_dev)",
     );
-    morpholog_postgres::with_default_user(&url)
+    morpholog_postgres::with_connection_defaults(&url)
 }
 
 /// The same connection string, naming another database.

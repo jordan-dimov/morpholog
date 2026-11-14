@@ -35,7 +35,7 @@ impl World {
         self.name(&format!("db_{which}"))
     }
     fn url(&self, which: &str) -> String {
-        let base = morpholog_postgres::with_default_user(&common::database_url());
+        let base = morpholog_postgres::with_connection_defaults(&common::database_url());
         common::with_database(&base, &self.db(which))
     }
     fn roles(&self) -> Vec<String> {
@@ -55,7 +55,7 @@ impl World {
         .collect()
     }
     async fn admin(&self) -> PgPool {
-        let base = morpholog_postgres::with_default_user(&common::database_url());
+        let base = morpholog_postgres::with_connection_defaults(&common::database_url());
         PgPool::connect(&common::with_database(&base, "postgres"))
             .await
             .unwrap()

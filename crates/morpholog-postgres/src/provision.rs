@@ -46,17 +46,26 @@ pub async fn initialise_schema(pool: &PgPool) -> Result<InitOutcome, PgError> {
     Ok(InitOutcome::Initialised)
 }
 
-/// A connection string with a username filled in when it names none, so
-/// `postgres:///mydb` keeps working. sqlx 0.9 connects an unnamed user as
-/// `anonymous`, which turns this standard short form into a
-/// peer-authentication failure.
+/// A connection string with what sqlx 0.9 gets wrong about the standard
+/// short form `postgres:///mydb?port=N` filled in, so it connects as psql
+/// would:
+///
+/// - **The user**, when the URL names none. sqlx connects an unnamed user
+///   as `anonymous`, a peer-authentication failure.
+/// - **The socket directory**, when the URL names no host. sqlx looks for
+///   the default port's socket, not the URL's, so with nothing listening
+///   on 5432 it falls back to TCP on localhost, which may want a password
+///   the socket does not. `PGHOSTADDR` or `PGHOST`, which sqlx reads
+///   first, leaves the host to sqlx.
 ///
 /// **Not libpq parity.** libpq uses the effective OS account; this reads
 /// `PGUSER`, then `USER`, then `LOGNAME`, which can differ under `sudo`, a
 /// service manager, or a container. Those contexts should name the user in
 /// the URL. With nothing available the URL is returned untouched, so the
-/// driver reports the problem rather than this inventing an identity.
-pub fn with_default_user(url: &str) -> String {
+/// driver reports the problem rather than this inventing an identity. The
+/// socket is looked for where sqlx itself looks, for the port the URL
+/// names; with none there, the host is left to sqlx.
+pub fn with_connection_defaults(url: &str) -> String {
     // An EMPTY variable counts as unset and falls through - `PGUSER=` is
     // how a CI environment often clears it, and treating it as a value
     // suppressed the fallback entirely (found by the shell-twin
@@ -65,13 +74,73 @@ pub fn with_default_user(url: &str) -> String {
         .into_iter()
         .filter_map(|key| std::env::var(key).ok())
         .find(|value| !value.is_empty());
-    apply_default_user(url, user.as_deref())
+    with_socket_host(&apply_default_user(url, user.as_deref()))
+}
+
+/// The directories sqlx looks in for a server socket, in its order.
+const SOCKET_DIRS: [&str; 3] = ["/var/run/postgresql", "/private/tmp", "/tmp"];
+
+fn with_socket_host(url: &str) -> String {
+    let set = |key| std::env::var(key).ok().filter(|v| !v.is_empty());
+    apply_socket_host(
+        url,
+        set("PGHOSTADDR").or(set("PGHOST")).is_some(),
+        set("PGPORT").as_deref(),
+        &|port| {
+            SOCKET_DIRS.into_iter().find(|dir| {
+                std::path::Path::new(dir)
+                    .join(format!(".s.PGSQL.{port}"))
+                    .exists()
+            })
+        },
+    )
+}
+
+/// The socket rule itself, without the environment or the filesystem.
+fn apply_socket_host(
+    url: &str,
+    pghost: bool,
+    pgport: Option<&str>,
+    socket_dir: &dyn Fn(&str) -> Option<&'static str>,
+) -> String {
+    let Some((_, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let authority = &rest[..rest.find(['/', '?']).unwrap_or(rest.len())];
+    let hostport = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let (host, authority_port) = hostport.split_once(':').unwrap_or((hostport, ""));
+    let params: Vec<&str> = rest
+        .split_once('?')
+        .map(|(_, query)| query.split('&').collect())
+        .unwrap_or_default();
+    let names_host = params.iter().any(|p| {
+        ["host", "hostaddr"]
+            .iter()
+            .any(|key| *p == *key || p.starts_with(&format!("{key}=")))
+    });
+    if !host.is_empty() || names_host || pghost {
+        return url.to_string();
+    }
+    // A `port` parameter overrides the authority's, as sqlx reads them.
+    let port = params
+        .iter()
+        .filter_map(|p| p.strip_prefix("port="))
+        .next_back()
+        .filter(|p| !p.is_empty())
+        .or(Some(authority_port).filter(|p| !p.is_empty()))
+        .or(pgport)
+        .unwrap_or("5432");
+    let Some(dir) = socket_dir(port) else {
+        return url.to_string();
+    };
+    let separator = if rest.contains('?') { '&' } else { '?' };
+    format!("{url}{separator}host={dir}")
 }
 
 /// A pool capped at one connection, for a resident session: its lockstep
 /// protocol cannot use a second, and the cap bounds load when many workers
-/// each hold one. The URL is used as given; apply [`with_default_user`]
-/// first for the OS-user default.
+/// each hold one. The URL is used as given; apply
+/// [`with_connection_defaults`] first.
 pub async fn single_connection_pool(url: &str) -> Result<PgPool, PgError> {
     sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
@@ -80,10 +149,10 @@ pub async fn single_connection_pool(url: &str) -> Result<PgPool, PgError> {
         .map_err(crate::error::classify)
 }
 
-/// [`with_default_user`] with the username supplied rather than read from
-/// the environment.
-pub fn with_user(url: &str, user: &str) -> String {
-    apply_default_user(url, Some(user))
+/// [`with_connection_defaults`] with the username supplied rather than
+/// read from the environment.
+pub fn with_connection_defaults_as(url: &str, user: &str) -> String {
+    with_socket_host(&apply_default_user(url, Some(user)))
 }
 
 /// Percent-encode a username for a URL query value, BY BYTE outside the
@@ -1120,5 +1189,83 @@ mod default_user_tests {
     #[test]
     fn a_malformed_string_is_returned_unchanged() {
         assert_eq!(apply_default_user("not-a-url", Some("alice")), "not-a-url");
+    }
+}
+
+#[cfg(test)]
+mod socket_host_tests {
+    use super::apply_socket_host;
+
+    /// A socket listening only on the disposable cluster's port.
+    fn only_55432(port: &str) -> Option<&'static str> {
+        (port == "55432").then_some("/var/run/postgresql")
+    }
+
+    fn fill(url: &str) -> String {
+        apply_socket_host(url, false, None, &only_55432)
+    }
+
+    // sqlx looks for the default port's socket whatever port the URL
+    // names, so with nothing on 5432 this form went to TCP and asked for a
+    // password the socket would not.
+    #[test]
+    fn a_hostless_url_gets_the_socket_of_its_own_port() {
+        assert_eq!(
+            fill("postgres:///morpholog_dev?port=55432"),
+            "postgres:///morpholog_dev?port=55432&host=/var/run/postgresql"
+        );
+        assert_eq!(
+            fill("postgres://:55432/db"),
+            "postgres://:55432/db?host=/var/run/postgresql"
+        );
+        assert_eq!(
+            fill("postgres:///db?hostx=1&port=55432"),
+            "postgres:///db?hostx=1&port=55432&host=/var/run/postgresql",
+            "a parameter merely starting with `host` names no host"
+        );
+    }
+
+    #[test]
+    fn the_port_parameter_wins_then_the_authority_then_pgport() {
+        assert_eq!(
+            fill("postgres://:5432/db?port=55432"),
+            "postgres://:5432/db?port=55432&host=/var/run/postgresql"
+        );
+        assert_eq!(
+            fill("postgres://:55432/db?port=5432"),
+            "postgres://:55432/db?port=5432"
+        );
+        assert_eq!(
+            apply_socket_host("postgres:///db", false, Some("55432"), &only_55432),
+            "postgres:///db?host=/var/run/postgresql"
+        );
+        assert_eq!(
+            fill("postgres:///db"),
+            "postgres:///db",
+            "5432 by default, and no socket there"
+        );
+    }
+
+    #[test]
+    fn a_named_host_or_pghost_is_left_alone() {
+        for url in [
+            "postgres://localhost:55432/db",
+            "postgres://carol@db.example:55432/db",
+            "postgres:///db?port=55432&host=/tmp",
+            "postgres:///db?port=55432&hostaddr=127.0.0.1",
+            "postgres:///db?port=55432&host",
+            "not-a-url",
+        ] {
+            assert_eq!(fill(url), url);
+        }
+        assert_eq!(
+            apply_socket_host("postgres:///db?port=55432", true, None, &only_55432),
+            "postgres:///db?port=55432"
+        );
+    }
+
+    #[test]
+    fn with_no_socket_the_host_is_left_to_sqlx() {
+        assert_eq!(fill("postgres:///db?port=6543"), "postgres:///db?port=6543");
     }
 }

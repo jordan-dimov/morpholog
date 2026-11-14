@@ -178,7 +178,7 @@ async fn a_reader_that_cannot_see_the_writer_still_withholds_its_row() {
     common::insert_in_flight_audit_row(&mut writer, Uuid::now_v7()).await;
     let held = audit_resume_watermark(&pool).await.unwrap();
 
-    let url = morpholog_postgres::with_default_user(&std::env::var("DATABASE_URL").unwrap());
+    let url = morpholog_postgres::with_connection_defaults(&std::env::var("DATABASE_URL").unwrap());
     let reader = sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
         .after_connect(|conn, _| {

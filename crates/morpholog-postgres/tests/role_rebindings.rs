@@ -43,7 +43,7 @@ async fn create_gateway(pool: &PgPool, role: &str) {
 async fn pool_as(role: &str) -> PgPool {
     let role = role.to_string();
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let url = morpholog_postgres::with_default_user(&url);
+    let url = morpholog_postgres::with_connection_defaults(&url);
     PgPoolOptions::new()
         .max_connections(1)
         .after_connect(move |conn, _| {

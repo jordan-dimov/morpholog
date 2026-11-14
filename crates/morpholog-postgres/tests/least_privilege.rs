@@ -14,7 +14,7 @@
 
 use morpholog_postgres::{
     DeploymentRoles, apply_migrations, databases_also_reached, deployment_roles, initialise_schema,
-    provision_least_privilege, with_default_user,
+    provision_least_privilege, with_connection_defaults,
 };
 use sqlx::PgPool;
 
@@ -109,7 +109,7 @@ struct Scratch {
 
 impl Scratch {
     async fn new(base: &str, databases: &[&str], roles: &[&str]) -> Self {
-        let admin = PgPool::connect(&with_default_user(&with_database(base, "postgres")))
+        let admin = PgPool::connect(&with_connection_defaults(&with_database(base, "postgres")))
             .await
             .expect("maintenance database");
         let scratch = Self {
@@ -127,7 +127,7 @@ impl Scratch {
 
     /// A pool on one of this test's databases, with the schema initialised.
     async fn deployment(&self, db: &str) -> PgPool {
-        let pool = PgPool::connect(&with_default_user(&with_database(&self.base, db)))
+        let pool = PgPool::connect(&with_connection_defaults(&with_database(&self.base, db)))
             .await
             .expect("scratch database");
         initialise_schema(&pool).await.expect("initialise");

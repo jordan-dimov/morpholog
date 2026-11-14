@@ -642,7 +642,7 @@ async fn the_executor_under_its_own_role_places_what_was_admitted_and_cannot_be_
 /// deployment `init` provisions, tested with it.
 async fn gateway_pool(role: &str) -> PgPool {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let url = morpholog_postgres::with_default_user(&url);
+    let url = morpholog_postgres::with_connection_defaults(&url);
     let role = role.to_string();
     PgPoolOptions::new()
         .max_connections(2)
