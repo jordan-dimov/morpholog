@@ -69,6 +69,11 @@ unsafe_code = "forbid"
 # is not there.
 unreachable_pub = "warn"
 
+# `-D warnings` reaches rustc and clippy, not cargo's own lints, so this
+# one denies by itself.
+[workspace.lints.cargo]
+unused_dependencies = "deny"
+
 [workspace.lints.clippy]
 unwrap_used = "warn"
 expect_used = "warn"

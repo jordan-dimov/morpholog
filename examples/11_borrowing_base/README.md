@@ -69,7 +69,7 @@ See [`borrowing_base.morph`](borrowing_base.morph) for the surface form.
 
 | Invariant | What it says |
 | --- | --- |
-| `at_most_one_facility_per_id` | A facility id identifies one facility, so its advance rate is a single well-defined number. |
+| `facility_unique_by_facility` | A facility id identifies one facility, so its advance rate is a single well-defined number. |
 | `advance_rate_within_unit_interval` | An advance rate is a fraction, `0 <= rate <= 1`. |
 | `collateral_value_is_positive` | Every pledged value is strictly positive, so the utilisation divisor is never zero under any admitted state. |
 | `drawdown_amount_is_non_negative` | A drawdown moves money out, never in (repayments are out of scope). |

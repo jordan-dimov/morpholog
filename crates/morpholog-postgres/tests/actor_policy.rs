@@ -27,7 +27,7 @@ mod common;
 
 use common::{
     expect_committed, gateway_pool, pg_program, propose_pg_as, reset_db, session_is_superuser,
-    test_pool, with_gateway_roles,
+    subj, test_pool, with_gateway_roles,
 };
 use morpholog_core::{EvalValue, Subject, Transformation, Transition};
 use morpholog_postgres::PgProgram;
@@ -83,10 +83,6 @@ transformation note(text):
 
 fn program() -> PgProgram {
     pg_program(morpholog_surface::parse_program(POLICY).unwrap())
-}
-
-fn subj(s: &str) -> EvalValue {
-    EvalValue::Subject(Subject::from(s))
 }
 
 /// The administrator on the record, restricted to this pool's login, so

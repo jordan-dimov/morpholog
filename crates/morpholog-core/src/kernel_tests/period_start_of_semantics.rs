@@ -5,21 +5,12 @@
 //! never clamped; a zero span and a fractional index are refused by name
 //! at both tiers.
 
+use crate::State;
 use crate::ir_builder::{
     date, dec, eq, params, period_index, period_start_of, require, span, term, transformation,
 };
+use crate::kernel_tests::support::holds;
 use crate::kernel_tests::support::propose_with_test_actor;
-use crate::{Outcome, Prop, State};
-
-fn holds(prop: Prop) {
-    let t = transformation("probe", params(&[]), vec![require(prop)]);
-    let outcome =
-        propose_with_test_actor(&t, vec![], &State::default(), &[], &[]).expect("evaluates");
-    assert!(
-        matches!(outcome, Outcome::Accepted { .. }),
-        "expected the proposition to hold: {outcome:?}"
-    );
-}
 
 fn start_of(anchor: &str, sp: &str, index: &str, expected: &str) {
     holds(eq(

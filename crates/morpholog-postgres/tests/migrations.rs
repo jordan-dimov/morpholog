@@ -20,7 +20,7 @@
 
 mod common;
 
-use common::{reset_db, test_pool};
+use common::{reset_db, test_pool, with_database};
 use morpholog_postgres::BASELINE_VERSION;
 use sqlx::PgPool;
 
@@ -98,26 +98,6 @@ async fn an_unmigrated_database_names_the_remedy_on_the_refusal_path() {
         rendered.contains("morpholog migrate"),
         "the message must name the command that fixes it, got: {rendered}"
     );
-}
-
-/// The same connection URL, pointing at a different database.
-///
-/// Only the last path segment changes. Replacing the name as text would
-/// also rewrite the scheme when the database is named `postgres`, as in CI.
-fn with_database(url: &str, name: &str) -> String {
-    // Any query string is carried across untouched: `?sslmode=require` has
-    // to survive, and it is not part of the database name.
-    let (base, query) = url
-        .split_once('?')
-        .map_or((url, None), |(b, q)| (b, Some(q)));
-    let swapped = match base.rsplit_once('/') {
-        Some((prefix, _)) => format!("{prefix}/{name}"),
-        None => base.to_string(),
-    };
-    match query {
-        Some(q) => format!("{swapped}?{q}"),
-        None => swapped,
-    }
 }
 
 /// Provision a database at the PREVIOUS release's shape, commit once, then

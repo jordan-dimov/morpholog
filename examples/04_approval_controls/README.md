@@ -86,4 +86,4 @@ That holds for documents as registered. The example assumes the submitting syste
 - **Who is acting.** The example governs approval authority, not who the approver is. It takes the actor the proposing application names; nothing here stops one application naming another approver. [Example 13](../13_biometric_identification_oversight/) shows how to restrict which database logins may speak for which names.
 - **Administrative authority for granting and submitting.** The grant and submission transformations are ungated; a real system gates them on authority of their own, such as `MayGrant(actor, ...)`, once that shape is justified.
 - **Predicate-pattern matching.** `ApprovalAuthorityFor(actor, predicate_pattern, limit)` - one claim governing a family of transformations. Deferred until forced.
-- **Delegation and segregation of duties.** Mentioned in [`docs/scope-and-ambition.md`](../../docs/scope-and-ambition.md); both await their forcing examples.
+- **Delegation and segregation of duties.** One approver handing authority to another, and a rule that the person who submits cannot also approve. Both wait for a worked example that needs them.

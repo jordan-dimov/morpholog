@@ -9,18 +9,9 @@
 use crate::ir_builder::{
     add, assert_, date, dec, eq, params, require, span, sub, term, transformation, var,
 };
+use crate::kernel_tests::support::holds;
 use crate::kernel_tests::support::{cal_span, propose_with_test_actor, test_actor};
 use crate::{Outcome, Prop, State, ValueExpr};
-
-fn holds(prop: Prop) {
-    let t = transformation("probe", params(&[]), vec![require(prop)]);
-    let outcome = propose_with_test_actor(&t, vec![], &State::default(), &[], &[])
-        .expect("evaluates cleanly");
-    assert!(
-        matches!(outcome, Outcome::Accepted { .. }),
-        "expected the proposition to hold exactly: {outcome:?}"
-    );
-}
 
 fn refuses(prop: Prop, fragments: &[&str]) {
     let t = transformation("probe", params(&[]), vec![require(prop)]);

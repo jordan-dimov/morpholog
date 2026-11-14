@@ -168,18 +168,18 @@ money actually moves (that is computed downstream).
 | Invariant | What it says |
 | --- | --- |
 | `current_official_price_has_a_figure` | The in-force pointer must name an official figure that actually exists. |
-| `at_most_one_current_official_price` | At most one official price is in force per trade. |
-| `official_price_id_identifies_one_figure` | An official price id names one figure (same trade, same price), so the in-force pointer and the audit price lookup are unambiguous. |
+| `current_official_price_unique_by_trade` | At most one official price is in force per trade. |
+| `official_price_unique_by_official_price_id` | An official price id names one figure (same trade, same price), so the in-force pointer and the audit price lookup are unambiguous. |
 | `official_price_has_captured_trade` | An official price belongs to a trade that was actually captured. With the rule above, a clean pointer -> figure -> trade provenance chain. |
-| `official_price_chain_no_fork` | The price-correction chain stays linear: a figure has at most one direct successor. |
-| `at_most_one_capture_per_trade` | A trade id identifies one captured trade (one commodity, one direction). |
+| `official_price_supersedes_unique_by_prior_official_price_id` | The price-correction chain stays linear: a figure has at most one direct successor. |
+| `trade_captured_unique_by_trade` | A trade id identifies one captured trade (one commodity, one direction). |
 | `terms_belong_to_captured_trade` | Every terms version belongs to a trade that was actually captured. |
-| `terms_version_id_identifies_one_record` | A terms version id names one terms record, so the lineage and lookups are unambiguous. |
-| `one_terms_version_per_effective_date` | At most one terms version per effective date, so "the quantity effective on that date" is a single number. An amendment must take a distinct effective date. |
-| `trade_terms_chain_no_fork` | The amendment chain stays linear: a terms version has at most one direct successor. |
+| `trade_terms_unique_by_version_id` | A terms version id names one terms record, so the lineage and lookups are unambiguous. |
+| `trade_terms_unique_by_trade_effective_from` | At most one terms version per effective date, so "the quantity effective on that date" is a single number. An amendment must take a distinct effective date. |
+| `trade_terms_supersedes_unique_by_prior_version_id` | The amendment chain stays linear: a terms version has at most one direct successor. |
 | `settled_within_effective_terms` | The total settled effective on or before any date may never exceed the quantity the terms in force on that date allow (inclusive) - the cumulative cap, judged on the effective clock. |
 | `settled_date_has_effective_terms` | Every settled date has a terms version effective by it, so a slice cannot fall before the trade had any terms and escape the cap by vacuity. |
-| `settlement_id_identifies_one_settlement` | A settlement id names one slice, so slices cannot be double-counted or hidden under a shared id. |
+| `trade_settled_unique_by_settlement_id` | A settlement id names one slice, so slices cannot be double-counted or hidden under a shared id. |
 | `settled_trade_was_confirmed` | Settlement can never run ahead of confirmation, whatever path a change takes. |
 | `trade_terms_quantity_is_positive` | A terms quantity is positive - no zero-size or negative trade. |
 | `settled_quantity_is_positive` | A settled slice is positive - a negative slice cannot make room under the running cap for an over-large one. |

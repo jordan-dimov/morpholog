@@ -9,9 +9,8 @@
 SQLX_OFFLINE = "true"
 
 # The PG-backed integration suites share one database and TRUNCATE it on
-# entry, so they only pass single-threaded. Precommit passes --test-threads=1
-# explicitly; this makes a plain `cargo test` safe too. Total test runtime is
-# sub-second, so serial execution costs nothing.
+# entry, so they only pass single-threaded. Every `cargo test` here runs them
+# so: precommit, CI and a plain local run alike.
 RUST_TEST_THREADS = "1"
 
 # `cargo update` skips any version published in the last week, so a

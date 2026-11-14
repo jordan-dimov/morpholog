@@ -39,8 +39,8 @@ on:
     tags: ["v*"]
 
 jobs:
-  # A property of the tag, not of any target: checked once, before four
-  # runners spend anything.
+  # A property of the tag, not of any target: checked once, before the
+  # build runners spend anything.
   guard:
     runs-on: ubuntu-latest
     permissions:

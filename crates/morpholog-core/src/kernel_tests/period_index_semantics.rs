@@ -5,18 +5,9 @@
 //! and a zero span refused by name at both tiers.
 
 use crate::ir_builder::{date, dec, eq, params, period_index, require, span, term, transformation};
+use crate::kernel_tests::support::holds;
 use crate::kernel_tests::support::propose_with_test_actor;
-use crate::{Outcome, Prop, State};
-
-fn holds(prop: Prop) {
-    let t = transformation("probe", params(&[]), vec![require(prop)]);
-    let outcome =
-        propose_with_test_actor(&t, vec![], &State::default(), &[], &[]).expect("evaluates");
-    assert!(
-        matches!(outcome, Outcome::Accepted { .. }),
-        "expected the proposition to hold: {outcome:?}"
-    );
-}
+use crate::{Outcome, State};
 
 fn index_of(anchor: &str, sp: &str, at: &str, expected: &str) {
     holds(eq(

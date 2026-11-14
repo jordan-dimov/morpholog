@@ -18,6 +18,7 @@
 )]
 
 mod common;
+use common::with_database;
 
 use std::time::Duration;
 
@@ -31,20 +32,6 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 const BASELINE_SCHEMA: &str = include_str!("fixtures/schema_v0.0.14.sql");
-
-fn with_database(url: &str, name: &str) -> String {
-    let (base, query) = url
-        .split_once('?')
-        .map_or((url, None), |(b, q)| (b, Some(q)));
-    let swapped = match base.rsplit_once('/') {
-        Some((prefix, _)) => format!("{prefix}/{name}"),
-        None => base.to_string(),
-    };
-    match query {
-        Some(q) => format!("{swapped}?{q}"),
-        None => swapped,
-    }
-}
 
 async fn ddl(pool: &PgPool, sql: String) {
     sqlx::raw_sql(sqlx::AssertSqlSafe(sql))

@@ -519,20 +519,11 @@ Then run the deploy sequence below with the new programme. A new rule can need n
 
 ## The deploy sequence
 
-A deployment that forgets a step still answers correctly, only slowly, so nothing fails to tell you. The sequence, every time the binary or a programme changes: The checklist form, with the upgrade and the day's close beside it, is [`docs/operating.md`](operating.md).
+A deployment that forgets a step still answers correctly, only slowly, so nothing fails to tell you. Run the sequence every time the binary or a programme changes. Its steps, one line each, are the checklist in [`docs/operating.md`](operating.md): [upgrading to a new release](operating.md#upgrading-to-a-new-release) when the binary moves, [deploying a changed programme](operating.md#deploying-a-changed-programme) when a programme does. On day zero `morpholog init --skip-if-exists` comes first; afterwards it is a no-op. This section explains the steps.
 
-```bash
-morpholog init --skip-if-exists                       # day zero only; a no-op afterwards
-morpholog migrate                                     # the schema this binary expects
-morpholog check --strict --database-url "$DATABASE_URL" ledger.morph --against billing.morph
-morpholog check --strict --database-url "$DATABASE_URL" billing.morph --against ledger.morph
-morpholog provision indexes ledger.morph billing.morph --json
-morpholog generate views ledger.morph | psql "$DATABASE_URL"   # if you read state as SQL
-```
+`init` cannot provision indexes. It provisions Morpholog's own tables and knows no programme; which indexes are worth building depends on the rules you deploy. A database reset with `init --reset` has no indexes until `provision indexes` runs again.
 
-`init` cannot do the third step. It provisions Morpholog's own tables and knows no programme; which indexes are worth building depends on the rules you deploy. A database reset with `init --reset` has no indexes until `provision indexes` runs again.
-
-The two `check` runs are the exception. A programme that does not fit the stored claims answers wrongly, not slowly, so each must fit the claims stored now and agree with the others on every predicate they share.
+The `check` step is the exception. A programme that does not fit the stored claims answers wrongly, not slowly, so each programme must fit the claims stored now and agree with the others on every predicate they share.
 
 Because a forgotten step fails nothing, gate on it where a step can be skipped: `migrate --check` exits non-zero while the schema is not current, and `provision indexes --check` (with the same programme files) exits non-zero while anything is left to create or repair, anything is stale, or a conflict needs an operator. Both change nothing and print the same report as the step they check. `migrate --check` reports on any database a Morpholog release made, one below the baseline included. While the canonical-order migration is pending it also carries `activation_preflight`: how far its preparation has gone, the estimated preparation time and writer pause, and what refuses the cutover; `migrate --prepare` runs that preparation ahead of the window, so the pause is scheduled, not discovered (`docs/install.md`). A non-zero exit with no report means the state could not be reported: the connection failed, say, the `morpholog` schema is absent, or the migration record is inconsistent.
 

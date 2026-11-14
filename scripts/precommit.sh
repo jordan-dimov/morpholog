@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Local pre-push verification for Morpholog.
 #
-# Runs every check CI runs, in the same order. A green local run means
-# a green CI run; bails on the first failure.
+# Runs the checks CI runs, and bails on the first failure.
 #
 # Optional env:
 #   DATABASE_URL  if set, runs the PG-backed test suites; otherwise
@@ -98,13 +97,12 @@ fi
 step 'cargo audit'
 cargo audit
 
-step 'sync test suites (morpholog-core / examples / surface / test-support)'
-cargo test \
-    -p morpholog-core \
-    -p morpholog-examples \
-    -p morpholog-surface \
-    -p morpholog-test-support \
-    --all-targets --locked
+step 'sync test suites (every crate that needs no database)'
+cargo test --workspace --all-targets --locked \
+    --exclude morpholog-cli \
+    --exclude morpholog-postgres \
+    --exclude morpholog-outbox \
+    --exclude morpholog-bench
 
 # The shell twin of `with_connection_defaults`, shared by both scripts and
 # pinned against the Rust rule by shell_twin_agreement.rs.
@@ -135,7 +133,7 @@ else
         -p morpholog-postgres \
         -p morpholog-outbox \
         -p morpholog-bench \
-        --all-targets --locked -- --test-threads=1
+        --all-targets --locked
 fi
 
 # ----------------------------------------------------------------
@@ -146,8 +144,8 @@ fi
 # morpholog-cli test suite, so this is belt-and-braces - but it
 # catches a stale .morph file even when DATABASE_URL is unset (and
 # the cli test suite is therefore skipped). The `find` picks up
-# any .morph elsewhere in the tree (test fixtures, scratch files)
-# as a side benefit; today that's still just the examples.
+# any .morph elsewhere in the tree too, such as the CLI's test
+# fixtures.
 #
 # Uses `cargo run` so the script is location-independent (honours
 # CARGO_TARGET_DIR) and doesn't depend on `cargo install` having
@@ -172,7 +170,7 @@ fi
 # contract test pins; the end-to-end drives the rewritten worked
 # embedder against the database. The committed-package drift gate
 # itself is a Rust test (generate_e2e), so it ran above either way.
-# The CI job pins the declared 3.10 floor; the local run uses
+# The CI job pins the declared 3.12 floor; the local run uses
 # whatever python3 is on PATH as a smoke test.
 # ----------------------------------------------------------------
 step 'generated Python client (unit tests + worked embedder)'

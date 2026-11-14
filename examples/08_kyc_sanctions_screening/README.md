@@ -43,7 +43,7 @@ Each outbox intent routes to a distinct downstream consumer, declared by name so
 
 | Invariant | Says |
 | --- | --- |
-| `at_most_one_current_screening_per_customer_and_list_type` | The singleton currentness pointer: at most one current screening per `(customer, list_type)`. |
+| `current_screening_unique_by_customer_list_type` | The singleton currentness pointer: at most one current screening per `(customer, list_type)`. |
 | `onboarded_requires_current_clean_sanctions` | An onboarded customer must have a current sanctions screening, clean or adjudicated-clear, not expired by the onboarding date. |
 | `onboarded_requires_current_clean_pep` | The same for the PEP list - separate legal weight, so a clean sanctions result does not cover the PEP obligation. |
 | `onboarded_requires_no_unresolved_match` | An onboarded customer has **no** `MatchUnderReview` on *any* of their screenings, current or not - a re-screen hit blocks onboarding even when an older clean result is still current. |
@@ -83,7 +83,7 @@ It is also the forcing home for the `xor` connective. The adjudication fork - a 
 
 ### The round-trip compute pattern
 
-The example exercises the round-trip compute pattern from the three-zone doctrine (`docs/scope-and-ambition.md`):
+The example exercises [the round-trip compute pattern](../../docs/outbox-sketch.md#the-round-trip-compute-pattern):
 
 ```
 request_screening -> outbox ScreeningRequested -> external provider

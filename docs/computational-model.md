@@ -1,6 +1,8 @@
 # The computational model
 
-Status: design doctrine. Companion to [`scope-and-ambition.md`](scope-and-ambition.md), whose algebra this document makes computational: a programme, the admitted state and a proposal give a decision.
+Status: design doctrine, the precise companion to [`scope-and-ambition.md`](scope-and-ambition.md).
+
+**The algebra.** A decision is a deterministic function of a validated programme, an admitted pre-state, a proposal and the fresh subjects it draws. It accepts a change, refuses it, or reports an error. Only a commit gives a new state and a record. Every change to Morpholog is reviewed against this statement ([reviewing a change](#reviewing-a-change)).
 
 Morpholog gives up general computation on purpose. A decision about what may become true should be finite, inspectable and reproducible, and a language that can loop, call out or consult the clock cannot promise any of the three. So the language has no `while`, no host functions and no ambient clock, and the one recursion it allows, a condition that calls itself, only finds what the admitted claims already imply. Applications decide what they want to do; Morpholog decides what they are allowed to make true.
 
@@ -47,10 +49,13 @@ A rule's truth depends only on the programme, the proposal, the state and the su
 
 ### 5. Replay
 
-A committed decision can be reconstructed from its recorded inputs under its recorded rules, and its meaning never depends on today's clock, mutable host code or a remote service.
+A committed decision's effects replay exactly from the record, and a decision is reproduced from its inputs under its recorded rules. Its meaning never depends on today's clock, mutable host code or a remote service. The record does not always hold the state a decision saw: under concurrency, its order is the order of effects.
 
-- **Holds by:** the authenticated history before a row reconstructs its pre-state, and the row carries the proposal's arguments, the attested actor and the subjects its act drew, and names the programme that admitted it and the semantics version that decided it, all inside the tamper-evident tree. No input to a commit goes unrecorded.
-- **Checked by:** `crates/morpholog-postgres/tests/drawn_subjects.rs` re-runs every commit of a history, made through every durable path, in the ordinary kernel from the authenticated history and the row's recorded execution inputs, under a programme matching its hash that implements its recorded semantics, and requires the same change and intents with every recorded subject consumed.
+- **Holds by:** each row records its effect, the proposal's arguments, the attested actor and the subjects its act drew, and names the programme that admitted it and the semantics version that decided it, all inside the tamper-evident tree. Folding the effects in the record's order rebuilds the claims exactly. A decision is a function of its inputs (guarantee 2), so given the state it read, it is reproduced.
+- **Checked by:**
+  - `crates/morpholog-postgres/tests/drawn_subjects.rs` re-runs every commit of a history, committed one act at a time through every durable path, in the ordinary kernel from the authenticated history and the row's recorded inputs, under a programme matching its hash that implements its recorded semantics. It requires the same change and intents, with every recorded subject consumed.
+  - `crates/morpholog-postgres/tests/canonical_order.rs` (`the_order_is_of_effects_not_of_what_each_decision_saw`): with two commits overlapping, the effects still rebuild the table exactly.
+- **Gap:** under concurrency, the history before a row in the record's order need not be the snapshot its decision read. SERIALIZABLE may place a transaction before one that took the earlier place in the record. Re-deciding such a row against that prefix can refuse a commit that was rightly admitted, and `rehearse` reports it so. The record does not hold the decision-time snapshot ([#644](https://github.com/jordan-dimov/morpholog/issues/644)).
 - **Boundary:** re-running a commit also needs a programme whose canonical hash matches the row, and an implementation of the semantics version it names. The record names both; it does not contain them. Recording the draws removed the last missing input; it did not create a programme or semantics archive.
 
 ### 6. Semantic identity
@@ -141,7 +146,7 @@ The compiled route runs SQL the compiler writes, which is never recursive, over 
 
 ## Reviewing a change
 
-Every change answers the algebra's question first: does it introduce a new semantic concept, or another way of preparing, proposing, deciding, reading or proving?
+Every change answers the algebra's question first (the statement at the top of this document): does it introduce a new semantic concept, or another way of preparing, proposing, deciding, reading or proving?
 
 **A strategy change** (a planner, an index, a compiled route, transport, caching, packaging of evidence) answers one question: are the eight guarantees and the observable outcome unchanged? If so, it proves that at the seam it replaces, with a differential or a parity test, and earns no new concept.
 

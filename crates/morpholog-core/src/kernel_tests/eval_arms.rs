@@ -9,21 +9,9 @@ use crate::ir_builder::{
     add, assert_, claim, defined, div, duration, eq, mul, params, predicate, program, qty, require,
     sum, term, timestamp, transformation, var,
 };
-use crate::kernel_tests::support::{propose_with_test_actor, test_transition};
+use crate::kernel_tests::support::{holds, propose_with_test_actor, test_transition};
 use crate::propose::propose as kernel_propose;
 use crate::{Definition, EvalError, Outcome, Prop, State, Term, Var};
-
-/// Evaluate one requirement against an empty state with no rules: an
-/// acceptance means the proposition held exactly.
-fn holds(prop: Prop) {
-    let t = transformation("probe", params(&[]), vec![require(prop)]);
-    let outcome = propose_with_test_actor(&t, vec![], &State::default(), &[], &[])
-        .expect("evaluates cleanly");
-    assert!(
-        matches!(outcome, Outcome::Accepted { .. }),
-        "expected the proposition to hold exactly: {outcome:?}"
-    );
-}
 
 /// Evaluate one requirement expecting a kernel error whose message
 /// carries every fragment.

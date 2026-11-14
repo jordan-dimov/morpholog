@@ -35,7 +35,7 @@ export DATABASE_URL='postgres:///morpholog_dev?port=55432'
 
 The socket form keeps peer authentication, so no password is involved; `postgres://localhost:55432/...` would ask for one under the default `pg_hba.conf`. Real Morpholog deployments stay on `:5432`, untouched by any test. To dispose of the cluster: `sudo pg_dropcluster --stop 18 morpholog_test`.
 
-The schema applies the head state from `crates/morpholog-core/sql/schema.sql`, in one transaction (`-1`) that stops at the first error, since the file records at its end that the database is at the head and must not say so over a half-applied schema. An existing database comes forward with `morpholog migrate` (`--check` to ask first), which carries the numbered migrations under `crates/morpholog-core/sql/migrations/` inside the binary; the baseline is the schema v0.0.14 provisioned, and a database from an older release is upgraded with a v0.0.14 binary first. (An installed `morpholog` binary provisions the same schema with `morpholog init`; the `psql` path is right for a source checkout, where the binary you last installed may trail the schema at head.)
+The schema applies the head state from `crates/morpholog-core/sql/schema.sql`, in one transaction (`-1`) that stops at the first error, since the file records at its end that the database is at the head and must not say so over a half-applied schema. An existing database comes forward with `morpholog migrate` (`--check` to ask first), which carries the numbered migrations under `crates/morpholog-postgres/sql/migrations/` inside the binary; the baseline is the schema v0.0.14 provisioned, and a database from an older release is upgraded with a v0.0.14 binary first. (An installed `morpholog` binary provisions the same schema with `morpholog init`; the `psql` path is right for a source checkout, where the binary you last installed may trail the schema at head.)
 
 Optional but recommended:
 
@@ -61,20 +61,7 @@ CI runs the test suites as three jobs in parallel: the sync crates, the CLI suit
 
 The script bails on the first failure. Without `DATABASE_URL` it skips the PG-backed test suites with a note; with it set, it runs them against whatever the URL names, which is why the URL above points at the disposable cluster.
 
-The underlying commands (CI runs the same in `.github/workflows/ci.yml`):
-
-```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
-cargo audit
-cargo test -p morpholog-core -p morpholog-examples -p morpholog-surface -p morpholog-test-support --all-targets --locked
-cargo test -p morpholog-cli -p morpholog-postgres -p morpholog-outbox -p morpholog-bench --all-targets --locked -- --test-threads=1   # with DATABASE_URL exported
-# when python3 is available:
-python3 -m unittest discover crates/morpholog-cli/templates/python_client/tests
-```
-
-The PG-backed test suites share one schema and truncate it between tests; they must run serially (`--test-threads=1`). The `morpholog-bench` entry is its N=1 compatibility smoke test, not a scale run.
+The script is the list of what runs, and `.github/workflows/ci.yml` runs the same checks; read either rather than a copy here. The PG-backed test suites share one schema and truncate it between tests, so they run serially: `.cargo/config.toml` sets `RUST_TEST_THREADS=1` for every `cargo test`. The `morpholog-bench` suite is its N=1 compatibility smoke test, not a scale run.
 
 ### The two-user acceptance test for `serve`
 

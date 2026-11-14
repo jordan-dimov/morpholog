@@ -56,9 +56,9 @@ See [`clinical_trial_enrolment.morph`](clinical_trial_enrolment.morph) for the s
 
 | Invariant | What it pins |
 | --- | --- |
-| `at_most_one_protocol_window_per_version` | A given `(trial_id, protocol_version)` admits at most one effective window. Without it, a duplicate `ProtocolVersion` admission with conflicting windows could retroactively change whether an earlier randomisation was valid. |
-| `at_most_one_consent_window_per_version` | Same shape for `ConsentFormVersion`. |
-| `participant_randomised_once_per_trial` | Two `ParticipantRandomised` claims sharing `(participant_id, trial_id)` must agree on protocol version, date, and actor. Catches the "randomised twice under different protocols" footgun without making validity-window violations eternal. |
+| `protocol_version_unique_by_trial_id_protocol_version` | A given `(trial_id, protocol_version)` admits at most one effective window. Without it, a duplicate `ProtocolVersion` admission with conflicting windows could retroactively change whether an earlier randomisation was valid. |
+| `consent_form_version_unique_by_trial_id_consent_form_version` | Same shape for `ConsentFormVersion`. |
+| `participant_randomised_unique_by_participant_id_trial_id` | Two `ParticipantRandomised` claims sharing `(participant_id, trial_id)` must agree on protocol version, date, and actor. Catches the "randomised twice under different protocols" footgun without making validity-window violations eternal. |
 
 The absence of an invariant tying historical `ParticipantRandomised` claims to *currently* valid protocols, consent forms, or delegations is deliberate. Closing a window must not invalidate an admitted record - same require-vs-invariant doctrine as the verified-revenue and insurance-claim-settlement examples. Validity is checked at admission; the record stands.
 

@@ -31,7 +31,7 @@ Every predicate here is content, terminal state, or lineage - no retractable poi
 | --- | --- |
 | `balanced_posted_entry` | For every `JournalEntry`, sum of line debits equals sum of line credits. `Eq(Sum, Sum)` over the entry's lines. |
 | `journal_entry_has_lines` | Every `JournalEntry` must have at least one `JournalLine`. Without this, a zero-line entry would trivially satisfy `balanced_posted_entry`. |
-| `at_most_one_direct_successor` | A `JournalEntry` can be superseded by at most one direct restatement; parallel chains are forbidden. |
+| `supersedes_unique_by_prior_entry_id` | A `JournalEntry` can be superseded by at most one direct restatement; parallel chains are forbidden. |
 
 **No invariant ties `JournalEntry` to `PeriodClosed`.** Period-close gating lives in `require` on the posting transformations, not in an invariant. As an invariant it would force either rejecting close (because pre-close postings would now violate the rule) or cascade-retracting historical postings. The `require` formulation matches the business: postings made before close stay valid; postings attempted after close are rejected at admission time.
 
@@ -117,4 +117,4 @@ The runtime replays the audit log up to the named transition and evaluates the d
 
 ### Restating an open-period entry
 
-`restate_entry` deliberately does *not* check whether the period is closed. Restating an entry posted earlier in an open period is a valid use case (correcting a same-period error before close). The `at_most_one_direct_successor` invariant ensures only one chain per original entry regardless.
+`restate_entry` deliberately does *not* check whether the period is closed. Restating an entry posted earlier in an open period is a valid use case (correcting a same-period error before close). The `supersedes_unique_by_prior_entry_id` invariant ensures only one chain per original entry regardless.

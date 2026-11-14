@@ -68,13 +68,20 @@ pub fn preimage(args: &[EvalValue]) -> Result<String, String> {
 
 /// `sha256:<hex>` over the preimage.
 pub fn digest(args: &[EvalValue]) -> Result<String, String> {
-    let hash = Sha256::digest(preimage(args)?.as_bytes());
+    Ok(sha256_text(preimage(args)?.as_bytes()))
+}
+
+/// `sha256:<hex>` over some bytes, as every digest the kernel prints is
+/// written.
+pub(crate) fn sha256_text(bytes: &[u8]) -> String {
+    use std::fmt::Write;
     let mut out = String::with_capacity(7 + 64);
     out.push_str("sha256:");
-    for byte in hash {
-        out.push_str(&format!("{byte:02x}"));
+    for byte in Sha256::digest(bytes) {
+        // Writing into a String cannot fail.
+        let _ = write!(out, "{byte:02x}");
     }
-    Ok(out)
+    out
 }
 
 /// JSON as PostgreSQL prints a `jsonb`: object keys sorted by length then

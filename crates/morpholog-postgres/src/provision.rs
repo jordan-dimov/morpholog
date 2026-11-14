@@ -181,14 +181,11 @@ fn apply_default_user(url: &str, user: Option<&str>) -> String {
     // spoken. Matched at a parameter boundary, so a database or option
     // named `...user` (`clusteruser=`, `superuser=1`) does not silently
     // suppress the fill-in and leave the caller connecting as anonymous.
-    let has_user_param = rest
-        .split_once('?')
-        .map(|(_, query)| {
-            query
-                .split('&')
-                .any(|param| param == "user" || param.starts_with("user="))
-        })
-        .unwrap_or(false);
+    let has_user_param = rest.split_once('?').is_some_and(|(_, query)| {
+        query
+            .split('&')
+            .any(|param| param == "user" || param.starts_with("user="))
+    });
     if rest[..authority_end].contains('@') || has_user_param {
         return url.to_string();
     }

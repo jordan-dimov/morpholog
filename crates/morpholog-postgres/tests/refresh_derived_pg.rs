@@ -17,9 +17,9 @@
 )]
 
 mod common;
-use common::{reset_db_and_read_cache, test_pool};
+use common::{reset_db_and_read_cache, test_pool, ts};
 
-use morpholog_core::{ClaimInstance, DerivedClaim, EvalValue, PredicateName, Program};
+use morpholog_core::{ClaimInstance, DerivedClaim, PredicateName, Program};
 use morpholog_postgres::{PgPool, list_derived, refresh_derived};
 use morpholog_surface::parse_program;
 
@@ -42,10 +42,6 @@ const FIXTURE: &str = "program cache_fixture\n\
 
 fn fixture() -> Program {
     parse_program(FIXTURE).expect("fixture parses")
-}
-
-fn ts(s: &str) -> EvalValue {
-    EvalValue::Timestamp(s.parse().expect("timestamp"))
 }
 
 async fn seed_entry(pool: &PgPool, p: &Program, account: &str, amount: i64) {

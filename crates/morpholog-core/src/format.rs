@@ -78,16 +78,7 @@ pub const CANONICAL_ENCODING: u32 = 2;
 /// meaning or fixed by validation, so the identity is a promise about
 /// validated programmes; an invalid one may share a valid one's hash.
 pub fn canonical_hash(p: &Program) -> String {
-    use sha2::{Digest, Sha256};
-    use std::fmt::Write;
-    let digest = Sha256::digest(canonical_preimage(p).as_bytes());
-    let mut out = String::with_capacity(7 + digest.len() * 2);
-    out.push_str("sha256:");
-    for b in digest {
-        // Writing into a String cannot fail.
-        let _ = write!(out, "{b:02x}");
-    }
-    out
+    crate::digest::sha256_text(canonical_preimage(p).as_bytes())
 }
 
 /// The bytes `canonical_hash` digests: the canonical encoding

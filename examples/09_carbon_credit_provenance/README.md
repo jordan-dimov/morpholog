@@ -37,12 +37,12 @@ See [`carbon_credit_provenance.morph`](carbon_credit_provenance.morph) for the s
 
 | Invariant | The bad state it forbids |
 | --- | --- |
-| `at_most_one_verified_quantity_per_measurement` | a measurement verified to two conflicting amounts |
-| `no_double_issuance` | two distinct credits backed by the same measurement |
-| `credit_backed_by_one_measurement` | one credit backed by two different measurements |
-| `single_custody` | one credit held by two accounts at once |
+| `verified_measurement_unique_by_measurement` | a measurement verified to two conflicting amounts |
+| `issued_unique_by_measurement` | two distinct credits backed by the same measurement |
+| `issued_unique_by_credit` | one credit backed by two different measurements |
+| `held_by_unique_by_credit` | one credit held by two accounts at once |
 | `retirement_terminal` | a credit that is both retired and still held |
-| `at_most_one_obligation_per_id` | one obligation id with two different sets of terms |
+| `obligation_unique_by_obligation` | one obligation id with two different sets of terms |
 | `obligation_not_both_satisfied_and_breached` | an obligation that is both satisfied and breached |
 
 ### Transformations
@@ -91,6 +91,6 @@ Provenance is modelled as ordinary **claims about claims** - `VerifiedMeasuremen
 
 ### What this example deliberately does not cover
 
-This example models one credit as backed by one measurement. Real registries may split a project period into many units or batches. We keep one-credit-per-measurement here so the legitimacy mechanics stay visible: `no_double_issuance` refuses two credits backed by the same measurement, and `credit_backed_by_one_measurement` refuses one credit backed by two - together pinning the credit-to-measurement correspondence one to one, so double-counting is impossible in either direction. Conservation across a batch (total issued against a measured quantity) is a later extension, not a change to the legitimacy story.
+This example models one credit as backed by one measurement. Real registries may split a project period into many units or batches. We keep one-credit-per-measurement here so the legitimacy mechanics stay visible: `issued_unique_by_measurement` refuses two credits backed by the same measurement, and `issued_unique_by_credit` refuses one credit backed by two - together pinning the credit-to-measurement correspondence one to one, so double-counting is impossible in either direction. Conservation across a batch (total issued against a measured quantity) is a later extension, not a change to the legitimacy story.
 
 `morpholog inspect guarantees examples/09_carbon_credit_provenance/carbon_credit_provenance.morph` lists what this model forbids - one entry per invariant, naming the forbidden state for the `not(...)` rules (`retirement_terminal`, `obligation_not_both_satisfied_and_breached`). It is the static companion to `explain`: the model declares what is impossible, and `explain` says why a specific transition was refused.

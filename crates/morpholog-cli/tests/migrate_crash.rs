@@ -13,6 +13,7 @@
 )]
 
 mod common;
+use common::with_database;
 
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -22,20 +23,6 @@ use uuid::Uuid;
 
 const BASELINE_SCHEMA: &str =
     include_str!("../../morpholog-postgres/tests/fixtures/schema_v0.0.14.sql");
-
-fn with_database(url: &str, name: &str) -> String {
-    let (base, query) = url
-        .split_once('?')
-        .map_or((url, None), |(b, q)| (b, Some(q)));
-    let swapped = match base.rsplit_once('/') {
-        Some((prefix, _)) => format!("{prefix}/{name}"),
-        None => base.to_string(),
-    };
-    match query {
-        Some(q) => format!("{swapped}?{q}"),
-        None => swapped,
-    }
-}
 
 /// A database at the v0.0.14 baseline, its own, with the admin pool that
 /// drops it.

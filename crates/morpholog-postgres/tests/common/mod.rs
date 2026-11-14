@@ -100,7 +100,7 @@ pub(crate) fn expect_committed(outcome: PgProposalOutcome) -> Uuid {
 
 pub(crate) use morpholog_test_support::{
     bool_, claim_instance, coll, date, dec, dec_str, has_claim, intent_instance, role, subj,
-    test_actor, test_transition,
+    test_actor, test_transition, ts,
 };
 
 /// Refused by the invariant or the named gate `rule`.

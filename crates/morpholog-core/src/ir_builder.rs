@@ -599,21 +599,6 @@ pub fn transformation(name: &str, parameters: Vec<Var>, body: Vec<Stmt>) -> Tran
     }
 }
 
-/// A transformation whose parameters may declare their kinds.
-pub fn transformation_typed(
-    name: &str,
-    parameters: Vec<(Var, Option<PredicateArgKind>)>,
-    body: Vec<Stmt>,
-) -> Transformation {
-    let (parameters, declared_kinds) = parameters.into_iter().unzip();
-    Transformation {
-        name: name.into(),
-        parameters,
-        declared_kinds,
-        body,
-    }
-}
-
 /// Build a [`Definition`] - a named, parameterised proposition.
 /// Parameters come from [`params`]; call it with [`defined`].
 pub fn definition(name: &str, parameters: Vec<Var>, body: Prop) -> Definition {
@@ -622,25 +607,6 @@ pub fn definition(name: &str, parameters: Vec<Var>, body: Prop) -> Definition {
         parameters,
         body: crate::ir::DefinitionBody::Prop(body),
         origin: crate::ir::DefinitionOrigin::Authored,
-    }
-}
-
-/// Build a [`Definition`] that names a figure. Parameters come from
-/// [`params`]; call it with [`defined_value`].
-pub fn value_definition(name: &str, parameters: Vec<Var>, body: ValueExpr) -> Definition {
-    Definition {
-        name: name.into(),
-        parameters,
-        body: crate::ir::DefinitionBody::Value(body),
-        origin: crate::ir::DefinitionOrigin::Authored,
-    }
-}
-
-/// A call to a definition that names a figure, in value position.
-pub fn defined_value(name: &str, args: Vec<ValueExpr>) -> ValueExpr {
-    ValueExpr::Defined {
-        name: name.into(),
-        args,
     }
 }
 

@@ -15,7 +15,7 @@
 # the `morpholog` and `morpholog_read` schemas.
 #
 # Usage:
-#   DATABASE_URL=postgres:///morpholog_sqlx_prep ./scripts/sqlx-prepare.sh
+#   DATABASE_URL='postgres:///morpholog_dev?port=55432' ./scripts/sqlx-prepare.sh
 
 set -euo pipefail
 
