@@ -26,7 +26,7 @@ class RunOutcomes(unittest.TestCase):
                 True,
                 date(2026, 6, 1),
                 datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
-                "PT6H",
+                values.Duration.from_iso("PT6H"),
                 values.Quantity(Decimal("25000"), "USD"),
                 ["nested"],
             ],

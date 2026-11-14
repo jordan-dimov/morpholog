@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from collections.abc import Set as AbstractSet
@@ -4430,8 +4430,12 @@ def to_json(envelope: object) -> str:
 
 
 def _plain(value: object) -> object:
+    # Before the dataclass case: a duration prints as its wire text.
+    if isinstance(value, values.Duration):
+        return value.to_iso()
     if is_dataclass(value) and not isinstance(value, type):
-        return asdict(value)
+        # One level at a time, so json.dumps brings each field back here.
+        return {f.name: getattr(value, f.name) for f in fields(value)}
     if isinstance(value, Decimal):
         return values.encode_decimal(value)
     if isinstance(value, datetime):
