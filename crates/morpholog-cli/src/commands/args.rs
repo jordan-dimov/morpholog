@@ -12,6 +12,9 @@
 //!   known kind (polymorphic, unconstrained, ambiguous, or a collection of
 //!   unknown items) are refused too, and the error points to `--args`.
 
+// A new value kind or construct must be decided here, not defaulted.
+#![warn(clippy::wildcard_enum_match_arm)]
+
 use anyhow::{Context, anyhow, bail};
 use jiff::civil::Date;
 use morpholog_core::{

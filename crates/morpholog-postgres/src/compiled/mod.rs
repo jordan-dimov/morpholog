@@ -63,6 +63,9 @@
 //! state, so on dirty history it can name another case, with the same
 //! variables.
 
+// A new value kind or construct must be decided here, not defaulted.
+#![warn(clippy::wildcard_enum_match_arm)]
+
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write as _;
 
@@ -1050,7 +1053,12 @@ fn computed_vars(expr: &ValueExpr, env: &Env, out: &mut Vec<(Var, Bound)>) {
                 computed_vars(arg, env, out);
             }
         }
-        _ => {}
+        ValueExpr::Term(_)
+        | ValueExpr::Sum { .. }
+        | ValueExpr::Extremum { .. }
+        | ValueExpr::ValueOf { .. }
+        | ValueExpr::Cond { .. }
+        | ValueExpr::Defined { .. } => {}
     }
 }
 
@@ -1084,7 +1092,7 @@ fn leaf_side(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Option<Side> {
                     report: ErrorReport::Value { sums, .. },
                     ..
                 }) => Some(sums),
-                _ => None,
+                Pending::Sum(_) | Pending::Covered(_) | Pending::Value(_) => None,
             })?;
             let mut vars = Vec::new();
             computed_vars(expr, env, &mut vars);
@@ -1094,7 +1102,11 @@ fn leaf_side(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Option<Side> {
                 sums,
             })
         }
-        _ => None,
+        ValueExpr::Term(_)
+        | ValueExpr::Extremum { .. }
+        | ValueExpr::ValueOf { .. }
+        | ValueExpr::Cond { .. }
+        | ValueExpr::Defined { .. } => None,
     }
 }
 
@@ -1114,7 +1126,17 @@ fn leaf_compare(conjunct: &Prop, env: &Env, ctx: &mut Ctx<'_>) -> Option<LeafCom
         ),
         Prop::Eq(left, right) => ("=", left, right),
         Prop::Neq(left, right) => ("!=", left, right),
-        _ => return None,
+        Prop::Claim { .. }
+        | Prop::Defined { .. }
+        | Prop::Implies { .. }
+        | Prop::Exists { .. }
+        | Prop::And(_)
+        | Prop::Or(_)
+        | Prop::Pre(_)
+        | Prop::Not(_)
+        | Prop::Xor(..)
+        | Prop::Forall { .. }
+        | Prop::In(..) => return None,
     };
     Some(LeafCompare {
         op,
@@ -1142,7 +1164,19 @@ struct Prefix {
 fn conjuncts_of(prop: &Prop) -> Vec<&Prop> {
     match prop {
         Prop::And(ps) => ps.iter().collect(),
-        other => vec![other],
+        other @ (Prop::Claim { .. }
+        | Prop::Defined { .. }
+        | Prop::Implies { .. }
+        | Prop::Exists { .. }
+        | Prop::Or(_)
+        | Prop::Pre(_)
+        | Prop::Not(_)
+        | Prop::Xor(..)
+        | Prop::Eq(..)
+        | Prop::Neq(..)
+        | Prop::Compare { .. }
+        | Prop::Forall { .. }
+        | Prop::In(..)) => vec![other],
     }
 }
 
@@ -1211,7 +1245,16 @@ fn diagnostic_level(
                     diagnostic_level(&conjuncts_of(right), l.env, entry, Some(choice), ctx)?,
                 );
             }
-            _ => {}
+            Prop::Claim { .. }
+            | Prop::Exists { .. }
+            | Prop::Or(_)
+            | Prop::Pre(_)
+            | Prop::Not(_)
+            | Prop::Xor(..)
+            | Prop::Eq(..)
+            | Prop::Neq(..)
+            | Prop::Compare { .. }
+            | Prop::In(..) => {}
         }
         let r = render_prop(conjunct, acc.env.clone(), ctx)?;
         acc.from.extend(r.from);
@@ -2222,7 +2265,17 @@ fn compile_invariant(
                 )
             }
         }
-        other => generic_denial(other, &mut ctx)?,
+        other @ (Prop::Claim { .. }
+        | Prop::Defined { .. }
+        | Prop::Exists { .. }
+        | Prop::And(_)
+        | Prop::Or(_)
+        | Prop::Pre(_)
+        | Prop::Xor(..)
+        | Prop::Eq(..)
+        | Prop::Neq(..)
+        | Prop::Compare { .. }
+        | Prop::In(..)) => generic_denial(other, &mut ctx)?,
     };
 
     let plan = ImpactPlan::with_definitions(inv, definitions);
@@ -2573,7 +2626,13 @@ fn const_eq(col: &ColRef, ev: &EvalValue) -> Option<String> {
         match ev {
             EvalValue::CalendarSpan(_) => false,
             EvalValue::Collection(items) => items.iter().all(storable),
-            _ => true,
+            EvalValue::Decimal(_)
+            | EvalValue::Subject(_)
+            | EvalValue::Bool(_)
+            | EvalValue::Date(_)
+            | EvalValue::Timestamp(_)
+            | EvalValue::Duration(_)
+            | EvalValue::Quantity { .. } => true,
         }
     }
     if !storable(ev) {
@@ -2795,7 +2854,13 @@ fn value_call_frame<'a>(
         .iter()
         .map(|a| match a {
             ValueExpr::Term(t) => Ok(t.clone()),
-            _ => Err(CompileReason::Construct {
+            ValueExpr::Arith { .. }
+            | ValueExpr::Sum { .. }
+            | ValueExpr::Extremum { .. }
+            | ValueExpr::ValueOf { .. }
+            | ValueExpr::Cond { .. }
+            | ValueExpr::Call { .. }
+            | ValueExpr::Defined { .. } => Err(CompileReason::Construct {
                 construct: "a figure called with an expression argument",
             }),
         })
@@ -3026,7 +3091,19 @@ fn render_binding_call(
     let (def, frame) = call_frame(name, args, &env, ctx)?;
     let branches: Vec<&Prop> = match condition_body(def)? {
         Prop::Or(branches) => branches.iter().collect(),
-        body => vec![body],
+        body @ (Prop::Claim { .. }
+        | Prop::Defined { .. }
+        | Prop::Implies { .. }
+        | Prop::Exists { .. }
+        | Prop::And(_)
+        | Prop::Pre(_)
+        | Prop::Not(_)
+        | Prop::Xor(..)
+        | Prop::Eq(..)
+        | Prop::Neq(..)
+        | Prop::Compare { .. }
+        | Prop::Forall { .. }
+        | Prop::In(..)) => vec![body],
     };
     let mut selects = Vec::with_capacity(branches.len());
     let mut kinds: Vec<Option<PredicateArgKind>> = vec![None; def.parameters.len()];
@@ -3503,7 +3580,12 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
                     well_typed: tagged_as_sql(col, "date"),
                     tagged: tagged_sql(col),
                 },
-                other => Ordered::None(Some(other.clone())),
+                other @ (PredicateArgKind::Subject
+                | PredicateArgKind::Duration
+                | PredicateArgKind::Bool
+                | PredicateArgKind::Collection
+                | PredicateArgKind::CalendarSpan
+                | PredicateArgKind::Any) => Ordered::None(Some(other.clone())),
             };
             Ok(Operand {
                 key: Some(key_sql(col)),
@@ -3570,7 +3652,14 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
                     "false".to_string(),
                     false,
                 ),
-                _ => {
+                ValueExpr::Term(_)
+                | ValueExpr::Arith { .. }
+                | ValueExpr::Sum { .. }
+                | ValueExpr::Extremum { .. }
+                | ValueExpr::ValueOf { .. }
+                | ValueExpr::Cond { .. }
+                | ValueExpr::Call { .. }
+                | ValueExpr::Defined { .. } => {
                     return Err(CompileReason::SumShape {
                         detail: "computed target",
                     });
@@ -3654,7 +3743,11 @@ fn literal_operand(value: &Value) -> Result<Operand, CompileReason> {
             well_typed: "true".to_string(),
             tagged,
         },
-        _ => Ordered::None(None),
+        EvalValue::Subject(_)
+        | EvalValue::Bool(_)
+        | EvalValue::Collection(_)
+        | EvalValue::Duration(_)
+        | EvalValue::CalendarSpan(_) => Ordered::None(None),
     };
     Ok(Operand {
         key: Some(key_lit(&ev)?),
@@ -3663,7 +3756,12 @@ fn literal_operand(value: &Value) -> Result<Operand, CompileReason> {
         static_unit: match value {
             Value::Decimal(_) => Some(None),
             Value::Quantity { unit, .. } => Some(Some(unit.as_str().to_string())),
-            _ => None,
+            Value::Subject(_)
+            | Value::Bool(_)
+            | Value::Date(_)
+            | Value::Timestamp(_)
+            | Value::Duration(_)
+            | Value::CalendarSpan(_) => None,
         },
     })
 }
