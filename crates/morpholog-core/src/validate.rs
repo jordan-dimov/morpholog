@@ -1161,8 +1161,9 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
         duplicated(p.predicates.iter().map(|d| d.name.as_str())),
     );
 
-    // CalendarSpan is expression-only; the surface cannot declare it,
-    // and hand-built IR is held to the same rule.
+    // A kind that is not declarable (a calendar span, expression-only)
+    // cannot be declared from the surface, and hand-built IR is held to
+    // the same rule.
     let declared_args = || {
         p.predicates
             .iter()
@@ -1175,7 +1176,7 @@ fn collect_duplicate_decl_errors(p: &Program) -> Vec<ValidationError> {
     };
     for (_, name, args) in declared_args() {
         for arg in args {
-            if arg.kind == crate::ir::PredicateArgKind::CalendarSpan {
+            if !arg.kind.is_declarable() {
                 errors.push(ValidationError::CalendarSpanNotDeclarable {
                     declaration: name.clone(),
                     argument: arg.name.clone(),

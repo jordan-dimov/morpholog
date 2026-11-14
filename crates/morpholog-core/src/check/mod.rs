@@ -1330,10 +1330,8 @@ impl CheckCtx<'_> {
                 builtin: Builtin::Abs,
                 ..
             }
-        ) || !matches!(
-            expected,
-            PredicateArgKind::Decimal | PredicateArgKind::Quantity(_) | PredicateArgKind::Duration
-        ) {
+        ) || !expected.is_signed()
+        {
             return;
         }
         // Peel nested `abs(abs(x))` down to the variable.
@@ -1683,16 +1681,7 @@ impl CheckCtx<'_> {
                 // An extremum yields a member, so it has the member's
                 // kind, which must be ordered.
                 if let InferredKind::Known(actual) = resolved {
-                    // An allow-list, so a new kind is unordered until
-                    // someone decides otherwise.
-                    if !matches!(
-                        actual,
-                        PredicateArgKind::Decimal
-                            | PredicateArgKind::Date
-                            | PredicateArgKind::Timestamp
-                            | PredicateArgKind::Duration
-                            | PredicateArgKind::Quantity(_)
-                    ) {
+                    if !actual.is_ordered() {
                         self.report(|context| ValidationError::UnorderedExtremum {
                             op: op.as_str(),
                             actual: actual.clone(),
@@ -1717,24 +1706,22 @@ impl CheckCtx<'_> {
                 // inference alone, never from the node's own seed, which
                 // the hash leaves out.
                 let (expected, result) = match resolved {
-                    InferredKind::Known(PredicateArgKind::Duration) => {
-                        (SumSeed::Duration, PredicateArgKind::Duration)
+                    InferredKind::Known(PredicateArgKind::Any) | InferredKind::UnknownOrAny => {
+                        (SumSeed::Decimal, PredicateArgKind::Decimal)
                     }
-                    InferredKind::Known(PredicateArgKind::Quantity(u)) => {
-                        (SumSeed::Quantity(u.clone()), PredicateArgKind::Quantity(u))
-                    }
-                    InferredKind::Known(PredicateArgKind::Decimal | PredicateArgKind::Any)
-                    | InferredKind::UnknownOrAny => (SumSeed::Decimal, PredicateArgKind::Decimal),
-                    InferredKind::Known(actual) => {
-                        self.report(|context| ValidationError::OperandKindMismatch {
-                            operator: "sum",
-                            expected: PredicateArgKind::Decimal,
-                            actual,
-                            suggestion: None,
-                            context,
-                        });
-                        return InferredKind::Known(PredicateArgKind::Decimal);
-                    }
+                    InferredKind::Known(kind) => match kind.sum_seed() {
+                        Some(seed) => (seed, kind),
+                        None => {
+                            self.report(|context| ValidationError::OperandKindMismatch {
+                                operator: "sum",
+                                expected: PredicateArgKind::Decimal,
+                                actual: kind,
+                                suggestion: None,
+                                context,
+                            });
+                            return InferredKind::Known(PredicateArgKind::Decimal);
+                        }
+                    },
                 };
                 self.sum_seeds
                     .insert(std::ptr::from_ref(expr), expected.clone());
@@ -1911,11 +1898,7 @@ impl CheckCtx<'_> {
             }
             Builtin::Abs => match self.infer_value(&args[0], scope) {
                 // abs keeps a signed value's kind; other kinds are errors.
-                InferredKind::Known(
-                    k @ (PredicateArgKind::Decimal
-                    | PredicateArgKind::Quantity(_)
-                    | PredicateArgKind::Duration),
-                ) => InferredKind::Known(k),
+                InferredKind::Known(k) if k.is_signed() => InferredKind::Known(k),
                 InferredKind::Known(kind) => {
                     self.report(|context| ValidationError::AbsKind { kind, context });
                     InferredKind::UnknownOrAny
@@ -2107,14 +2090,7 @@ impl CheckCtx<'_> {
     /// Calendar spans are excluded: P1M against P30D has no answer
     /// without a date, so spans compare only for equality.
     fn ordered_domain(&mut self, builtin: &'static str, kind: PredicateArgKind) -> InferredKind {
-        if matches!(
-            kind,
-            PredicateArgKind::Decimal
-                | PredicateArgKind::Quantity(_)
-                | PredicateArgKind::Duration
-                | PredicateArgKind::Date
-                | PredicateArgKind::Timestamp
-        ) {
+        if kind.is_ordered() {
             return InferredKind::Known(kind);
         }
         self.report(|context| ValidationError::BuiltinKind {
