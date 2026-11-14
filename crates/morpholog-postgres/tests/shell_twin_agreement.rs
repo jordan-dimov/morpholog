@@ -186,15 +186,41 @@ fn the_shell_twin_agrees_with_the_rust_rule() {
     );
 }
 
+/// A file this test created, removed when dropped. Created exclusively,
+/// so the test never truncates, follows or deletes a file it did not make
+/// in a directory others share.
+struct Created(std::path::PathBuf);
+
+impl Drop for Created {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// A port nothing uses, and a file named as its server socket in `/tmp`.
+fn claim_socket_name() -> (u32, Created) {
+    let first = 40_000 + std::process::id() % 20_000;
+    for port in first..first + 100 {
+        let path = std::path::PathBuf::from(format!("/tmp/.s.PGSQL.{port}"));
+        if std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .is_ok()
+        {
+            return (port, Created(path));
+        }
+    }
+    panic!("no free socket name in /tmp from port {first}");
+}
+
 /// The socket branch, on any machine: a file named as a server socket for
 /// a port nothing uses, in the last directory sqlx looks in, so both sides
 /// must find it and name that directory as the host. With `PGHOST` set,
 /// both must leave the host alone instead.
 #[test]
 fn the_twin_names_the_socket_directory_identically() {
-    let port = 40_000 + std::process::id() % 20_000;
-    let socket = std::path::PathBuf::from(format!("/tmp/.s.PGSQL.{port}"));
-    std::fs::write(&socket, "").expect("a file in /tmp");
+    let (port, _socket) = claim_socket_name();
     let url = format!("postgres:///db?port={port}&user=u");
     let path = format!(
         "{}/../../scripts/shared/sqlx_url.sh",
@@ -202,7 +228,6 @@ fn the_twin_names_the_socket_directory_identically() {
     );
     let shell = shell_sqlx_url(&path, &url);
     let rust = morpholog_postgres::with_connection_defaults(&url);
-    std::fs::remove_file(&socket).expect("cleanup");
     assert_eq!(shell, rust, "the twin disagrees on {url}");
     let pghost = ["PGHOSTADDR", "PGHOST"]
         .iter()
