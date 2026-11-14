@@ -100,10 +100,52 @@ async fn the_database_key_is_equal_exactly_when_the_kernel_says_so() {
     }
 }
 
-/// Each declarable kind renders a typed view column that holds every
-/// sample admitted, and the description names the column's kind.
+/// How a reader of a view gets a column of this kind back as the value it
+/// holds: an SQL expression over the column, and what its text means.
+/// Exhaustive, so a new declarable kind must say how it reads back.
+fn read_back(kind: &PredicateArgKind) -> (&'static str, fn(&PredicateArgKind, &str) -> EvalValue) {
+    match kind {
+        PredicateArgKind::Subject => ("v", |_, t| EvalValue::Subject(t.into())),
+        PredicateArgKind::Decimal => ("v::text", |_, t| EvalValue::Decimal(t.parse().unwrap())),
+        PredicateArgKind::Quantity(_) => ("v::text", |k, t| {
+            let PredicateArgKind::Quantity(unit) = k else {
+                unreachable!()
+            };
+            EvalValue::Quantity {
+                amount: t.parse().unwrap(),
+                unit: unit.clone(),
+            }
+        }),
+        PredicateArgKind::Date => ("v::text", |_, t| EvalValue::Date(t.parse().unwrap())),
+        PredicateArgKind::Timestamp => ("to_json(v) #>> '{}'", |_, t| {
+            EvalValue::Timestamp(t.parse().unwrap())
+        }),
+        // A view's interval is in microseconds, which every sample is.
+        PredicateArgKind::Duration => ("extract(epoch from v)::text", |_, t| {
+            let seconds: rust_decimal::Decimal = t.parse().unwrap();
+            let nanos = (seconds * rust_decimal::Decimal::from(1_000_000_000_i64))
+                .trunc()
+                .to_string()
+                .parse::<i64>()
+                .unwrap();
+            EvalValue::Duration(jiff::SignedDuration::from_nanos(nanos))
+        }),
+        PredicateArgKind::Bool => ("v::text", |_, t| EvalValue::Bool(t == "true")),
+        // A collection's column holds its tagged elements; an `Any` column
+        // holds the whole tagged value.
+        PredicateArgKind::Collection => ("v::text", |_, t| {
+            EvalValue::Collection(serde_json::from_str(t).unwrap())
+        }),
+        PredicateArgKind::Any => ("v::text", |_, t| serde_json::from_str(t).unwrap()),
+        PredicateArgKind::CalendarSpan => ("", |k, _| panic!("{k} is never declared")),
+    }
+}
+
+/// Each declarable kind renders a typed view column that reads back as
+/// the value admitted, by the kernel's equality, for every sample and both
+/// sides of each pair written differently; the description names the kind.
 #[tokio::test]
-async fn every_declarable_kind_renders_a_view_column_that_holds_its_values() {
+async fn every_declarable_kind_renders_a_view_column_that_reads_back_its_values() {
     let pool = test_pool().await;
     morpholog_postgres::testing::reset_database(&pool)
         .await
@@ -114,26 +156,24 @@ async fn every_declarable_kind_renders_a_view_column_that_holds_its_values() {
         .unwrap();
     let p = programme();
     let pg = common::pg_program(p.clone());
-    let mut admitted = std::collections::BTreeMap::<usize, i64>::new();
+    let mut admitted = std::collections::BTreeMap::<usize, Vec<(String, EvalValue)>>::new();
     for (i, kind) in every_kind().iter().enumerate() {
         let samples = kind_samples(kind);
-        // A sample of the kind in another unit is for the key test; the
-        // declaration refuses it, as it should.
-        for (n, v) in samples
+        let values = samples
             .distinct
             .iter()
-            .enumerate()
-            .filter(|(_, v)| kind.holds(&v.kind()))
-        {
+            .chain(samples.equal_pairs.iter().flat_map(|(a, b)| [a, b]))
+            // A sample in another unit is for the key test; the
+            // declaration refuses it, as it should.
+            .filter(|v| kind.holds(&v.kind()));
+        for (n, v) in values.enumerate() {
+            let id = format!("h{n}");
             let act = p.transformation(&format!("hold{i}")).unwrap();
             let outcome = common::propose_pg_with_test_actor(
                 &pool,
                 &pg,
                 act,
-                vec![
-                    EvalValue::Subject(format!("h{n}").as_str().into()),
-                    v.clone(),
-                ],
+                vec![EvalValue::Subject(id.as_str().into()), v.clone()],
             )
             .await
             .unwrap();
@@ -141,7 +181,7 @@ async fn every_declarable_kind_renders_a_view_column_that_holds_its_values() {
                 matches!(outcome, PgProposalOutcome::Committed { .. }),
                 "{kind}: {v:?}"
             );
-            *admitted.entry(i).or_default() += 1;
+            admitted.entry(i).or_default().push((id, v.clone()));
         }
     }
     let rendered = render_views(
@@ -172,17 +212,32 @@ async fn every_declarable_kind_renders_a_view_column_that_holds_its_values() {
             Some(kind.to_string().as_str()),
             "{kind}"
         );
-        let held: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT count(v) FROM morpholog_views.{}",
+        let (expression, decode) = read_back(kind);
+        let rows: Vec<(String, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT id, {expression} FROM morpholog_views.{}",
             view.view
         )))
-        .fetch_one(&pool)
+        .fetch_all(&pool)
         .await
         .unwrap();
+        let expected = &admitted[&i];
         assert_eq!(
-            held, admitted[&i],
-            "{kind}: every admitted value reads back non-null"
+            rows.len(),
+            expected.len(),
+            "{kind}: one row per admitted claim"
         );
+        for (id, value) in expected {
+            let text = rows
+                .iter()
+                .find(|(row, _)| row == id)
+                .and_then(|(_, text)| text.clone())
+                .unwrap_or_else(|| panic!("{kind}: {id} has a value in the view"));
+            assert_eq!(
+                &decode(kind, &text),
+                value,
+                "{kind}: {id} reads back from `{text}`"
+            );
+        }
     }
 }
 

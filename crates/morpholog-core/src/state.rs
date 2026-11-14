@@ -1123,3 +1123,115 @@ mod arg_hasher_tests {
         assert_eq!(hashes.len(), 16, "two indexes hashed a value alike");
     }
 }
+
+#[cfg(test)]
+mod value_order_tests {
+    use super::*;
+    use std::cmp::Ordering;
+
+    /// Values of every kind, two where they can differ, and pairs written
+    /// differently that are equal (`1.0` and `1`, `5.0 USD` and `5 USD`).
+    /// Local because a kernel unit test cannot take test-support's values.
+    fn samples() -> Vec<EvalValue> {
+        let dec = |s: &str| EvalValue::Decimal(s.parse().unwrap());
+        let qty = |a: &str, u: &str| EvalValue::Quantity {
+            amount: a.parse().unwrap(),
+            unit: Unit::from(u.to_string()),
+        };
+        vec![
+            dec("1"),
+            dec("1.0"),
+            dec("2"),
+            dec("-1"),
+            EvalValue::Subject("a".into()),
+            EvalValue::Subject("b".into()),
+            EvalValue::Bool(false),
+            EvalValue::Bool(true),
+            EvalValue::Collection(vec![]),
+            EvalValue::Collection(vec![dec("1")]),
+            EvalValue::Collection(vec![dec("1.0")]),
+            EvalValue::Collection(vec![dec("1"), EvalValue::Subject("a".into())]),
+            EvalValue::Date("2026-01-01".parse().unwrap()),
+            EvalValue::Date("2026-12-31".parse().unwrap()),
+            EvalValue::Timestamp("2026-01-01T00:00:00Z".parse().unwrap()),
+            EvalValue::Timestamp("2026-01-01T00:00:01Z".parse().unwrap()),
+            EvalValue::Duration(jiff::SignedDuration::from_hours(1)),
+            EvalValue::Duration(jiff::SignedDuration::from_secs(-1)),
+            qty("5", "USD"),
+            qty("5.0", "USD"),
+            qty("2", "USD"),
+            qty("5", "EUR"),
+            EvalValue::CalendarSpan(crate::calendar::parse_calendar_span("P1M").unwrap()),
+            EvalValue::CalendarSpan(crate::calendar::parse_calendar_span("P30D").unwrap()),
+        ]
+    }
+
+    /// The variant names serde's derive gives `PredicateArgKind`, which it
+    /// passes to `deserialize_enum` (test-support's kinds test does the same).
+    fn kind_names() -> HashSet<&'static str> {
+        use serde::de::{Error, Visitor, value};
+        struct Capture(std::cell::Cell<&'static [&'static str]>);
+        impl<'de> serde::Deserializer<'de> for &Capture {
+            type Error = value::Error;
+            fn deserialize_any<V: Visitor<'de>>(self, _: V) -> Result<V::Value, value::Error> {
+                Err(value::Error::custom("not an enum"))
+            }
+            fn deserialize_enum<V: Visitor<'de>>(
+                self,
+                _: &'static str,
+                variants: &'static [&'static str],
+                _: V,
+            ) -> Result<V::Value, value::Error> {
+                self.0.set(variants);
+                Err(value::Error::custom("recorded"))
+            }
+            serde::forward_to_deserialize_any! {
+                bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+                bytes byte_buf option unit unit_struct newtype_struct seq tuple
+                tuple_struct map struct identifier ignored_any
+            }
+        }
+        let capture = Capture(std::cell::Cell::new(&[]));
+        assert!(<crate::PredicateArgKind as serde::Deserialize>::deserialize(&capture).is_err());
+        capture.0.get().iter().copied().collect()
+    }
+
+    /// A unit kind serialises as its name, a kind with a payload as a
+    /// one-key object named by it.
+    fn kind_name(v: &EvalValue) -> String {
+        let kind = serde_json::to_value(v.kind()).unwrap();
+        kind.as_str()
+            .map(String::from)
+            .or_else(|| kind.as_object().and_then(|one| one.keys().next().cloned()))
+            .unwrap()
+    }
+
+    /// The canonical order orders claims and key tuples, so it must be a
+    /// total order that agrees with equality: equal exactly when the values
+    /// are, antisymmetric, and transitive. A new variant whose values fell
+    /// through to the rank alone would compare every two of them equal.
+    #[test]
+    fn the_canonical_order_is_total_and_agrees_with_equality() {
+        let values = samples();
+        // Every kind a value can be: every kind but `Any`, which no value is.
+        let covered: HashSet<String> = values.iter().map(kind_name).collect();
+        let kinds: HashSet<String> = kind_names()
+            .into_iter()
+            .filter(|k| *k != "Any")
+            .map(String::from)
+            .collect();
+        assert_eq!(covered, kinds, "a sample of every kind a value can be");
+        for a in &values {
+            for b in &values {
+                let ab = cmp_value(a, b);
+                assert_eq!(ab == Ordering::Equal, a == b, "{a:?} and {b:?}");
+                assert_eq!(ab, cmp_value(b, a).reverse(), "{a:?} and {b:?}");
+                for c in &values {
+                    if ab != Ordering::Greater && cmp_value(b, c) != Ordering::Greater {
+                        assert_ne!(cmp_value(a, c), Ordering::Greater, "{a:?}, {b:?}, {c:?}");
+                    }
+                }
+            }
+        }
+    }
+}
