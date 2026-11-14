@@ -1,6 +1,6 @@
 # Morpholog
 
-**Write business rules once. Make them hold.**
+**Write business rules once. Let AI rapidly generate safe and reliable business systems around them.**
 
 Business software is full of rules. Who may approve a payment? How much stock can be allocated? When can a trade settle? What happens when a figure is corrected?
 
