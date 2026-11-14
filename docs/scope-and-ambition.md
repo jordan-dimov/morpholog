@@ -1,250 +1,160 @@
 # Morpholog: Scope and Ambition
 
-Companion to [`runtime-semantics.md`](runtime-semantics.md) and to [`design-history.md`](design-history.md), which records (retrospectively) which specific examples forced which design decisions.
+This document explains what Morpholog is for, where it should grow and where it should stop. It is not a feature list. For the exact rules of the runtime, see [runtime semantics](runtime-semantics.md). For current plans, see the [roadmap](roadmap.md). [Design history](design-history.md) records why past choices were made.
 
-This document fixes what Morpholog is *for*, what it should grow into, and - equally important - what it must never become. It is a defence against two opposite mistakes: under-claiming the value, and over-claiming the surface.
+## The problem
 
-## Product ambition: make consequential business changes easier to trust
+Business software is full of rules. An order must not use more stock than exists. A payment needs approval. A trade must stay within its limits.
 
-**North star.** Make business software substantially easier to **build, verify and change** by reducing how often the same business obligations must be implemented and independently checked across application code. This is an aspiration to test, not a guarantee of lower cost or fewer defects in today's applications.
+Most applications enforce these rules in several places. They appear in services, database queries, APIs and batch jobs. Copies drift. Changes are hard to check. A mistake may only become visible after money, stock or authority has moved.
 
-The enduring boundary is **proposal versus authority**. People, conventional software and AI agents may propose actions; the approved, independently enforced programme decides whether their effects are admissible under its case-local rules. The proposer need not enforce those rules itself. The surrounding application still owns computation, presentation and external effects.
+AI can write this code faster. But more code is not the answer if someone still has to check every copy.
 
-There are three distinct trust questions:
+**Morpholog's aim is to make business rules explicit, enforce them in one place and remove much of the code that repeats them.**
 
-- **AI or other untrusted software proposes an action.** A pinned, protected Morpholog runtime can enforce the deployed rules independently of that proposer. This is a capability of the runtime, conditional on its actual deployment and credential boundary.
-- **AI changes the surrounding application code.** Independent governance *may* reduce the number of business-policy checks reviewers must re-establish, but only where the integration preserves atomicity, one authoritative state owner and no bypass. Less code to inspect is not, by itself, evidence of a safer change.
-- **AI changes the rulebook or its deployment.** New rules must be reviewed and activated by trusted authorities; proposal admission under an existing approved rulebook does not authorise policy changes. End-to-end protected rulebook promotion remains a separate concern (#627).
+## How it works
 
-No rulebook can establish that its own requirements are complete or correct, that incoming facts are true, or that every downstream effect succeeds. Those are explicit human, integration and operational obligations.
+Suppose a warehouse holds ten items. One order takes seven. A second order asks for five.
 
-**Product test.** For a proposed capability, ask which recurring *obligation* disappears for the caller, developer, reviewer or operator, which obligations remain, and which integration, authoring, deployment and maintenance work is added. Compare the lifetime cost of a **correct, accepted business change**, not generated lines of code or model throughput. AI-assisted application change is the first commercial hypothesis, not Morpholog's identity. Evidence and next experiments are tracked in [#697](https://github.com/jordan-dimov/morpholog/issues/697) and the [roadmap](roadmap.md).
+In a conventional system, every route that allocates stock must apply the right checks. In Morpholog, the second allocation is proposed to the same rulebook. It is refused because only three items remain. The record does not change.
 
-## The thesis
+The rulebook is called a **programme**. It describes what the business accepts, allows and forbids. Its main ideas are small:
 
-Morpholog governs **commit legitimacy**. The only way governed state changes is through a transformation; a transformation commits only if it introduces no violation in any case it touches. The product is not a programming language. It is a runtime where the question "may this state be admitted as legitimate?" is decidable by the language itself, not by code somebody remembered to write.
+- **Claims** are statements the system has accepted, such as "this stock item holds ten units". They are not proof of what exists in the real world.
+- **Transformations** are named business actions, such as "allocate stock" or "approve payment". They are the only authorised way to change those claims.
+- **Invariants** are rules that accepted changes must respect, such as "stock cannot be over-allocated".
+- **The record** keeps admitted changes and the rules under which they were made. Refused changes leave the governed state unchanged.
 
-Everything else - UI, reporting, analytics, optimisation, market data ingestion, OCR, ML, scheduling, integrations - lives outside Morpholog and interacts with governed state only through transformations and reads.
+Morpholog checks each proposal against the current record and the applicable rules. If it passes, the change and its audit entry are saved together. If it fails, Morpholog can explain the refusal.
 
-## The constitution
+This is more than calling a validation function. The check and the change happen in one database transaction. A competing change cannot quietly invalidate the decision under the runtime's stated guarantees.
 
-The whole product:
+There are limits. A check covers the cases a change affects. It does not necessarily repair unrelated problems left by older data. The exact guarantees are in [runtime semantics](runtime-semantics.md) and [the computational model](computational-model.md).
 
-1. The world is a set of admitted **claims**.
-2. The only way claims change is through a **transformation**.
-3. Every transformation must satisfy every active **invariant** in each case it touches.
-4. Therefore a commit cannot introduce a violation, or leave one unrepaired, in a case it touches. Violations inherited outside those cases may remain, as history left them.
+## The ambition: build less software
 
-A corollary that has become the centre of the bet, not a footnote to it: since admissibility is decided by the invariants and not by whatever produced the proposal, **the proposer does not have to be trusted.** A person, a solver, a heuristic, a model, an agent, a genetic search - each only suggests a candidate next state; the runtime admits or refuses it on the same terms, and explains the refusal in the model's own vocabulary so the proposer can repair and retry. This is the thing that gets harder, not easier, as more of what proposes change is software you did not write and cannot audit line by line. Morpholog's answer is to stop trying to trust the proposer: legitimacy is enforced *outside* the intelligence, never asked *of* it. That is what lets a business put untrusted intelligence to work on the records that matter.
+A rule should not need one copy in the API, another in a batch job and a third in a report.
 
-Those are the *constitutional* concepts: claims are the admitted state; invariants and transformations are the only first-class constructs over it - the rules and the actions. The other declarations a programme carries (`predicate`, `intent`, `define`, `derived`) are vocabulary, body grammar, and read-side, in the supporting tier below; none is a modelling primitive. Everything the implementation has grown is **supporting machinery**, and the discipline is to keep it subordinate so it never becomes the identity of the project:
+Morpholog could become the foundation for a substantial business application. The rulebook would define its key records, actions and constraints. Ordinary code would handle the interface, external calculations and connections to other systems.
 
-- **Vocabulary** - `predicate` and `intent` declarations: the shapes claims and outbox effects may take, including declared *claim disciplines* (`unique by`, `append only`, `current pointer by`, `superseded via`, `effective by`) - properties of a claim shape, expressed through generated invariants or definitions, or enforced statically, never a rule-template system.
-- **Body grammar** - the expression syntax of invariant and transformation *bodies*, including `define` (a named, parameterised proposition: a recurring condition written once and called by the name the business uses for it). Supporting syntax, not a user-facing modelling concept; it exists only so that a rule, or a computation inside one, has an honest shape. A definition names a proposition; it is not a view system and does not replace `derived` - `define` answers "does this condition hold?", `derived` enumerates claims.
-- **Read side** - derived claims are named reads over admitted claims. They never mutate governed state; for a derived result to carry legitimacy, a transformation must admit it as an ordinary claim.
-- **Execution account** - the trace and `explain`: a rendering of why a transformation was or was not admitted, never a separate reasoning engine.
-- **Record and consequence** - the audit log (what was admitted, under which rules) and the outbox (post-commit effects a transformation emitted): a consequence log, never a workflow engine.
+This can remove work in four places:
 
-No supporting concept may grow into an independent subsystem - a workflow engine, a projection or query engine, a general query language, host functions, a solver runtime, an analytics layer. Those are the [non-goals](#non-goals); this hierarchy is *why* they are non-goals. The test for any proposed construct is one line: **does it serve claims, invariants, and transformations - or compete with them?**
+- **Writing:** application code calls named business actions instead of rebuilding the same checks.
+- **Reading:** typed views and generated clients can expose the model without another hand-maintained definition of it.
+- **Changing:** developers can inspect rules and test proposed changes against recorded history.
+- **Explaining:** the system can show which rule allowed or refused a decision, and what evidence was available.
 
-Underneath the constitution is one algebra, and everything the runtime does is a way of carrying it out. **A programme, the admitted state and a proposal give a decision. A committed decision gives a new admitted state and its record.** The programme says what legitimate state is. The admitted state is the claims accepted so far, so the same proposal can commit against one state and be refused against another. The decision is committed or rejected. Only a commit persists anything: the new state, and the audit record of what was admitted under which rules. A rejection changes nothing; the rejection log kept beside it is operational evidence, not part of the record. Compiling rules to SQL, choosing which cases a change can affect, indexes, transactions, the outbox, evidence packs, witnesses and resident sessions are each a way of preparing a programme, making a proposal, reaching a decision, reading the state, or proving the record. They may change what a decision costs, never what it is, and none of them is a further concept for a user to learn. So a change to the implementation answers a second question beside the first: **does it introduce a new semantic concept, or another way of preparing, proposing, deciding, reading or proving?** A new concept needs a worked example that forces it. A new way needs only to be correct, and to leave the algebra as it was. The algebra is also a computational promise: a decision is finite, deterministic and pure. [`computational-model.md`](computational-model.md) states that promise as guarantees, with the argument that decisions terminate and the question a change must answer before it may weaken one.
+Some of this already exists. Morpholog has a runtime, audit record, checks, explanation tools, historical rehearsal, generated Python clients and SQL views. Larger application-building workflows are still an ambition.
 
-One discipline runs through all of it: **Morpholog claims no more than it can witness.** Only a commit leaves a record, so a refused proposal leaves none, and the rejection log kept beside it is a floor, not a census. The outbox records each committed intent durably, and workers attempt its delivery: transient failures are retried, so a delivery may occur more than once, and a permanent failure is recorded. It claims neither exactly-once delivery nor the power to undo the outside world. Gateway attestation records which login asserted an actor, not that the actor is who it says. A lint finding is a smell, not a proof, and coverage reports what happened, never what could. An evidence pack proves inclusion and consistency, not that it holds a subject's whole history. The same standard holds for the project's own words: a sentence describing the system says only what its code or a test can show, and where nothing can, the sentence is weakened or removed.
+We should not judge success by lines written in the Morpholog language. Judge it by **code, checks and decisions that no longer need separate implementations**.
 
-## The boundary
+Often the best improvement is to remove a question. If the record already determines a value, derive it. Do not ask a caller or agent to supply a second copy. Ask for genuine choices, observations and evidence. Check those inputs rather than trusting them.
 
-The line is not "core vs application." It is **governed truth vs everything else**.
+## Why AI makes this more important
 
-| Inside Morpholog (governed truth) | Outside Morpholog (computation, presentation, communication) |
+An AI agent can build features quickly. It can also repeat the same business mistake across many files.
+
+The useful split is simple:
+
+**Agents propose. An approved rulebook decides.**
+
+An agent may write a screen, generate an adapter or suggest a business action. It should not have to reproduce every business rule in that code. A protected Morpholog service can enforce the approved rules independently.
+
+This only works if the agent cannot bypass the service, change the deployed rulebook or write directly to the protected data. Those are deployment requirements, not automatic properties of using Morpholog.
+
+Changing the rulebook is different from using it. New rules need review and approval by people with the right authority. An agent cannot approve its own rule changes. A fully protected approval-to-deployment process is still an open goal ([#627](https://github.com/jordan-dimov/morpholog/issues/627)).
+
+The larger opportunity is not "let AI write anything safely". It is **make business software cheaper to build and change while keeping its most important decisions independently controlled**.
+
+## Where Morpholog stops
+
+Morpholog decides which changes may enter the business record. It is not meant to do every job in the application.
+
+| Morpholog owns | Other software owns |
 |---|---|
-| Claims (admitted assertions over subjects) | Market data feeds, sensor streams, OCR, ML categorisation |
-| Invariants (rules that decide admissibility) | Pricing, curve building, MTM compute, simulation, solver output |
-| Transformations (the only path state may change) | UI, dashboards, reports, BI, free-text search |
-| Audit (which transformations admitted what, under which rule set) | Workflow engines, message brokers, schedulers |
-| Outbox (intents to be delivered post-commit) | Integration code that actually sends invoices, REMIT reports, settlement instructions, emails |
+| Accepted claims, business actions and rules | User interfaces and ordinary application flow |
+| The decision and the record of it | Forecasting, optimisation, OCR and AI reasoning |
+| Durable requests for actions after a commit | Sending payments, messages and reports |
+| Views and evidence derived from its record | Dashboards, integrations and external data sources |
 
-The right question for every proposed feature is: *does this need to be governed, or merely computed?* If it needs to be governed, it becomes a claim and an invariant. If it is merely computed or merely presented, it lives outside and the result - if it carries any legitimacy weight - is admitted back in as a claim with provenance.
+Outside work can return as a new proposal. For example, a pricing engine calculates a value. Morpholog can then decide whether that value may be recorded or used for a business purpose.
 
-A useful sharpening of this line, especially around process-shaped concerns: **workflow orchestration is outside; the legitimacy of each workflow step is inside.** Morpholog does not schedule approvals, route tasks, or own user notifications - that is what message brokers, queues, and workflow engines exist for. But whether a given approval was admitted under the authority and conditions the rules require, whether a step may legitimately follow from the prior admitted state, and what the audit trail says afterwards - those are inside, and they are claims. This distinction protects the project from two opposite mistakes: building Camunda inside Morpholog, and letting workflow middleware bypass Morpholog's legitimacy check.
+Morpholog does not call outside services while deciding a change. It records an outgoing request and lets a separate worker act after commit. That worker may retry. Outside effects are not guaranteed to happen exactly once.
 
-## Where compute lives
+**One business operation must have one honest owner of its data.** Splitting a stock movement into two separate commits can leave half the operation done. If an existing system cannot give Morpholog a sound transaction boundary, that integration is not ready.
 
-The boundary above says what belongs in Morpholog; the next question is how an external system integrates - where heavy computation runs, and how it returns to the governed model. The answer is a three-zone split.
+## The rules must also be right
 
-| Zone | What runs there | Examples |
-|---|---|---|
-| **Compute** | Anything heavy, non-deterministic, or arbitrary. Outside the database transaction. | Monte Carlo simulations, OU price-process integration, ML inference, merit-order dispatch, optimisation solvers, web scraping, image processing. |
-| **Commit** | Small, bounded, deterministic transformations that propose state changes. Inside the transaction; must introduce no violation in any case it touches to become durable. | Admitting a settlement claim, recording a verified figure, posting a journal entry, registering a payment intent. |
-| **Outbox** | Post-commit intents staged inside the same transaction; after commit, delivery is attempted, retried on transient failure (so it may repeat), and a permanent failure is recorded. | Sending an invoice, posting a webhook, calling a downstream service, triggering a recompute. |
+A system can enforce the wrong rules perfectly.
 
-The doctrinal statement, in one sentence:
+A payment limit might come from an old contract. An approval step might exist because of a risk that no longer applies. Two departments might follow policies that contradict each other.
 
-> **Morpholog does not call out during commit. It emits durable intents after commit. External compute returns through another governed transformation.**
+Morpholog can explain why a decision passed or failed *under the rules*. That is not the same as explaining why the business chose those rules.
 
-That sentence determines the shape of every integration. There is no synchronous call-out from inside a transformation - it would break the atomicity guarantee and couple the kernel to whatever the called system was doing. There is no "Morpholog drives the simulation" - the simulation lives in the compute zone, in whatever language and framework suits it, and submits its result back as a candidate claim. There is no "external system polls and mutates" - state changes always come through `propose`.
+Over time, we want every important rule to have a clear answer to four questions:
 
-**Input (compute -> commit).** External compute proposes a transformation by name, with an actor and typed arguments (a `Vec<EvalValue>`, the same codec across the CLI's `propose` and the Rust `propose_against_pg`). The input is deliberately narrow: Morpholog owns whether to admit; the caller owns what to propose.
+- **Why does it exist?** What purpose or obligation does it serve?
+- **Where did it come from?** A contract, law, policy or business decision?
+- **Who approved it?** Who can change it?
+- **What does it affect?** Which actions and past decisions depend on it?
 
-**Output (commit -> compute).** Intents a committed transformation emitted land in the outbox, and after commit their delivery is attempted, retried on transient failure, and recorded as failed when permanently impossible - either by an in-process Rust `Deliverer` (the polling worker) or out-of-process through the `morpholog outbox` CLI's claim/complete lease protocol, whichever suits the deployment.
+This does not call for a new theory of every business intention. Start with sources, owners, reasons and examples. Keep them linked to the rules they explain. Agents may help find conflicts and suggest changes. People remain responsible for deciding what the business should want.
 
-The pattern across the two - request transformation, outbox intent, external compute, result transformation - is the *round-trip compute pattern*, walked through concretely in [`outbox-sketch.md`](outbox-sketch.md).
+This is a direction for future work, not a claim that Morpholog already judges whether policies are wise or lawful.
 
-## The expansion principle
+## What we can and cannot trust
 
-> **Whatever you want to make legitimate, name it as a predicate and admit it as a claim. Whatever rules must hold, write as an invariant. Everything else lives outside.**
+Several questions must stay separate:
 
-This single rule subsumes a large family of concepts that other systems implement as separate subsystems. In Morpholog, each is just more claims:
+1. **Did this proposal follow the deployed rules?** Morpholog can answer within its defined scope.
+2. **Are those the right rules?** The business must decide.
+3. **Are the input facts true?** The system needs trustworthy sources and checks.
+4. **Was the right rulebook deployed and protected?** Operators must enforce access and approval boundaries.
+5. **Did the outside action happen?** Delivery, acknowledgement and reconciliation need their own evidence.
 
-| Concept that looks like a feature elsewhere | What it is in Morpholog |
-|---|---|
-| Claim standing / admissibility-for-purpose | `AdmissibleFor(claim_subject, purpose)` - a claim |
-| Read-side / projections | Derived claims computed from admitted claims |
-| Lifecycle phase ("Confirmed," "Posted," "Settled") | A conjunction of admitted claims, optionally named as a derived claim |
-| External-computation provenance | `MTMComputedFrom(mtm_id, curve_snapshot, model_v)` - claims |
-| Integration acknowledgement / delivery | `SentTo(intent, counterparty, message_id)`, `AcknowledgedBy(intent, counterparty, ack_id)` - claims |
-| Permissions / approvals / authority | `HasRole(actor, role)`, `ApprovalAuthorityFor(actor, threshold)` - claims |
-| Temporal qualification (event / effective / known time) | `OccurredOn(subject, date)`, `EffectiveFor(subject, period)`, `KnownAsOf(subject, time)` - claims |
+The audit record helps reconstruct and check past decisions. Rehearsal can show how recorded proposals would fare under different rules. Neither proves that all facts were true or that future behaviour will be correct.
 
-Each category is *located* in the core primitive - admitted claims governed by invariants - not solved by it: several still need carefully designed affordances and real runtime work (derived-claim materialisation, as-of strategies, indexing, invalidation, provenance). The discipline is that any new support serves the claim/invariant model rather than becoming a subsystem beside it. So a proposal that looks like a new subsystem - a workflow engine, an IAM module, a BI layer, a projection framework - is first re-examined as a proposal for a new *claim vocabulary* plus, where genuinely needed, a small claim-serving affordance. Most collapse along that axis.
+Trust comes from these parts working together. No single feature supplies all of it.
 
-## What the language actually needs
+## One rulebook for one shared responsibility
 
-These affordances unlock the categories above. Together they are far less than the surface area of the subsystems they replace.
+A set of business actions that changes the same governed records should be checked by the rules that apply to those records. Splitting those actions across unrelated rulebooks can leave gaps.
 
-### 1. Typed predicate declarations *(landed)*
+A large programme may be organised into smaller source files. That should make teamwork easier, not change the rules. The deployed programme still has one identity and one set of decisions. Work on [programmes in parts](https://github.com/jordan-dimov/morpholog/issues/785) follows this principle.
 
-```
-predicate BankRecognisedRevenue(
-    asset: Subject,
-    period: Subject,
-    amount: Decimal,
-    recognition: Subject
-)
-```
+Separate programmes make sense when responsibilities and write ownership really are separate.
 
-Pure introspection. Not types-over-subjects. Not classes. Just *shapes-of-predicates*: how many arguments, of what kinds, in what positions, with what names. The kernel continues to treat claims as opaque tuples; everything else (parser errors, indexing, derived-claim type-checking, read-side schemas, documentation generation) gets dramatically better.
+## How we will know it works
 
-This is the smallest possible step toward making claim vocabulary at scale manageable, without compromising the "no types over subjects" floor.
+The real test is a working business system, not a clever example or a shorter file.
 
-**Status:** landed - typed `PredicateDecl`s and `IntentDecl`s, validated for arity and kind by `morpholog check`.
+We should compare Morpholog with a well-built conventional application. Test real changes and real failures. Count both the work removed and the new work created.
 
-### 2. Derived claims *(first cut landed)*
+Measure:
 
-A named, read-only computation over admitted claims - a trial balance, a running total, a report row - declared alongside the rules and computed by the same kernel, so a read can never show what an invariant would refuse. This single construct subsumes most of what other systems call "projections" or "read models": phase/lifecycle naming, balances and totals, current pointers re-expressed as derivable, report rows. It is how Morpholog owns the read side without becoming a query engine - the read side is a governed artefact, not a free query surface.
+- Time to build and change a correct working feature.
+- How many versions of a business rule still need maintenance.
+- What reviewers must check, and which defects reach production.
+- The cost of learning the model, moving existing data and operating the system.
+- Transaction safety, performance and retries under real workloads.
+- How well a decision can be explained, checked and revisited.
 
-**Status:** landed and materialised - computed on demand (`enumerate_derived`), with `refresh derived` caching into a `morpholog_read` schema and `generate views` emitting typed SQL views over it, the kernel staying the sole evaluator. Recursion and visibility to invariants are deferred; see [`design-history.md`](design-history.md).
+Test new applications and carefully chosen parts of existing ones. AI-assisted changes need independent tests, not just the agent's own assessment.
 
-### 3. As-of, as a single operator
+If integration costs more than it saves, use a smaller boundary or ordinary software. A failed experiment is evidence, not a reason to add more features until it looks successful.
 
-The audit log already records every transition with a UUIDv7 transition id and timestamp. One operator - `state at T` (or `as of t`) - lets any invariant or derived claim be evaluated against the state that existed at any prior transition.
+## What we will not build
 
-This single primitive collapses the temporal notions that ETRM and accounting systems normally carry as separate fields:
+**Keep the decision engine small.** It must remain finite, deterministic and free of hidden external calls. New language features need a real example that cannot be handled well without them.
 
-- **Event time** - modelled as a claim `OccurredOn(subject, date)`.
-- **Admission time** - already in the audit row (`committed_at`, `transition_id`).
-- **Effective time** - modelled as a claim `EffectiveFor(subject, period)`.
-- **Knowledge time** - the `as of T` operator, evaluated against the audit log.
+Morpholog will not become a general programming language, workflow scheduler, AI model, solver or replacement for PostgreSQL. It will not have a switch that skips business rules. Exceptions must themselves be approved and recorded under explicit rules.
 
-No bitemporal schema is assumed at the modelling level. The v0 audit log already contains enough information to define as-of semantics by replay; performance may later require snapshots or materialised histories, but those are *implementation strategies* rather than *semantic primitives*. The semantics is "evaluate against the state that existed at T"; how to do that efficiently is a separate, contained question.
+These limits apply to the **decision engine**, not every tool around it. Better editors, generated APIs, clients and deployment tools may be useful. Build them when they remove real work. Do not build them just because they are possible.
 
-**Status:** landed by replay - reads and derived claims take `--as-of` (a transition id or RFC 3339 timestamp), reconstructed from the audit log with no bitemporal columns. Snapshots remain the deferred optimisation, exactly as the semantics/strategy split above predicted.
+Our design rules are simple: keep one source of authority; derive instead of duplicating; make limits visible; preserve the meaning of decisions; and prefer removing work to adding machinery.
 
-### 4. Actor context on transitions
+## The direction
 
-The actor under whose authority a transition is being proposed is **transition context**, not a transformation parameter. Every `Transition` carries an `actor`; the audit log persists it; a transformation body - a `require` gate or an `admit` - can consult it through a reserved `Term::Actor` term without each transformation having to declare it. (Inside an invariant body it raises `EvalError::UnboundActor`, by design: authority is checked at admission, in `require`, not asserted as a standing rule.) The shape becomes:
+**Write the business rules once. Make them hold. Build less software around them.**
 
-```
-transformation approve_journal(journal):
-    require HasRole(actor, finance_controller)
-    require not Posted(journal)
-    admit JournalApproved(journal, actor)
-```
-
-Authority, delegation, approval limits, and segregation-of-duties are then modelled as claims (`HasRole(actor, role)`, `ApprovalAuthorityFor(actor, amount_cap)`, `DelegatedBy(delegate, delegator, scope)`), and invariants over those claims. No RBAC subsystem. No middleware. Two pieces working together: the affordance to consult "who proposed this" at *admission time* (`require` checks inside a transformation body, against the actor of the proposed transition), and the discipline to express authority itself as governed claims that invariants can constrain (consistency of the authority record, not its application to any specific proposal).
-
-The plumbing landed first (`Transition.actor`, `audit.actor`); the consultation primitive `Term::Actor` followed, forced by the actor-authority worked example (now part of [`approval_controls`](../examples/04_approval_controls/)). Inside a `require` or an `admit`, `actor` resolves to the actor of the proposing transition. Inside an invariant body, it raises `EvalError::UnboundActor` - the require-vs-invariant doctrine made enforceable by the runtime rather than convention.
-
-### What is not in this list
-
-Not on the list, deliberately: workflow primitives, projection DSL beyond derived claims, query language beyond derived-claim queries, ORM, BI engine, scheduler, solver runtime, message broker. These are *outside the boundary*. If a real example forces one, that is a design event worth a separate doctrine doc, not an incremental feature.
-
-## Surface syntax and the IR
-
-The `.morph` parser commits surface syntax to a deliberately narrower contract than the IR.
-
-**The doctrine:** the parser can rename, rearrange, and add sugar; it cannot add semantic capability the kernel does not have. Surface syntax is more domain-native than the IR but never more expressive than it. Every legal `.morph` file must map to a legal `morpholog_core::Program`, and the surface offers no operator, no construct, and no escape hatch that the kernel cannot evaluate.
-
-The cost of this discipline is that the parser does real translation work (infix to prefix, keyword to enum variant, bounded form to comprehension). The payoff is that the language stays *uncircumventable*. Surface affordances cannot accumulate into a parallel evaluator. The IR remains the single source of semantic truth.
-
-**The surface-to-IR map** - the exact verb-by-verb correspondence, and why each rename is a readability choice rather than a new capability - is tabulated in [`runtime-semantics.md`](runtime-semantics.md#surface-to-ir-mapping), beside the IR definitions it mirrors. Keeping it there means the correspondence is maintained in one place, where the IR itself is specified, rather than drifting across two docs as the kernel grows.
-
-**What this rules out:**
-
-- A surface form that maps to no IR construct (would be a fictitious operator).
-- A surface form that adds an interpretation the kernel does not have (e.g., a convention day count like 30/360 - the kernel counts actual days between civil dates but does not reinterpret the calendar, so the form stays out of the surface until a worked example forces the kernel to grow it. This discipline has already run full cycles: instant-and-duration arithmetic, unit-tagged quantities, and then calendar-span date arithmetic, each stayed out until a worked example - two laytime stages, then covenant reporting - forced it, and then kernel and surface grew together).
-- A surface escape hatch like `unsafe_block { ... }` or `evaluate_in_rust(...)`.
-
-**What this leaves room for:**
-
-- Different layouts (block-style `invariant X:\n  body` vs inline `invariant X: body`) that map to the same IR.
-- Macros / convenience forms that expand to existing IR (e.g., `between(x, lo, hi)` could desugar to `lo <= x and x <= hi`).
-- Renaming, reordering, and disambiguation rules in the surface that have no IR cost.
-
-The doctrine governs every surface addition. A reviewer should reject any surface addition that lacks an IR mapping or that smuggles in an interpretation the kernel cannot evaluate.
-
-**Block syntax: indentation, not braces.** Multi-statement blocks (transformation bodies, `for` loops, future statement-bearing constructs) use indentation, not braces or `end` keywords. This matches the colon-terminated forms at the expression level (`forall x in xs: body`, `exists x: body`, `invariant Name: body`) and keeps `.morph` source reading as rules, not config JSON or imperative scaffolding. The layout mechanism is an implementation choice; the doctrine is *indentation*.
-
-**One programme, one file - deliberately.** There is no `include`, no import, no module system; the word does not even lex. A governed rulebook's unit of trust is the whole programme - one file an auditor reads top to bottom, hashes as one identity, and can hold in one sitting. A module system would reintroduce the question "what else applies here?" that the single file exists to close. If a deployment genuinely outgrows one bounded context, the answer is a second *programme* (its own file, its own hash, its own audit), not a fragment mechanism inside this one.
-
-## The right way to measure ambition
-
-The wrong question: *what percentage of the code is Morpholog?* The right question: *what percentage of the legitimacy-bearing failure modes does Morpholog make non-representable?*
-
-Real ETRM and accounting systems suffer the same small family of failures, regardless of vendor or scale:
-
-- **Reconciliation drift** - truth and reports diverge.
-- **Mutable history** - yesterday's beliefs cannot be reproduced.
-- **Stale standing** - a draft is used as if posted; a superseded value is treated as current.
-- **Authority leaks** - an operation is performed without the approval the rules require.
-- **Lost compute provenance** - which curve produced which MTM, under which model version?
-- **Non-reproducible reports** - a regulatory return cannot be re-derived from its inputs.
-- **External effects under stale state** - an invoice was sent, a settlement instructed, a report filed, against state that has since changed.
-
-These are not seven different failures. They are one failure with seven faces: *state was treated as legitimate that the system cannot, under explicit rules, justify treating as legitimate.*
-
-Morpholog's claim is that this whole class of failure becomes non-representable when the language itself is the legitimacy boundary. Measured this way, Morpholog owns **the majority of the legitimacy surface** of a serious business system while still being a minority of the lines of code. That is the ambition, and it is the right frame; "X% of the codebase" is the wrong one.
-
-## Where Morpholog fits: fragile legitimacy, not hard calculation
-
-That failure family points at the kind of domain where Morpholog earns its place - a wider category than "regulated finance". The recurring shape is **official standing**: the moment something becomes *allowed, recognised, paid, certified, released, listed, funded, or treated as compliant*. Morpholog is strongest wherever the expensive failure is not a bad calculation but a bad standing - a state treated as legitimate that no one can, afterwards, justify. Put another way, the category is **systems where being wrong is not merely incorrect, but illegitimate**.
-
-A domain fits to the degree it has five properties, not by how complex its arithmetic is:
-
-1. A bad official state is expensive - legally, financially, or in safety terms.
-2. The rules are cross-cutting and scattered today (email, PDFs, spreadsheets, separate systems).
-3. Evidence matters as much as calculation.
-4. Audit and explanation carry monetary or legal weight.
-5. There are external effects after commit (a payment, a certificate, an instruction).
-
-Finance, KYC, insurance, clinical trials, and energy settlement score high - but so do trade finance, supply-chain custody, environmental-attribute claims (carbon credits, certificates of origin: "no green claim without admissible provenance"), healthcare eligibility, data-access governance, and the admission of AI-agent actions ("the agent may propose; only legitimate actions become official"). The diagnostic questions are always the same - *why was this allowed, who had the authority, what evidence existed at the time, what obligation did it create, what downstream effect did it emit, and what would have blocked it?* - which is the same observation as: **the legitimacy engine and the explanation engine are one bet, and it has begun paying out.** `morpholog explain` already turns a rejected proposal into a missing-evidence checklist, naming each absent claim and the transformation that would supply it; `morpholog inspect guarantees` names what a model makes impossible - both read straight off the IR that decides admissibility, not a second system bolted alongside. A domain becomes compelling once Morpholog can answer those questions about it, and on the carbon-credit flagship it does. The [roadmap](roadmap.md) carries the rest of the legibility set.
-
-The boundary discipline holds across every one of these: Morpholog governs the *admission of the official-standing claim* - the permit is issued, the action approved, the credit retired - never the physical or computational act behind it (the switching hardware, the AI agent's reasoning and drift, the meter). Those stay outside and return as admitted evidence. It is the discipline that keeps "official state is everywhere" from eroding the inside/outside line.
-
-## Non-goals
-
-These are floors. They do not get relaxed by accumulation of pressure; they get relaxed only by explicit revisit with reasons recorded.
-
-- **No entities, classes, services, or ORM** in the surface language. Subjects are opaque identifiers; predicates attach to subjects; that is the entire object model.
-- **No general workflow engine.** Lifecycle is conjunctions of admitted claims, read through derived claims where a view is wanted. Morpholog is not Camunda and must not grow toward it.
-- **No arbitrary computation inside transformations.** Pure expressions over admitted claims, plus assertions, retractions, intents. External computation lives outside; its results may be admitted back as claims with provenance.
-- **No BI / analytics / reporting engine.** Derived claims govern reproducible read-side outputs; everything else is a separate concern with a separate tool.
-- **No optimisation / solver runtime.** ETRM scheduling, AP payment runs, dispatch - outside. Morpholog governs the inputs and admits the outputs.
-- **No ad-hoc query DSL** beyond derived-claim queries and the as-of operator.
-- **No bypass flags** (`skip_validation`, `force_commit`, etc.). Exceptions, when needed, are first-class typed claims with full audit standing.
-- **No bespoke storage kernel.** Morpholog runs on PostgreSQL 18+ and leans deliberately on `SERIALIZABLE` isolation, JSONB, and atomic multi-table commit. The recurring "if the language is truly minimal, compile it down to a standalone microkernel" inverts the thesis: atomic commit under serializable concurrency, crash recovery, and MVCC are the hardest correctness code in computing, and reimplementing them would move millions of lines of un-battle-tested machinery *inside* the trust boundary for an elegance the product does not need. The minimalism that matters is **surface** (the `.morph` language and IR stay small), not **substrate**. The database is the correctness substrate, chosen on purpose.
-
-## Where this leaves us
-
-Morpholog does not aspire to be the language you write the whole business system in. That would be a trap and a category error. It aspires to be the **governed-truth layer that makes the rest of the business system safe to build**: a runtime where the legitimacy boundary is the language, the failure modes that haunt serious business software become non-representable, and the perennial question - *what did we believe, when, under which rules, and how do we know the data obeyed them?* - has an answer by construction.
-
-Measured in lines of code, that is a minority of any real system. Measured in legitimacy-surface coverage, it can be most of what matters.
+The rules should remain small enough to understand and trust. The systems they support need not be small.
