@@ -1324,7 +1324,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-bench"
-version = "0.0.18"
+version = "0.0.19"
 dependencies = [
  "anyhow",
  "clap",
@@ -1344,7 +1344,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-cli"
-version = "0.0.18"
+version = "0.0.19"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -1370,7 +1370,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-core"
-version = "0.0.18"
+version = "0.0.19"
 dependencies = [
  "ahash",
  "jiff",
@@ -1386,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-examples"
-version = "0.0.18"
+version = "0.0.19"
 dependencies = [
  "jiff",
  "morpholog-core",
@@ -1398,7 +1398,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-outbox"
-version = "0.0.18"
+version = "0.0.19"
 dependencies = [
  "jiff",
  "jiff-sqlx",
@@ -1415,7 +1415,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-postgres"
-version = "0.0.18"
+version = "0.0.19"
 dependencies = [
  "base64 0.23.1",
  "ed25519-dalek",
@@ -1442,7 +1442,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-surface"
-version = "0.0.18"
+version = "0.0.19"
 dependencies = [
  "ariadne",
  "chumsky",
@@ -1452,7 +1452,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-test-support"
-version = "0.0.18"
+version = "0.0.19"
 dependencies = [
  "jiff",
  "morpholog-core",
@@ -1462,7 +1462,7 @@ dependencies = [
 
 [[package]]
 name = "morpholog-witness"
-version = "0.0.18"
+version = "0.0.19"
 dependencies = [
  "bcder",
  "bytes",
