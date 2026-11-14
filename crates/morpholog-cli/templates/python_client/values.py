@@ -30,12 +30,12 @@ from typing import TypeVar
 # ASCII digits only and the whole text, as the binary reads it.
 _DECIMAL_PATTERN = re.compile(r"^-?(0|[1-9]\d*)(\.\d+)?$", re.ASCII)
 # The schema's `date` and `date-time` formats (RFC 3339), and the
-# signed exact-seconds spans the binary writes for a duration.
+# schema's duration pattern, ASCII digits only, as the binary reads it.
 _DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _TIMESTAMP_PATTERN = re.compile(
     r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$"
 )
-_DURATION_PATTERN = re.compile(r"^-?PT(?=\d)(\d+H)?(\d+M)?(\d+(\.\d+)?S)?$")
+_DURATION_PATTERN = re.compile(r"^-?PT(?=\d)(\d+H)?(\d+M)?(\d+(\.\d{1,9})?S)?$", re.ASCII)
 
 
 class CodecError(ValueError):
