@@ -1470,3 +1470,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** two embedders with programmes too large to read as one file (#785). The InvenTree fork built each family as its own file and joined them with a script, and BEDROCK's register had reached 990 lines with more to come. Separate programmes would not do: the families share stock, and an invariant binds only its own programme's acts.
 
 **Landed:** a `.parts` manifest lists a programme's files in order, and every command that takes a `.morph` takes it in its place. The runtime reads the parts as one text, so the language, the parser and the hash are unchanged, and a programme in parts hashes as its concatenation. A part is refused where a construct could run into the next one: an open parenthesis, a missing final newline, a first line that is indented or opens no declaration, or a `program` header outside the first part. A path is refused when it is absolute, uses `..`, resolves out of the manifest's directory, or repeats a listed file. `check --json` names the file each finding points into, so a finding in an `--against` programme is placed too. The doctrine ("One rulebook for one shared responsibility") now says how a programme in parts is read.
+
+### A large act's check no longer exhausts the planner
+
+**Forced by:** the InvenTree fork (#796). A shipment of 750 allocations in one act exhausted PostgreSQL's memory, twice. Each touched case added another condition to the invariant check, and the memory needed to plan that SQL grew roughly with the square of the cases.
+
+**Landed:** cases that constrain the same columns are grouped. Arrays hold the values each column may take, and tuple equality keeps the exact combinations, so the check still examines only the touched cases. The 750-allocation shipment now commits in about three seconds, with the database process under 300 MB. Decisions and witnesses are unchanged.
