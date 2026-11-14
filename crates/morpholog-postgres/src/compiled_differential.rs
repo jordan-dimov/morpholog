@@ -3007,3 +3007,109 @@ transformation check(x):
         assert_eq!(got, expected, "{source}");
     }
 }
+
+const SERIALS: &str = "program serials
+predicate Item(item: Subject, quantity: Decimal)
+predicate Serial(item: Subject, serial: Subject)
+predicate Want(item: Subject, quantity: Decimal)
+invariant serialised_hold_one:
+    Serial(i, _) and Item(i, q) implies q = 1
+transformation stock_two(i1, q1, i2, q2):
+    admit Item(i1, q1)
+    admit Item(i2, q2)
+transformation stock_wanted(tag: Subject):
+    for Want(i, q):
+        admit Item(i, q)
+transformation record_serial(item, serial):
+    admit Serial(item, serial)
+transformation want(item, quantity):
+    admit Want(item, quantity)
+";
+
+/// Probe one act and return what the three evaluators saw.
+async fn observe(
+    pool: &PgPool,
+    prepared: &PreparedProgram,
+    sql_set: &CompiledInvariantSet,
+    transformation: &str,
+    args: Vec<EvalValue>,
+) -> ProbeObservation {
+    match probe_raw(pool, prepared, sql_set, transformation, args).await {
+        Ok(Probe::Observed(obs)) => *obs,
+        other => panic!("expected an observed probe: {}", describe(other)),
+    }
+}
+
+/// An act touching several cases over two columns is checked against
+/// arrays of their keys and their tuples. It must agree with the kernel:
+/// a stored violation in a case the act does not touch refuses nothing,
+/// and a violation the act makes refuses with the kernel's witness in
+/// whatever order the act touches the cases, at two cases and at the
+/// 750 InvenTree ships in one act (#796).
+#[tokio::test]
+async fn a_check_over_many_cases_agrees_with_the_kernel() {
+    let program = morpholog_surface::parse_program(SERIALS).expect("parses");
+    let validated = program.validated().expect("validates");
+    let sql_set = compile_invariants(&validated).expect("compiles");
+    let prepared = PreparedProgram::new(program).expect("valid");
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let serials: Vec<_> = ["a", "b"]
+        .iter()
+        .map(|i| serde_json::json!([subject(i), subject(&format!("s_{i}"))]))
+        .collect();
+    insert_rows(&pool, "Serial", &serials).await;
+    // Inherited, bypassing the kernel: case (a, 2) already violates.
+    insert_rows(
+        &pool,
+        "Item",
+        &[serde_json::json!([subject("a"), decimal("2")])],
+    )
+    .await;
+
+    let obs = observe(
+        &pool,
+        &prepared,
+        &sql_set,
+        "stock_two",
+        vec![subj("a"), dec(1), subj("c"), dec(2)],
+    )
+    .await;
+    assert!(
+        matches!(obs.kernel, Some(Outcome::Accepted { .. })) && obs.stage2.is_none(),
+        "cases (a, 1) and (c, 2) leave (a, 2) alone: kernel {:?}, case-bound {:?}",
+        obs.kernel,
+        summarise(&obs.stage2)
+    );
+
+    for args in [
+        vec![subj("a"), dec(3), subj("b"), dec(4)],
+        vec![subj("b"), dec(4), subj("a"), dec(3)],
+    ] {
+        let obs = observe(&pool, &prepared, &sql_set, "stock_two", args.clone()).await;
+        assert_eq!(
+            governed_contract(&obs),
+            Ok(false),
+            "{args:?} refuses as the kernel does"
+        );
+    }
+
+    // Two violations deep in 750 cases: the witness is still the kernel's.
+    let wanted: Vec<_> = (0..750)
+        .map(|k| {
+            let quantity = if k == 400 || k == 700 { "5" } else { "1" };
+            serde_json::json!([subject(&format!("w{k:03}")), decimal(quantity)])
+        })
+        .collect();
+    insert_rows(&pool, "Want", &wanted).await;
+    let serials: Vec<_> = (0..750)
+        .map(|k| serde_json::json!([subject(&format!("w{k:03}")), subject(&format!("t{k:03}"))]))
+        .collect();
+    insert_rows(&pool, "Serial", &serials).await;
+    let obs = observe(&pool, &prepared, &sql_set, "stock_wanted", vec![subj("go")]).await;
+    assert_eq!(
+        governed_contract(&obs),
+        Ok(false),
+        "750 cases refuse as the kernel does"
+    );
+}

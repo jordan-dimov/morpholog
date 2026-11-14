@@ -66,7 +66,7 @@
 // A new value kind or construct must be decided here, not defaulted.
 #![warn(clippy::wildcard_enum_match_arm)]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write as _;
 
 use morpholog_core::{Admission, EffectiveDelta, Outcome, StagedDelta, State, execution};
@@ -932,9 +932,11 @@ impl BoundedCases {
     /// Cases binding the same columns are one group, held as arrays: an
     /// `OR` of one arm per case made the planner's memory grow with the
     /// square of the cases, gigabytes for an act touching a few hundred
-    /// claims. Each column's `= ANY` keeps the seek through its index;
+    /// claims. Each column's `= ANY` is a condition its index can serve;
     /// over several columns, the row's tuple must also be one of the
-    /// group's, so the filter admits exactly the touched cases.
+    /// group's, so the filter admits exactly the touched cases. There are
+    /// as many groups as shapes of case, a handful, so finding a case's
+    /// group is no search over the cases.
     pub(crate) fn filter(&self) -> String {
         let mut groups: Vec<(&[String], Vec<&Case>)> = Vec::new();
         for case in &self.cases {
@@ -978,12 +980,12 @@ fn group_filter(seeks: &[String], members: &[&Case]) -> String {
         .iter()
         .enumerate()
         .map(|(i, seek)| {
-            let mut keys: Vec<&str> = Vec::new();
-            for case in members {
-                if !keys.contains(&case.keys[i].as_str()) {
-                    keys.push(&case.keys[i]);
-                }
-            }
+            let mut seen: HashSet<&str> = HashSet::new();
+            let keys: Vec<&str> = members
+                .iter()
+                .map(|case| case.keys[i].as_str())
+                .filter(|key| seen.insert(key))
+                .collect();
             format!("({seek}) = ANY (ARRAY[{}])", keys.join(", "))
         })
         .collect();
@@ -1664,9 +1666,9 @@ impl CompiledInvariant {
                 one.seeks.push(seek_sql(col));
                 one.keys.push(key);
             }
-            if !rendered.contains(&one) {
-                rendered.push(one);
-            }
+            // Core lists each case once. A repeat would only lengthen the
+            // SQL: an array entry or a rank arm twice changes no answer.
+            rendered.push(one);
         }
         CaseFilter::Bounded(BoundedCases { cases: rendered })
     }
