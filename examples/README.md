@@ -1,9 +1,8 @@
 # The worked examples
 
-Every example runs end to end against PostgreSQL; nothing is mocked. The
-[main README](../README.md#start-with-these-examples) lists them by domain.
-This page offers two other ways in: by the business problem you have, and
-by what you want to write in a `.morph` file.
+Every example runs end to end against PostgreSQL; nothing is mocked.
+Find one by the business problem you have, by domain, or by what you
+want to write in a `.morph` file.
 
 ## Find an example by business problem
 
@@ -22,6 +21,50 @@ by what you want to write in a `.morph` file.
 | Require human oversight of an AI's output | [Biometric identification oversight](13_biometric_identification_oversight/) |
 | Hold someone to a commitment made before the outcome was known | [Sealed bids](26_sealed_bids/) |
 | Add Morpholog to an application you already run | [Adding Morpholog to an existing trading system](etrm_embedder/) |
+
+## Find an example by domain
+
+**Start here**
+
+- [Trade lifecycle](10_trade_lifecycle/) - a commodity trade from capture to settlement. Only a desk with authority for the commodity can confirm it. Each settlement must name the official price in force. A price correction changes the price the next settlement must name, and leaves the earlier settlements standing.
+- [Adding Morpholog to an existing trading system](etrm_embedder/) - a Python program standing in for a trading system drives the trade lifecycle through the client Morpholog generates from its rules. The trading system keeps doing its job; Morpholog decides the steps that must be defensible.
+- [Margin call run](14_margin_call_run/) - a risk engine proposes the whole day's run. It is accepted only if every account that should be called is in it, no other account is, and every amount is exact. A margin call the engine forgot is refused, not just a wrong one.
+- [Verified revenue](02_verified_revenue/) - a figure is approved for a particular use, relied on, then corrected. Every decision made along the way stays defensible.
+- [Biometric identification oversight](13_biometric_identification_oversight/) - the EU AI Act's two-person verification, enforced: an AI's match counts for nothing until two distinct verifiers, each authorised when they verified, confirm it.
+
+**Money and markets**
+
+- [Double-entry ledger](03_double_entry_ledger/) - debits equal credits; closing a period; restating; a trial balance at any past moment.
+- [Settlement netting](01_settlement_netting/) - settlements that are fine alone but forbidden together are refused.
+- [Insurance claim settlement](05_insurance_claim_settlement/) - total payouts can never exceed the policy limit.
+- [Borrowing base](11_borrowing_base/) - a loan can never be drawn beyond what its collateral supports.
+- [Metered billing](15_metered_billing/) - a bill correct to the penny, every line recomputed and rounded the agreed way.
+- [Covenant reporting](17_covenant_reporting/) - a loan's reporting calendar, three calendar months at a time, with overdue notices that must count the days correctly.
+- [Laytime and demurrage](12_laytime_demurrage/) - shipping's argument about minutes: exact times, computed deadlines, tonnes of cargo and dollars of delay.
+- [Order blotter](24_order_blotter/) - a cancel recorded by mistake on an append-only blotter: marked in error by an appointed corrector, never removed, and the fill it blocked admitted afterwards.
+
+**Evidence, authority and regulation**
+
+- [Approval controls](04_approval_controls/) - authority checked at the moment someone approves, and withdrawn later; approvals given while it held stay valid, and the document's recorded amount, not the approver, decides whether a ceiling applies.
+- [Clinical trial enrolment](06_clinical_trial_enrolment/) - protocol, consent and eligibility must all be valid on the day a patient is enrolled.
+- [KYC sanctions screening](08_kyc_sanctions_screening/) - onboarding blocked by an out-of-date screening or an unresolved match.
+- [Carbon-credit provenance](09_carbon_credit_provenance/) - no green claim without evidence behind it, and no credit counted twice.
+
+**Operations**
+
+- [Operational information](20_operational_information/) - an untrusted optimiser's figures are recomputed and checked before any of them is accepted.
+- [Release governance](16_release_governance/) - this project's own release checklist: a release tagged before its checks passed cannot be recorded.
+- [Closed-loop execution](21_closed_loop_execution/) - an untrusted agent's orders reach the venue only through a custodied executor, and the venue's own report exposes any order nobody authorised.
+- [Residue classes](22_residue_classes/) - two textbook theorems made finite by a change of representation: the record verifies the finite part itself, keeps a proof assistant's report apart as testimony, and lets a conclusion stand only on both.
+- [Delivery-hour limits](23_delivery_hour_limits/) - a power book's cap that holds in every hour a trade touches, the hours computed from the trade, and a day product as long as the published calendar day says.
+- [Stock allocation](25_stock_allocation/) - a warehouse ships a shipment by visiting every allocation on it, splitting the item or sending it whole, the act deciding which, and stock is conserved across every split.
+- [Sealed bids](26_sealed_bids/) - bidders commit to a bid before the close and reveal it after, and the record refuses a reveal that does not hash to its commitment.
+
+**Language features**
+
+- [Scoped charges](18_scoped_charges/) - each charge takes its figure from the right source, and a line with the wrong source's figure cannot be saved.
+- [Charging years](19_charging_years/) - a billing period may not cross the 1 April anniversary, and each run records the price list it used.
+- [Chess](07_chess_transition_invariants/) - a toy: rules that compare the board before a move with the board after it.
 
 ## Find an example by what you want to write
 
