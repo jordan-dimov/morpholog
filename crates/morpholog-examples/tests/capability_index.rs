@@ -310,22 +310,23 @@ fn every_construct_the_index_names_is_in_the_canonical_table() {
     );
 }
 
-/// The two indexes agree on which examples exist: the index page says the
-/// main README lists the same ones.
+/// The domain list names every example the tables do: the page offers it
+/// as a way in to all of them.
 #[test]
-fn the_domain_index_and_the_capability_index_cover_the_same_examples() {
-    let readme = std::fs::read_to_string(repo_root().join("README.md")).expect("README.md");
-    let indexed: BTreeSet<String> = parse_rows(&index_text())
-        .into_iter()
-        .map(|r| r.directory)
-        .collect();
+fn the_domain_list_and_the_capability_index_cover_the_same_examples() {
+    let text = index_text();
+    let start = text
+        .find("## Find an example by domain")
+        .expect("examples/README.md has a domain list");
+    let rest = &text[start..];
+    let domains = rest[3..].find("\n## ").map_or(rest, |end| &rest[..end + 3]);
+    let indexed: BTreeSet<String> = parse_rows(&text).into_iter().map(|r| r.directory).collect();
     let missing: Vec<&String> = indexed
         .iter()
-        .filter(|d| !readme.contains(&format!("examples/{d}/")))
+        .filter(|d| !domains.contains(&format!("]({d}/)")))
         .collect();
     assert!(
         missing.is_empty(),
-        "the capability index covers examples the main README's domain list does not: \
-         {missing:?}. The index page tells the reader both list the same examples."
+        "the capability index covers examples the domain list does not: {missing:?}"
     );
 }

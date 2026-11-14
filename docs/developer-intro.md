@@ -901,10 +901,23 @@ conditions instead of one twenty-line gate.)
 
 ## Questions you are probably asking
 
-For the questions about writing twice, database access, a record whose shape
-changes, performance and GDPR, see the
-[README's common questions](../README.md#common-questions). What this guide
-raises specifically:
+**"Doesn't this mean writing everything twice?"**
+No. Each governed action is written once, to Morpholog. The systems that need it - the ETRM, the ERP, a reporting store - are kept up to date from the notifications accepted actions emit (retried on transient failure, with keys that make a repeated delivery harmless, and a permanent failure recorded rather than retried forever). One write, then explicit copying, with no two-phase commit. The tables are plain PostgreSQL and can sit in the same database as your application's, in their own schema.
+
+**"Can't someone bypass the rules with raw SQL?"**
+With superuser access, yes, as with any database (a DBA can drop a `CHECK` constraint too). Two things limit it. Ordinary permissions let only Morpholog's role write its tables. And the records and the audit log are two accounts of one history, so `audit verify` catches an edit that makes them disagree, or one that rewrites both if you have shared a checkpoint fingerprint outside the database. That fingerprint is 32 bytes: email it to your auditor, or have a public timestamp authority sign it (`audit checkpoint --witness rfc3161:<url>`) so the check can also show *when* the history looked like this. The honest limit: it protects history only up to the last fingerprint you shared, and sharing it is a habit the software cannot enforce.
+
+**"Isn't one generic table of records slow?"**
+The table is storage, not the query engine. A rule that compiles to SQL is checked inside the same transaction, only over the records a change touches; other rules are checked in memory over the records the change reads. Either way the in-memory version is the specification, and a test holds the SQL version to it. Heavy querying and reporting use the typed SQL views Morpholog generates, or a downstream copy.
+
+**"What about GDPR's right to erasure, if nothing is deleted?"**
+Keep personal data in an ordinary store you can erase, keyed by an opaque id, and keep personal details out of the governed records ([how, and what it does not cover](embedder-integration.md#personal-data-outside-the-record)). The design encourages this but cannot make it automatic. Erasing inside the history cryptographically is a known future direction.
+
+**"How does the shape of a record change once history exists?"**
+The same way records change: declare the new shape, carry the data forward with a governed transformation, and history stays as it was recorded. Tooling that automates this is future work; `morpholog migrate` already upgrades Morpholog's own tables between releases.
+
+**"Do I have to call a command-line tool for every request?"**
+No. One-off calls are the simple path (about 9ms each). `morpholog session` keeps one process running with your rules loaded and a warm connection, and answers several times faster per call, with the same JSON either way. `morpholog generate python-client` writes a typed, dependency-free Python client from your rules, session support included, stamped with the fingerprint of the rules it was built from. Rust programs use the library directly. For callers that must hold neither the rules nor the database logins, `morpholog serve` holds both behind a Unix socket ([serving callers you do not trust](embedder-integration.md#serving-callers-you-do-not-trust-morpholog-serve)). More languages will come when a real integration needs them.
 
 **"Are `Subject` and `Decimal` really the only types?"**
 No - this guide's example just never needed more. There are dates with date
@@ -946,8 +959,7 @@ that fired, with a caret on its line.
   from an application rather than a terminal: the pinned contract this
   guide's `propose()` sketch was secretly following, batch import, and the
   generated Python client.
-- The project [`README`](../README.md) - the wider pitch and the list of
-  questions Morpholog is built to answer.
+- The project [`README`](../README.md) - the wider pitch.
 - [`scope-and-ambition.md`](scope-and-ambition.md) and
   [`roadmap.md`](roadmap.md) - what Morpholog is for, what it must never
   become, and what is coming next.
