@@ -985,6 +985,83 @@ To tell whether a deployment is affected, look in `pg_locks` while proposals run
 
 `check -v` lists each read in a transformation body that loads its predicate whole: the transformation, the predicate, the statement, its rule name when it has one, and the definitions the read goes through. A read is keyed only by values the transformation knows before it runs: a parameter no statement rebinds, `actor`, or a literal. A variable a gate binds as it runs, such as a trade it sums over, does not key anything, and the selector `effective by` generates looks for a later version by its keys alone, so passing it another field does not key that read. A limit gate that sums every trade's terms in force through that selector therefore reads every organisation's terms. A definition that names the organisation in its reads, passed the parameter, keys it. The list is text in `check -v`, not part of `check --json`.
 
+### A walk in a recorded order
+
+Some host code walks claims in order, and each pass depends on the ones before it. InvenTree ships a shipment this way. It visits the shipment's allocations with a running quantity per stock item: an allocation splits the item when it takes less than the item has left, and otherwise takes the item whole. A `for` pass reads the record as the act began, so there is no running value. But the running quantity is a prefix sum. What an item has left when an allocation is reached is its quantity, less the allocations of it that come earlier. Given an order that is a recorded fact, each pass computes that from the record:
+
+```morph
+program shipping
+
+predicate Item(item: Subject, quantity: Decimal)
+    unique by (item)
+predicate Shipment(shipment: Subject, next: Decimal)
+    unique by (shipment)
+predicate Alloc(alloc: Subject, shipment: Subject, item: Subject, quantity: Decimal, seq: Decimal)
+    unique by (alloc)
+predicate Shipped(item: Subject, shipment: Subject)
+predicate ShipsAs(alloc: Subject, item: Subject)
+
+transformation stock(item, quantity):
+    admit Item(item, quantity)
+
+transformation open_shipment(shipment):
+    admit Shipment(shipment, 0)
+
+-- The order is a recorded fact: each allocation takes the shipment's
+-- next place, so no two allocations in a shipment share one.
+transformation allocate(alloc, shipment, item, quantity):
+    bind Shipment(shipment, next)
+    let after = (next + 1)
+    retract Shipment(shipment, next)
+    admit Shipment(shipment, after)
+    admit Alloc(alloc, shipment, item, quantity, next)
+
+-- A merge moves allocations onto the item they now draw from, and each
+-- keeps its place in the shipment.
+transformation merge_stock(source, target):
+    bind Item(source, moved)
+    bind Item(target, held)
+    let total = (held + moved)
+    retract Item(source, moved)
+    retract Item(target, held)
+    admit Item(target, total)
+    for Alloc(a, s, source, q, seq):
+        retract Alloc(a, s, source, q, seq)
+        admit Alloc(a, s, target, q, seq)
+
+-- Each pass reads the record as the act began. What an item has left
+-- when an allocation is reached is its quantity, less the allocations
+-- of it that come earlier in the shipment. Only the item's last pass
+-- writes its remainder, and the shipment's unique places make that
+-- pass one.
+transformation ship(shipment):
+    for Alloc(a, shipment, i, q, seq):
+        bind Item(i, held)
+        let before = (sum(q2 | Alloc(_, shipment, i, q2, s2) and s2 < seq))
+        let left = (held - before)
+        if q < left:
+            let child = new Subject()
+            admit Item(child, q)
+            admit Shipped(child, shipment)
+            admit ShipsAs(a, child)
+            if not (exists s3: Alloc(_, shipment, i, _, s3) and s3 > seq):
+                let rest = (left - q)
+                retract Item(i, held)
+                admit Item(i, rest)
+        else:
+            admit ShipsAs(a, i)
+            admit Shipped(i, shipment)
+            retract Item(i, held)
+            admit Item(i, left)
+```
+
+- **The order is recorded.** Each allocation takes the shipment's next place from a counter claim. InvenTree's own result depends on an order the database happens to return: which allocation keeps the original item when two use it up exactly, for one.
+- **The order is unique across the whole shipment, not per item.** A merge moves allocations onto the item they now draw from, and each keeps its place. With an order per item, two allocations that were each first for their own item would share one place after a merge.
+- **Only the item's last pass writes its remainder.** The prefix sum reads only the same item's earlier allocations. Two passes that write different remainders are refused by the item's `unique by`. Two that write the same one write one claim, and nothing refuses them: two allocations sharing a place do exactly that, which is why the place must be unique.
+- **The sum is quadratic** in one item's allocations within one shipment, which is small.
+
+**What it costs.** Every allocation into a shipment retracts and re-admits its one counter claim, so allocations into one shipment conflict whichever item they draw from. On the InvenTree fork, sixteen allocations racing into one shipment, on distinct items, retried 2.85 to 2.98 times per commit. Allocations into different shipments share no counter. Each conflict is a `serialization_failure`, safe to submit again as it is, with a retry loop like the one above. Orders built from `decided_at` and a tie-break were measured too. The ones that retried less were not unique across the shipment, and a merge broke them; the ones that were unique retried as much as the counter.
+
 ## The resident session (`morpholog session`)
 
 ```bash
