@@ -19,6 +19,7 @@
 )]
 
 pub mod differential;
+pub mod kinds;
 
 use jiff::civil::Date;
 use morpholog_core::{

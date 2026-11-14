@@ -404,11 +404,11 @@ pub enum ValidationError {
         found: usize,
         context: ValidationContext,
     },
-    /// A `digest` argument of a kind no claim can carry: a collection or
-    /// a calendar span. The encoding is the stored value's, so only a
-    /// storable kind has one.
+    /// A `digest` argument that is not a single value: a collection, or
+    /// a calendar span, which nothing stores. A digest commits to single
+    /// values, each in its stored encoding.
     #[error(
-        "digest takes the kinds a claim can carry, not {kind} (argument {position}) in {context}"
+        "digest takes single values (a subject, decimal, quantity, date, timestamp, duration or bool), not {kind} (argument {position}) in {context}"
     )]
     DigestArgumentKind {
         kind: PredicateArgKind,
