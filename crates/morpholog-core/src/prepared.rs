@@ -149,10 +149,11 @@ impl PreparedProgram {
     }
 
     /// [`Self::propose`] without the candidate state: the decision and
-    /// the effective delta it was judged on, for a caller that advances
-    /// its own state afterwards, as a rehearsal does. `Ok(None)` when no
-    /// transformation has that name.
-    pub(crate) fn decide(
+    /// the effective delta it was judged on, for a caller that keeps its
+    /// own state and advances it with [`State::apply`], as a rehearsal or
+    /// an exchange core does. Nothing of `pre_state` is copied. `Ok(None)`
+    /// when no transformation has that name.
+    pub fn decide(
         &self,
         transition: &Transition,
         pre_state: &State,

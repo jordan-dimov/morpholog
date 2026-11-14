@@ -562,8 +562,11 @@ impl State {
 
     /// Advance this state in place by one transition's delta:
     /// retractions first, then admissions not already present.
-    /// `clone()` is a cheap snapshot: it copies only what changed since
-    /// the base, which this keeps small.
+    /// `clone()` shares the base and copies the overlay: every claim
+    /// admitted since the base, with its argument indexes, which this lets
+    /// grow to an eighth of the base (or 512 entries) before folding it. A
+    /// caller that wants only a decision takes no copy:
+    /// [`crate::PreparedProgram::decide`] judges over a view.
     pub fn apply(&mut self, asserted: &[ClaimInstance], retracted: &[ClaimInstance]) {
         self.apply_under(asserted, retracted, usize::MAX);
         if self.layering_now().compacts_ordinarily() {

@@ -8,6 +8,7 @@ mod canonical;
 mod case_bound;
 mod checked_arith;
 mod cond_semantics;
+mod copies;
 mod date_arithmetic;
 mod decimal_wire;
 mod definitions_adversarial;
