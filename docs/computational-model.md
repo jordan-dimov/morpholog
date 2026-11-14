@@ -32,7 +32,10 @@ A decision's meaning has no ambient inputs. The kernel reads no file, standard i
 Fresh subjects are the one input taken during execution, through one explicit boundary, the subject source. A runtime may produce that input from the clock and randomness, as the shipped one does (UUIDv7): the subject sequence is the semantic input, never the way it was generated.
 
 - **Holds by:** `morpholog-core` has no I/O dependency; `new Subject()` draws from a source the caller supplies.
-- **Checked by:** `scripts/kernel_purity.sh` (in precommit and CI): no randomness crate among the kernel's dependencies, and no clock, randomness, file, standard I/O, network, process, environment or thread access, and no printing, in its source. A tripwire, not a proof.
+- **Checked by:**
+  - `scripts/kernel_purity.sh`, in precommit and CI: no randomness crate among the kernel's dependencies, and no file, standard I/O, network, process, environment or thread module named in its source.
+  - Clippy, through the kernel's `clippy.toml` and lints at its crate root: no clock read, environment read, file, stream, thread or process call or type, and no printing. Clippy resolves each call to its definition, so a renamed import, a re-export or a fully qualified path is refused as well.
+  - Both are tripwires over the listed names, not a proof: a dependency could read the clock inside a function the lists do not name.
 - **Gap:** a subject source is caller code, so termination assumes it answers (see premise T6).
 
 ### 4. Explicit state

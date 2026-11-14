@@ -1,0 +1,64 @@
+# The kernel decides from what it is given. It reads no clock, no
+# randomness and nothing outside the process: no files, environment,
+# network, other processes, threads or standard streams. Clippy resolves
+# each call and type below to its definition, so a renamed import, a
+# re-export or a fully qualified path is caught as surely as the plain
+# name. `scripts/kernel_purity.sh` keeps the checks that need no build:
+# no randomness crate among the dependencies, and no use of the
+# outside-world modules at all.
+#
+# This file replaces the workspace's `.clippy.toml` for this crate, so it
+# repeats the test allowances.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+
+disallowed-methods = [
+    { path = "std::time::SystemTime::now", reason = "the kernel reads no clock; take the instant as an input" },
+    { path = "std::time::Instant::now", reason = "the kernel reads no clock; take the instant as an input" },
+    { path = "jiff::Timestamp::now", reason = "the kernel reads no clock; take the instant as an input" },
+    { path = "jiff::Zoned::now", reason = "the kernel reads no clock; take the instant as an input" },
+    { path = "jiff::tz::TimeZone::system", reason = "the system time zone comes from the environment" },
+    { path = "jiff::tz::TimeZone::try_system", reason = "the system time zone comes from the environment" },
+    { path = "jiff::tz::db", reason = "the time zone database is read from disk" },
+    { path = "jiff::tz::TimeZoneDatabase::from_env", reason = "the time zone database is read from disk" },
+    { path = "jiff::tz::TimeZoneDatabase::from_dir", reason = "the time zone database is read from disk" },
+    { path = "jiff::tz::TimeZone::get", reason = "a named time zone is looked up in the database on disk" },
+    { path = "jiff::Timestamp::in_tz", reason = "a named time zone is looked up in the database on disk" },
+    { path = "jiff::Zoned::in_tz", reason = "a named time zone is looked up in the database on disk" },
+    { path = "jiff::civil::Date::in_tz", reason = "a named time zone is looked up in the database on disk" },
+    { path = "jiff::civil::DateTime::in_tz", reason = "a named time zone is looked up in the database on disk" },
+    { path = "std::env::var", reason = "the kernel reads no environment" },
+    { path = "std::env::var_os", reason = "the kernel reads no environment" },
+    { path = "std::env::vars", reason = "the kernel reads no environment" },
+    { path = "std::env::vars_os", reason = "the kernel reads no environment" },
+    { path = "std::env::args", reason = "the kernel reads no environment" },
+    { path = "std::env::args_os", reason = "the kernel reads no environment" },
+    { path = "std::env::current_dir", reason = "the kernel reads no environment" },
+    { path = "std::env::temp_dir", reason = "the kernel reads no environment" },
+    { path = "std::fs::read", reason = "the kernel touches no files" },
+    { path = "std::fs::read_to_string", reason = "the kernel touches no files" },
+    { path = "std::fs::read_dir", reason = "the kernel touches no files" },
+    { path = "std::fs::write", reason = "the kernel touches no files" },
+    { path = "std::fs::metadata", reason = "the kernel touches no files" },
+    { path = "std::fs::exists", reason = "the kernel touches no files" },
+    { path = "std::io::stdin", reason = "the kernel reads and writes no standard stream" },
+    { path = "std::io::stdout", reason = "the kernel reads and writes no standard stream" },
+    { path = "std::io::stderr", reason = "the kernel reads and writes no standard stream" },
+    { path = "std::thread::spawn", reason = "the kernel starts no threads" },
+    { path = "std::thread::sleep", reason = "the kernel does not wait on time" },
+    { path = "std::process::exit", reason = "the kernel answers with a value, never by ending the process" },
+]
+
+disallowed-types = [
+    { path = "jiff::Zoned", reason = "a zoned time names its zone, which is looked up in the database on disk, parsing included" },
+    { path = "jiff::tz::TimeZoneDatabase", reason = "the time zone database is read from disk" },
+    { path = "std::time::SystemTime", reason = "the kernel reads no clock" },
+    { path = "std::time::Instant", reason = "the kernel reads no clock" },
+    { path = "std::fs::File", reason = "the kernel touches no files" },
+    { path = "std::fs::OpenOptions", reason = "the kernel touches no files" },
+    { path = "std::net::TcpStream", reason = "the kernel opens no connections" },
+    { path = "std::net::TcpListener", reason = "the kernel opens no connections" },
+    { path = "std::net::UdpSocket", reason = "the kernel opens no connections" },
+    { path = "std::process::Command", reason = "the kernel starts no processes" },
+]
