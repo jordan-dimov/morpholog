@@ -44,7 +44,8 @@ in place; `rebalance` under declarations below shows the shape.
 A programme is one file, or the files a `.parts` manifest lists in
 order, read as one text; declarations, rules and acts may come in any
 order. Only the first part holds `program`, and each part ends with a
-newline, closes its parentheses and starts at column 1. Comments start with `--`. Indentation is layout: a body is the
+newline, closes its parentheses, and starts with a declaration at
+column 1. Comments start with `--`. Indentation is layout: a body is the
 lines indented under its head, and parentheses switch layout off, so a
 long expression may break across lines inside them.
 

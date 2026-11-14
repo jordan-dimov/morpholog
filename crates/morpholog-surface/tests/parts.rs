@@ -207,6 +207,53 @@ fn a_part_that_starts_indented_is_refused() {
     assert!(message.contains("starts indented"), "{message}");
 }
 
+/// The layout pass has no newline token, so a line at column 1 still continues the declaration
+/// before it. Without this refusal, the discipline would key `Stock` from another file, and the
+/// expression would finish a rule another file began.
+#[test]
+fn a_part_that_starts_without_a_declaration_is_refused() {
+    let (file, message) = refused(&[
+        ("h.morph", HEADER),
+        ("stock.morph", STOCK),
+        (
+            "constraints.morph",
+            "-- one row per item\n\nunique by (item)\n",
+        ),
+    ]);
+    assert_eq!(file, "constraints.morph");
+    assert!(
+        message.contains("starts with identifier `unique`"),
+        "{message}"
+    );
+    let (file, message) = refused(&[
+        ("h.morph", HEADER),
+        (
+            "rule.morph",
+            &format!("{STOCK}invariant counted: Stock(_, q) implies\n"),
+        ),
+        ("rest.morph", "q >= 0\n"),
+    ]);
+    assert_eq!(file, "rest.morph");
+    assert!(
+        message.contains("a part starts with a declaration"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_part_that_starts_with_a_declaration_after_comments_is_read() {
+    let source = parts(&[
+        ("h.morph", HEADER),
+        ("stock.morph", STOCK),
+        (
+            "rules.morph",
+            "-- the rules\n\ninvariant counted: Stock(_, q) implies q >= 0\n",
+        ),
+    ]);
+    let (program, _) = source.parse().expect("each part opens a declaration");
+    assert_eq!(program.invariants.len(), 1);
+}
+
 #[test]
 fn only_the_first_part_holds_the_header() {
     let (file, message) = refused(&[("a.morph", STOCK), ("h.morph", HEADER)]);

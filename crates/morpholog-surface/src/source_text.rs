@@ -3,7 +3,8 @@
 //! Parts are joined in order into one string, so every span stays a byte range into one text and
 //! the parser never sees a file boundary. Each part keeps its base offset, which places a span
 //! back in the file and line a reader sees. The join is refused where a construct could run from
-//! one part into the next: an open parenthesis, a missing final newline, an indented start.
+//! one part into the next: an open parenthesis, a missing final newline, a first line that is
+//! indented or does not open a declaration.
 
 use crate::diagnostics::{Diagnostic, Severity, Span, line_col};
 use crate::lexer::{Token, lex};
@@ -220,6 +221,18 @@ impl SourceText {
                         ),
                         line_start..span.start,
                     ));
+                } else if !starts_a_declaration(token) && *token != Token::KwProgram {
+                    // The layout pass has no newline token, so a part's first
+                    // line at column 1 still continues the declaration before
+                    // it unless it opens one of its own.
+                    out.push(Diagnostic::error(
+                        format!(
+                            "`{}` starts with {token}, which would continue the declaration \
+                             the part before it ends with; a part starts with a declaration",
+                            self.files[i].name
+                        ),
+                        span.clone(),
+                    ));
                 }
             }
             let header = *token == Token::KwProgram;
@@ -249,4 +262,18 @@ impl SourceText {
         }
         out
     }
+}
+
+/// Whether a token opens a top-level declaration.
+fn starts_a_declaration(token: &Token) -> bool {
+    matches!(
+        token,
+        Token::KwPredicate
+            | Token::KwIntent
+            | Token::KwDefine
+            | Token::KwInvariant
+            | Token::KwTransformation
+            | Token::KwDerived
+            | Token::KwConst
+    )
 }
