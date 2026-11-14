@@ -38,6 +38,9 @@ KEY_ID=release-register-1
 PUBLIC_KEY_FILE=examples/16_release_governance/release-register.pub
 SIGNING_KEY="${RELEASE_SIGNING_KEY:-$HOME/.config/morpholog/release-register.pem}"
 RECORD="release-record-$TAG"
+# The first release that published its record; each later one checks
+# the record of the release before it.
+FIRST_RECORD=v0.0.20
 
 cd "$(git rev-parse --show-toplevel)"
 
@@ -120,29 +123,38 @@ step() {
     refresh_claims
 }
 
-# A changed programme, or a binary that decides differently, must still
-# decide the register's history as it was decided.
-last="$("$MORPHOLOG" inspect audit --database-url "$DB" | tail -1)"
+# The register's whole history must decide as it was decided, under this
+# programme and this binary, before anything new is recorded.
 rehearsal="$("$MORPHOLOG" rehearse "$MORPH" --database-url "$DB")"
-if [ "$(jq -r '.model_hash // empty' <<< "$last")" != "$(jq -r .program_hash <<< "$rehearsal")" ] \
-    || [ "$(jq -r '.semantics_version // empty' <<< "$last")" != "$(jq -r .semantics_version <<< "$rehearsal")" ]; then
-    jq -e '.totals | .different_delta + .would_reject + .would_error + .unreplayable == 0' \
-        <<< "$rehearsal" > /dev/null \
-        || die "the register's history does not rehearse the same under $MORPH: $(jq -c .totals <<< "$rehearsal")"
-    say "register: its history rehearses the same under this programme and binary"
-fi
+jq -e '.totals | .different_delta + .would_reject + .would_error + .unreplayable == 0' \
+    <<< "$rehearsal" > /dev/null \
+    || die "the register's history does not rehearse the same under $MORPH: $(jq -c .totals <<< "$rehearsal")"
+say "register: its history rehearses the same under this programme and binary"
 
-# The record the last release published must still verify under this
-# binary, signed by the key in this repository.
-if [ -n "$previous" ] && has RecordPublished "${previous//./_}"; then
-    tmp="$(mktemp -d)"
-    gh release download "$previous" -p "release-record-$previous.*" -D "$tmp" \
-        || die "the register says $previous published its record, but its release has none"
-    "$MORPHOLOG" audit verify-pack "$tmp/release-record-$previous.pack" \
-        --anchor-file "$tmp/release-record-$previous.anchor.json" \
-        --require-signatures --require-signing-key "$PUBLIC_KEY_FILE" > "$tmp/verdict.json" \
-        || die "the record published with $previous does not verify under this binary: $(jq -c .verdict "$tmp/verdict.json")"
-    rm -rf "$tmp"
+# verify_record TAG - the record published with TAG, both files, verified
+# under this binary with a signature by the key in this repository.
+verify_record() {
+    local tag="$1" dir
+    dir="$(mktemp -d)"
+    for name in "release-record-$tag.pack" "release-record-$tag.anchor.json"; do
+        gh release download "$tag" -p "$name" -O "$dir/$name" \
+            || die "$tag has no published $name"
+    done
+    "$MORPHOLOG" audit verify-pack "$dir/release-record-$tag.pack" \
+        --anchor-file "$dir/release-record-$tag.anchor.json" \
+        --require-signatures --require-signing-key "$PUBLIC_KEY_FILE" > "$dir/verdict.json" \
+        || die "the record published with $tag does not verify under this binary: $(jq -c .verdict "$dir/verdict.json")"
+    rm -rf "$dir"
+}
+
+# Every release from the first to publish one carries its record. The
+# register's claim that it did is held to the release, never asked
+# whether to check.
+if [ -n "$previous" ] \
+    && [ "$(printf '%s\n%s\n' "$previous" "$FIRST_RECORD" | sort -V | head -1)" = "$FIRST_RECORD" ]; then
+    verify_record "$previous"
+    has RecordPublished "${previous//./_}" \
+        || die "$previous published its record, but the register does not say so"
     say "the record published with $previous verifies under this binary"
 fi
 
@@ -256,13 +268,15 @@ step announce Announced "{\"version\": \"$SUBJECT\"}" "$SUBJECT"
 # The register seals what it holds, signs the seal, and publishes the
 # record beside the downloads. A rerun builds the same files, since the
 # seal is the one already made and the export is deterministic, and it
-# never replaces a published file that differs.
+# never replaces a published file that differs. Once the register says
+# the record is published, every rerun checks it still is.
 public_key="$(cat "$PUBLIC_KEY_FILE")"
 step authorise_signing_key AuditSigningKey \
     "{\"key_id\": \"$KEY_ID\", \"public_key\": \"$public_key\"}" \
     "$KEY_ID" audit_checkpoint_v1 "$public_key"
 if has RecordPublished "$SUBJECT"; then
-    say "register: RecordPublished $SUBJECT already recorded"
+    verify_record "$TAG"
+    say "$RECORD: still published, signed, verifies"
 else
     tmp="$(mktemp -d)"
     newest="$("$MORPHOLOG" inspect audit --database-url "$DB" | tail -1 | jq -r .transition_id)"
@@ -283,11 +297,8 @@ else
         cmp -s "$tmp/$name" "$tmp/published/$name" \
             || die "$TAG already has a different $name; it is never replaced"
     done
-    "$MORPHOLOG" audit verify-pack "$tmp/published/$RECORD.pack" \
-        --anchor-file "$tmp/published/$RECORD.anchor.json" \
-        --require-signatures --require-signing-key "$PUBLIC_KEY_FILE" > "$tmp/verdict.json" \
-        || die "the published record does not verify: $(jq -c .verdict "$tmp/verdict.json")"
     rm -rf "$tmp"
+    verify_record "$TAG"
     say "$RECORD: published, signed, verifies"
     step publish_record RecordPublished "{\"version\": \"$SUBJECT\"}" "$SUBJECT"
 fi

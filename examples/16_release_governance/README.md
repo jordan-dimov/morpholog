@@ -110,10 +110,16 @@ changed afterwards. It does not show that CI ran. That is what
 travels beside the pack, so trust in it comes from the key, which you
 take from this repository rather than from the release.
 
+The script signs with one key and checks with one key. A record keeps
+the key it was signed by, so replacing the key is a reviewed change to
+how earlier records are checked, not only a new `authorise_signing_key`:
+each record must still be checked against the key it was signed with.
+
 Before it records anything, the next release checks the last one's
-record again with its own binary. If the programme or the binary has
-changed, the script also rehearses the register's whole history and
-stops unless every past decision comes out the same.
+record again with its own binary, whatever the register says about it.
+It also rehearses the register's whole history under the current
+programme and binary, and stops unless every past decision comes out
+the same.
 
 ## Deliberately not covered
 
