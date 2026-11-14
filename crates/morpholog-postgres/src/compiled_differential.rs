@@ -3113,3 +3113,149 @@ async fn a_check_over_many_cases_agrees_with_the_kernel() {
         "750 cases refuse as the kernel does"
     );
 }
+
+/// Outer rows each summing over a body that compares (#802). One sums
+/// past the decimal range with a well-typed body; the other's body meets
+/// a subject where it orders a quantity. The kernel evaluates the whole
+/// sum for each outer row in turn, body first, so the first row's error
+/// wins whichever kind it is: crossed both ways. And on one row with
+/// both, the body's error wins over the total's range.
+#[tokio::test]
+async fn a_raising_sum_body_reports_per_outer_row_in_order() {
+    let pool = test_pool().await;
+    const SOURCE: &str = "program summed_bodies
+predicate Enabled(flag: Subject)
+predicate Holder(x: Subject)
+predicate Line(x: Subject, line: Subject, q: Decimal)
+invariant lines_are_bounded:
+    Enabled(_) and Holder(x) implies sum(q | Line(x, _, q) and q > 0) <= 100
+transformation enable(flag):
+    admit Enabled(flag)
+";
+    let huge = "79228162514264337593543950335";
+    for (label, overflow_on_first, mistype_on_first) in [
+        ("range first", true, false),
+        ("mistype first", false, true),
+        ("both on one row", true, true),
+    ] {
+        reset_db(&pool).await;
+        let (first, second) = rows_in_load_order(&pool, |a, b| {
+            (
+                serde_json::json!([subject(a)]),
+                serde_json::json!([subject(b)]),
+            )
+        })
+        .await;
+        let x1 = first[0]["value"].as_str().unwrap().to_string();
+        let x2 = second[0]["value"].as_str().unwrap().to_string();
+        insert_rows(&pool, "Holder", &[first.clone(), second.clone()]).await;
+        let overflowing = if overflow_on_first { &x1 } else { &x2 };
+        let mistyped = if mistype_on_first { &x1 } else { &x2 };
+        insert_rows(
+            &pool,
+            "Line",
+            &[
+                serde_json::json!([subject(overflowing), subject("l1"), decimal(huge)]),
+                serde_json::json!([subject(overflowing), subject("l2"), decimal("1")]),
+                serde_json::json!([subject(mistyped), subject("l3"), subject("lots")]),
+            ],
+        )
+        .await;
+        eprintln!("{label}");
+        expect_kernel_error_agreed(SOURCE, "enable", vec![subj("f")]).await;
+    }
+}
+
+/// A condition with an `or`, called with every argument bound under a
+/// sum (#802), which the sum reads as a truth test. The kernel evaluates
+/// every branch, so a branch that holds hides no other branch's error,
+/// and the first branch to raise names the error; with no error, the
+/// verdict is the kernel's whether two branches hold or none.
+#[tokio::test]
+async fn a_condition_with_an_or_under_a_sum_raises_and_counts_as_the_kernel() {
+    const SOURCE: &str = "program ready_lines
+predicate Enabled(flag: Subject)
+predicate Holder(x: Subject)
+predicate Line(x: Subject, line: Subject, q: Decimal)
+predicate Mark(line: Subject)
+predicate Shipped(line: Subject, shipped: Decimal)
+predicate Alloc(line: Subject, a: Decimal)
+define ready(l, q):
+    Mark(l) or (Shipped(l, s) and q <= s) or q <= sum(a | Alloc(l, a))
+invariant at_most_one_ready_line:
+    Enabled(_) and Holder(x) implies sum(1 | Line(x, l, q) and ready(l, q)) <= 1
+transformation enable(flag):
+    admit Enabled(flag)
+";
+    let program = morpholog_surface::parse_program(SOURCE).expect("parses");
+    let validated = program.validated().expect("validates");
+    let sql_set = compile_invariants(&validated).expect("compiles");
+    let prepared = PreparedProgram::new(program).expect("valid");
+    let pool = test_pool().await;
+    let huge = "79228162514264337593543950335";
+    let line = |l: &str, q: &str| serde_json::json!([subject("h"), subject(l), decimal(q)]);
+    // The rows a case adds, by predicate.
+    type Rows<'a> = &'a [(&'a str, serde_json::Value)];
+    let raising: [(&str, Rows); 2] = [
+        (
+            "a holding branch, then a raising one",
+            &[
+                ("Mark", serde_json::json!([subject("l1")])),
+                (
+                    "Shipped",
+                    serde_json::json!([subject("l1"), subject("lots")]),
+                ),
+            ],
+        ),
+        (
+            "two raising branches: the earlier one's error",
+            &[
+                (
+                    "Shipped",
+                    serde_json::json!([subject("l1"), subject("lots")]),
+                ),
+                ("Alloc", serde_json::json!([subject("l1"), decimal(huge)])),
+                ("Alloc", serde_json::json!([subject("l1"), decimal("1")])),
+            ],
+        ),
+    ];
+    for (label, rows) in raising {
+        reset_db(&pool).await;
+        insert_rows(&pool, "Holder", &[serde_json::json!([subject("h")])]).await;
+        insert_rows(&pool, "Line", &[line("l1", "5")]).await;
+        for (predicate, row) in rows {
+            insert_rows(&pool, predicate, std::slice::from_ref(row)).await;
+        }
+        eprintln!("{label}");
+        expect_kernel_error_agreed(SOURCE, "enable", vec![subj("f")]).await;
+    }
+    let holding: [(&str, Rows, bool); 3] = [
+        (
+            "two branches hold for one line: it counts once",
+            &[
+                ("Mark", serde_json::json!([subject("l1")])),
+                ("Shipped", serde_json::json!([subject("l1"), decimal("5")])),
+            ],
+            true,
+        ),
+        ("no branch holds", &[], true),
+        (
+            "two lines ready: over the limit",
+            &[
+                ("Mark", serde_json::json!([subject("l1")])),
+                ("Mark", serde_json::json!([subject("l2")])),
+            ],
+            false,
+        ),
+    ];
+    for (label, rows, accepted) in holding {
+        reset_db(&pool).await;
+        insert_rows(&pool, "Holder", &[serde_json::json!([subject("h")])]).await;
+        insert_rows(&pool, "Line", &[line("l1", "5"), line("l2", "5")]).await;
+        for (predicate, row) in rows {
+            insert_rows(&pool, predicate, std::slice::from_ref(row)).await;
+        }
+        let obs = observe(&pool, &prepared, &sql_set, "enable", vec![subj("f")]).await;
+        assert_eq!(governed_contract(&obs), Ok(accepted), "{label}");
+    }
+}

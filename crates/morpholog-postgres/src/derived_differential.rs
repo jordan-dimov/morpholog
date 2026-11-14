@@ -76,8 +76,39 @@ transformation post(account, side, amount):
     admit Entry(account, side, amount)
 ";
 
+/// InvenTree's order progress (#802): the lines that pass a comparison,
+/// the lines whose own allocations, a sum under the sum, pass one, and
+/// the lines a condition with an `or` holds for, through a call the sum
+/// reads as a truth test. Each raises where a stored value is not a
+/// decimal.
+const ORDERS: &str = "program order_progress
+predicate SalesOrder(order: Subject)
+predicate SalesLine(line: Subject, order: Subject, part: Subject, quantity: Decimal)
+predicate VirtualPart(part: Subject)
+predicate LineShipped(line: Subject, shipped: Decimal)
+predicate SalesAllocation(allocation: Subject, line: Subject, quantity: Decimal)
+predicate OrderProgress(order: Subject, completed_lines: Decimal, overallocated_lines: Decimal, allocated_lines: Decimal)
+define line_ready(l):
+    SalesLine(l, _, p, q) and (VirtualPart(p) or (LineShipped(l, s) and q <= s) or q <= sum(a | SalesAllocation(_, l, a)))
+derived OrderProgress(order):
+    over SalesOrder(order: order)
+    value completed_lines = sum(1 | SalesLine(l, order, _, q) and LineShipped(l, s) and q <= s)
+    value overallocated_lines = sum(1 | SalesLine(l, order, _, q) and q < sum(a | SalesAllocation(_, l, a)))
+    value allocated_lines = sum(1 | SalesLine(l, order, _, _) and line_ready(l))
+transformation open_order(order):
+    admit SalesOrder(order)
+transformation add_line(line, order, part, quantity):
+    admit SalesLine(line, order, part, quantity)
+transformation mark_virtual(part):
+    admit VirtualPart(part)
+transformation ship(line, shipped):
+    admit LineShipped(line, shipped)
+transformation allocate(allocation, line, quantity):
+    admit SalesAllocation(allocation, line, quantity)
+";
+
 fn programs() -> Vec<Program> {
-    let mut out: Vec<Program> = [SPIKE, EDGES]
+    let mut out: Vec<Program> = [SPIKE, EDGES, ORDERS]
         .iter()
         .map(|s| morpholog_surface::parse_program(s).expect("fragment parses"))
         .collect();
@@ -450,5 +481,103 @@ async fn live_views_follow_a_governed_history_commit_by_commit() {
         seen_values,
         ["2", "5", "5", "3", "0"],
         "the figure moved with every commit, with no refresh"
+    );
+}
+
+/// One order whose lines raise and one whose lines do not (#802). The
+/// kernel's enumeration fails whole; the live view answers the clean
+/// order exactly and names the failure on the other alone, with its
+/// values NULL where they raise. A line two branches hold for counts
+/// once, as the kernel counts a call.
+#[tokio::test]
+async fn a_raising_sum_body_fails_its_own_key_alone() {
+    let pool = test_pool().await;
+    let orders = morpholog_surface::parse_program(ORDERS).unwrap();
+    let orders_v = orders.validated().unwrap();
+    let clean = vec![
+        claim_instance("SalesOrder", &[subj("a")]),
+        // a1: shipped in full, and its part is virtual: two branches.
+        claim_instance("SalesLine", &[subj("a1"), subj("a"), subj("v"), dec(5)]),
+        // a2: shipped short, allocated short: no branch.
+        claim_instance("SalesLine", &[subj("a2"), subj("a"), subj("p"), dec(3)]),
+        // a3: allocated 5 against 4: the sum branch.
+        claim_instance("SalesLine", &[subj("a3"), subj("a"), subj("p"), dec(4)]),
+        claim_instance("VirtualPart", &[subj("v")]),
+        claim_instance("LineShipped", &[subj("a1"), dec(5)]),
+        claim_instance("LineShipped", &[subj("a2"), dec(1)]),
+        claim_instance("SalesAllocation", &[subj("x1"), subj("a3"), dec(3)]),
+        claim_instance("SalesAllocation", &[subj("x2"), subj("a3"), dec(2)]),
+        claim_instance("SalesOrder", &[subj("b")]),
+        claim_instance("SalesLine", &[subj("b1"), subj("b"), subj("p"), dec(2)]),
+    ];
+    assert_eq!(
+        agree(
+            &pool,
+            &orders_v,
+            &State::from_claims(clean.clone()),
+            "orders clean"
+        )
+        .await,
+        1
+    );
+    let rows = live_rows(&pool, &orders_v, "OrderProgress").await;
+    let row = |order: &str| {
+        rows.iter()
+            .find(|(cells, _)| cells[0] == order)
+            .cloned()
+            .unwrap_or_else(|| panic!("a row for {order}: {rows:?}"))
+    };
+    assert_eq!(
+        row("a"),
+        (
+            vec![
+                "a".to_string(),
+                "1".to_string(),
+                "1".to_string(),
+                "2".to_string()
+            ],
+            None
+        ),
+        "a1 shipped in full; a3 allocated 5 against 4; a1 and a3 ready, a1 once"
+    );
+
+    // b's shipment holds a subject where a quantity is compared.
+    let mut dirty = clean;
+    dirty.push(claim_instance("LineShipped", &[subj("b1"), subj("lots")]));
+    let state = State::from_claims(dirty);
+    assert!(orders_v.enumerate_derived("OrderProgress", &state).is_err());
+    assert_eq!(agree(&pool, &orders_v, &state, "orders dirty").await, 1);
+    let rows = live_rows(&pool, &orders_v, "OrderProgress").await;
+    let row = |order: &str| {
+        rows.iter()
+            .find(|(cells, _)| cells[0] == order)
+            .cloned()
+            .unwrap_or_else(|| panic!("a row for {order}: {rows:?}"))
+    };
+    assert_eq!(
+        row("a"),
+        (
+            vec![
+                "a".to_string(),
+                "1".to_string(),
+                "1".to_string(),
+                "2".to_string()
+            ],
+            None
+        ),
+        "the clean order keeps its values"
+    );
+    assert_eq!(
+        row("b"),
+        (
+            vec![
+                "b".to_string(),
+                "NULL".to_string(),
+                "0".to_string(),
+                "NULL".to_string()
+            ],
+            Some("scope".to_string())
+        ),
+        "the values that compare b1's shipment are NULL, the other is computed, and the row names the failure"
     );
 }

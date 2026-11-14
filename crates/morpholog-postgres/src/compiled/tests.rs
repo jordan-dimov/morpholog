@@ -1153,6 +1153,32 @@ fn an_overlapping_or_under_a_sum_is_refused() {
     );
 }
 
+/// Inside a call the sum reads as a truth test, an `or` compiles; a sum
+/// within that call's body counts again, so a raw `or` in that inner
+/// sum's body is refused as at the top.
+#[test]
+fn a_raw_or_in_a_sum_body_stays_refused_inside_a_truth_call() {
+    let program = morpholog_surface::parse_program(
+        "program truth_call
+predicate P(k: Subject, q: Decimal)
+predicate S(k: Subject, s: Subject)
+predicate Cap(k: Subject, cap: Decimal)
+define counted(k):
+    1 <= sum(q | P(k, q) and (q > 0 or q < 10))
+invariant under_test:
+    Cap(k, cap) implies sum(1 | S(k, _) and counted(k)) <= cap
+transformation t(k, q):
+    admit P(k, q)
+",
+    )
+    .expect("fragment parses");
+    let r = refusals(&program);
+    assert_eq!(
+        r[0].reason.to_string(),
+        "`or` is outside the compiled fragment"
+    );
+}
+
 /// The same literal twice holds twice for one value, and the kernel
 /// counts it twice: refused by name rather than rendered as one test.
 #[test]

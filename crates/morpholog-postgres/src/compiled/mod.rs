@@ -1923,6 +1923,7 @@ impl<'a> Ctx<'a> {
             in_sum: false,
             in_consequent: false,
             binding_calls: false,
+            in_truth_call: false,
             counter: 0,
             required: BTreeSet::new(),
             pending: Vec::new(),
@@ -1951,6 +1952,14 @@ struct Ctx<'a> {
     /// which reports no witness; an invariant's diagnosis reads claim
     /// aliases, so there it stays refused.
     binding_calls: bool,
+    /// Rendering the body of a fully bound call under a sum, which the
+    /// sum reads as a truth test: whether the body holds, never how many
+    /// ways. An `or` there is a truth test too, and a sum may close a
+    /// scope inside it, since its probes lift into a correlated scope of
+    /// their own. Cleared again inside a sum's body, where multiplicity
+    /// counts: a raw `or` there would count a witness once per holding
+    /// branch, which a truth test does not reproduce.
+    in_truth_call: bool,
     counter: usize,
     /// Every (predicate, position) the SQL seeks on, collected where the
     /// seek is emitted: the index specification.
@@ -1986,6 +1995,10 @@ struct SumPart {
 /// value it could not take.
 struct RenderedSum {
     lateral: String,
+    /// The ways the body can raise, lifted into one scope of the
+    /// enclosing row. The kernel evaluates the whole body before it sums,
+    /// so these come before the target's kind and the total's range.
+    body: Vec<Probe>,
     range_error: String,
     kind_error: String,
     /// Whether the sum can meet a value other than a decimal: a literal
@@ -2250,12 +2263,14 @@ fn violated(r: &Rendered, final_: String) -> Vec<String> {
 /// The typed refusal for a raising scope where the fragment has no place
 /// for one: a sum's, unless a comparison itself can raise.
 fn shape_refusal(r: &Rendered, sum: &'static str, comparison: &'static str) -> CompileReason {
-    if r.probes.iter().flat_map(|d| d.probes.iter()).any(|p| {
-        matches!(
-            p.report,
-            ErrorReport::Compare { .. } | ErrorReport::Value { .. }
-        )
-    }) {
+    fn compares(p: &Probe) -> bool {
+        match &p.report {
+            ErrorReport::Compare { .. } | ErrorReport::Value { .. } => true,
+            ErrorReport::Lifted { probes, .. } => probes.iter().any(compares),
+            ErrorReport::SumRange | ErrorReport::SumKind => false,
+        }
+    }
+    if r.probes.iter().flat_map(|d| d.probes.iter()).any(compares) {
         CompileReason::ComparisonShape { detail: comparison }
     } else {
         CompileReason::SumShape { detail: sum }
@@ -2856,7 +2871,7 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
             OrderedDomain::Duration => Err(CompileReason::ComparisonDomain { domain: *domain }),
         },
         Prop::Or(branches) => {
-            if !ctx.in_consequent {
+            if !ctx.in_consequent && !ctx.in_truth_call {
                 if let Some(test) = exclusive_literal_test(branches, &env, ctx)? {
                     return Ok(Rendered {
                         where_: vec![test],
@@ -2873,8 +2888,15 @@ fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, Com
             let mut tests = Vec::new();
             let mut drafts = Vec::new();
             for branch in branches {
-                let r = nested_scope(render_prop(branch, env.clone(), ctx)?)?;
-                tests.push(if !r.from.is_empty() {
+                let r = render_prop(branch, env.clone(), ctx)?;
+                // In a truth call a branch may compare a sum, whose
+                // lateral its own test must carry.
+                let r = if ctx.in_truth_call {
+                    r
+                } else {
+                    nested_scope(r)?
+                };
+                tests.push(if !r.from.is_empty() || !r.laterals.is_empty() {
                     r.exists_sql()
                 } else if r.has_errors() {
                     format!("({})", and_all(&r.where_))
@@ -3027,9 +3049,13 @@ fn render_defined(
         }
         let (def, frame) = call_frame(name, args, &env, ctx)?;
         let body = condition_body(def)?;
-        let r = nested_scope(outside_consequent(ctx, |ctx| {
-            render_prop(body, frame, ctx)
-        })?)?;
+        // The body's probes lift into the correlated scope below, and the
+        // truth test carries the body's laterals, so a sum may close a
+        // scope in it.
+        let truth_call = std::mem::replace(&mut ctx.in_truth_call, true);
+        let r = outside_consequent(ctx, |ctx| render_prop(body, frame, ctx));
+        ctx.in_truth_call = truth_call;
+        let r = r?;
         return Ok(Rendered {
             where_: vec![r.exists_sql()],
             probes: lifted_scopes(&r.probes),
@@ -3591,6 +3617,7 @@ fn close_comparison(
     for p in pending {
         match p {
             Pending::Sum(s) => {
+                probes.extend(s.body);
                 if s.can_meet_foreign {
                     probes.push(Probe {
                         condition: s.kind_error.clone(),
@@ -3688,21 +3715,26 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
                 });
             }
             let outside = std::mem::replace(&mut ctx.in_sum, true);
+            let truth_call = std::mem::replace(&mut ctx.in_truth_call, false);
             let r = outside_consequent(ctx, |ctx| render_prop(body, env.clone(), ctx));
             ctx.in_sum = outside;
+            ctx.in_truth_call = truth_call;
             let r = r?;
             if r.from.is_empty() {
                 return Err(CompileReason::SumShape {
                     detail: "body binds no claims",
                 });
             }
-            if r.has_errors() {
-                return Err(shape_refusal(
-                    &r,
-                    "sum within a sum body",
-                    "a quantity or timestamp ordering within a sum body",
-                ));
+            // A raising row fails its own condition, so it drops out of
+            // the aggregate; the total is then wrong but never read, since
+            // the body's error is reported first.
+            let lifted = lift(&r.probes);
+            if !lifted.laterals.is_empty() {
+                return Err(CompileReason::UnvalidatedShape {
+                    detail: "a sum body raising before it binds a claim".to_string(),
+                });
             }
+            let body = lifted.probes;
             // The sum target must be a bound decimal variable or a decimal
             // literal; a computed target refuses.
             let (val, kind_test, can_meet_foreign): (String, String, bool) = match value.as_ref() {
@@ -3756,6 +3788,7 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
                     from_list(&r),
                     r.conjunction()
                 ),
+                body,
                 range_error: range_error_sql(&total),
                 kind_error: format!("{alias}.f"),
                 can_meet_foreign,

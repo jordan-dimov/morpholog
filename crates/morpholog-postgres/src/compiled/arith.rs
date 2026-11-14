@@ -61,6 +61,13 @@ pub(super) fn computed_operand(
     let inner: Vec<Pending> = ctx.pending.drain(start..).collect();
     for p in inner {
         match p {
+            // The value's probe re-evaluates only the arithmetic over the
+            // sum's total, so a body that can raise has no report here.
+            Pending::Sum(s) if !s.body.is_empty() => {
+                return Err(CompileReason::SumShape {
+                    detail: "a sum whose body can raise, inside a computed value",
+                });
+            }
             Pending::Sum(s) => ctx.pending.push(Pending::Covered(s.lateral)),
             other @ (Pending::Covered(_) | Pending::Value(_)) => ctx.pending.push(other),
         }
