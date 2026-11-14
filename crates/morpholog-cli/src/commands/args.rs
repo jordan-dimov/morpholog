@@ -491,13 +491,13 @@ mod tests {
     /// And the schema's duration pattern.
     #[test]
     fn the_client_template_carries_the_duration_pattern() {
-        let line = format!(
-            "_DURATION_PATTERN = re.compile(r\"{}\", re.ASCII)",
+        let pattern = format!(
+            "_DURATION_PATTERN = re.compile(\n    r\"{}\", re.ASCII\n)",
             morpholog_core::schema::DURATION_PATTERN
         );
         assert!(
-            crate::commands::generate::VALUES_PY.contains(&line),
-            "values.py must read `{line}`"
+            crate::commands::generate::VALUES_PY.contains(&pattern),
+            "values.py must read `{pattern}`"
         );
     }
 

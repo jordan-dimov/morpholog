@@ -56,7 +56,7 @@
           "required": ["type", "value"],
           "properties": {
             "type": { "const": "duration" },
-            "value": { "type": "string", "format": "duration", "pattern": "^-?PT(?=\\d)(\\d+H)?(\\d+M)?(\\d+(\\.\\d{1,9})?S)?$" }
+            "value": { "type": "string", "format": "duration", "pattern": "^-?PT(?=\\d)(\\d{1,19}H)?(\\d{1,19}M)?(\\d{1,19}(\\.\\d{1,9})?S)?$" }
           }
         },
         {

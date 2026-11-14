@@ -34,7 +34,9 @@ _DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _TIMESTAMP_PATTERN = re.compile(
     r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$"
 )
-_DURATION_PATTERN = re.compile(r"^-?PT(?=\d)(\d+H)?(\d+M)?(\d+(\.\d{1,9})?S)?$", re.ASCII)
+_DURATION_PATTERN = re.compile(
+    r"^-?PT(?=\d)(\d{1,19}H)?(\d{1,19}M)?(\d{1,19}(\.\d{1,9})?S)?$", re.ASCII
+)
 
 
 class CodecError(ValueError):
@@ -79,10 +81,12 @@ class Duration:
     def from_iso(cls, text: str) -> Duration:
         """Read the wire's spelling: ISO 8601 exact time units, as the
         schema's pattern states, and refuse every other."""
-        # Longer than any duration in range: bounded before int() reads it.
-        if not isinstance(text, str) or len(text) > 48:
+        # The whole text: `$` alone would also match before a final newline.
+        # The pattern bounds every number, so int() below reads at most 19
+        # digits.
+        if not isinstance(text, str):
             raise CodecError(f"duration {text!r} is not an exact span like PT6H")
-        match = _DURATION_PATTERN.match(text)
+        match = _DURATION_PATTERN.fullmatch(text)
         if match is None:
             raise CodecError(f"duration {text!r} is not an exact span like PT6H")
         hours, minutes, seconds, fraction = match.groups()

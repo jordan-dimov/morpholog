@@ -204,9 +204,10 @@ pub(crate) fn deserialize_decimal<'de, D: serde::Deserializer<'de>>(
 
 /// The text a duration crosses the wire as: ISO 8601 exact time units in
 /// capitals, hours then minutes then seconds, each optional but one
-/// present, a fraction on seconds only and at most nine digits of it, an
-/// optional leading minus. One source, as for [`DECIMAL_PATTERN`].
-pub const DURATION_PATTERN: &str = r"^-?PT(?=\d)(\d+H)?(\d+M)?(\d+(\.\d{1,9})?S)?$";
+/// present and at most 19 digits (the largest in range, seconds, has 19),
+/// a fraction on seconds only and at most nine digits of it, an optional
+/// leading minus. One source, as for [`DECIMAL_PATTERN`].
+pub const DURATION_PATTERN: &str = r"^-?PT(?=\d)(\d{1,19}H)?(\d{1,19}M)?(\d{1,19}(\.\d{1,9})?S)?$";
 
 /// Read a duration as the wire carries it: a text matching
 /// [`DURATION_PATTERN`], within the range the kernel holds. jiff reads
@@ -240,6 +241,9 @@ fn matches_duration_pattern(s: &str) -> bool {
     for unit in ['H', 'M'] {
         let n = digits(rest);
         if n > 0 && rest[n..].starts_with(unit) {
+            if n > 19 {
+                return false;
+            }
             rest = &rest[n + 1..];
         }
     }
@@ -247,7 +251,7 @@ fn matches_duration_pattern(s: &str) -> bool {
         return true;
     }
     let whole = digits(rest);
-    if whole == 0 {
+    if whole == 0 || whole > 19 {
         return false;
     }
     let mut tail = &rest[whole..];
