@@ -1476,3 +1476,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** the InvenTree fork (#796). A shipment of 750 allocations in one act exhausted PostgreSQL's memory, twice. Each touched case added another condition to the invariant check, and the memory needed to plan that SQL grew roughly with the square of the cases.
 
 **Landed:** cases that constrain the same columns are grouped. Arrays hold the values each column may take, and tuple equality keeps the exact combinations, so the check still examines only the touched cases. The 750-allocation shipment now commits in about three seconds, with the database process under 300 MB. Decisions and witnesses are unchanged.
+
+### A sum's body may compare, sum and call a condition with an `or`
+
+**Forced by:** the InvenTree fork's readers (#802). Most are a count or sum over rows that pass a test: lines complete, lines allocated, stock available. The kernel decided them, but a live derived view refused every one, even `sum(1 | SalesLine(l, o, _, q) and q > 0)`. A comparison over a stored value can raise a kernel error, and the compiled fragment refused any sum whose body could raise, any called condition that closed a sum, and any `or` outside a rule's consequent.
+
+**Landed:** a sum's body lifts its ways of raising into a correlated scope beside the aggregate, reported before the sum's own kind and range, in the kernel's order. A fully bound call under a sum is a truth test, so a sum may close a scope inside it and its body may hold an `or`, each branch's errors lifted in branch order. Both the compiled invariant checks and live derived views take these shapes; the compiled differential holds the first error across outer rows, within one row and across branches to the kernel's. A raw `or` directly in a sum's body still refuses: there the kernel counts a witness once per holding branch, which a truth test does not reproduce.

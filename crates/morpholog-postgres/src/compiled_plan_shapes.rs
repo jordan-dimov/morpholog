@@ -762,3 +762,80 @@ async fn a_check_over_hundreds_of_cases_plans_in_a_few_megabytes() {
         .expect("the planner reports its memory");
     assert!(used_kb < 32 * 1024, "240 cases took {used_kb} kB to plan");
 }
+
+/// A sum whose body compares (#802) carries its body's probe as a
+/// correlated scope beside its aggregate. Bound to one holder's case, on
+/// a populated table, the check still seeks the holder's lines through
+/// the managed index and leaves no relation-level SIRead lock.
+#[tokio::test]
+async fn a_sum_whose_body_compares_seeks_and_leaves_no_relation_lock() {
+    let pool = test_pool().await;
+    reset(&pool).await;
+    let program = morpholog_surface::parse_program(
+        "program bounded_lines
+predicate Holder(x: Subject)
+predicate Line(x: Subject, line: Subject, q: Decimal)
+invariant lines_are_bounded:
+    Holder(x) implies sum(q | Line(x, _, q) and q > 0) <= 100
+transformation hold(x):
+    admit Holder(x)
+transformation add_line(x, line, q):
+    admit Line(x, line, q)
+",
+    )
+    .expect("parses");
+    let pg = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
+    provision_indexes(&pool, &[&pg], false).await.unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'Holder', jsonb_build_array(jsonb_build_object('type', 'subject', 'value', 'h' || i)),
+                gen_random_uuid()
+         FROM generate_series(1, 500) i;
+         INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'Line', jsonb_build_array(jsonb_build_object('type', 'subject', 'value', 'h' || (i % 500)),
+                                          jsonb_build_object('type', 'subject', 'value', 'l' || i),
+                                          jsonb_build_object('type', 'decimal', 'value', (i % 7)::text)),
+                gen_random_uuid()
+         FROM generate_series(1, 5000) i;
+         ANALYZE morpholog.claims;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let set = compiled_set(&program);
+    let inv = &set.invariants[0];
+    let CaseFilter::Bounded(cases) = inv.case_filter(
+        &[claim_instance("Line", &[subj("h7"), subj("l_new"), dec(3)])],
+        &[],
+    ) else {
+        panic!("the delta bounds the rule to its holder");
+    };
+    let sql = inv.violation_sql(Some(&cases.filter()));
+    let used = indexes_in_plan(&pool, &sql, true).await;
+    assert!(
+        used.iter().any(|n| n.starts_with("morpholog_ci_line_")),
+        "the holder's lines are sought through a managed index; it uses {used:?}"
+    );
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::raw_sql("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(sql))
+        .fetch_optional(&mut *tx)
+        .await
+        .unwrap();
+    let relation_locks: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pg_locks
+          WHERE pid = pg_backend_pid() AND mode = 'SIReadLock' AND locktype = 'relation'
+            AND relation = 'morpholog.claims'::regclass",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    tx.rollback().await.unwrap();
+    assert_eq!(
+        relation_locks, 0,
+        "the case-bound check took a relation lock"
+    );
+}

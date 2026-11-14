@@ -121,6 +121,10 @@ pub(crate) fn compile_derived(
         for pending in std::mem::take(&mut ctx.pending) {
             match pending {
                 Pending::Sum(sum) => {
+                    for probe in sum.body {
+                        own.push(probe.condition.clone());
+                        failures.push((probe.condition, class_of(&probe.report)));
+                    }
                     if sum.can_meet_foreign {
                         own.push(sum.kind_error.clone());
                         failures.push((sum.kind_error, "sum_kind"));
@@ -131,15 +135,8 @@ pub(crate) fn compile_derived(
                 }
                 Pending::Covered(lateral) => laterals.push(lateral),
                 Pending::Value(probe) => {
-                    let class = match probe.report {
-                        ErrorReport::SumRange => "sum_range",
-                        ErrorReport::SumKind => "sum_kind",
-                        ErrorReport::Compare { .. } => "compare",
-                        ErrorReport::Value { .. } => "value",
-                        ErrorReport::Lifted { .. } => "scope",
-                    };
                     own.push(probe.condition.clone());
-                    failures.push((probe.condition, class));
+                    failures.push((probe.condition, class_of(&probe.report)));
                 }
             }
         }
@@ -190,4 +187,15 @@ pub(crate) fn compile_derived(
 
 fn quote_ident(name: &str) -> String {
     crate::sql_quote::quote_ident(name)
+}
+
+/// The class a live row names for a way of raising.
+fn class_of(report: &ErrorReport) -> &'static str {
+    match report {
+        ErrorReport::SumRange => "sum_range",
+        ErrorReport::SumKind => "sum_kind",
+        ErrorReport::Compare { .. } => "compare",
+        ErrorReport::Value { .. } => "value",
+        ErrorReport::Lifted { .. } => "scope",
+    }
 }
