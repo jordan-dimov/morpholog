@@ -3,4 +3,3 @@
 # library code without a per-file #![allow(...)] in every test module.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
-allow-panic-in-tests = true

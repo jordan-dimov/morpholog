@@ -43,8 +43,8 @@ privilege on the claims table could go around it. Close that the ordinary
 way - only the runtime's role writes the `morpholog` schema - and a write that
 slips through anyway is not silent: the claims table and the audit log are two
 records of one history, and `morpholog audit verify` catches any edit that
-leaves them disagreeing. (The README's "Can someone bypass the rules with raw
-SQL?" has the full answer.)
+leaves them disagreeing. (["Can't someone bypass the rules with raw SQL?"](#questions-you-are-probably-asking)
+below has the full answer.)
 
 The last idea is the one with no familiar name, so hold it lightly for now.
 Morpholog stores **claims**, not objects. There is no `Invoice` class, no row

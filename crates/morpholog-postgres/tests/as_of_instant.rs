@@ -7,14 +7,14 @@
 
 #![expect(
     clippy::unwrap_used,
-    clippy::expect_used,
     reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
 )]
 
 mod common;
 
 use common::{
-    drain_open_transactions, expect_committed, pg_program, propose_pg_as, reset_db, test_pool,
+    drain_open_transactions, expect_committed, pg_program, propose_pg_as, reset_db, run_sql,
+    test_pool,
 };
 use jiff::{SignedDuration, Timestamp};
 use morpholog_core::Program;
@@ -124,13 +124,6 @@ async fn ordered_row(executor: impl sqlx::PgExecutor<'_>, k: &str) -> Uuid {
     .await
     .unwrap();
     id
-}
-
-async fn execute(pool: &PgPool, sql: &str) {
-    sqlx::raw_sql(sqlx::AssertSqlSafe(sql.to_string()))
-        .execute(pool)
-        .await
-        .expect(sql);
 }
 
 async fn row_of(pool: &PgPool, id: Uuid) -> morpholog_postgres::AuditRow {
@@ -345,7 +338,7 @@ async fn a_quiet_horizon_fences_the_ordering_clock() {
     let pg = pg_program(program());
     let a = act(&pool, &pg, "a").await;
 
-    execute(
+    run_sql(
         &pool,
         "SELECT setval('morpholog.audit_ordered_at_us', 1000)",
     )
@@ -363,7 +356,7 @@ async fn a_quiet_horizon_fences_the_ordering_clock() {
     );
 
     let ahead = before + 3_600_000_000;
-    execute(
+    run_sql(
         &pool,
         &format!("SELECT setval('morpholog.audit_ordered_at_us', {ahead})"),
     )
@@ -453,7 +446,7 @@ async fn live_faults(pool: &PgPool) -> Vec<String> {
 /// now, so the mutation is inside the pack rather than a tamper against
 /// an earlier root.
 async fn offline_fault(pool: &PgPool) -> Option<String> {
-    execute(pool, "DELETE FROM morpholog.audit_checkpoints").await;
+    run_sql(pool, "DELETE FROM morpholog.audit_checkpoints").await;
     create_checkpoint(pool, None, None).await.unwrap();
     let pack = export_pack(pool, None).await.unwrap();
     match verify_pack(&pack, None).unwrap() {
@@ -493,20 +486,20 @@ async fn the_verifiers_hold_the_chronology_live_and_offline() {
     assert!(live_faults(&pool).await.is_empty());
 
     // An act of the batch at another instant than its order's.
-    execute(
+    run_sql(
         &pool,
         &format!("UPDATE morpholog.audit SET ordered_at = ordered_at + interval '1 second' WHERE transition_id = '{p}'"),
     )
     .await;
     assert_both_name(&pool, "differs from its order's").await;
-    execute(
+    run_sql(
         &pool,
         &format!("UPDATE morpholog.audit SET ordered_at = ordered_at - interval '1 second' WHERE transition_id = '{p}'"),
     )
     .await;
 
     // A later order at the previous order's instant.
-    execute(
+    run_sql(
         &pool,
         &format!(
             "UPDATE morpholog.audit SET ordered_at = (SELECT ordered_at FROM morpholog.audit WHERE transition_id = '{p}')
@@ -524,7 +517,7 @@ async fn the_verifiers_hold_the_chronology_live_and_offline() {
     testing::activate(&pool).await.unwrap();
     act(&pool, &pg, "e").await;
     assert!(live_faults(&pool).await.is_empty());
-    execute(
+    run_sql(
         &pool,
         "UPDATE morpholog.audit SET ordered_at = '2026-06-01T00:00:01Z'
           WHERE transformation_name = 'morpholog.activate'",

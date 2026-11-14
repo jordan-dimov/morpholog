@@ -5,18 +5,9 @@
 //! type error.
 
 use crate::ir_builder::{dec, eq, params, require, round, term, transformation};
+use crate::kernel_tests::support::holds;
 use crate::kernel_tests::support::propose_with_test_actor;
-use crate::{Outcome, Prop, State};
-
-fn holds(prop: Prop) {
-    let t = transformation("probe", params(&[]), vec![require(prop)]);
-    let outcome = propose_with_test_actor(&t, vec![], &State::default(), &[], &[])
-        .expect("evaluates cleanly");
-    assert!(
-        matches!(outcome, Outcome::Accepted { .. }),
-        "expected the proposition to hold exactly: {outcome:?}"
-    );
-}
+use crate::{Prop, State};
 
 fn refuses(prop: Prop, fragments: &[&str]) {
     let t = transformation("probe", params(&[]), vec![require(prop)]);

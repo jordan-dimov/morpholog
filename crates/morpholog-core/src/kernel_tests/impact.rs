@@ -13,20 +13,7 @@ use crate::ir_builder::{
     and, claim, defined, implies, invariant, params, subj as lit, term, var, wildcard,
 };
 
-fn subj(s: &str) -> EvalValue {
-    EvalValue::Subject(s.into())
-}
-
-fn dec(n: i64) -> EvalValue {
-    EvalValue::Decimal(Decimal::new(n, 0))
-}
-
-fn claim_instance(predicate: &str, args: &[EvalValue]) -> ClaimInstance {
-    ClaimInstance {
-        predicate: predicate.into(),
-        args: args.to_vec(),
-    }
-}
+use super::support::{claim_instance, dec, subj};
 
 fn def(name: &str, parameters: &[&str], body: Prop) -> Definition {
     Definition {

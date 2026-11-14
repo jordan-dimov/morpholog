@@ -13,7 +13,7 @@ in the [glossary](#glossary) at the end.
   hour from nothing to a programme that refuses a change and explains why.
 - [Installing from a release](install.md) - a prebuilt binary to a running
   example, and how an existing database upgrades.
-- [Operating a deployment](operating.md) - the three sequences as a
+- [Operating a deployment](operating.md) - the sequences as a
   checklist: upgrading to a release, deploying a changed programme,
   closing a day. Each step links to its explanation.
 - [The surface syntax on one page](surface-syntax.md) - every form a

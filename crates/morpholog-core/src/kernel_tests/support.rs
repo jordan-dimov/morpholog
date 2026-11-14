@@ -78,6 +78,18 @@ pub(crate) fn propose_with_test_actor(
     crate::propose::propose(t, &transition, pre, invariants, definitions, &mut fresh())
 }
 
+/// Propose an act that only requires `prop`, and expect it to hold.
+pub(crate) fn holds(prop: crate::Prop) {
+    use crate::ir_builder::{params, require, transformation};
+    let t = transformation("probe", params(&[]), vec![require(prop)]);
+    let outcome = propose_with_test_actor(&t, vec![], &State::default(), &[], &[])
+        .expect("evaluates cleanly");
+    assert!(
+        matches!(outcome, Outcome::Accepted { .. }),
+        "expected the proposition to hold: {outcome:?}"
+    );
+}
+
 pub(crate) fn must_accept(
     t: &Transformation,
     args: Vec<EvalValue>,

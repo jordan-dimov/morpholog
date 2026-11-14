@@ -33,6 +33,14 @@ const CASES: &[&str] = &[
     "not-a-url",
 ];
 
+/// The shared shell twin.
+fn twin() -> String {
+    format!(
+        "{}/../../scripts/shared/sqlx_url.sh",
+        env!("CARGO_MANIFEST_DIR")
+    )
+}
+
 fn shell_sqlx_url_as(script: &str, url: &str, user: &str) -> String {
     let program = format!(
         "set -euo pipefail\n\
@@ -83,13 +91,10 @@ const HOSTILE_USERS: &[&str] = &[
 
 #[test]
 fn the_twin_encodes_hostile_usernames_identically() {
-    for script in ["scripts/shared/sqlx_url.sh"] {
-        let path = format!("{}/../../{script}", env!("CARGO_MANIFEST_DIR"));
-        for user in HOSTILE_USERS {
-            let shell = shell_sqlx_url_as(&path, "postgres:///db", user);
-            let rust = morpholog_postgres::with_connection_defaults_as("postgres:///db", user);
-            assert_eq!(shell, rust, "{script} disagrees on PGUSER={user}");
-        }
+    for user in HOSTILE_USERS {
+        let shell = shell_sqlx_url_as(&twin(), "postgres:///db", user);
+        let rust = morpholog_postgres::with_connection_defaults_as("postgres:///db", user);
+        assert_eq!(shell, rust, "the twin disagrees on PGUSER={user}");
     }
 }
 
@@ -163,18 +168,15 @@ fn both_scripts_source_the_shared_twin() {
 #[test]
 fn the_shell_twin_agrees_with_the_rust_rule() {
     let mut filled = 0;
-    for script in ["scripts/shared/sqlx_url.sh"] {
-        let path = format!("{}/../../{script}", env!("CARGO_MANIFEST_DIR"));
-        for url in CASES {
-            let shell = shell_sqlx_url(&path, url);
-            let rust = morpholog_postgres::with_connection_defaults(url);
-            assert_eq!(
-                shell, rust,
-                "{script} disagrees with with_connection_defaults on {url}"
-            );
-            if rust != *url {
-                filled += 1;
-            }
+    for url in CASES {
+        let shell = shell_sqlx_url(&twin(), url);
+        let rust = morpholog_postgres::with_connection_defaults(url);
+        assert_eq!(
+            shell, rust,
+            "the twin disagrees with with_connection_defaults on {url}"
+        );
+        if rust != *url {
+            filled += 1;
         }
     }
     // With no username in the environment every case returns unchanged,
@@ -222,10 +224,7 @@ fn claim_socket_name() -> (u32, Created) {
 fn the_twin_names_the_socket_directory_identically() {
     let (port, _socket) = claim_socket_name();
     let url = format!("postgres:///db?port={port}&user=u");
-    let path = format!(
-        "{}/../../scripts/shared/sqlx_url.sh",
-        env!("CARGO_MANIFEST_DIR")
-    );
+    let path = twin();
     let shell = shell_sqlx_url(&path, &url);
     let rust = morpholog_postgres::with_connection_defaults(&url);
     assert_eq!(shell, rust, "the twin disagrees on {url}");

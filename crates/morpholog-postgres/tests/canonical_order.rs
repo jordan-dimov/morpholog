@@ -8,13 +8,12 @@
 
 #![expect(
     clippy::unwrap_used,
-    clippy::expect_used,
     reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
 )]
 
 mod common;
 
-use common::{expect_committed, pg_program, propose_pg_as, reset_db, test_pool};
+use common::{expect_committed, pg_program, propose_pg_as, reset_db, run_sql, test_pool};
 use morpholog_core::{ClaimInstance, Program};
 use morpholog_postgres::{
     ClaimRead, PgError, PgPool, PgProgram, VerifyOutcome, begin_audit_tail, read_claims_at,
@@ -92,13 +91,6 @@ async fn legacy(pool: &PgPool, name: &str, k: &str, committed_at: &str) -> Uuid 
     id
 }
 
-async fn execute(pool: &PgPool, sql: &str) {
-    sqlx::raw_sql(sqlx::AssertSqlSafe(sql.to_string()))
-        .execute(pool)
-        .await
-        .expect(sql);
-}
-
 async fn verdict(pool: &PgPool) -> VerifyOutcome {
     verify_replay(pool, &mut |_| {}).await.unwrap()
 }
@@ -173,7 +165,7 @@ async fn legacy_uncertainty_includes_who_admitted_a_claim() {
     legacy(&pool, "retract_x", "a", "2026-06-01T00:00:02Z").await;
     let no_op = legacy(&pool, "admit_x", "a", "2026-06-01T00:00:03Z").await;
     let readmit = legacy(&pool, "admit_x", "a", "2026-06-01T00:00:04Z").await;
-    execute(
+    run_sql(
         &pool,
         &format!(
             "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
@@ -204,7 +196,7 @@ async fn operations_follow_the_claims_a_row_proposed() {
     reset_db(&pool).await;
     let pg = pg_program(program());
     let admitted = act(&pool, &pg, "admit_x", "a").await;
-    execute(
+    run_sql(
         &pool,
         &format!(
             "UPDATE morpholog.audit
@@ -237,7 +229,7 @@ async fn a_delete_the_history_cannot_explain_diverges() {
         }
     ));
 
-    execute(
+    run_sql(
         &pool,
         &format!("DELETE FROM morpholog.audit WHERE transition_id = '{admitted}'"),
     )
@@ -256,7 +248,7 @@ async fn the_claims_table_names_the_transition_replay_names() {
     reset_db(&pool).await;
     let pg = pg_program(program());
     let admitted = act(&pool, &pg, "admit_x", "a").await;
-    execute(
+    run_sql(
         &pool,
         &format!(
             "UPDATE morpholog.claims SET asserted_in = '{}'",
@@ -280,7 +272,7 @@ async fn the_activation_record_is_the_one_its_prefix_implies() {
     common::drain_open_transactions(&pool).await;
     testing::reset_before_activation(&pool).await.unwrap();
     let admitted = legacy(&pool, "admit_x", "a", "2026-06-01T00:00:01Z").await;
-    execute(
+    run_sql(
         &pool,
         &format!(
             "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
@@ -305,7 +297,7 @@ async fn the_activation_record_is_the_one_its_prefix_implies() {
     .await
     .unwrap();
 
-    execute(
+    run_sql(
         &pool,
         "BEGIN;
          UPDATE morpholog.audit SET operations = '[]'
@@ -319,7 +311,7 @@ async fn the_activation_record_is_the_one_its_prefix_implies() {
     assert_eq!(found[0].0, activation);
     assert!(found[0].1.contains("baseline chunks"), "{found:?}");
 
-    execute(
+    run_sql(
         &pool,
         "DELETE FROM morpholog.audit WHERE transformation_name = 'morpholog.activate'",
     )
@@ -352,7 +344,7 @@ async fn the_order_is_of_effects_not_of_what_each_decision_saw() {
     morpholog_postgres::provision_indexes(&pool, &[&pg], false)
         .await
         .unwrap();
-    execute(
+    run_sql(
         &pool,
         "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
          SELECT 'XPad', jsonb_build_array(jsonb_build_object('type', 'subject', 'value', i::text)),
@@ -404,7 +396,7 @@ async fn the_order_is_of_effects_not_of_what_each_decision_saw() {
     .await
     .unwrap();
     assert_eq!(&order[1..], &[b, a], "B takes the earlier order");
-    execute(
+    run_sql(
         &pool,
         "DELETE FROM morpholog.claims WHERE predicate_name = 'XPad'",
     )

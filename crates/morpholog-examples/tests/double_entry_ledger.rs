@@ -298,7 +298,7 @@ fn lone_journal_entry_without_lines_violates_invariant() {
 fn cannot_restate_already_restated_entry() {
     // Post, restate, then restate the original again. The second restatement
     // is refused by the `require not exists newer: Supersedes(newer, prior)`
-    // gate, with the at_most_one_direct_successor invariant as backstop.
+    // gate, with the `Supersedes` uniqueness (`supersedes_unique_by_prior_entry_id`) as backstop.
     let s1 = ex().must_accept(
         &double_entry_ledger::post_simple_entry(),
         vec![

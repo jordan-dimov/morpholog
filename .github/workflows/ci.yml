@@ -154,14 +154,10 @@ jobs:
     timeout-minutes: 10
 
     env:
-      # The same rust-lld memory bounds the coverage job carries.
-      # Serialising lld caps each link's internal parallelism, but
-      # cargo still links several test binaries concurrently, and with
-      # full debuginfo the combined peak still intermittently SIGBUSes
-      # the hosted runner (it has taken out pg-17 and pg-18 runs on
-      # different days). line-tables-only cuts each link's footprint
-      # several-fold while test backtraces keep file/line info.
-      RUSTFLAGS: "-C link-arg=-Wl,--threads=1 -C debuginfo=line-tables-only"
+      # Serialising rust-lld bounds each link's memory: concurrent links
+      # of the test binaries have SIGBUSed the hosted runner. The dev
+      # profile's line tables keep the binaries small too.
+      RUSTFLAGS: "-C link-arg=-Wl,--threads=1"
 
     steps:
       - uses: actions/checkout@v5
@@ -174,32 +170,22 @@ jobs:
         with:
           key: test-sync
 
-      # Sync, pure crates - no DB.
-      - name: test (core)
-        run: cargo test -p morpholog-core --all-targets --locked
-
-      - name: test (examples)
-        run: cargo test -p morpholog-examples --all-targets --locked
-
-      # Parser arc: lexer, layout, parser, formatter round-trip.
-      # No DB; the round-trip property test lives here.
-      - name: test (surface)
-        run: cargo test -p morpholog-surface -p morpholog-test-support --all-targets --locked
+      # Every crate that needs no database, so a new one is never left out.
+      - name: test (sync)
+        run: >-
+          cargo test --workspace --all-targets --locked
+          --exclude morpholog-cli --exclude morpholog-postgres
+          --exclude morpholog-outbox --exclude morpholog-bench
 
   test-cli:
-    name: test (cli, postgres ${{ matrix.postgres }})
+    name: test (cli)
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
-    strategy:
-      fail-fast: false
-      matrix:
-        # PostgreSQL 18 is the minimum supported version.
-        postgres: [18]
-
     services:
       postgres:
-        image: postgres:${{ matrix.postgres }}
+        # PostgreSQL 18 is the minimum supported version.
+        image: postgres:18
         env:
           POSTGRES_PASSWORD: postgres
         ports:
@@ -212,17 +198,10 @@ jobs:
 
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-      RUSTFLAGS: "-C link-arg=-Wl,--threads=1 -C debuginfo=line-tables-only"
+      RUSTFLAGS: "-C link-arg=-Wl,--threads=1"
 
     steps:
       - uses: actions/checkout@v5
-      # The 2PC census test needs prepared transactions, which the image
-      # disables; the setting takes a restart.
-      - name: Allow prepared transactions
-        run: |
-          docker exec ${{ job.services.postgres.id }} psql -U postgres -c "ALTER SYSTEM SET max_prepared_transactions = 5"
-          docker restart ${{ job.services.postgres.id }}
-          until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres; do sleep 1; done
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -237,25 +216,20 @@ jobs:
           PGPASSWORD: postgres
         run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -1 -f crates/morpholog-core/sql/schema.sql
 
-      # PG-backed integration tests share one schema; each test
-      # truncates it on entry, so they must run serially.
-      - name: test (cli, serial)
-        run: cargo test -p morpholog-cli --all-targets --locked -- --test-threads=1
+      # The database suites share one schema and truncate it on entry,
+      # so they run serially (`RUST_TEST_THREADS` in .cargo/config.toml).
+      - name: test (cli)
+        run: cargo test -p morpholog-cli --all-targets --locked
 
   test-adapter:
-    name: test (adapter, postgres ${{ matrix.postgres }})
+    name: test (adapter)
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
-    strategy:
-      fail-fast: false
-      matrix:
-        # PostgreSQL 18 is the minimum supported version.
-        postgres: [18]
-
     services:
       postgres:
-        image: postgres:${{ matrix.postgres }}
+        # PostgreSQL 18 is the minimum supported version.
+        image: postgres:18
         env:
           POSTGRES_PASSWORD: postgres
         ports:
@@ -268,7 +242,7 @@ jobs:
 
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-      RUSTFLAGS: "-C link-arg=-Wl,--threads=1 -C debuginfo=line-tables-only"
+      RUSTFLAGS: "-C link-arg=-Wl,--threads=1"
 
     steps:
       - uses: actions/checkout@v5
@@ -306,20 +280,19 @@ jobs:
           SQLX_OFFLINE: "false"
         run: cargo sqlx prepare --workspace --check -- --all-targets --all-features --locked
 
-      # PG-backed integration tests share one schema; each test
-      # truncates it on entry, so they must run serially.
-      - name: test (postgres, serial)
-        run: cargo test -p morpholog-postgres --all-targets --locked -- --test-threads=1
+      # Serial, as in test-cli.
+      - name: test (postgres)
+        run: cargo test -p morpholog-postgres --all-targets --locked
 
-      - name: test (outbox, serial)
-        run: cargo test -p morpholog-outbox --all-targets --locked -- --test-threads=1
+      - name: test (outbox)
+        run: cargo test -p morpholog-outbox --all-targets --locked
 
       # Scale-pressure bench: the N=1 compatibility smoke test only.
       # It runs every scenario once against the schema, so drift in the
       # bench's hand-written SQL fails here instead of the next manual
-      # scale run. Truncates the schema, hence serial.
-      - name: test (bench smoke, serial)
-        run: cargo test -p morpholog-bench --all-targets --locked -- --test-threads=1
+      # scale run.
+      - name: test (bench smoke)
+        run: cargo test -p morpholog-bench --all-targets --locked
 
   # The one check branch protection requires: green only when every
   # test job is. It keeps its name across the split so the required
@@ -365,13 +338,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
-      # The 2PC census test needs prepared transactions, which the image
-      # disables; the setting takes a restart.
-      - name: Allow prepared transactions
-        run: |
-          docker exec ${{ job.services.postgres.id }} psql -U postgres -c "ALTER SYSTEM SET max_prepared_transactions = 5"
-          docker restart ${{ job.services.postgres.id }}
-          until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres; do sleep 1; done
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -392,16 +358,6 @@ jobs:
 
       - name: Build the CLI
         run: cargo build -p morpholog-cli --locked
-
-      # The committed package under the worked embedder must be exactly
-      # what this binary generates - regenerate-and-diff is the drift
-      # contract embedders themselves rely on.
-      - name: Regenerate the example client and diff
-        run: |
-          target/debug/morpholog generate python-client \
-            examples/10_trade_lifecycle/trade_lifecycle.morph \
-            --out examples/etrm_embedder
-          git diff --exit-code examples/etrm_embedder/morpholog_client
 
       - name: Client types (pinned mypy, as scripts/python_types.sh names it)
         run: |

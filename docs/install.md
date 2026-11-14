@@ -122,17 +122,10 @@ A verifier reads its own evidence-pack format, and the format before it when tha
 
 `morpholog init` provisions a schema; it never migrates one. That is
 deliberate - it means running `init` against a live database cannot alter
-it. Upgrading is its own verb, and it sits in a sequence (the checklist form is [`docs/operating.md`](operating.md)):
-
-```bash
-# 1. stop every process on the database: sessions, workers, the service
-pg_dump "$DATABASE_URL" > before-upgrade.sql                 # 2. back up
-morpholog migrate --check --database-url "$DATABASE_URL"     # 3. ask: exit 1 unless current
-morpholog migrate --database-url "$DATABASE_URL"             # 4. bring the schema forward
-morpholog audit verify --database-url "$DATABASE_URL"        # 5. the record still agrees with itself
-morpholog provision indexes a.morph b.morph                  # 6. every programme, one call
-# 7. start every process on the new binary
-```
+it. Upgrading is its own verb, and it sits in a sequence that stops every
+process on the database first and starts them on the new binary last. The
+steps, one line each, are [the upgrade checklist](operating.md#upgrading-to-a-new-release);
+this section explains them.
 
 One migration, the canonical audit order, does most of its work before
 the step that pauses writers: new columns, constraints and indexes are
@@ -156,9 +149,9 @@ migration still pending and `--check` saying `ready`, and the plain
 
 To try the migration first, migrate a copy (`createdb -T live trial`). A copy holds the same grants as its source, so `migrate` on it warns that this deployment's roles also hold privileges in the source database. For a copy that is expected, and no reason to move roles. Drop the copy before you migrate the live database, or that migrate warns about the copy too.
 
-When a release moves the semantics version, the release notes say which decisions moved. `morpholog rehearse <programme>` with the programme you serve, after step 4, lists every committed proposal this binary would decide differently, so the ones a moved decision touches are found before anyone proposes again.
+When a release moves the semantics version, the release notes say which decisions moved. `morpholog rehearse <programme>` with the programme you serve, after `migrate`, lists every committed proposal this binary would decide differently, so the ones a moved decision touches are found before anyone proposes again.
 
-Step 6 provisions. `provision indexes --check` asks the same question and changes nothing, so it belongs at deployment or service start, before the first write is accepted: a programme running unprovisioned is refused there instead of found by its latency.
+After the migration, `provision indexes` names every programme in one call. `provision indexes --check` asks the same question and changes nothing, so it belongs at deployment or service start, before the first write is accepted: a programme running unprovisioned is refused there instead of found by its latency.
 
 Stopping first is not ceremony. A resident session and an outbox worker
 ask whether the database is theirs once, when they start, so one still

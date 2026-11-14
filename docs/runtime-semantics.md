@@ -55,7 +55,7 @@ Claims are **set-valued** in v0.
 - That check is on what a proposal introduces, never on what it reads. A claim stored with another kind (admitted before semantics version 6, or written around the runtime) is still matched by gates and patterns, and still retractable. Whether the stored claims fit a programme is `check --database-url`'s question, which stays the deploy gate. And `rehearse` answers a third: what the recorded proposals would decide under a candidate. It reports a row that admits a misfitting value again as `would_error`, but cannot vouch for a stored claim no row admits again.
 - Retraction takes a pattern (`retract Pred(a, b, c)`, `retract Pred(a, b, _)`, or `retract Pred(key: k, ..)`) and retracts every claim it matches. Zero matches changes nothing, even when the pattern names every field. A transformation that must refuse when the claim is missing says so with a `require` (or a `bind`) before the `retract`. A `bind` that matches a claim only so the retract can name every field is unnecessary where the fields kept cover a uniqueness key grounded before the bind, and `check` hints the pattern form there; the `bind`'s refusal when no claim matches is kept by a `require`. Where no such key pins one claim the hint stays silent, because a `bind` over several matches is an error and a pattern retract removes them all.
 - Reads observe only the pre-transformation snapshot.
-- Invariants evaluate against `CandidateState`, not the snapshot.
+- Invariants evaluate against the candidate state (`Candidate`), not the snapshot.
 
 A claim's identity is its `(predicate_name, arguments)` tuple. The PG schema enforces uniqueness with a constraint, not via runtime de-duplication.
 
@@ -104,8 +104,8 @@ ValueExpr                        -- a value expression: computes exactly one val
                                     Evaluated by eval_value.
   Term                           -- a leaf (Var, Wildcard, Literal, Actor)
   Arith { op: ArithOp, left, right }  -- decimal arithmetic; op is one of
-                                    Add | Sub | Mul | Div | Mod (infix + - * / %) or
-                                    Min | Max (floor / cap, min(a,b) / max(a,b))
+                                    Add | Sub | Mul | Div | Mod (infix + - * / %)
+  Call { builtin, args }         -- a strict builtin: min, max, abs, round, ...
   Sum { value, body: Prop, seed } -- sum a value over a proposition's matches; seed is
                                     the typed zero an empty sum returns, stamped by lowering
                                     from the target's kind and left out of the hash
@@ -170,8 +170,8 @@ Intent
   idempotency_key                -- hash(transition_id, name, args) by default;
                                     explicit override allowed
 
-CandidateState
-  Snapshot − retracted claims + asserted claims
+Candidate
+  Snapshot - retracted claims + asserted claims, read without copying the snapshot
 
 AuditRecord
   transition_id                  -- UUIDv7
@@ -206,7 +206,7 @@ An as-of timestamp selects by each row's instant: `ordered_at`, or `committed_at
 
 ## Surface-to-IR mapping
 
-The `.morph` surface verbs map one-to-one onto the IR constructs above. The renames are domain-flavour and layout only: the surface is more business-native than the IR but never more expressive than it (the doctrine, and what it rules out, is in [`scope-and-ambition.md`](scope-and-ambition.md#surface-syntax-and-the-ir)). This table is the exact correspondence, with the reason each surface form is spelled the way it is; how each form is written, with a parsed example of every construct, is in [`surface-syntax.md`](surface-syntax.md).
+The `.morph` surface verbs map one-to-one onto the IR constructs above. The renames are domain-flavour and layout only: the surface is more business-native than the IR but never more expressive than it. This table is the exact correspondence, with the reason each surface form is spelled the way it is; how each form is written, with a parsed example of every construct, is in [`surface-syntax.md`](surface-syntax.md).
 
 | Surface verb | IR construct | Reason |
 |---|---|---|
@@ -268,7 +268,7 @@ The `.morph` surface verbs map one-to-one onto the IR constructs above. The rena
      - asserted claims
      - retracted claims
      - emitted intents
-4. Construct CandidateState = Snapshot − Retracted + Asserted.
+4. Read the candidate state as Snapshot - Retracted + Asserted.
 5. Revalidate each active invariant over the cases the change could
    affect (see "Admission: case-local revalidation").
 6. If any revalidation fails: rollback. Nothing commits. No business audit record.
@@ -431,7 +431,7 @@ bind_one Policy(policy_id, aggregate_limit)                 -- bound policy_id n
 ... statements that reference policy_id and aggregate_limit ...
 ```
 
-The structural guarantee that each `bind_one` is single-valued comes from a programme-level invariant - e.g. `at_most_one_X_per_id` (the shape `verified_revenue::at_most_one_current_verification_per_asset_period` and `insurance_claim_settlement::at_most_one_policy_per_id` both use). Without that invariant, a duplicate admission would surface as `bind_one matched 2 candidates` (kernel error) rather than a lawful rejection.
+The structural guarantee that each `bind_one` is single-valued comes from a programme-level invariant: the one a `unique by` or `current pointer by` declaration generates, named `{predicate}_unique_by_{fields}` (`verified_revenue::current_verification_unique_by_asset_period` and `insurance_claim_settlement::policy_unique_by_policy_id` are two). Without that invariant, a duplicate admission would surface as `bind_one matched 2 candidates` (kernel error) rather than a lawful rejection.
 
 The `require + let + value_of` chain remains expressible (`ValueExpr::ValueOf` is not deleted), and is the right tool when a value-producing position needs a lookup that does not fit a statement-level binding extension - inside arithmetic, inside `Sum`, or inside a derived-claim value expression.
 
@@ -894,7 +894,7 @@ Steps 1-7 are atomic. After commit, workers running outside the transaction atte
 
 ## Explicit non-goals for v0
 
-The doctrinal floors - no entities/classes/services, no workflow engine, no arbitrary computation inside transformations, no BI engine, no bypass flags - are in [`scope-and-ambition.md`](scope-and-ambition.md)'s Non-goals and not repeated here. The IR- and runtime-specific ones:
+The doctrinal floors - no entities/classes/services, no workflow engine, no arbitrary computation inside transformations, no BI engine, no bypass flags - hold here; the limits on the decision engine are in [`scope-and-ambition.md`](scope-and-ambition.md#what-we-will-not-build). The IR- and runtime-specific ones:
 
 - No invariant lifecycle. v0 has one canonical epoch; all invariants are `version: 1`, status `enforced`.
 - No generated *storage* schema from claim shapes. v0 uses a small hand-written PG schema at `crates/morpholog-core/sql/schema.sql` for the runtime tables (claims, audit, outbox). Read-side typed *views* over predicates are generated (`generate views`); the storage DDL is not.
