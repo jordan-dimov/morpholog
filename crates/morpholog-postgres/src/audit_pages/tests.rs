@@ -31,7 +31,7 @@ async fn pool() -> PgPool {
                 Ok(())
             })
         })
-        .connect(&crate::with_default_user(&url))
+        .connect(&crate::with_connection_defaults(&url))
         .await
         .expect("failed to connect to PostgreSQL test database");
     // The trigger is off, so each row takes the order the test gives it.

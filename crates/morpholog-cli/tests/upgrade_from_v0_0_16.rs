@@ -211,7 +211,7 @@ fn propose(binary: &Path, url: &str, file: &Path, act: &str, k: &str) -> Output 
 async fn a_database_the_last_release_wrote_upgrades_and_verifies() {
     let Some(old) = old_binary() else { return };
     let new = Path::new(common::bin());
-    let base = morpholog_postgres::with_default_user(&common::database_url());
+    let base = morpholog_postgres::with_connection_defaults(&common::database_url());
     let name = format!("morpholog_cli_upgrade_{}", std::process::id());
     let admin = PgPool::connect(&common::with_database(&base, "postgres"))
         .await

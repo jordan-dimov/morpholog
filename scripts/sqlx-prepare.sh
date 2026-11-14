@@ -20,7 +20,7 @@
 set -euo pipefail
 
 : "${DATABASE_URL:?DATABASE_URL must point at a disposable Morpholog database}"
-# The shell twin of `with_default_user`, shared by both scripts and
+# The shell twin of `with_connection_defaults`, shared by both scripts and
 # pinned against the Rust rule by shell_twin_agreement.rs.
 # shellcheck source=shared/sqlx_url.sh
 source "$(dirname "${BASH_SOURCE[0]}")/shared/sqlx_url.sh"

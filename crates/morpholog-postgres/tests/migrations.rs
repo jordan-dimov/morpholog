@@ -55,7 +55,7 @@ async fn an_unmigrated_database_names_the_remedy_on_the_refusal_path() {
     // the same box, or two jobs) must not drop each other's database.
     let name = format!("morpholog_drift_probe_{}", std::process::id());
     let name = name.as_str();
-    let admin = morpholog_postgres::with_default_user(&with_database(&base, "postgres"));
+    let admin = morpholog_postgres::with_connection_defaults(&with_database(&base, "postgres"));
     let admin_pool = sqlx::PgPool::connect(&admin)
         .await
         .expect("connect to the maintenance database");
@@ -66,7 +66,7 @@ async fn an_unmigrated_database_names_the_remedy_on_the_refusal_path() {
         .await
         .expect("create the throwaway database");
 
-    let probe_url = morpholog_postgres::with_default_user(&with_database(&base, name));
+    let probe_url = morpholog_postgres::with_connection_defaults(&with_database(&base, name));
     let outcome = drift_probe(&probe_url).await;
 
     // Drop the database before asserting, so a failed assertion cannot leave
@@ -537,7 +537,7 @@ async fn a_baseline_database_migrated_to_the_head_has_the_fresh_schema() {
     let fresh = format!("morpholog_schema_fresh_{}", std::process::id());
     let upgraded = format!("morpholog_schema_upgraded_{}", std::process::id());
     let (fresh, upgraded) = (fresh.as_str(), upgraded.as_str());
-    let admin = morpholog_postgres::with_default_user(&with_database(&base, "postgres"));
+    let admin = morpholog_postgres::with_connection_defaults(&with_database(&base, "postgres"));
     let admin_pool = sqlx::PgPool::connect(&admin).await.expect("maintenance db");
     for db in [fresh, upgraded] {
         ddl(
@@ -551,9 +551,9 @@ async fn a_baseline_database_migrated_to_the_head_has_the_fresh_schema() {
             .unwrap();
     }
     let connect = |db: &str| {
-        sqlx::PgPool::connect_lazy(&morpholog_postgres::with_default_user(&with_database(
-            &base, db,
-        )))
+        sqlx::PgPool::connect_lazy(&morpholog_postgres::with_connection_defaults(
+            &with_database(&base, db),
+        ))
         .unwrap()
     };
     let (fresh_pool, upgraded_pool) = (connect(fresh), connect(upgraded));
@@ -608,7 +608,7 @@ async fn a_baseline_database_is_behind_until_migrated_and_then_keeps_a_gate_witn
     };
     let name = format!("morpholog_gate_witness_{}", std::process::id());
     let name = name.as_str();
-    let admin = morpholog_postgres::with_default_user(&with_database(&base, "postgres"));
+    let admin = morpholog_postgres::with_connection_defaults(&with_database(&base, "postgres"));
     let admin_pool = sqlx::PgPool::connect(&admin).await.expect("maintenance db");
     ddl(
         &admin_pool,
@@ -619,7 +619,7 @@ async fn a_baseline_database_is_behind_until_migrated_and_then_keeps_a_gate_witn
     ddl(&admin_pool, format!("CREATE DATABASE {name}"))
         .await
         .unwrap();
-    let url = morpholog_postgres::with_default_user(&with_database(&base, name));
+    let url = morpholog_postgres::with_connection_defaults(&with_database(&base, name));
     let pool = sqlx::PgPool::connect(&url).await.unwrap();
     sqlx::raw_sql(BASELINE_SCHEMA)
         .execute(&pool)

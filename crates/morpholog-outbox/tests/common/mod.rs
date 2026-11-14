@@ -21,7 +21,7 @@ pub(crate) async fn test_pool() -> PgPool {
         "DATABASE_URL must be set for morpholog-outbox integration tests \
          (e.g. postgres:///morpholog_dev)",
     );
-    let url = morpholog_postgres::with_default_user(&url);
+    let url = morpholog_postgres::with_connection_defaults(&url);
     PgPool::connect(&url)
         .await
         .expect("failed to connect to PostgreSQL test database")

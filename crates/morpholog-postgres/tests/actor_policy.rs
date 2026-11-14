@@ -380,7 +380,7 @@ async fn set_role_does_not_change_who_the_policy_thinks_you_are() {
             .unwrap();
 
             let url = std::env::var("DATABASE_URL").unwrap();
-            let url = morpholog_postgres::with_default_user(&url);
+            let url = morpholog_postgres::with_connection_defaults(&url);
             let borrowing = PgPoolOptions::new()
                 .max_connections(1)
                 .after_connect(|conn, _| {

@@ -30,7 +30,7 @@ fn migrate(url: &str) -> (std::process::ExitStatus, String, String) {
 
 #[tokio::test(flavor = "current_thread")]
 async fn migrate_names_the_other_sessions_while_a_migration_is_pending() {
-    let base = morpholog_postgres::with_default_user(&common::database_url());
+    let base = morpholog_postgres::with_connection_defaults(&common::database_url());
     let name = format!("morpholog_cli_sessions_{}", std::process::id());
     let admin = PgPool::connect(&common::with_database(&base, "postgres"))
         .await

@@ -151,7 +151,8 @@ pub use provision::{
     RoleMembers, SessionCount, databases_also_reached, deployment_roles, direct_members,
     drop_schema, initialise_schema, listed_roles, other_sessions, provision_least_privilege,
     rebind_least_privilege, redact_database_url, require_can_provision_least_privilege,
-    require_deployment_roles, single_connection_pool, with_default_user, with_user,
+    require_deployment_roles, single_connection_pool, with_connection_defaults,
+    with_connection_defaults_as,
 };
 pub use receipt::{
     CheckpointMatch, Completeness, Evaluation, EvaluationReceipt, ParsedReceipt, ProgramMatch,

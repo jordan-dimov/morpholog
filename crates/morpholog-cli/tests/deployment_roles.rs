@@ -87,7 +87,7 @@ async fn init_refuses_held_roles_and_migrate_warns_about_shared_ones() {
     let Ok(base) = std::env::var("DATABASE_URL") else {
         return;
     };
-    let base = morpholog_postgres::with_default_user(&base);
+    let base = morpholog_postgres::with_connection_defaults(&base);
     let admin = PgPool::connect(&common::with_database(&base, "postgres"))
         .await
         .unwrap();
@@ -183,7 +183,7 @@ async fn a_reset_binds_again_only_the_roles_the_database_recorded() {
     let Ok(base) = std::env::var("DATABASE_URL") else {
         return;
     };
-    let base = morpholog_postgres::with_default_user(&base);
+    let base = morpholog_postgres::with_connection_defaults(&base);
     let admin = PgPool::connect(&common::with_database(&base, "postgres"))
         .await
         .unwrap();
@@ -338,7 +338,7 @@ async fn a_reset_of_a_database_older_than_the_role_record_refuses_first() {
     let Ok(base) = std::env::var("DATABASE_URL") else {
         return;
     };
-    let base = morpholog_postgres::with_default_user(&base);
+    let base = morpholog_postgres::with_connection_defaults(&base);
     let admin = PgPool::connect(&common::with_database(&base, "postgres"))
         .await
         .unwrap();
@@ -439,7 +439,7 @@ async fn least_privilege_without_createrole_refuses_before_any_change() {
     let Ok(base) = std::env::var("DATABASE_URL") else {
         return;
     };
-    let base = morpholog_postgres::with_default_user(&base);
+    let base = morpholog_postgres::with_connection_defaults(&base);
     let admin = PgPool::connect(&common::with_database(&base, "postgres"))
         .await
         .unwrap();
@@ -517,7 +517,7 @@ async fn a_reset_never_recreates_a_missing_recorded_role() {
     let Ok(base) = std::env::var("DATABASE_URL") else {
         return;
     };
-    let base = morpholog_postgres::with_default_user(&base);
+    let base = morpholog_postgres::with_connection_defaults(&base);
     let admin = PgPool::connect(&common::with_database(&base, "postgres"))
         .await
         .unwrap();

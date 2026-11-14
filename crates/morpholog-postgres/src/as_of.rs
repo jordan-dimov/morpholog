@@ -378,7 +378,7 @@ mod tests {
         let url = std::env::var("DATABASE_URL").expect(
             "DATABASE_URL must be set for the as-of tests (e.g. postgres:///morpholog_dev)",
         );
-        let pool = PgPool::connect(&crate::with_default_user(&url))
+        let pool = PgPool::connect(&crate::with_connection_defaults(&url))
             .await
             .expect("failed to connect to PostgreSQL test database");
         crate::testing::reset_database(&pool).await.expect("reset");

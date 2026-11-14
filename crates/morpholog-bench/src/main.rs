@@ -2277,7 +2277,7 @@ fn run_compare(args: &CompareArgs) -> Result<()> {
 /// A scenario's pool, on the URL's implied user like every other
 /// Postgres tool.
 async fn connect(url: &str) -> Result<PgPool> {
-    PgPool::connect(&morpholog_postgres::with_default_user(url))
+    PgPool::connect(&morpholog_postgres::with_connection_defaults(url))
         .await
         .context("connect to PostgreSQL")
 }
@@ -2836,7 +2836,9 @@ async fn run_contend(args: ContendArgs) -> Result<()> {
     // connections and hide the contention being measured.
     let pool = PgPoolOptions::new()
         .max_connections(args.workers as u32 + 2)
-        .connect(&morpholog_postgres::with_default_user(&args.database_url))
+        .connect(&morpholog_postgres::with_connection_defaults(
+            &args.database_url,
+        ))
         .await
         .context("connect to PostgreSQL")?;
     require_migration_head(&pool).await?;
@@ -4107,7 +4109,9 @@ async fn run_suite(args: SuiteArgs) -> Result<()> {
     // handful of connections.
     let pool = PgPoolOptions::new()
         .max_connections(18)
-        .connect(&morpholog_postgres::with_default_user(&args.database_url))
+        .connect(&morpholog_postgres::with_connection_defaults(
+            &args.database_url,
+        ))
         .await
         .context("connect to PostgreSQL")?;
     require_migration_head(&pool).await?;
@@ -4867,7 +4871,7 @@ mod smoke {
         // The suite plumbing over a tiny private plan, one case per
         // family. The quick ladder is a real measurement run, too slow
         // for CI.
-        let pool = PgPool::connect(&morpholog_postgres::with_default_user(&url))
+        let pool = PgPool::connect(&morpholog_postgres::with_connection_defaults(&url))
             .await
             .expect("suite smoke pool");
         let plan = vec![

@@ -57,9 +57,9 @@ async fn ddl(pool: &PgPool, sql: String) {
 async fn baseline_database(tag: &str) -> Option<(PgPool, PgPool, String)> {
     let base = std::env::var("DATABASE_URL").ok()?;
     let name = format!("morpholog_prep_{tag}_{}", std::process::id());
-    let admin = PgPool::connect(&morpholog_postgres::with_default_user(&with_database(
-        &base, "postgres",
-    )))
+    let admin = PgPool::connect(&morpholog_postgres::with_connection_defaults(
+        &with_database(&base, "postgres"),
+    ))
     .await
     .unwrap();
     ddl(
@@ -68,9 +68,9 @@ async fn baseline_database(tag: &str) -> Option<(PgPool, PgPool, String)> {
     )
     .await;
     ddl(&admin, format!("CREATE DATABASE {name}")).await;
-    let pool = PgPool::connect(&morpholog_postgres::with_default_user(&with_database(
-        &base, &name,
-    )))
+    let pool = PgPool::connect(&morpholog_postgres::with_connection_defaults(
+        &with_database(&base, &name),
+    ))
     .await
     .unwrap();
     sqlx::raw_sql(BASELINE_SCHEMA)
@@ -732,7 +732,7 @@ async fn the_census_refuses_a_session_this_login_cannot_see() {
                 Ok(())
             })
         })
-        .connect(&morpholog_postgres::with_default_user(&url))
+        .connect(&morpholog_postgres::with_connection_defaults(&url))
         .await
         .unwrap();
     let seen_by_limited = census(&limited).await.unwrap();
