@@ -29,7 +29,7 @@ Morpholog checks each proposal against the current record and the applicable rul
 
 This is more than calling a validation function. The check and the change happen in one database transaction. A competing change cannot quietly invalidate the decision under the runtime's stated guarantees.
 
-There are limits. A check covers the cases a change affects. It does not necessarily repair unrelated problems left by older data. The exact guarantees are in [runtime semantics](runtime-semantics.md) and [the computational model](computational-model.md).
+There are limits. A check covers the cases a change affects. It does not necessarily repair unrelated problems left by older data. The exact guarantees are in [runtime semantics](runtime-semantics.md) and [the computational model](computational-model.md), which also states, in one sentence, what a decision is.
 
 ## The ambition: build less software
 

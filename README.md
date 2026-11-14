@@ -1,6 +1,8 @@
 # Morpholog
 
-**Write business rules once. Let AI rapidly generate safe and reliable business systems around them.**
+**Write business rules once. Enforce them independently. Build less software.**
+
+AI can build the application around the rules. Morpholog keeps its important business decisions under rules you control.
 
 Business software is full of rules. Who may approve a payment? How much stock can be allocated? When can a trade settle? What happens when a figure is corrected?
 
