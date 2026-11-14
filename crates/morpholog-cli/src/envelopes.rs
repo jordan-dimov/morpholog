@@ -18,6 +18,10 @@ pub struct CheckReport {
     pub file: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub invariants: Option<Vec<CheckedInvariant>>,
+    /// The files of a programme in parts, in programme order; absent for
+    /// one file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parts: Option<Vec<String>>,
 }
 
 /// One invariant in programme order: `compiled` (checked in SQL) or
@@ -51,16 +55,18 @@ pub struct CheckRefusal {
     pub message: String,
 }
 
-/// One finding in `check --json`. Byte offsets and 1-based
-/// line/column are present when the finding has a source anchor; a
-/// finding without one (a generated discipline invariant) carries
-/// only severity and message.
+/// One finding in `check --json`. A finding with a source anchor
+/// carries the file it points into, and byte offsets and 1-based
+/// line/column within that file; a finding without one (a generated
+/// discipline invariant) carries only severity and message.
 #[derive(Serialize)]
 pub struct CheckDiagnostic {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub column: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
     pub message: String,
@@ -74,22 +80,29 @@ impl CheckDiagnostic {
         severity: &'static str,
         message: String,
         span: Option<morpholog_surface::Span>,
-        source: &str,
+        source: &morpholog_surface::SourceText,
     ) -> Self {
-        let (line, column) = match &span {
-            Some(s) => {
-                let (l, c) = morpholog_surface::line_col(source, s.start);
-                (Some(l), Some(c))
-            }
-            None => (None, None),
+        let Some(span) = span else {
+            return Self {
+                column: None,
+                end: None,
+                file: None,
+                line: None,
+                message,
+                severity,
+                start: None,
+            };
         };
+        let at = source.locate(span.start);
+        let (file, local) = source.local_span(&span);
         Self {
-            column,
-            end: span.as_ref().map(|s| s.end),
-            line,
+            column: Some(at.column),
+            end: Some(local.end),
+            file: Some(file.to_string()),
+            line: Some(at.line),
             message,
             severity,
-            start: span.as_ref().map(|s| s.start),
+            start: Some(local.start),
         }
     }
 }

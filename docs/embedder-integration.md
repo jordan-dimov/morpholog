@@ -234,6 +234,7 @@ The authoring gate's machine-readable shape, for an embedder (or its authoring A
     {
       "severity": "error",
       "message": "undeclared predicate `Ghost` referenced in invariant `cap`",
+      "file": "model.morph",
       "start": 412, "end": 447,
       "line": 19, "column": 1
     }
@@ -241,7 +242,7 @@ The authoring gate's machine-readable shape, for an embedder (or its authoring A
 }
 ```
 
-One entry per finding - parse errors, validation errors, and lints uniformly - with `severity` either `"error"` or `"hint"`. `start`/`end` are byte offsets into the file, `line`/`column` 1-based; a finding with no source anchor (one against a generated discipline invariant, say) carries only `severity` and `message`. A clean programme emits an empty `diagnostics` array. Exit semantics match the plain form: `0` when nothing failed, `1` on any error, and `--strict` promotes hints to errors (in the JSON too). Without `--json`, the same findings render as ariadne caret blocks on stderr and stdout stays script-silent.
+One entry per finding - parse errors, validation errors, and lints uniformly - with `severity` either `"error"` or `"hint"`. A finding with a source anchor names the `file` it points into, with `start`/`end` as byte offsets into that file and `line`/`column` 1-based; a finding with no source anchor (one against a generated discipline invariant, say) carries only `severity` and `message`. For a programme in parts, the top-level `file` is the manifest, `parts` lists its files in programme order, and each finding names its part. A clean programme emits an empty `diagnostics` array. Exit semantics match the plain form: `0` when nothing failed, `1` on any error, and `--strict` promotes hints to errors (in the JSON too). Without `--json`, the same findings render as ariadne caret blocks on stderr and stdout stays script-silent.
 
 When parsing and validation leave a programme, the report also carries `invariants`: one entry per invariant in programme order, with the route this binary plans for it and the cases admission checks. `compiled` means SQL checks it inside the proposal's transaction; `interpreted` means the kernel does, and the entry carries the refusal that kept it out of SQL, a `kind` from a closed list and the `message` that `check -v` prints. `cases` is `bound` when the impact plan can bound every change the rule sees to the cases that change touches, and `whole` when some change checks the rule over the whole state, with `because` naming the one construct responsible as `check -v` prints it:
 
@@ -269,7 +270,7 @@ The field is present even when the run fails on a promoted lint or an `--against
 
 ### `morpholog check --against`
 
-Two programmes deployed against one database share rows for any same-named predicate, and each escapes the other's gates: a guarded `register` in one file and an ungated registration in another are two write authorities over one persisted predicate. `check a.morph --against b.morph` (repeatable, one flag per deployed programme) reports every predicate `a.morph` admits or retracts that the other also admits or retracts, as a hint anchored on `a.morph`'s writing transformation, naming the other file, its writing transformations, and whether each carries a top-level admission gate (a gate inside a `for` is an iteration condition, not protection). Reads are never findings. A predicate both files declare with different fields is an error, anchored on `a.morph`'s declaration: claims are stored by name and position, so each programme would miss the claims the other admits. Field names may differ; the number of fields, and the kind and unit at each position, may not, and `Any` matches only `Any`. Each `--against` file must itself parse and validate (its own lints are not judged here; that is its own `check`); a failure there is an error naming that path, unanchored in `--json` because the report has one `file`. The CI shape is `--strict` against every other programme in the deployment, which turns the hint into a failing exit. These checks are static and need no database, so they catch a conflict before any claim exists. The database, not the files, is the shared thing, and a census of which programme hashes have actually written a predicate waits on a deployment whose historic programme files are no longer all to hand.
+Two programmes deployed against one database share rows for any same-named predicate, and each escapes the other's gates: a guarded `register` in one file and an ungated registration in another are two write authorities over one persisted predicate. `check a.morph --against b.morph` (repeatable, one flag per deployed programme) reports every predicate `a.morph` admits or retracts that the other also admits or retracts, as a hint anchored on `a.morph`'s writing transformation, naming the other file, its writing transformations, and whether each carries a top-level admission gate (a gate inside a `for` is an iteration condition, not protection). Reads are never findings. A predicate both files declare with different fields is an error, anchored on `a.morph`'s declaration: claims are stored by name and position, so each programme would miss the claims the other admits. Field names may differ; the number of fields, and the kind and unit at each position, may not, and `Any` matches only `Any`. Each `--against` file must itself parse and validate (its own lints are not judged here; that is its own `check`); a failure there is an error naming that path, placed in that programme's file, which the finding's `file` names. The CI shape is `--strict` against every other programme in the deployment, which turns the hint into a failing exit. These checks are static and need no database, so they catch a conflict before any claim exists. The database, not the files, is the shared thing, and a census of which programme hashes have actually written a predicate waits on a deployment whose historic programme files are no longer all to hand.
 
 ### `morpholog check --database-url`
 
@@ -290,6 +291,12 @@ With the flag, a business rejection's envelope carries an `explanation` field: t
 A stable content hash of the programme's rules: SHA-256 over a *stable positional canonicalisation* of the parsed programme (deliberately separate from the formatter's evolving human-facing form, so equivalent surface sugar - a named claim pattern and its positional twin - shares one hash) - emitted as `{"hash": "sha256:<hex>", "morpholog_version": "<version>", "program": "<name>"}`. Because the formatter/parser round-trip makes that rendering canonical, formatting-only edits do not change the hash; and because comments do not survive canonicalisation, this is **rules-identity, not file-identity** - editing teaching prose leaves the hash alone, editing a rule does not. Record it as a `ruleset_version` in deployment metadata, generated-code headers, and evidence packs ("built against model hash X"). Only a valid programme hashes; parse or validation failures exit non-zero.
 
 `morpholog_version` is what the generated client's pin check reads. A pin is the `hash` field alone, `morpholog hash f.morph | jq -r .hash` (or `hash().hash` on the client, whose `hash()` returns the whole report), never the whole output, which changes with every binary. The hashed encoding is frozen from v0.0.14, so the same rules hash the same under every later binary. Formatting and equivalent sugar keep the hash; replacing a wildcard with a fresh variable keeps the rule's meaning and still moves it, because the canonical programme changed. The pins then follow (check, hash, regenerate the client, update the pins, deploy), and history stays attributable because every commit records the hash of the programme that admitted it. A hint under `--strict` that asks for a respelling is therefore a decision about the deployed programme, not a lint to acknowledge: `--strict` is the CI choice to treat every hint as an error, and plain `check` still passes.
+
+### A programme in parts
+
+A programme too large to read as one file may be split into files that a `.parts` manifest lists, one path per line, in programme order; blank lines and `--` comment lines are allowed. Every command that takes a `.morph` takes the manifest in its place. The runtime reads the files as one text, so the programme hashes as their concatenation would, and splitting a deployed file into parts keeps its pins. Only the first file holds `program`; each file ends with a newline, closes every parenthesis it opens, and starts with a declaration at column 1, so nothing runs from one file into the next. Paths are relative to the manifest and stay beside or below it: an absolute path, a `..`, a symlink out of the directory, a file listed twice and a manifest inside a manifest are each refused. The hash names the programme, not its files: the record of which files were deployed is the deployment's own.
+
+Two programmes may list the same part. That suits programmes with separate write ownership over one database that read the same records: with one file of shared declarations, each declares those predicates exactly as the other does, which `check --against` would otherwise have to catch. Each programme keeps its own hash and its own audit, and `check --against` still reports the predicates both write. The shared part must sit beside or below both manifests, so keep them in one directory. A part from another tree is copied in, so the files an auditor reads are the files that apply.
 
 ### `morpholog schema --all`
 
@@ -979,6 +986,83 @@ To tell whether a deployment is affected, look in `pg_locks` while proposals run
 - `max_pred_locks_per_relation` takes effect on a reload, but the shared lock table keeps its size. Raised to 1024 on its own, it removed the whole-table locks in the same workload, but a bulk load running at the same time ran out of shared memory.
 
 `check -v` lists each read in a transformation body that loads its predicate whole: the transformation, the predicate, the statement, its rule name when it has one, and the definitions the read goes through. A read is keyed only by values the transformation knows before it runs: a parameter no statement rebinds, `actor`, or a literal. A variable a gate binds as it runs, such as a trade it sums over, does not key anything, and the selector `effective by` generates looks for a later version by its keys alone, so passing it another field does not key that read. A limit gate that sums every trade's terms in force through that selector therefore reads every organisation's terms. A definition that names the organisation in its reads, passed the parameter, keys it. The list is text in `check -v`, not part of `check --json`.
+
+### A walk in a recorded order
+
+Some host code walks claims in order, and each pass depends on the ones before it. InvenTree ships a shipment this way. It visits the shipment's allocations with a running quantity per stock item: an allocation splits the item when it takes less than the item has left, and otherwise takes the item whole. A `for` pass reads the record as the act began, so there is no running value. But the running quantity is a prefix sum. What an item has left when an allocation is reached is its quantity, less the allocations of it that come earlier. Given an order that is a recorded fact, each pass computes that from the record:
+
+```morph
+program shipping
+
+predicate Item(item: Subject, quantity: Decimal)
+    unique by (item)
+predicate Shipment(shipment: Subject, next: Decimal)
+    unique by (shipment)
+predicate Alloc(alloc: Subject, shipment: Subject, item: Subject, quantity: Decimal, seq: Decimal)
+    unique by (alloc)
+predicate Shipped(item: Subject, shipment: Subject)
+predicate ShipsAs(alloc: Subject, item: Subject)
+
+transformation stock(item, quantity):
+    admit Item(item, quantity)
+
+transformation open_shipment(shipment):
+    admit Shipment(shipment, 0)
+
+-- The order is a recorded fact: each allocation takes the shipment's
+-- next place, so no two allocations in a shipment share one.
+transformation allocate(alloc, shipment, item, quantity):
+    bind Shipment(shipment, next)
+    let after = (next + 1)
+    retract Shipment(shipment, next)
+    admit Shipment(shipment, after)
+    admit Alloc(alloc, shipment, item, quantity, next)
+
+-- A merge moves allocations onto the item they now draw from, and each
+-- keeps its place in the shipment.
+transformation merge_stock(source, target):
+    bind Item(source, moved)
+    bind Item(target, held)
+    let total = (held + moved)
+    retract Item(source, moved)
+    retract Item(target, held)
+    admit Item(target, total)
+    for Alloc(a, s, source, q, seq):
+        retract Alloc(a, s, source, q, seq)
+        admit Alloc(a, s, target, q, seq)
+
+-- Each pass reads the record as the act began. What an item has left
+-- when an allocation is reached is its quantity, less the allocations
+-- of it that come earlier in the shipment. Only the item's last pass
+-- writes its remainder, and the shipment's unique places make that
+-- pass one.
+transformation ship(shipment):
+    for Alloc(a, shipment, i, q, seq):
+        bind Item(i, held)
+        let before = (sum(q2 | Alloc(_, shipment, i, q2, s2) and s2 < seq))
+        let left = (held - before)
+        if q < left:
+            let child = new Subject()
+            admit Item(child, q)
+            admit Shipped(child, shipment)
+            admit ShipsAs(a, child)
+            if not (exists s3: Alloc(_, shipment, i, _, s3) and s3 > seq):
+                let rest = (left - q)
+                retract Item(i, held)
+                admit Item(i, rest)
+        else:
+            admit ShipsAs(a, i)
+            admit Shipped(i, shipment)
+            retract Item(i, held)
+            admit Item(i, left)
+```
+
+- **The order is recorded.** Each allocation takes the shipment's next place from a counter claim. InvenTree's own result depends on an order the database happens to return: which allocation keeps the original item when two use it up exactly, for one.
+- **The order is unique across the whole shipment, not per item.** A merge moves allocations onto the item they now draw from, and each keeps its place. With an order per item, two allocations that were each first for their own item would share one place after a merge.
+- **Only the item's last pass writes its remainder.** The prefix sum reads only the same item's earlier allocations. Two passes that write different remainders are refused by the item's `unique by`. Two that write the same one write one claim, and nothing refuses them: two allocations sharing a place do exactly that, which is why the place must be unique.
+- **The sum is quadratic** in one item's allocations within one shipment, which is small.
+
+**What it costs.** Every allocation into a shipment retracts and re-admits its one counter claim, so allocations into one shipment conflict whichever item they draw from. On the InvenTree fork, sixteen allocations racing into one shipment, on distinct items, retried 2.85 to 2.98 times per commit. Allocations into different shipments share no counter. Each conflict is a `serialization_failure`, safe to submit again as it is, with a retry loop like the one above. Orders built from `decided_at` and a tie-break were measured too. The ones that retried less were not unique across the shipment, and a merge broke them; the ones that were unique retried as much as the counter.
 
 ## The resident session (`morpholog session`)
 

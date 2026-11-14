@@ -1,0 +1,23 @@
+{
+  "diagnostics": [
+    {
+      "column": 1,
+      "end": 61,
+      "file": "model/20_stock.morph",
+      "line": 3,
+      "message": "undeclared predicate `Ghost` referenced in invariant `cap`",
+      "severity": "error",
+      "start": 26
+    },
+    {
+      "message": "--against model/shop.parts is the file being checked; a programme cannot collide with itself",
+      "severity": "error"
+    }
+  ],
+  "file": "model/shop.parts",
+  "parts": [
+    "model/00_shop.morph",
+    "model/10_part.morph",
+    "model/20_stock.morph"
+  ]
+}

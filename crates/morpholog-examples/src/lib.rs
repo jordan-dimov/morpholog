@@ -16,13 +16,14 @@ use morpholog_core::{Invariant, Program, Transformation};
 /// Parse a built-in example's embedded `.morph` source into its [`Program`].
 /// Panics on failure: a built-in example that does not parse is a bug.
 pub(crate) fn parse_example(name: &str, source: &str) -> Program {
-    morpholog_surface::parse_program(source).unwrap_or_else(|diagnostics| {
-        let rendered: String = diagnostics
-            .iter()
-            .map(|d| d.render(name, source, false))
-            .collect();
-        panic!("built-in example `{name}` must parse:\n{rendered}")
-    })
+    let text = morpholog_surface::SourceText::file(name, source);
+    match text.parse() {
+        Ok((program, _)) => program,
+        Err(diagnostics) => {
+            let rendered: String = diagnostics.iter().map(|d| text.render(d, false)).collect();
+            panic!("built-in example `{name}` must parse:\n{rendered}")
+        }
+    }
 }
 
 /// Clone a named invariant out of a parsed example program. A missing

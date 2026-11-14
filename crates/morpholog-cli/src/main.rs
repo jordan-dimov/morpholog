@@ -347,7 +347,7 @@ pub(crate) struct RefreshSnapshotsArgs {
 /// Arguments for `refresh derived`.
 #[derive(clap::Args, Debug)]
 pub(crate) struct RefreshDerivedArgs {
-    /// Path to a `.morph` source file.
+    /// Path to a `.morph` file or `.parts` manifest.
     pub(crate) file: PathBuf,
 
     #[command(flatten)]
@@ -409,7 +409,7 @@ pub(crate) enum GenerateCmd {
 /// the rows propose, the actor, the fixed arguments, and the range.
 #[derive(clap::Args, Debug)]
 pub(crate) struct GeneratedRowsArgs {
-    /// Path to a `.morph` source file.
+    /// Path to a `.morph` file or `.parts` manifest.
     pub(crate) file: PathBuf,
 
     /// The transformation each row proposes.
@@ -473,7 +473,7 @@ pub(crate) enum DerivedSourceArg {
 /// Arguments for `generate views`.
 #[derive(clap::Args, Debug)]
 pub(crate) struct GenerateViewsArgs {
-    /// Path to a `.morph` source file.
+    /// Path to a `.morph` file or `.parts` manifest.
     pub(crate) file: PathBuf,
 
     /// Schema the views are created in (created with
@@ -515,7 +515,7 @@ pub(crate) struct GenerateViewsArgs {
 /// Arguments for `generate python-client`.
 #[derive(clap::Args, Debug)]
 pub(crate) struct GeneratePythonClientArgs {
-    /// Path to a `.morph` source file.
+    /// Path to a `.morph` file or `.parts` manifest.
     pub(crate) file: PathBuf,
 
     /// Directory to write the `morpholog_client/` package under.
@@ -710,7 +710,7 @@ pub(crate) struct KeygenArgs {
 /// score it against - either a live connection or a portable evidence pack.
 #[derive(clap::Args, Debug)]
 pub(crate) struct EvaluateArgs {
-    /// Path to the candidate `.morph` source file to score.
+    /// Path to the candidate `.morph` file or `.parts` manifest to score.
     pub(crate) file: std::path::PathBuf,
 
     /// Score against the committed audit log at this connection (or
@@ -755,7 +755,7 @@ pub(crate) struct EvaluateArgs {
 /// rehearse it over - a database or an evidence pack.
 #[derive(clap::Args, Debug)]
 pub(crate) struct RehearseArgs {
-    /// Path to the candidate `.morph` source file to rehearse
+    /// Path to the candidate `.morph` file or `.parts` manifest to rehearse
     pub(crate) file: std::path::PathBuf,
 
     /// Rehearse against the committed audit log at this connection (or
@@ -824,8 +824,8 @@ pub(crate) enum ProvisionCmd {
 
 #[derive(clap::Args, Debug)]
 pub(crate) struct ProvisionIndexesArgs {
-    /// The `.morph` programmes whose loads and compiled invariants set
-    /// the requirement.
+    /// The programmes whose loads and compiled invariants set the
+    /// requirement, each a `.morph` file or a `.parts` manifest.
     #[arg(required = true, num_args = 1..)]
     pub(crate) files: Vec<std::path::PathBuf>,
 
@@ -1327,7 +1327,7 @@ pub(crate) enum Inspect {
 /// connection flag, and the prose/JSON toggle.
 #[derive(clap::Args, Debug)]
 pub(crate) struct InspectCoverageArgs {
-    /// Path to a `.morph` source file.
+    /// Path to a `.morph` file or `.parts` manifest.
     pub(crate) file: PathBuf,
 
     #[command(flatten)]
@@ -1378,7 +1378,7 @@ fn non_empty_subject(s: &str) -> Result<String, String> {
 /// declarations are programme metadata, not state.
 #[derive(clap::Args, Debug)]
 pub(crate) struct InspectPredicatesArgs {
-    /// Path to a `.morph` source file.
+    /// Path to a `.morph` file or `.parts` manifest.
     pub(crate) file: PathBuf,
 }
 
@@ -1387,7 +1387,7 @@ pub(crate) struct InspectPredicatesArgs {
 /// prose view for the structured form.
 #[derive(clap::Args, Debug)]
 pub(crate) struct InspectGuaranteesArgs {
-    /// Path to a `.morph` source file.
+    /// Path to a `.morph` file or `.parts` manifest.
     pub(crate) file: PathBuf,
     /// Emit the structured JSON form instead of prose.
     #[arg(long)]
@@ -1456,7 +1456,7 @@ pub(crate) struct InspectClaimsArgs {
 /// Arguments for `inspect derived`.
 #[derive(clap::Args, Debug)]
 pub(crate) struct InspectDerivedArgs {
-    /// Path to a `.morph` source file.
+    /// Path to a `.morph` file or `.parts` manifest.
     pub(crate) file: PathBuf,
 
     /// Derived claim predicate name (e.g. `TrialBalanceRow`). Looked
@@ -1543,7 +1543,7 @@ impl InspectOutboxStatus {
 /// file (`parse`). No database connection.
 #[derive(clap::Args, Debug)]
 pub(crate) struct SourceFileArgs {
-    /// Path to a `.morph` source file.
+    /// Path to a `.morph` file or `.parts` manifest.
     pub(crate) file: PathBuf,
 }
 
@@ -1553,7 +1553,7 @@ pub(crate) struct SourceFileArgs {
 /// wants is opt-in rather than the script-facing default.
 #[derive(clap::Args, Debug)]
 pub(crate) struct CheckArgs {
-    /// Path to a `.morph` source file.
+    /// Path to a `.morph` file or `.parts` manifest.
     pub(crate) file: PathBuf,
 
     /// Print a one-screen summary of the validated programme: its name
@@ -1611,7 +1611,7 @@ pub(crate) struct CheckArgs {
 /// pure static read over the parsed and validated programme.
 #[derive(clap::Args, Debug)]
 pub(crate) struct SchemaArgs {
-    /// Path to a `.morph` source file. Not needed for `--result`,
+    /// Path to a `.morph` file or `.parts` manifest. Not needed for `--result`,
     /// whose envelope contract is programme-independent.
     #[arg(required_unless_present = "result")]
     pub(crate) file: Option<PathBuf>,
@@ -1662,7 +1662,7 @@ pub(crate) struct SchemaArgs {
 /// lifetime, and the database connection.
 #[derive(clap::Args, Debug)]
 pub(crate) struct TransactArgs {
-    /// Path to a `.morph` source file containing the programme.
+    /// Path to a `.morph` file or `.parts` manifest containing the programme.
     pub(crate) file: PathBuf,
 
     /// Path to NDJSON acts (`-` for stdin), one per line as
@@ -1677,7 +1677,7 @@ pub(crate) struct TransactArgs {
 
 #[derive(clap::Args, Debug)]
 pub(crate) struct SessionArgs {
-    /// Path to a `.morph` source file containing the programme. Read
+    /// Path to a `.morph` file or `.parts` manifest containing the programme. Read
     /// once at startup; the ready line's `model_hash` is its
     /// canonical rules-identity hash.
     pub(crate) file: PathBuf,
@@ -1697,7 +1697,7 @@ pub(crate) struct SessionArgs {
 
 #[derive(clap::Args, Debug)]
 pub(crate) struct ServeArgs {
-    /// Path to the `.morph` source file. Read once at startup.
+    /// Path to the `.morph` file or `.parts` manifest. Read once at startup.
     pub(crate) file: PathBuf,
 
     /// The canonical hash (`sha256:...`, as `morpholog hash` reports
@@ -1728,7 +1728,7 @@ pub(crate) struct ServeArgs {
 
 #[derive(clap::Args, Debug)]
 pub(crate) struct ProposeArgs {
-    /// Path to a `.morph` source file containing the programme.
+    /// Path to a `.morph` file or `.parts` manifest containing the programme.
     pub(crate) file: PathBuf,
 
     /// Transformation name within the parsed programme. Omitted in
@@ -1812,7 +1812,7 @@ pub(crate) struct ProposeArgs {
 /// facing bare-by-name codec.
 #[derive(clap::Args, Debug)]
 pub(crate) struct ExplainArgs {
-    /// Path to a `.morph` source file containing the programme.
+    /// Path to a `.morph` file or `.parts` manifest containing the programme.
     pub(crate) file: PathBuf,
 
     /// Transformation name within the parsed programme.

@@ -1848,8 +1848,12 @@ class CoverageReport:
 
 @dataclass(frozen=True)
 class Diagnostic:
+    """One finding. One with a source anchor names the file it points
+    into, with offsets, line and column within that file."""
+
     severity: str
     message: str
+    file: str | None = None
     start: int | None = None
     end: int | None = None
     line: int | None = None
@@ -1861,11 +1865,12 @@ class Diagnostic:
             "diagnostic",
             payload,
             {"severity", "message"},
-            {"start", "end", "line", "column"},
+            {"file", "start", "end", "line", "column"},
         )
         return cls(
             severity=data.member("severity", {"error", "hint"}),
             message=data.text("message"),
+            file=data.optional_text("file"),
             start=data.optional_integer("start"),
             end=data.optional_integer("end"),
             line=data.optional_integer("line"),
@@ -1959,15 +1964,18 @@ class CheckedInvariant:
 
 @dataclass(frozen=True)
 class CheckReport:
-    """The findings for one file, and the route this binary plans for each
-    invariant. ``invariants`` is ``None`` only when parsing or validation
-    left no programme to plan; an empty list is a programme with no
-    invariants. The route belongs to the programme and the binary
-    together: another version may plan differently."""
+    """The findings for one programme, and the route this binary plans for
+    each invariant. ``invariants`` is ``None`` only when parsing or
+    validation left no programme to plan; an empty list is a programme with
+    no invariants. The route belongs to the programme and the binary
+    together: another version may plan differently. ``parts`` lists the
+    files of a programme in parts, in order, and is ``None`` for one
+    file."""
 
     file: str
     diagnostics: list[Diagnostic]
     invariants: list[CheckedInvariant] | None = None
+    parts: list[str] | None = None
 
     @property
     def route(self) -> str | None:
@@ -1986,7 +1994,9 @@ class CheckReport:
 
     @classmethod
     def from_json(cls, payload: object) -> CheckReport:
-        data = _strict("check report", payload, {"file", "diagnostics"}, {"invariants"})
+        data = _strict(
+            "check report", payload, {"file", "diagnostics"}, {"invariants", "parts"}
+        )
         return cls(
             file=data.text("file"),
             diagnostics=data.array("diagnostics", Diagnostic.from_json),
@@ -1995,6 +2005,7 @@ class CheckReport:
                 if "invariants" in data
                 else None
             ),
+            parts=data.texts("parts") if "parts" in data else None,
         )
 
 

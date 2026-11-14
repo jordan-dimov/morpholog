@@ -9,7 +9,7 @@ use morpholog_core::{
     PreparedProgram, Program, Transformation, TransformationName, ValidatedProgram, ValidationError,
 };
 use morpholog_postgres::PgPool;
-use morpholog_surface::{Diagnostic, SourceMap, parse_program_with_sources};
+use morpholog_surface::{Diagnostic, SourceMap, SourceText};
 use serde::Serialize;
 use std::path::Path;
 
@@ -29,6 +29,7 @@ pub(crate) mod inspect;
 pub(crate) mod keygen;
 pub(crate) mod migrate;
 pub(crate) mod outbox;
+pub(crate) mod parts;
 pub(crate) mod propose;
 pub(crate) mod provision;
 pub(crate) mod receipt;
@@ -49,8 +50,7 @@ pub(crate) mod witness;
 pub(crate) struct ParsedSource {
     pub(crate) program: Program,
     pub(crate) map: SourceMap,
-    pub(crate) source: String,
-    pub(crate) source_name: String,
+    pub(crate) source: SourceText,
 }
 
 /// A failure the command has already reported in full, carried out to
@@ -92,23 +92,32 @@ impl std::fmt::Display for AlreadyReported {
 
 impl std::error::Error for AlreadyReported {}
 
-/// Read a `.morph` source file and parse it. On parse failure, render the
-/// diagnostics to stderr and return [`AlreadyReported`]. Every command that
-/// reads a `.morph` file goes through here, so they all render alike.
-pub(crate) fn parse_or_report(file: &Path) -> anyhow::Result<ParsedSource> {
-    let source = std::fs::read_to_string(file)
+/// Read a programme's text: a `.morph` file, or the parts a `.parts`
+/// manifest lists.
+pub(crate) fn read_source(file: &Path) -> anyhow::Result<SourceText> {
+    if parts::is_manifest(file) {
+        return Ok(parts::read(file)?);
+    }
+    let text = std::fs::read_to_string(file)
         .with_context(|| format!("read source file {}", file.display()))?;
-    let source_name = file.display().to_string();
-    match parse_program_with_sources(&source) {
+    Ok(SourceText::file(file.display().to_string(), text))
+}
+
+/// Read a programme, from a `.morph` file or a `.parts` manifest, and
+/// parse it. On parse failure, render the diagnostics to stderr and return
+/// [`AlreadyReported`]. Every command that reads a programme goes through
+/// here, so they all render alike.
+pub(crate) fn parse_or_report(file: &Path) -> anyhow::Result<ParsedSource> {
+    let source = read_source(file)?;
+    match source.parse() {
         Ok((program, map)) => Ok(ParsedSource {
             program,
             map,
             source,
-            source_name,
         }),
         Err(diagnostics) => {
             for d in &diagnostics {
-                eprint!("{}", d.render(&source_name, &source, colour()));
+                eprint!("{}", source.render(d, colour()));
             }
             Err(AlreadyReported.into())
         }
@@ -129,11 +138,9 @@ pub(crate) fn render_validation_error(err: &ValidationError, parsed: &ParsedSour
     match parsed.map.span_for_error(err) {
         Some(span) => eprint!(
             "{}",
-            Diagnostic::error(err.to_string(), span).render(
-                &parsed.source_name,
-                &parsed.source,
-                colour()
-            )
+            parsed
+                .source
+                .render(&Diagnostic::error(err.to_string(), span), colour())
         ),
         None => eprintln!("error: {err}"),
     }

@@ -953,7 +953,7 @@ fn against_reports_a_shared_writer_as_a_hint_on_the_local_transformation() {
 }
 
 #[test]
-fn against_json_carries_the_finding_with_the_local_span_and_no_foreign_spans() {
+fn against_json_places_each_finding_in_the_file_it_points_into() {
     let secure = temp_morph(SECURE_MORPH);
     let rogue = temp_morph(ROGUE_MORPH);
     let out = check_against(secure.path(), &[rogue.path()], &["--json"]);
@@ -966,6 +966,11 @@ fn against_json_carries_the_finding_with_the_local_span_and_no_foreign_spans() {
         diagnostics[0]["line"], 4,
         "anchored on `register`: {payload}"
     );
+    assert_eq!(
+        diagnostics[0]["file"],
+        secure.path().display().to_string(),
+        "{payload}"
+    );
     assert!(
         diagnostics[0]["message"]
             .as_str()
@@ -974,18 +979,16 @@ fn against_json_carries_the_finding_with_the_local_span_and_no_foreign_spans() {
         "{payload}"
     );
 
-    // A broken --against file is an error naming the path, with no span:
-    // the report has one `file`, and a span into another would mislead.
+    // A broken --against file is an error naming the path, placed in that
+    // file, which the finding's `file` names.
     let broken = temp_morph("program broken\npredicate P(x: Subject)\ninvariant t: Nope(x)\n");
     let out = check_against(secure.path(), &[broken.path()], &["--json"]);
     assert!(!out.status.success());
     let payload: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let d = &payload["diagnostics"].as_array().unwrap()[0];
     assert_eq!(d["severity"], "error");
-    assert!(
-        d.get("line").is_none() && d.get("start").is_none(),
-        "{payload}"
-    );
+    assert_eq!(d["file"], broken.path().display().to_string(), "{payload}");
+    assert_eq!(d["line"], 3, "{payload}");
     assert!(
         d["message"]
             .as_str()

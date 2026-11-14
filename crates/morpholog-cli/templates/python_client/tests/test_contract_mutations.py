@@ -135,6 +135,7 @@ CASES = {
     "check_report_routes.json": ("check_report", E.CheckReport.from_json),
     "check_report_cases.json": ("check_report", E.CheckReport.from_json),
     "check_report_no_invariants.json": ("check_report", E.CheckReport.from_json),
+    "check_report_parts.json": ("check_report", E.CheckReport.from_json),
     "hash_report.json": ("hash_report", E.HashReport.from_json),
     "init_report.json": ("init_report", E.InitReport.from_json),
     "init_report_least_privilege.json": ("init_report", E.InitReport.from_json),
