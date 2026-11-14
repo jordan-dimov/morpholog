@@ -196,3 +196,79 @@ async fn propose_locates_a_refusing_rule_in_its_part() {
     );
     assert!(stderr(&out).contains(&rule_at), "{}", stderr(&out));
 }
+
+/// Two programmes over one database may list one part of shared
+/// declarations: each hashes as its own concatenation, the two declare the
+/// shared predicate alike, and `check --against` still reports that both
+/// write it.
+#[test]
+fn two_programmes_may_share_a_part() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = |name: &str| dir.path().join(name);
+    std::fs::create_dir(path("shared")).unwrap();
+    let files = [
+        ("shared/stock.morph", STOCK),
+        ("warehouse.morph", "program warehouse\n"),
+        ("sales.morph", "program sales\n"),
+        ("receive.morph", ACT),
+        (
+            "sell.morph",
+            "transformation sell(item):\n    retract Stock(item, _)\n",
+        ),
+    ];
+    for (name, text) in files {
+        std::fs::write(path(name), text).unwrap();
+    }
+    std::fs::write(
+        path("warehouse.parts"),
+        "warehouse.morph\nshared/stock.morph\nreceive.morph\n",
+    )
+    .unwrap();
+    std::fs::write(
+        path("sales.parts"),
+        "sales.morph\nshared/stock.morph\nsell.morph\n",
+    )
+    .unwrap();
+    let concatenation = |name: &str, texts: &[&str]| {
+        std::fs::write(path(name), texts.concat()).unwrap();
+        hash(&path(name))
+    };
+    let warehouse = hash(&path("warehouse.parts"));
+    assert_eq!(
+        warehouse,
+        concatenation("w.morph", &["program warehouse\n", STOCK, ACT])
+    );
+    assert_eq!(
+        hash(&path("sales.parts")),
+        concatenation(
+            "s.morph",
+            &[
+                "program sales\n",
+                STOCK,
+                "transformation sell(item):\n    retract Stock(item, _)\n"
+            ]
+        )
+    );
+
+    let out = run(&[
+        "check",
+        "--json",
+        text(&path("warehouse.parts")),
+        "--against",
+        text(&path("sales.parts")),
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let findings = report["diagnostics"].as_array().unwrap();
+    assert!(
+        findings.iter().all(|d| d["severity"] == "hint"),
+        "the shared declarations agree: {report}"
+    );
+    assert!(
+        findings.iter().any(|d| d["message"]
+            .as_str()
+            .unwrap()
+            .contains("`Stock` is writable by another programme")),
+        "both write Stock: {report}"
+    );
+}
