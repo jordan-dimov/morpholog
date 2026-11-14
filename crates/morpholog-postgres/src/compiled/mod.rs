@@ -66,7 +66,7 @@
 // A new value kind or construct must be decided here, not defaulted.
 #![warn(clippy::wildcard_enum_match_arm)]
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use morpholog_core::{Admission, EffectiveDelta, Outcome, StagedDelta, State, execution};
@@ -898,33 +898,108 @@ pub(crate) enum CaseFilter {
 }
 
 /// The touched cases rendered onto the antecedent's columns, in the
-/// order the impact plan lists them: the filter is their disjunction,
-/// and the rank says which case a row belongs to first, so the
+/// order the impact plan lists them: the filter admits a row of any of
+/// them, and the rank says which case a row belongs to first, so the
 /// diagnosis picks the earliest case's first failing row, as the kernel
 /// does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BoundedCases {
-    disjuncts: Vec<String>,
+    cases: Vec<Case>,
+}
+
+/// One case: the seek expression of each column it binds, and the key
+/// each must hold, in the same order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Case {
+    seeks: Vec<String>,
+    keys: Vec<String>,
+}
+
+impl Case {
+    fn conjunction(&self) -> String {
+        self.seeks
+            .iter()
+            .zip(&self.keys)
+            .map(|(seek, key)| format!("({seek}) = {key}"))
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    }
 }
 
 impl BoundedCases {
-    /// The disjunction, parenthesised; `(false)` for no case at all.
+    /// The filter, parenthesised; `(false)` for no case at all.
+    ///
+    /// Cases binding the same columns are one group, held as arrays: an
+    /// `OR` of one arm per case made the planner's memory grow with the
+    /// square of the cases, gigabytes for an act touching a few hundred
+    /// claims. Each column's `= ANY` keeps the seek through its index;
+    /// over several columns, the row's tuple must also be one of the
+    /// group's, so the filter admits exactly the touched cases.
     pub(crate) fn filter(&self) -> String {
-        if self.disjuncts.is_empty() {
+        let mut groups: Vec<(&[String], Vec<&Case>)> = Vec::new();
+        for case in &self.cases {
+            match groups
+                .iter_mut()
+                .find(|(seeks, _)| *seeks == case.seeks.as_slice())
+            {
+                Some((_, members)) => members.push(case),
+                None => groups.push((&case.seeks, vec![case])),
+            }
+        }
+        if groups.is_empty() {
             return "(false)".to_string();
         }
-        format!("({})", self.disjuncts.join(") OR ("))
+        let arms: Vec<String> = groups
+            .iter()
+            .map(|(seeks, members)| match members.as_slice() {
+                [only] => only.conjunction(),
+                _ => group_filter(seeks, members),
+            })
+            .collect();
+        format!("({})", arms.join(") OR ("))
     }
 
     /// The index of the first case a row matches, for an `ORDER BY`.
     fn rank(&self) -> String {
         let mut sql = String::from("CASE");
-        for (i, d) in self.disjuncts.iter().enumerate() {
-            let _ = write!(sql, " WHEN ({d}) THEN {i}");
+        for (i, case) in self.cases.iter().enumerate() {
+            let _ = write!(sql, " WHEN ({}) THEN {i}", case.conjunction());
         }
         sql.push_str(" END");
         sql
     }
+}
+
+/// Several cases over the same columns: each column one of the keys the
+/// cases give it, and, over more than one column, the tuple one of the
+/// cases'.
+fn group_filter(seeks: &[String], members: &[&Case]) -> String {
+    let mut parts: Vec<String> = seeks
+        .iter()
+        .enumerate()
+        .map(|(i, seek)| {
+            let mut keys: Vec<&str> = Vec::new();
+            for case in members {
+                if !keys.contains(&case.keys[i].as_str()) {
+                    keys.push(&case.keys[i]);
+                }
+            }
+            format!("({seek}) = ANY (ARRAY[{}])", keys.join(", "))
+        })
+        .collect();
+    if seeks.len() > 1 {
+        let tuples: Vec<String> = members
+            .iter()
+            .map(|case| format!("ROW({})", case.keys.join(", ")))
+            .collect();
+        let row = seeks
+            .iter()
+            .map(|seek| format!("({seek})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        parts.push(format!("ROW({row}) = ANY (ARRAY[{}])", tuples.join(", ")));
+    }
+    parts.join(" AND ")
 }
 
 #[derive(Debug, Clone)]
@@ -1573,25 +1648,27 @@ impl CompiledInvariant {
             Impact::Unbounded => return CaseFilter::Unbounded,
             Impact::Bounded(cases) => cases,
         };
-        let mut disjuncts: Vec<String> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
+        let mut rendered: Vec<Case> = Vec::new();
         for case in &cases {
-            let mut parts = Vec::new();
+            let mut one = Case {
+                seeks: Vec::new(),
+                keys: Vec::new(),
+            };
             for (var, ev) in case {
                 let Some(col) = self.case_cols.get(var) else {
                     return CaseFilter::Unbounded;
                 };
-                match const_eq(col, ev) {
-                    Some(sql) => parts.push(sql),
-                    None => return CaseFilter::Unbounded,
-                }
+                let Some(key) = case_key(ev) else {
+                    return CaseFilter::Unbounded;
+                };
+                one.seeks.push(seek_sql(col));
+                one.keys.push(key);
             }
-            let disjunct = parts.join(" AND ");
-            if seen.insert(disjunct.clone()) {
-                disjuncts.push(disjunct);
+            if !rendered.contains(&one) {
+                rendered.push(one);
             }
         }
-        CaseFilter::Bounded(BoundedCases { disjuncts })
+        CaseFilter::Bounded(BoundedCases { cases: rendered })
     }
 }
 
@@ -2619,9 +2696,9 @@ fn tagged_json(ev: &EvalValue) -> Result<String, CompileReason> {
     })
 }
 
-/// Case-bound constant equality on an antecedent column, or None when the
-/// value cannot be stored at all (widens to Unbounded).
-fn const_eq(col: &ColRef, ev: &EvalValue) -> Option<String> {
+/// The digest a case-bound column must hold, or None when the value
+/// cannot be stored at all (widens to Unbounded).
+fn case_key(ev: &EvalValue) -> Option<String> {
     fn storable(ev: &EvalValue) -> bool {
         match ev {
             EvalValue::CalendarSpan(_) => false,
@@ -2638,7 +2715,7 @@ fn const_eq(col: &ColRef, ev: &EvalValue) -> Option<String> {
     if !storable(ev) {
         return None;
     }
-    const_eq_sql(col, ev).ok()
+    Some(format!("morpholog.claim_digest({})", key_lit(ev).ok()?))
 }
 
 fn render_prop(prop: &Prop, env: Env, ctx: &mut Ctx<'_>) -> Result<Rendered, CompileReason> {

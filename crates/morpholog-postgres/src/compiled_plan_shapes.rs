@@ -17,6 +17,9 @@
 //!   guarded where they bite (`jit = off` in the check transaction, ORDER
 //!   BY over the extractor expressions) and would show here as a missing
 //!   index.
+//! - **Planner memory.** A check bound to hundreds of cases plans in
+//!   memory linear in them, and over several columns admits exactly the
+//!   touched cases.
 //!
 //! There is deliberately no test that every full violation query uses its
 //! own indexes: a full uniqueness check is a self-join over the whole
@@ -688,5 +691,114 @@ transformation record(item, amount):
     assert_eq!(
         relation_locks, 0,
         "the case-bound check took a relation lock"
+    );
+}
+
+const SERIALS: &str = "program serials
+predicate Item(item: Subject, quantity: Decimal)
+predicate Serial(item: Subject, serial: Subject)
+invariant serialised_hold_one:
+    Serial(i, _) and Item(i, q) implies q = 1
+transformation stock(item, quantity):
+    admit Item(item, quantity)
+transformation record_serial(item, serial):
+    admit Serial(item, serial)
+";
+
+/// The case-bound check of `serialised_hold_one` for one act stocking
+/// `items`: one case per (item, quantity).
+fn serials_case_check(program: &Program, items: &[(String, i64)]) -> String {
+    let set = compiled_set(program);
+    let inv = &set.invariants[0];
+    let asserted: Vec<_> = items
+        .iter()
+        .map(|(item, q)| claim_instance("Item", &[subj(item), dec(*q)]))
+        .collect();
+    let CaseFilter::Bounded(cases) = inv.case_filter(&asserted, &[]) else {
+        panic!("stocking items bounds the rule to their cases");
+    };
+    inv.violation_sql(Some(&cases.filter()))
+}
+
+/// One act touching hundreds of claims gave the case-bound check one
+/// `OR` arm per case, and over two patterns with distinct literals the
+/// planner's memory grew with the square of the arms: 508 MB at 240
+/// cases on this table, and an out-of-memory kill at InvenTree's 750
+/// allocations in one shipment (#796). Held as arrays, 240 cases plan in
+/// a few MB; the bound leaves room for the planner and none for the
+/// square.
+#[tokio::test]
+async fn a_check_over_hundreds_of_cases_plans_in_memory_linear_in_them() {
+    let pool = test_pool().await;
+    reset(&pool).await;
+    let program = morpholog_surface::parse_program(SERIALS).expect("parses");
+    let pg = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
+    provision_indexes(&pool, &[&pg], false).await.unwrap();
+    sqlx::raw_sql(
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'Item', jsonb_build_array(jsonb_build_object('type', 'subject', 'value', 'i' || g),
+                                          jsonb_build_object('type', 'decimal', 'value', (1 + g % 5)::text)),
+                gen_random_uuid()
+         FROM generate_series(1, 2000) g;
+         INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'Serial', jsonb_build_array(jsonb_build_object('type', 'subject', 'value', 'i' || g),
+                                            jsonb_build_object('type', 'subject', 'value', 's' || g)),
+                gen_random_uuid()
+         FROM generate_series(1, 2000, 7) g;
+         ANALYZE morpholog.claims;",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let items: Vec<(String, i64)> = (0..240).map(|k| (format!("n{k}"), 1 + k % 5)).collect();
+    let sql = serials_case_check(&program, &items);
+    let plan: serde_json::Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "EXPLAIN (MEMORY, COSTS OFF, FORMAT JSON) {sql}"
+    )))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let used_kb = plan[0]["Planning"]["Memory Used"]
+        .as_u64()
+        .expect("the planner reports its memory");
+    assert!(used_kb < 32 * 1024, "240 cases took {used_kb} kB to plan");
+}
+
+/// Over several columns, the check admits exactly the touched cases, not
+/// every combination of their values: a violation the record already
+/// holds in a case the act does not touch is not this act's to answer
+/// for, as case-local admission promises.
+#[tokio::test]
+async fn a_check_over_several_columns_admits_only_the_touched_cases() {
+    let pool = test_pool().await;
+    reset(&pool).await;
+    let program = morpholog_surface::parse_program(SERIALS).expect("parses");
+    sqlx::raw_sql(
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in) VALUES
+         ('Serial', '[{\"type\":\"subject\",\"value\":\"a\"},{\"type\":\"subject\",\"value\":\"s\"}]', gen_random_uuid()),
+         ('Item', '[{\"type\":\"subject\",\"value\":\"a\"},{\"type\":\"decimal\",\"value\":\"2\"}]', gen_random_uuid());",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let found = |sql: String| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .fetch_optional(&pool)
+                .await
+                .unwrap()
+                .is_some()
+        }
+    };
+    let set = compiled_set(&program);
+    assert!(
+        found(set.invariants[0].violation_sql(None)).await,
+        "the full check finds the stored violation in case (a, 2)"
+    );
+    let touched = [("a".to_string(), 1), ("b".to_string(), 2)];
+    assert!(
+        !found(serials_case_check(&program, &touched)).await,
+        "cases (a, 1) and (b, 2) leave (a, 2) alone"
     );
 }
