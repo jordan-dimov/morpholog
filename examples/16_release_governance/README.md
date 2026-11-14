@@ -28,7 +28,9 @@ The commands it runs are the ones below.
 Claims: the platform matrix (`PlatformDeclared`), green gate runs
 (`GateGreen`, append only), tags (`Tagged`, one commit per version,
 append only), published downloads (`AssetPublished`), changelog
-entries, and announcements (`Announced`, append only).
+entries, announcements (`Announced`, append only), the key that signs
+the register's seal (`AuditSigningKey`, one key per id), and the
+published record (`RecordPublished`, append only).
 
 Invariants: a tag exists only at a gated commit; an announcement never
 exists without its tag and changelog.
@@ -36,7 +38,8 @@ exists without its tag and changelog.
 Transformations: one per checklist step, ending in `announce` - whose
 gate demands a download for every declared platform. Why completeness
 is a gate rather than an invariant is the example's teaching moment;
-the `.morph` walks through it.
+the `.morph` walks through it. After the announcement, the record
+itself is published (`publish_record`).
 
 Forced no kernel or surface addition: the process domain composes
 entirely from existing primitives, which is the point.
@@ -75,7 +78,7 @@ morpholog propose $MORPH record_changelog --actor releaser \
 morpholog propose $MORPH announce --actor releaser \
     --args-named '{"version": "v0_0_8"}' --database-url $DB
 morpholog inspect claims --named $MORPH --database-url $DB
-morpholog audit tail --database-url $DB
+morpholog inspect audit --database-url $DB
 morpholog inspect outbox --database-url $DB
 ```
 
@@ -84,6 +87,33 @@ turned it away; propose `announce` twice and the replay guard refuses
 the second. Leave one platform's `publish_asset` out and `announce`
 refuses too - which is the rule doing the work it was written for, now
 that the channel builds for more than one platform.
+
+## Check a release's record yourself
+
+From v0.0.20, each release carries the register as it stood after the
+announcement: `release-record-vX.Y.Z.pack`, and the seal it is checked
+against, `release-record-vX.Y.Z.anchor.json`. The seal is signed by
+the key in [`release-register.pub`](release-register.pub). With no
+database:
+
+```
+morpholog audit verify-pack release-record-vX.Y.Z.pack \
+    --anchor-file release-record-vX.Y.Z.anchor.json \
+    --require-signatures --require-signing-key release-register.pub
+```
+
+Without the last two flags an unsigned pack passes too, so keep them.
+A pass shows the record is whole and was sealed by that key: it holds
+every step in the order the register admitted them, and nothing in it
+changed afterwards. It does not show that CI ran. That is what
+`scripts/release.sh` checked before recording the step. The seal
+travels beside the pack, so trust in it comes from the key, which you
+take from this repository rather than from the release.
+
+Before it records anything, the next release checks the last one's
+record again with its own binary. If the programme or the binary has
+changed, the script also rehearses the register's whole history and
+stops unless every past decision comes out the same.
 
 ## Deliberately not covered
 

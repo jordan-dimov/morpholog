@@ -11,13 +11,17 @@
 #
 # Each register step is recorded only after what it claims is verified,
 # and in the register's own order: gate, tag, one asset per declared
-# platform, changelog, announcement. Safe to run again after a failure:
-# a step already in the register is checked and skipped, and an existing
-# tag is accepted only if it points at the commit the gate recorded.
+# platform, changelog, announcement. Then the register's own record is
+# sealed, signed and published beside the downloads. Safe to run again
+# after a failure: a step already in the register is checked and
+# skipped, and an existing tag is accepted only if it points at the
+# commit the gate recorded.
 #
-# Needs: git, gh (authenticated), jq, cargo, and the register database
+# Needs: git, gh (authenticated), jq, cargo, the register database
 # (RELEASE_DATABASE_URL, default postgres:///morpholog_release - not a
-# test database, which the suites reset).
+# test database, which the suites reset), and the register's signing
+# key (RELEASE_SIGNING_KEY, default
+# ~/.config/morpholog/release-register.pem).
 set -euo pipefail
 
 TAG="${1:-}"
@@ -30,11 +34,17 @@ SUBJECT="${TAG//./_}"
 DB="${RELEASE_DATABASE_URL:-postgres:///morpholog_release}"
 MORPH=examples/16_release_governance/release_governance.morph
 NOTES="release-notes/$TAG.md"
+KEY_ID=release-register-1
+PUBLIC_KEY_FILE=examples/16_release_governance/release-register.pub
+SIGNING_KEY="${RELEASE_SIGNING_KEY:-$HOME/.config/morpholog/release-register.pem}"
+RECORD="release-record-$TAG"
 
 cd "$(git rev-parse --show-toplevel)"
 
 die() { echo "error: $*" >&2; exit 1; }
 say() { echo "==> $*"; }
+
+[ -r "$SIGNING_KEY" ] || die "no signing key at $SIGNING_KEY"
 
 cargo build --quiet --locked -p morpholog-cli
 MORPHOLOG=target/debug/morpholog
@@ -109,6 +119,32 @@ step() {
     say "register: $transformation committed"
     refresh_claims
 }
+
+# A changed programme, or a binary that decides differently, must still
+# decide the register's history as it was decided.
+last="$("$MORPHOLOG" inspect audit --database-url "$DB" | tail -1)"
+rehearsal="$("$MORPHOLOG" rehearse "$MORPH" --database-url "$DB")"
+if [ "$(jq -r '.model_hash // empty' <<< "$last")" != "$(jq -r .program_hash <<< "$rehearsal")" ] \
+    || [ "$(jq -r '.semantics_version // empty' <<< "$last")" != "$(jq -r .semantics_version <<< "$rehearsal")" ]; then
+    jq -e '.totals | .different_delta + .would_reject + .would_error + .unreplayable == 0' \
+        <<< "$rehearsal" > /dev/null \
+        || die "the register's history does not rehearse the same under $MORPH: $(jq -c .totals <<< "$rehearsal")"
+    say "register: its history rehearses the same under this programme and binary"
+fi
+
+# The record the last release published must still verify under this
+# binary, signed by the key in this repository.
+if [ -n "$previous" ] && has RecordPublished "${previous//./_}"; then
+    tmp="$(mktemp -d)"
+    gh release download "$previous" -p "release-record-$previous.*" -D "$tmp" \
+        || die "the register says $previous published its record, but its release has none"
+    "$MORPHOLOG" audit verify-pack "$tmp/release-record-$previous.pack" \
+        --anchor-file "$tmp/release-record-$previous.anchor.json" \
+        --require-signatures --require-signing-key "$PUBLIC_KEY_FILE" > "$tmp/verdict.json" \
+        || die "the record published with $previous does not verify under this binary: $(jq -c .verdict "$tmp/verdict.json")"
+    rm -rf "$tmp"
+    say "the record published with $previous verifies under this binary"
+fi
 
 # A gate or tag already recorded for another commit means this release
 # would name a commit the register never saw pass.
@@ -215,5 +251,45 @@ body="$(gh release view "$TAG" --json body --jq .body)"
     || die "the published notes are not exactly $NOTES plus the install paragraph; fix the release, not the file"
 step record_changelog ChangelogEntry "{\"version\": \"$SUBJECT\"}" "$SUBJECT"
 step announce Announced "{\"version\": \"$SUBJECT\"}" "$SUBJECT"
+
+# ---------------------------------------------------------------- the record
+# The register seals what it holds, signs the seal, and publishes the
+# record beside the downloads. A rerun builds the same files, since the
+# seal is the one already made and the export is deterministic, and it
+# never replaces a published file that differs.
+public_key="$(cat "$PUBLIC_KEY_FILE")"
+step authorise_signing_key AuditSigningKey \
+    "{\"key_id\": \"$KEY_ID\", \"public_key\": \"$public_key\"}" \
+    "$KEY_ID" audit_checkpoint_v1 "$public_key"
+if has RecordPublished "$SUBJECT"; then
+    say "register: RecordPublished $SUBJECT already recorded"
+else
+    tmp="$(mktemp -d)"
+    newest="$("$MORPHOLOG" inspect audit --database-url "$DB" | tail -1 | jq -r .transition_id)"
+    "$MORPHOLOG" audit checkpoint --database-url "$DB" --signing-key "$SIGNING_KEY" \
+        --key-id "$KEY_ID" --covering "$newest" > "$tmp/checkpoint.json" \
+        || die "the register did not seal its record: $(cat "$tmp/checkpoint.json")"
+    jq 'del(.status)' "$tmp/checkpoint.json" > "$tmp/$RECORD.anchor.json"
+    "$MORPHOLOG" audit export --database-url "$DB" \
+        --tree-size "$(jq -r .tree_size "$tmp/checkpoint.json")" > "$tmp/$RECORD.pack"
+    assets="$(gh release view "$TAG" --json assets --jq '[.assets[].name]')"
+    mkdir "$tmp/published"
+    for name in "$RECORD.pack" "$RECORD.anchor.json"; do
+        if ! jq -e --arg n "$name" 'index($n)' <<< "$assets" > /dev/null; then
+            gh release upload "$TAG" "$tmp/$name"
+            say "uploaded $name"
+        fi
+        gh release download "$TAG" -p "$name" -O "$tmp/published/$name"
+        cmp -s "$tmp/$name" "$tmp/published/$name" \
+            || die "$TAG already has a different $name; it is never replaced"
+    done
+    "$MORPHOLOG" audit verify-pack "$tmp/published/$RECORD.pack" \
+        --anchor-file "$tmp/published/$RECORD.anchor.json" \
+        --require-signatures --require-signing-key "$PUBLIC_KEY_FILE" > "$tmp/verdict.json" \
+        || die "the published record does not verify: $(jq -c .verdict "$tmp/verdict.json")"
+    rm -rf "$tmp"
+    say "$RECORD: published, signed, verifies"
+    step publish_record RecordPublished "{\"version\": \"$SUBJECT\"}" "$SUBJECT"
+fi
 
 say "$TAG released and recorded"

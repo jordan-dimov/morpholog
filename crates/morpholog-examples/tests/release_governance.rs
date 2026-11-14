@@ -226,6 +226,52 @@ fn announcing_with_a_platform_missing_its_asset_is_refused() {
 }
 
 #[test]
+fn publishing_the_record_before_the_announcement_is_refused() {
+    let reason = ex().must_reject(
+        &release_governance::publish_record(),
+        vec![subj("v0_0_8")],
+        &ready_to_announce(),
+    );
+    expect_gate(&reason, "version_is_announced");
+}
+
+#[test]
+fn the_record_is_published_once_the_release_is_announced() {
+    let e = ex();
+    let state = e.must_accept(
+        &release_governance::announce(),
+        vec![subj("v0_0_8")],
+        ready_to_announce(),
+    );
+    e.must_accept(
+        &release_governance::publish_record(),
+        vec![subj("v0_0_8")],
+        state,
+    );
+}
+
+#[test]
+fn a_second_key_under_the_same_id_is_refused() {
+    let e = ex();
+    let state = e.must_accept(
+        &release_governance::authorise_signing_key(),
+        vec![subj("release-register-1"), subj("ed25519-pub:aa")],
+        State::default(),
+    );
+    let reason = e.must_reject(
+        &release_governance::authorise_signing_key(),
+        vec![subj("release-register-1"), subj("ed25519-pub:bb")],
+        &state,
+    );
+    match &reason {
+        RejectionReason::Invariant { name, .. } => {
+            assert_eq!(name.as_str(), "audit_signing_key_unique_by_key_id")
+        }
+        other => panic!("expected the generated uniqueness invariant, got: {other}"),
+    }
+}
+
+#[test]
 fn a_platform_declared_later_does_not_invalidate_a_past_announcement() {
     let e = ex();
     let state = e.must_accept(

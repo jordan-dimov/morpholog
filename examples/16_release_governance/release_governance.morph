@@ -50,6 +50,20 @@ predicate ChangelogEntry(version: Subject)
 predicate Announced(version: Subject)
     append only
 
+-- The register's own evidence. Each release publishes a copy of this
+-- record beside its downloads, sealed and signed, so anyone can check
+-- it without the database. `AuditSigningKey` is a name the runtime
+-- knows: a key signs the seal only while a claim like this one names
+-- it. One key id names one key, forever. The first key is trusted the
+-- way the programme is: whoever runs the register admits it, and its
+-- public half sits in the repository for verifiers.
+predicate AuditSigningKey(key_id: Subject, purpose: Subject, public_key: Subject)
+    unique by (key_id)
+-- The sealed copy for this version is published and verified. The next
+-- release must check it again with its own binary before it goes out.
+predicate RecordPublished(version: Subject)
+    append only
+
 intent ReleaseAnnounced(version: Subject)
 
 -- The standing rules, whatever anyone does.
@@ -105,3 +119,12 @@ transformation announce(version):
     require every_declared_platform_has_its_asset: (forall p in PlatformDeclared(p): AssetPublished(version, p))
     admit Announced(version)
     emit ReleaseAnnounced(version)
+
+transformation authorise_signing_key(key_id, public_key):
+    admit AuditSigningKey(key_id, #audit_checkpoint_v1, public_key)
+
+-- The record of a release is published only after the release is
+-- announced, so the sealed copy holds every step of it.
+transformation publish_record(version):
+    require version_is_announced: Announced(version)
+    admit RecordPublished(version)
