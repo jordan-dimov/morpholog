@@ -2,16 +2,17 @@
 //! hold each surface a value crosses to the same kinds: the tagged and
 //! named wire, the key the database compares by, the view column and the
 //! generated client. A new kind does not compile until [`kind_samples`]
-//! has its samples; it then belongs in [`every_kind`], and each surface's
-//! test fails until it handles the kind or refuses it by name.
+//! has its samples, a test fails until [`every_kind`] lists it, and each
+//! surface's test then fails until it handles the kind or refuses it by
+//! name.
 
 use morpholog_core::{EvalValue, PredicateArgKind};
 
 use crate::{bool_, cal_span, coll, date, dec, dec_str, dur, qty, subj, ts};
 
-/// One representative of every kind. A new kind is listed here when it
-/// gets its arm in [`kind_samples`], which the compiler asks for: no test
-/// can see a variant missing from a list.
+/// One representative of every kind. A test holds this list to the
+/// variants serde knows `PredicateArgKind` has, so a new kind fails it
+/// until listed here.
 pub fn every_kind() -> Vec<PredicateArgKind> {
     vec![
         PredicateArgKind::Subject,
@@ -98,6 +99,55 @@ pub fn kind_samples(kind: &PredicateArgKind) -> KindSamples {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The variant names serde's derive gives `T`: it passes them to
+    /// `deserialize_enum`, which this deserializer records and refuses.
+    fn variant_names<T: for<'de> serde::Deserialize<'de>>() -> Vec<&'static str> {
+        use serde::de::{Error, Visitor, value};
+        struct Capture(std::cell::Cell<&'static [&'static str]>);
+        impl<'de> serde::Deserializer<'de> for &Capture {
+            type Error = value::Error;
+            fn deserialize_any<V: Visitor<'de>>(self, _: V) -> Result<V::Value, value::Error> {
+                Err(value::Error::custom("not an enum"))
+            }
+            fn deserialize_enum<V: Visitor<'de>>(
+                self,
+                _: &'static str,
+                variants: &'static [&'static str],
+                _: V,
+            ) -> Result<V::Value, value::Error> {
+                self.0.set(variants);
+                Err(value::Error::custom("recorded"))
+            }
+            serde::forward_to_deserialize_any! {
+                bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+                bytes byte_buf option unit unit_struct newtype_struct seq tuple
+                tuple_struct map struct identifier ignored_any
+            }
+        }
+        let capture = Capture(std::cell::Cell::new(&[]));
+        assert!(T::deserialize(&capture).is_err());
+        capture.0.get().to_vec()
+    }
+
+    #[test]
+    fn every_kind_names_each_variant_once() {
+        let mut listed: Vec<String> = every_kind()
+            .iter()
+            .map(|kind| match serde_json::to_value(kind).unwrap() {
+                serde_json::Value::String(name) => name,
+                serde_json::Value::Object(one) => one.keys().next().unwrap().clone(),
+                other => panic!("{other}"),
+            })
+            .collect();
+        listed.sort();
+        let mut variants: Vec<String> = variant_names::<PredicateArgKind>()
+            .into_iter()
+            .map(String::from)
+            .collect();
+        variants.sort();
+        assert_eq!(listed, variants, "every_kind lists each kind exactly once");
+    }
 
     #[test]
     fn a_kind_has_samples_exactly_when_it_is_declarable() {
