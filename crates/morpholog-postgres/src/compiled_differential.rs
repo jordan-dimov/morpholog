@@ -3259,3 +3259,58 @@ transformation enable(flag):
         assert_eq!(governed_contract(&obs), Ok(accepted), "{label}");
     }
 }
+
+/// The same condition, reached through a change inside it (#802): an
+/// allocation the sum in the condition's third branch reads makes a line
+/// ready while its `Line` claim is untouched. The full and the
+/// case-bound checks decide it as the kernel does, refusing the
+/// allocation that makes a second line ready and admitting one that
+/// does not.
+#[tokio::test]
+async fn an_allocation_inside_a_condition_under_a_sum_is_decided_as_the_kernel() {
+    const SOURCE: &str = "program ready_by_allocation
+predicate Holder(x: Subject)
+predicate Line(x: Subject, line: Subject, q: Decimal)
+predicate Mark(line: Subject)
+predicate Shipped(line: Subject, shipped: Decimal)
+predicate Alloc(line: Subject, a: Decimal)
+define ready(l, q):
+    Mark(l) or (Shipped(l, s) and q <= s) or q <= sum(a | Alloc(l, a))
+invariant at_most_one_ready_line:
+    Holder(x) implies sum(1 | Line(x, l, q) and ready(l, q)) <= 1
+transformation allocate(line, a):
+    admit Alloc(line, a)
+";
+    let program = morpholog_surface::parse_program(SOURCE).expect("parses");
+    let validated = program.validated().expect("validates");
+    let sql_set = compile_invariants(&validated).expect("compiles");
+    let prepared = PreparedProgram::new(program).expect("valid");
+    let pool = test_pool().await;
+    for (label, line, a, accepted) in [
+        ("an allocation that leaves l2 short", "l2", "2", true),
+        ("an allocation that makes l2 ready", "l2", "5", false),
+        ("an allocation on the line already ready", "l1", "9", true),
+    ] {
+        reset_db(&pool).await;
+        insert_rows(&pool, "Holder", &[serde_json::json!([subject("h")])]).await;
+        insert_rows(
+            &pool,
+            "Line",
+            &[
+                serde_json::json!([subject("h"), subject("l1"), decimal("5")]),
+                serde_json::json!([subject("h"), subject("l2"), decimal("5")]),
+            ],
+        )
+        .await;
+        insert_rows(&pool, "Mark", &[serde_json::json!([subject("l1")])]).await;
+        let obs = observe(
+            &pool,
+            &prepared,
+            &sql_set,
+            "allocate",
+            vec![subj(line), dec(a.parse().unwrap())],
+        )
+        .await;
+        assert_eq!(governed_contract(&obs), Ok(accepted), "{label}");
+    }
+}
