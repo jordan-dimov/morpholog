@@ -832,7 +832,8 @@ fn judge_invariants(
 
 /// [`finish_staged_delta_with`] without the candidate state: the verdict
 /// and the effective delta. For a measurement that times the decision
-/// apart from the state's advance; an embedder proposes.
+/// apart from the state's advance; an embedder calls
+/// [`crate::PreparedProgram::decide`].
 #[cfg(any(test, feature = "measure"))]
 pub fn decide_staged_delta_with(
     staged: StagedDelta,
@@ -879,7 +880,9 @@ pub(crate) fn decide_staged(
 }
 
 /// Judge a staged delta and return the owned candidate the outcome
-/// carries: the candidate is built once and the invariants read it.
+/// carries. The invariants read a view of the pre-state with the delta
+/// over it, so a refused act copies nothing; the owned candidate is built
+/// only for an admitted act, whose outcome carries it.
 pub(crate) fn finish_staged_inner(
     staged: StagedDelta,
     pre_state: &State,
@@ -895,7 +898,6 @@ pub(crate) fn finish_staged_inner(
             emitted,
         } => (asserted, retracted, emitted),
     };
-    let candidate = pre_state.with_delta(&asserted, &retracted);
     let computed;
     let effective = match established {
         Some(effective) => effective,
@@ -904,8 +906,9 @@ pub(crate) fn finish_staged_inner(
             &computed
         }
     };
+    let view = Candidate::new(pre_state, &asserted, &retracted);
     if let Some(reason) = judge_invariants(
-        StateRef::Owned(&candidate),
+        StateRef::Candidate(&view),
         pre_state,
         admission,
         effective,
@@ -913,11 +916,12 @@ pub(crate) fn finish_staged_inner(
     )? {
         return Ok(Outcome::Rejected { reason });
     }
+    let candidate_state = pre_state.with_delta(&asserted, &retracted);
     Ok(Outcome::Accepted {
         asserted_claims: asserted,
         retracted_claims: retracted,
         emitted_intents: emitted,
-        candidate_state: candidate,
+        candidate_state,
     })
 }
 
