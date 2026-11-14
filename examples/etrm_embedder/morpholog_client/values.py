@@ -5,13 +5,12 @@ Python values, a quantity keeping its unit. Encode: bare Python values into the 
 codec's JSON shapes. Exactness is the contract: decimals travel as
 strings end to end and become ``decimal.Decimal``, never a float;
 timestamps are aware ``datetime`` objects, and a naive datetime is
-refused on write because an instant must name an instant.
+refused on write because an instant must name an instant. A duration
+is a ``Duration``: an exact count of nanoseconds, which ``timedelta``
+cannot hold.
 
-Durations have no encoder here: the generator refuses programmes whose
-contracts need a Duration argument, so a codec that silently
-half-supported it would lie about the client's coverage. A collection
-argument needs no encoder of its own either - the generated request
-model encodes it element by element, each item passing through
+A collection argument needs no encoder of its own - the generated
+request model encodes it element by element, each item passing through
 ``encode_named`` as the scalar it is.
 """
 
@@ -21,7 +20,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import TypeVar
 
@@ -30,12 +29,14 @@ from typing import TypeVar
 # ASCII digits only and the whole text, as the binary reads it.
 _DECIMAL_PATTERN = re.compile(r"^-?(0|[1-9]\d*)(\.\d+)?$", re.ASCII)
 # The schema's `date` and `date-time` formats (RFC 3339), and the
-# signed exact-seconds spans the binary writes for a duration.
+# schema's duration pattern, ASCII digits only, as the binary reads it.
 _DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _TIMESTAMP_PATTERN = re.compile(
     r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$"
 )
-_DURATION_PATTERN = re.compile(r"^-?PT(?=\d)(\d+H)?(\d+M)?(\d+(\.\d+)?S)?$")
+_DURATION_PATTERN = re.compile(
+    r"^-?PT(?=\d)(\d{1,19}H)?(\d{1,19}M)?(\d{1,19}(\.\d{1,9})?S)?$", re.ASCII
+)
 
 
 class CodecError(ValueError):
@@ -48,6 +49,91 @@ class Quantity:
 
     amount: Decimal
     unit: str
+
+
+_NANOS_PER_SECOND = 1_000_000_000
+# The binary's range: a signed 64-bit count of seconds plus nanoseconds,
+# so the negative end reaches one second further than the positive one.
+_DURATION_MIN = -(2**63) * _NANOS_PER_SECOND - (_NANOS_PER_SECOND - 1)
+_DURATION_MAX = (2**63 - 1) * _NANOS_PER_SECOND + (_NANOS_PER_SECOND - 1)
+
+
+@dataclass(frozen=True, order=True)
+class Duration:
+    """An exact span of time, in nanoseconds, as the binary holds it.
+
+    ``Duration.from_iso("PT90M") == Duration.from_iso("PT1H30M")``, and
+    ``to_iso()`` writes the one spelling the binary writes, so a digest
+    over a duration commits as the kernel's does. No arithmetic: the
+    client carries the value, the programme computes with it.
+    """
+
+    nanoseconds: int
+
+    def __post_init__(self) -> None:
+        # bool is an int to Python, never a duration.
+        if type(self.nanoseconds) is not int:
+            raise CodecError(f"a Duration counts whole nanoseconds, not {self.nanoseconds!r}")
+        if not _DURATION_MIN <= self.nanoseconds <= _DURATION_MAX:
+            raise CodecError(f"{self.nanoseconds} nanoseconds is outside the binary's range")
+
+    @classmethod
+    def from_iso(cls, text: str) -> Duration:
+        """Read the wire's spelling: ISO 8601 exact time units, as the
+        schema's pattern states, and refuse every other."""
+        # The whole text: `$` alone would also match before a final newline.
+        # The pattern bounds every number, so int() below reads at most 19
+        # digits.
+        if not isinstance(text, str):
+            raise CodecError(f"duration {text!r} is not an exact span like PT6H")
+        match = _DURATION_PATTERN.fullmatch(text)
+        if match is None:
+            raise CodecError(f"duration {text!r} is not an exact span like PT6H")
+        hours, minutes, seconds, fraction = match.groups()
+        whole = int(hours[:-1]) * 3600 if hours else 0
+        whole += int(minutes[:-1]) * 60 if minutes else 0
+        whole += int(seconds.split(".")[0].rstrip("S")) if seconds else 0
+        nanos = whole * _NANOS_PER_SECOND
+        if fraction:
+            nanos += int(fraction[1:].ljust(9, "0"))
+        return cls(-nanos if text.startswith("-") else nanos)
+
+    def to_iso(self) -> str:
+        """The binary's own spelling: the largest units first, none that
+        is zero, and ``PT0S`` for nothing at all."""
+        size = abs(self.nanoseconds)
+        whole, fraction = divmod(size, _NANOS_PER_SECOND)
+        hours, rest = divmod(whole, 3600)
+        minutes, seconds = divmod(rest, 60)
+        text = "PT"
+        if hours:
+            text += f"{hours}H"
+        if minutes:
+            text += f"{minutes}M"
+        if seconds or fraction or not (hours or minutes):
+            text += str(seconds)
+            if fraction:
+                text += "." + f"{fraction:09d}".rstrip("0")
+            text += "S"
+        return "-" + text if self.nanoseconds < 0 else text
+
+    @classmethod
+    def from_timedelta(cls, value: timedelta) -> Duration:
+        """A ``timedelta``, exactly: it holds microseconds."""
+        if not isinstance(value, timedelta):
+            raise CodecError(f"expected a timedelta, got {value!r}")
+        micros = (value.days * 86_400 + value.seconds) * 1_000_000 + value.microseconds
+        return cls(micros * 1_000)
+
+    def to_timedelta(self) -> timedelta:
+        """The same span as a ``timedelta``, or a refusal: never rounded."""
+        micros, rest = divmod(self.nanoseconds, 1_000)
+        if rest:
+            raise CodecError(f"{self.to_iso()} is finer than a microsecond; timedelta would round it")
+        try:
+            return timedelta(microseconds=micros)
+        except OverflowError as exc:
+            raise CodecError(f"{self.to_iso()} is outside timedelta's range") from exc
 
 
 def _expect_str(what: str, value: object) -> str:
@@ -160,6 +246,8 @@ def encode_named(value: object) -> object:
         return encode_timestamp(value)
     if isinstance(value, date):
         return value.isoformat()
+    if isinstance(value, Duration):
+        return value.to_iso()
     raise CodecError(f"no named-codec encoding for {type(value).__name__}: {value!r}")
 
 
@@ -171,7 +259,8 @@ def digest(*values: object) -> str:
     Each value is encoded as the record stores it: a ``str`` is a
     subject, a ``Decimal`` a decimal with its scale trimmed (so
     ``Decimal("100.00")`` and ``Decimal("100")`` commit alike), a ``bool``
-    a bool, a ``date`` a date and an aware ``datetime`` an instant. An
+    a bool, a ``date`` a date, an aware ``datetime`` an instant and a
+    ``Duration`` a duration in the binary's one spelling. An
     ``int`` or a ``float`` is refused rather than read as a decimal, and
     so is a naive datetime: a commitment the kernel could not reproduce
     is worse than none. No database, subprocess or network.
@@ -203,8 +292,10 @@ def _value_key(value: object) -> list[object]:
         return ["timestamp", _trimmed_timestamp(encode_timestamp(value))]
     if isinstance(value, date):
         return ["date", value.isoformat()]
+    if isinstance(value, Duration):
+        return ["duration", value.to_iso()]
     raise CodecError(
-        "digest takes a str, a Decimal, a bool, a date or an aware datetime, "
+        "digest takes a str, a Decimal, a bool, a date, an aware datetime or a Duration, "
         f"not {type(value).__name__}: {value!r}"
     )
 
@@ -257,12 +348,7 @@ def decode_tagged(tagged: object) -> object:
         case "timestamp":
             return parse_timestamp(value)
         case "duration":
-            # No exact stdlib representation (timedelta rounds
-            # nanoseconds); the ISO text IS the exact value.
-            text = _expect_str("a duration", value)
-            if not _DURATION_PATTERN.match(text):
-                raise CodecError(f"duration {text!r} is not an exact span like PT6H")
-            return text
+            return Duration.from_iso(_expect_str("a duration", value))
         case "quantity":
             if (
                 not isinstance(value, dict)
@@ -321,6 +407,13 @@ def named_date(where: str, value: object) -> date:
 def named_timestamp(where: str, value: object) -> datetime:
     try:
         return parse_timestamp(value)
+    except CodecError as exc:
+        raise CodecError(f"{where}: {exc}") from exc
+
+
+def named_duration(where: str, value: object) -> Duration:
+    try:
+        return Duration.from_iso(_expect_str("a duration", value))
     except CodecError as exc:
         raise CodecError(f"{where}: {exc}") from exc
 

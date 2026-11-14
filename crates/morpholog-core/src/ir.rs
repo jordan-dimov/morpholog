@@ -835,12 +835,12 @@ impl Value {
             .map_err(|e| format!("invalid timestamp `{s}`: {e}"))
     }
 
-    /// An exact duration literal from ISO 8601 time units (`PT6H`).
-    /// Calendar units are refused by the type itself.
+    /// An exact duration literal from ISO 8601 time units (`PT6H`), in
+    /// the wire's own grammar.
     pub fn duration(s: &str) -> Result<Self, String> {
-        s.parse::<jiff::SignedDuration>()
+        crate::schema::duration_from_wire(s)
             .map(Self::Duration)
-            .map_err(|e| format!("invalid duration `{s}`: {e}"))
+            .map_err(|e| format!("invalid duration: {e}"))
     }
 
     /// A calendar span literal from ISO 8601 date units (`P3M`, `P45D`).

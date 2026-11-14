@@ -3,7 +3,7 @@ library makes real (scientific Decimal rendering, naive datetimes)."""
 
 import json
 import unittest
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -27,7 +27,7 @@ class DecodeTagged(unittest.TestCase):
                 {"type": "timestamp", "value": "2026-06-01T12:00:00Z"},
                 datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
             ),
-            ({"type": "duration", "value": "PT6H"}, "PT6H"),
+            ({"type": "duration", "value": "PT6H"}, values.Duration(6 * 3600 * 10**9)),
             (
                 {"type": "quantity", "value": {"amount": "25000", "unit": "USD"}},
                 values.Quantity(Decimal("25000"), "USD"),
@@ -187,6 +187,10 @@ class WireFormats(unittest.TestCase):
                     self.refused({"type": kind, "value": text})
         for text in corpus["decimal"]["both_refuse"]:
             self.refused({"type": "quantity", "value": {"amount": text, "unit": "USD"}})
+        # A duration is written back in the binary's one spelling.
+        for text, written in corpus["duration"]["canonical"]:
+            with self.subTest(canonical=text):
+                self.assertEqual(values.Duration.from_iso(text).to_iso(), written)
 
     def test_a_decimal_past_what_int_reads_is_still_this_codecs_refusal(self):
         # Python's `int` refuses a string of thousands of digits with its
@@ -205,8 +209,8 @@ class WireFormats(unittest.TestCase):
                 {"type": "timestamp", "value": "2026-06-01t13:30:00+01:30"},
                 datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
             ),
-            ({"type": "duration", "value": "-PT1H30M"}, "-PT1H30M"),
-            ({"type": "duration", "value": "PT0.5S"}, "PT0.5S"),
+            ({"type": "duration", "value": "-PT1H30M"}, values.Duration(-5400 * 10**9)),
+            ({"type": "duration", "value": "PT0.5S"}, values.Duration(5 * 10**8)),
             ({"type": "date", "value": "0001-01-01"}, date(1, 1, 1)),
         ]
         for tagged, expected in cases:
@@ -215,3 +219,47 @@ class WireFormats(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExactDuration(unittest.TestCase):
+    """A duration is a count of nanoseconds, in the binary's range, built
+    only through checks that refuse what the binary refuses."""
+
+    def test_spellings_of_one_span_are_one_value(self):
+        self.assertEqual(values.Duration.from_iso("PT90M"), values.Duration.from_iso("PT1H30M"))
+        self.assertLess(values.Duration.from_iso("-PT1S"), values.Duration.from_iso("PT0S"))
+
+    def test_a_direct_construction_is_checked_too(self):
+        top = (2**63 - 1) * 10**9 + 999_999_999
+        bottom = -(2**63) * 10**9 - 999_999_999
+        self.assertEqual(values.Duration(top).to_iso(), "PT2562047788015215H30M7.999999999S")
+        self.assertEqual(values.Duration(bottom).to_iso(), "-PT2562047788015215H30M8.999999999S")
+        for bad in (top + 1, bottom - 1, True, 1.0, "1", None):
+            with self.subTest(repr(bad)), self.assertRaises(values.CodecError):
+                values.Duration(bad)
+
+    def test_the_text_round_trips(self):
+        for nanos in (0, 1, -1, 999_999_999, 10**9, 3_600 * 10**9 + 1, -(61 * 10**9),
+                      (2**63 - 1) * 10**9 + 999_999_999, -(2**63) * 10**9 - 999_999_999):
+            with self.subTest(nanos):
+                d = values.Duration(nanos)
+                self.assertEqual(values.Duration.from_iso(d.to_iso()), d)
+
+    def test_a_timedelta_converts_exactly_or_not_at_all(self):
+        for td in (timedelta(0), timedelta(microseconds=1), timedelta(days=-1, microseconds=3),
+                   timedelta.max, timedelta.min):
+            with self.subTest(td):
+                self.assertEqual(values.Duration.from_timedelta(td).to_timedelta(), td)
+        with self.assertRaises(values.CodecError):
+            values.Duration(1).to_timedelta()
+        with self.assertRaises(values.CodecError):
+            values.Duration.from_iso("PT2562047788015215H").to_timedelta()
+        with self.assertRaises(values.CodecError):
+            values.Duration.from_timedelta(5400)
+
+    def test_it_crosses_the_named_codec_and_the_digest_in_the_binary_spelling(self):
+        d = values.Duration.from_iso("PT90M")
+        self.assertEqual(values.encode_named(d), "PT1H30M")
+        self.assertEqual(values._value_key(d), ["duration", "PT1H30M"])
+        with self.assertRaises(values.CodecError):
+            values.encode_named(timedelta(minutes=90))

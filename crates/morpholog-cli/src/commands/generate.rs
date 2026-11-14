@@ -156,6 +156,7 @@ fn kind_supported(kind: &PredicateArgKind) -> bool {
             | PredicateArgKind::Decimal
             | PredicateArgKind::Date
             | PredicateArgKind::Timestamp
+            | PredicateArgKind::Duration
             | PredicateArgKind::Bool
             | PredicateArgKind::Quantity(_)
     )
@@ -341,6 +342,7 @@ fn kind_map(kind: &PredicateArgKind) -> (&'static str, &'static str, Option<Stri
         PredicateArgKind::Decimal => ("Decimal", "named_decimal", None),
         PredicateArgKind::Date => ("date", "named_date", None),
         PredicateArgKind::Timestamp => ("datetime", "named_timestamp", None),
+        PredicateArgKind::Duration => ("values.Duration", "named_duration", None),
         PredicateArgKind::Bool => ("bool", "named_bool", None),
         PredicateArgKind::Quantity(unit) => (
             "Decimal",
@@ -349,10 +351,7 @@ fn kind_map(kind: &PredicateArgKind) -> (&'static str, &'static str, Option<Stri
                 "amount in {unit} (the declaration carries the unit)"
             )),
         ),
-        PredicateArgKind::Collection
-        | PredicateArgKind::Duration
-        | PredicateArgKind::CalendarSpan
-        | PredicateArgKind::Any => {
+        PredicateArgKind::Collection | PredicateArgKind::CalendarSpan | PredicateArgKind::Any => {
             unreachable!("the refusal sweep rejected unsupported kinds before rendering")
         }
     }

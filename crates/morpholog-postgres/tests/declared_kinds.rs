@@ -302,3 +302,65 @@ async fn a_sum_over_drifted_values_of_one_kind_decides_as_the_kernel_does() {
         }
     }
 }
+
+/// Storage is one more route into the duration grammar. Attacker
+/// capability: a writer that edits a stored payload outside Morpholog.
+/// Every duration the wire corpus accepts is stored and read back as the
+/// kernel holds it; a stored payload rewritten in a spelling the wire
+/// refuses is refused on reading, by name, never read as the same value.
+#[tokio::test]
+async fn durations_read_back_from_storage_only_in_the_wire_grammar() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let pg = PgProgram::new(
+        PreparedProgram::new(morpholog_surface::parse_program(PROGRAMME).unwrap()).unwrap(),
+    );
+    let corpus: serde_json::Value = serde_json::from_str(include_str!(
+        "../../morpholog-cli/tests/golden/wire_texts.json"
+    ))
+    .unwrap();
+    let accepted: Vec<EvalValue> = corpus["duration"]["both_accept"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| {
+            EvalValue::Duration(
+                morpholog_core::schema::duration_from_wire(t.as_str().unwrap()).unwrap(),
+            )
+        })
+        .collect();
+    for (i, value) in accepted.iter().enumerate() {
+        let outcome = propose_against_pg(
+            &pool,
+            &pg,
+            &act("hold", vec![subj(&format!("d{i}")), value.clone()]),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(outcome, PgProposalOutcome::Committed { .. }),
+            "{value:?}"
+        );
+    }
+    let read = morpholog_postgres::read_claims(&pool).await.unwrap();
+    for (i, value) in accepted.iter().enumerate() {
+        let held = read
+            .iter()
+            .find(|r| r.claim.args[0] == subj(&format!("d{i}")))
+            .unwrap();
+        assert_eq!(&held.claim.args[1], value, "d{i} reads back as admitted");
+    }
+
+    sqlx::query(
+        "UPDATE morpholog.claims SET arguments = jsonb_set(arguments, '{1,value}', '\"1h 30m\"')
+         WHERE predicate_name = 'Held' AND arguments -> 0 ->> 'value' = 'd0'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let refused = morpholog_postgres::read_claims(&pool).await.unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("1h 30m"),
+        "the refusal names the stored text: {refused:#}"
+    );
+}

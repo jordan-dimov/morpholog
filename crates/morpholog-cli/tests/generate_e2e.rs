@@ -372,7 +372,7 @@ fn the_generated_models_refuse_a_value_of_another_kind() {
     assert!(generate(&fixture, out.path()).status.success());
     let probe = r#"
 import sys
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 sys.path.insert(0, sys.argv[1])
 from morpholog_client import models, values
@@ -389,24 +389,28 @@ def refused(call, why):
     print("WRONG accepted", why)
 
 good = {"order_id": "o1", "qty": "1.5", "on": "2026-01-02",
-        "at": "2026-01-02T03:04:05Z", "firm": True, "cost": "10"}
+        "at": "2026-01-02T03:04:05Z", "firm": True, "cost": "10", "took": "PT90M"}
 claim = models.FillClaim.from_named(good)
 assert claim.qty == Decimal("1.5") and claim.firm is True and claim.at.tzinfo is not None
+assert claim.took == values.Duration.from_iso("PT1H30M")
 for key, bad in [("order_id", 7), ("qty", 1.5), ("qty", "NaN"),
                  ("on", "2026-01-02T00:00:00Z"), ("at", "2026-01-02 03:04:05"),
-                 ("firm", "true"), ("cost", 10)]:
+                 ("firm", "true"), ("cost", 10), ("took", "1h 30m"), ("took", 5400)]:
     refused(lambda: models.FillClaim.from_named({**good, key: bad}), f"{key}={bad!r}")
 refused(lambda: models.FillClaim.from_named({k: v for k, v in good.items() if k != "qty"}),
         "missing qty")
 refused(lambda: models.FillClaim.from_named({**good, "extra": "x"}), "unknown key")
 
 at = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
-args = ["o1", Decimal("1.5"), date(2026, 1, 2), at, True, values.Quantity(Decimal("10"), "USD")]
+took = values.Duration.from_iso("PT90M")
+args = ["o1", Decimal("1.5"), date(2026, 1, 2), at, True, values.Quantity(Decimal("10"), "USD"),
+        took]
 payload = models.INTENT_PAYLOADS["FillBooked"].from_args(args)
 assert payload == models.FillBookedPayload("o1", Decimal("1.5"), date(2026, 1, 2), at, True,
-                                           Decimal("10"))
+                                           Decimal("10"), took)
 for i, bad in [(0, 7), (1, "1.5"), (2, at), (3, date(2026, 1, 2)), (4, 1), (5, 1.5),
-               (5, Decimal("10")), (5, values.Quantity(Decimal("10"), "EUR"))]:
+               (5, Decimal("10")), (5, values.Quantity(Decimal("10"), "EUR")),
+               (6, "PT1H30M"), (6, timedelta(minutes=90))]:
     refused(lambda: models.FillBookedPayload.from_args(args[:i] + [bad] + args[i + 1:]),
             f"argument {i}={bad!r}")
 refused(lambda: models.FillBookedPayload.from_args(args[:5]), "arity")
@@ -420,7 +424,7 @@ print("done")
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stdout.contains("done"), "{stdout}\n{stderr}");
     assert!(!stdout.contains("WRONG"), "{stdout}");
-    assert_eq!(stdout.matches("refused").count(), 18, "{stdout}");
+    assert_eq!(stdout.matches("refused").count(), 22, "{stdout}");
 }
 
 fn refusal_fixture(source: &str) -> (tempfile::TempDir, PathBuf) {
@@ -435,17 +439,17 @@ fn refusal_fixture(source: &str) -> (tempfile::TempDir, PathBuf) {
 fn refusal_names_every_finding_and_writes_nothing() {
     let (_dir, path) = refusal_fixture(
         "program refusals\n\
-         predicate Timed(id: Subject, took: Duration)\n\
+         predicate Timed(id: Subject, took: Any)\n\
          predicate Keyword(id: Subject, class: Decimal)\n\
-         transformation t(id, unused):\n    admit Timed(id, duration(PT1H))\n",
+         transformation t(id, unused):\n    admit Timed(id, id)\n",
     );
     let out = tempfile::tempdir().unwrap();
     let result = generate(&path, out.path());
     assert!(!result.status.success(), "unsupported kinds must refuse");
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(
-        stderr.contains("`took` has kind Duration"),
-        "the Duration field is named; got:\n{stderr}"
+        stderr.contains("`took` has kind Any"),
+        "the Any field is named; got:\n{stderr}"
     );
     assert!(
         stderr.contains("`class` is a Python keyword"),
@@ -531,18 +535,22 @@ fn the_committed_example_package_is_current() {
     }
 }
 
-// The laytime example is built on durations, which the client does not
-// support, so it is refused by name.
+// The laytime example is built on durations, and its models type each
+// one as the client's exact `Duration`.
 #[test]
-fn laytime_is_refused_for_its_durations() {
+fn laytime_generates_with_its_durations_exact() {
     let out = tempfile::tempdir().unwrap();
     let result = generate(
         &repo_root().join("examples/12_laytime_demurrage/laytime.morph"),
         out.path(),
     );
-    assert!(!result.status.success());
-    let stderr = String::from_utf8_lossy(&result.stderr);
-    assert!(stderr.contains("Duration"), "got:\n{stderr}");
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let models = std::fs::read_to_string(out.path().join("morpholog_client/models.py")).unwrap();
+    assert!(models.contains(": values.Duration"), "{models}");
 }
 
 // ============================================================

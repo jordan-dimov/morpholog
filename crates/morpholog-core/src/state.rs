@@ -46,9 +46,11 @@ pub enum EvalValue {
     /// modelling, admitted as claims, never a runtime assumption.
     Timestamp(jiff::Timestamp),
     /// An exact span of time, in exact seconds (no calendar units).
-    /// JSON shape: `{ "type": "duration", "value": "PT6H" }` (jiff's
-    /// default serde format for [`jiff::SignedDuration`]).
-    Duration(jiff::SignedDuration),
+    /// JSON shape: `{ "type": "duration", "value": "PT6H" }`, written as
+    /// jiff writes it and read only in [`crate::schema::DURATION_PATTERN`].
+    Duration(
+        #[serde(deserialize_with = "crate::schema::deserialize_duration")] jiff::SignedDuration,
+    ),
     /// A calendar span (whole months plus whole days). Only an
     /// arithmetic operand: claims, intents, and transition arguments
     /// refuse it, so it never reaches storage or the wire.

@@ -3,10 +3,10 @@
 -- model tests generate from.
 program every_generated_kind
 
-predicate Fill(order_id: Subject, qty: Decimal, on: Date, at: Timestamp, firm: Bool, cost: Decimal[USD])
+predicate Fill(order_id: Subject, qty: Decimal, on: Date, at: Timestamp, firm: Bool, cost: Decimal[USD], took: Duration)
 
-intent FillBooked(order_id: Subject, qty: Decimal, on: Date, at: Timestamp, firm: Bool, cost: Decimal[USD])
+intent FillBooked(order_id: Subject, qty: Decimal, on: Date, at: Timestamp, firm: Bool, cost: Decimal[USD], took: Duration)
 
-transformation book(order_id, qty, on, at, firm, cost):
-    admit Fill(order_id, qty, on, at, firm, cost)
-    emit FillBooked(order_id, qty, on, at, firm, cost)
+transformation book(order_id, qty, on, at, firm, cost, took):
+    admit Fill(order_id, qty, on, at, firm, cost, took)
+    emit FillBooked(order_id, qty, on, at, firm, cost, took)

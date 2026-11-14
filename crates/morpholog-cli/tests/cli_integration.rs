@@ -5597,3 +5597,57 @@ transformation post_balance(account, figure):
     assert!(!status.success());
     assert!(stderr.contains(&hint), "{stderr}");
 }
+
+/// Attacker capability: control of a pack file's bytes. A duration in a
+/// pack is read in the wire's one grammar, as on every other route: the
+/// value is written as `PT1H30M`, and the same row with that value
+/// respelt as `1h 30m` is not read as an intact record.
+#[tokio::test(flavor = "current_thread")]
+async fn a_pack_reads_a_duration_only_in_the_wire_grammar() {
+    reset_db().await;
+    let programme = tempfile::Builder::new()
+        .suffix(".morph")
+        .tempfile()
+        .unwrap();
+    std::fs::write(
+        programme.path(),
+        "program held\npredicate Held(id: Subject, d: Duration)\n\
+         transformation hold(id, d: Duration):\n    admit Held(id, d)\n",
+    )
+    .unwrap();
+    let path = programme.path().to_str().unwrap();
+    let (status, _, stderr) = run_cli(&[
+        "propose",
+        path,
+        "hold",
+        "--actor",
+        "a",
+        "--args-named",
+        r#"{"id": "h", "d": "PT90M"}"#,
+    ]);
+    assert!(status.success(), "{stderr}");
+    let (status, _, stderr) = run_cli(&["audit", "checkpoint"]);
+    assert!(status.success(), "{stderr}");
+    let (status, pack, stderr) = run_cli(&["audit", "export"]);
+    assert!(status.success(), "{stderr}");
+    assert!(
+        pack.contains("\"PT1H30M\""),
+        "the pack holds the written form: {pack}"
+    );
+    let verdict_of = |pack: &str| {
+        let file = temp_file(pack.as_bytes());
+        let (_, stdout, _) =
+            run_cli_no_db(&["audit", "verify-pack", file.path().to_str().unwrap()]);
+        pack_verdict(&stdout)
+    };
+    assert_eq!(verdict_of(&pack)["status"], "intact");
+    let respelt = verdict_of(&pack.replace("\"PT1H30M\"", "\"1h 30m\""));
+    assert_eq!(respelt["status"], "malformed_pack", "{respelt}");
+    assert!(
+        respelt["detail"]
+            .as_str()
+            .unwrap()
+            .contains("`1h 30m` does not match"),
+        "the refusal names the respelt duration: {respelt}"
+    );
+}

@@ -3993,10 +3993,13 @@ fn the_manual_schema_intent_ledger_holds() {
         ),
         (
             Intent::FormatConstraint,
-            "decimals and digests are patterned strings; ids and instants carry formats",
+            "decimals, durations and digests are patterned strings; ids and instants carry formats",
             nodes
                 .iter()
                 .any(|(_, n)| n["pattern"] == morpholog_core::schema::DECIMAL_PATTERN)
+                && nodes
+                    .iter()
+                    .any(|(_, n)| n["pattern"] == morpholog_core::schema::DURATION_PATTERN)
                 && nodes
                     .iter()
                     .any(|(_, n)| n["pattern"] == "^sha256:[0-9a-f]{64}$")

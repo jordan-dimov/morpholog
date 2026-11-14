@@ -14,7 +14,7 @@ from python_client.values import CodecError, digest
 GOLDEN = TEMPLATES_DIR.parents[1] / "morpholog-core" / "tests" / "golden" / "digest_v1.json"
 # The tags the helper takes bare values for; the rest have no bare form
 # in this client and are refused.
-BARE = {"subject", "decimal", "bool", "date", "timestamp"}
+BARE = {"subject", "decimal", "bool", "date", "timestamp", "duration"}
 
 
 class AgainstTheKernelsGolden(unittest.TestCase):

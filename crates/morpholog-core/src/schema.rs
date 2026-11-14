@@ -202,6 +202,78 @@ pub(crate) fn deserialize_decimal<'de, D: serde::Deserializer<'de>>(
     decimal_from_wire(&text).map_err(serde::de::Error::custom)
 }
 
+/// The text a duration crosses the wire as: ISO 8601 exact time units in
+/// capitals, hours then minutes then seconds, each optional but one
+/// present and at most 19 digits (the largest in range, seconds, has 19),
+/// a fraction on seconds only and at most nine digits of it, an optional
+/// leading minus. One source, as for [`DECIMAL_PATTERN`].
+pub const DURATION_PATTERN: &str = r"^-?PT(?=\d)(\d{1,19}H)?(\d{1,19}M)?(\d{1,19}(\.\d{1,9})?S)?$";
+
+/// Read a duration as the wire carries it: a text matching
+/// [`DURATION_PATTERN`], within the range the kernel holds. jiff reads
+/// the number; the pattern comes first because jiff alone also takes
+/// lowercase designators, fractional hours and its friendly form.
+///
+/// # Errors
+///
+/// A message naming the text and what it is not.
+pub fn duration_from_wire(text: &str) -> Result<jiff::SignedDuration, String> {
+    if !matches_duration_pattern(text) {
+        return Err(format!(
+            "`{text}` does not match the schema pattern {DURATION_PATTERN} (ISO 8601 exact \
+             time units, such as PT6H or PT1H30M: no calendar units, no lowercase, no \
+             fraction except on seconds)"
+        ));
+    }
+    text.parse::<jiff::SignedDuration>()
+        .map_err(|e| format!("`{text}` is not a duration the kernel holds: {e}"))
+}
+
+/// [`DURATION_PATTERN`] by hand, held to it by the wire-text corpus.
+fn matches_duration_pattern(s: &str) -> bool {
+    let Some(mut rest) = s.strip_prefix('-').unwrap_or(s).strip_prefix("PT") else {
+        return false;
+    };
+    let digits = |t: &str| t.bytes().take_while(u8::is_ascii_digit).count();
+    if digits(rest) == 0 {
+        return false;
+    }
+    for unit in ['H', 'M'] {
+        let n = digits(rest);
+        if n > 0 && rest[n..].starts_with(unit) {
+            if n > 19 {
+                return false;
+            }
+            rest = &rest[n + 1..];
+        }
+    }
+    if rest.is_empty() {
+        return true;
+    }
+    let whole = digits(rest);
+    if whole == 0 || whole > 19 {
+        return false;
+    }
+    let mut tail = &rest[whole..];
+    if let Some(fraction) = tail.strip_prefix('.') {
+        let n = digits(fraction);
+        if n == 0 || n > 9 {
+            return false;
+        }
+        tail = &fraction[n..];
+    }
+    tail == "S"
+}
+
+/// The serde reader for a duration, so a duration read from JSON on any
+/// route is [`duration_from_wire`]'s.
+pub(crate) fn deserialize_duration<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<jiff::SignedDuration, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    duration_from_wire(&text).map_err(serde::de::Error::custom)
+}
+
 /// The JSON Schema type/format/pattern for a concrete kind, with no
 /// description.
 fn bare_kind_shape(kind: &PredicateArgKind) -> Value {
@@ -212,7 +284,9 @@ fn bare_kind_shape(kind: &PredicateArgKind) -> Value {
         PredicateArgKind::Decimal => json!({"type": "string", "pattern": DECIMAL_PATTERN}),
         PredicateArgKind::Date => json!({"type": "string", "format": "date"}),
         PredicateArgKind::Timestamp => json!({"type": "string", "format": "date-time"}),
-        PredicateArgKind::Duration => json!({"type": "string", "format": "duration"}),
+        PredicateArgKind::Duration => {
+            json!({"type": "string", "format": "duration", "pattern": DURATION_PATTERN})
+        }
         PredicateArgKind::Bool => json!({"type": "boolean"}),
         PredicateArgKind::Collection => json!({"type": "array"}),
         // Same wire shape as `Decimal`; the declaration fixes the unit.

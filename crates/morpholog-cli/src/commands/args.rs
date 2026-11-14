@@ -345,13 +345,8 @@ fn decode_duration(param: &str, raw: &Value) -> anyhow::Result<EvalValue> {
         "Duration",
         "an ISO-8601 duration string in exact time units (e.g. \"PT6H\")",
     )?;
-    let d = s.parse::<jiff::SignedDuration>().map_err(|e| {
-        anyhow!(
-            "parameter `{param}` is Duration but `{s}` failed to parse: {e}. \
-             Expected ISO 8601 time units (e.g. PT6H, PT1H30M); calendar units \
-             (months, years) are not accepted."
-        )
-    })?;
+    let d = morpholog_core::schema::duration_from_wire(s)
+        .map_err(|e| anyhow!("parameter `{param}` is Duration but {e}"))?;
     Ok(EvalValue::Duration(d))
 }
 
@@ -432,18 +427,23 @@ mod tests {
                     decode_value("p", &ParamKind::Concrete(param_kind.clone()), &json!(text));
                 assert!(decoded.is_err(), "{kind} {text:?} is refused: {decoded:?}");
             }
-            if kind != "decimal" {
+            // The tagged route reads the same texts: bare, nested in a
+            // collection, and for a decimal as a quantity's amount too.
+            let tagged = |text: &str| -> Vec<serde_json::Value> {
+                let mut shapes = vec![
+                    json!([{"type": kind, "value": text}]),
+                    json!([{"type": "collection", "value": [{"type": kind, "value": text}]}]),
+                ];
+                if kind == "decimal" {
+                    shapes.push(json!([
+                        {"type": "quantity", "value": {"amount": text, "unit": "USD"}}
+                    ]));
+                }
+                shapes
+            };
+            if !matches!(kind, "decimal" | "duration") {
                 continue;
             }
-            // The tagged route reads the same texts: bare, as a quantity's
-            // amount, and nested in a collection.
-            let tagged = |text: &str| {
-                [
-                    json!([{"type": "decimal", "value": text}]),
-                    json!([{"type": "quantity", "value": {"amount": text, "unit": "USD"}}]),
-                    json!([{"type": "collection", "value": [{"type": "decimal", "value": text}]}]),
-                ]
-            };
             for text in texts("both_accept") {
                 for shape in tagged(&text) {
                     let decoded = decode_tagged(&shape.to_string());
@@ -457,6 +457,22 @@ mod tests {
                 }
             }
         }
+        // A duration is written back in one spelling, which is also its
+        // value key, so the client's printer is held to these pairs too.
+        for pair in corpus["duration"]["canonical"].as_array().unwrap() {
+            let (text, written) = (pair[0].as_str().unwrap(), pair[1].as_str().unwrap());
+            let decoded = decode_value(
+                "p",
+                &ParamKind::Concrete(PredicateArgKind::Duration),
+                &json!(text),
+            )
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(&decoded).unwrap(),
+                json!({"type": "duration", "value": written}),
+                "{text} is written back as {written}"
+            );
+        }
     }
 
     /// The generated client carries the schema's own decimal pattern.
@@ -469,6 +485,19 @@ mod tests {
         assert!(
             crate::commands::generate::VALUES_PY.contains(&line),
             "values.py must read `{line}`"
+        );
+    }
+
+    /// And the schema's duration pattern.
+    #[test]
+    fn the_client_template_carries_the_duration_pattern() {
+        let pattern = format!(
+            "_DURATION_PATTERN = re.compile(\n    r\"{}\", re.ASCII\n)",
+            morpholog_core::schema::DURATION_PATTERN
+        );
+        assert!(
+            crate::commands::generate::VALUES_PY.contains(&pattern),
+            "values.py must read `{pattern}`"
         );
     }
 
