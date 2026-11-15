@@ -1,7 +1,5 @@
 use jiff::Timestamp;
-use morpholog_postgres::{
-    CompensationSpec, Deliverer, PgError, PgPool, ProcessOutcome, process_one_outbox_row,
-};
+use morpholog_postgres::{Deliverer, PgError, PgPool, ProcessOutcome, process_one_outbox_row};
 use std::time::Duration;
 
 /// Drain every currently-claimable outbox row of the given `intent_type` in one pass.
@@ -23,7 +21,6 @@ pub async fn process_available_outbox_rows<D>(
     intent_type: &str,
     lease_duration: Duration,
     deliverer: &D,
-    compensation: Option<&CompensationSpec>,
 ) -> Result<Vec<ProcessOutcome>, PgError>
 where
     D: Deliverer,
@@ -37,7 +34,7 @@ where
             intent_type,
             lease_duration,
             deliverer,
-            compensation,
+            None,
             pass_start,
         )
         .await?;

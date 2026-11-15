@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use morpholog_postgres::{CompensationSpec, Deliverer, PgError, PgPool, earliest_pending_retry};
+use morpholog_postgres::{Deliverer, PgError, PgPool, earliest_pending_retry};
 use tokio::sync::watch;
 
 use crate::clock::Clock;
@@ -32,7 +32,6 @@ where
     jitter_low: f64,
     jitter_high: f64,
     deliverer: D,
-    compensation: Option<CompensationSpec>,
     clock: C,
     rng: R,
 }
@@ -43,8 +42,8 @@ where
     C: Clock,
     R: JitterRng,
 {
-    /// Construct a worker with defaults: 30s lease, 1s base poll interval, +/-25% jitter, no
-    /// compensation. Adjust with the `with_*` setters before calling [`Self::run`].
+    /// Construct a worker with defaults: 30s lease, 1s base poll interval, +/-25% jitter.
+    /// Adjust with the `with_*` setters before calling [`Self::run`].
     pub fn new(
         pool: PgPool,
         worker_id: impl Into<String>,
@@ -62,12 +61,14 @@ where
             jitter_low: 0.75,
             jitter_high: 1.25,
             deliverer,
-            compensation: None,
             clock,
             rng,
         }
     }
 
+    /// Set how long a claimed row stays leased to this worker. A delivery that
+    /// runs past it can lose the row to another worker mid-delivery, so set it
+    /// above the deliverer's longest legitimate run.
     pub fn with_lease_duration(mut self, d: Duration) -> Self {
         self.lease_duration = d;
         self
@@ -104,11 +105,6 @@ where
         self
     }
 
-    pub fn with_compensation(mut self, c: CompensationSpec) -> Self {
-        self.compensation = Some(c);
-        self
-    }
-
     /// Run the polling loop until `shutdown` is set to `true`.
     ///
     /// Returns `Ok(())` on shutdown, including when every shutdown sender is dropped.
@@ -134,7 +130,6 @@ where
                 &self.intent_type,
                 self.lease_duration,
                 &self.deliverer,
-                self.compensation.as_ref(),
             )
             .await?;
 

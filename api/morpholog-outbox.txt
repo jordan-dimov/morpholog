@@ -95,7 +95,6 @@ impl<D, C, R> morpholog_outbox::OutboxWorker<D, C, R> where D: morpholog_postgre
 pub fn morpholog_outbox::OutboxWorker<D, C, R>::new(sqlx_postgres::PgPool, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, D, C, R) -> Self
 pub async fn morpholog_outbox::OutboxWorker<D, C, R>::run(self, tokio::sync::watch::Receiver<bool>) -> core::result::Result<(), morpholog_postgres::error::PgError>
 pub fn morpholog_outbox::OutboxWorker<D, C, R>::with_base_interval(self, core::time::Duration) -> Self
-pub fn morpholog_outbox::OutboxWorker<D, C, R>::with_compensation(self, morpholog_postgres::outbox::CompensationSpec) -> Self
 pub fn morpholog_outbox::OutboxWorker<D, C, R>::with_jitter(self, f64, f64) -> Self
 pub fn morpholog_outbox::OutboxWorker<D, C, R>::with_lease_duration(self, core::time::Duration) -> Self
 impl<D, C, R> core::marker::Freeze for morpholog_outbox::OutboxWorker<D, C, R> where D: core::marker::Freeze, C: core::marker::Freeze, R: core::marker::Freeze
@@ -175,4 +174,4 @@ impl morpholog_outbox::jitter::JitterRng for morpholog_outbox::jitter::RandJitte
 pub fn morpholog_outbox::jitter::RandJitter::jitter_factor(&self, f64, f64) -> f64
 impl morpholog_outbox::jitter::JitterRng for morpholog_outbox::testing::FixedJitter
 pub fn morpholog_outbox::testing::FixedJitter::jitter_factor(&self, f64, f64) -> f64
-pub async fn morpholog_outbox::process_available_outbox_rows<D>(&sqlx_postgres::PgPool, &str, &str, core::time::Duration, &D, core::option::Option<&morpholog_postgres::outbox::CompensationSpec>) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::outbox::ProcessOutcome>, morpholog_postgres::error::PgError> where D: morpholog_postgres::outbox::Deliverer
+pub async fn morpholog_outbox::process_available_outbox_rows<D>(&sqlx_postgres::PgPool, &str, &str, core::time::Duration, &D) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::outbox::ProcessOutcome>, morpholog_postgres::error::PgError> where D: morpholog_postgres::outbox::Deliverer

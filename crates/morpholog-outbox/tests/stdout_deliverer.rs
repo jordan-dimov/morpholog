@@ -21,7 +21,6 @@ async fn stdout_deliverer_marks_row_delivered_via_drain() {
         "JournalEntryPosted",
         Duration::from_secs(30),
         &StdoutDeliverer,
-        None,
     )
     .await
     .unwrap();
