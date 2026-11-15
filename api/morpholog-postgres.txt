@@ -3153,6 +3153,7 @@ pub fn morpholog_postgres::signing_key_to_pem(&ed25519_dalek::signing::SigningKe
 pub async fn morpholog_postgres::single_connection_pool(&str) -> core::result::Result<sqlx_postgres::PgPool, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::stored_claim_shapes(&sqlx_postgres::PgPool) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::StoredShape>, morpholog_postgres::PgError>
 pub fn morpholog_postgres::streamed_pack_head(&[u8]) -> core::option::Option<morpholog_postgres::PackHead>
+pub async fn morpholog_postgres::transition_is_covered(&sqlx_postgres::PgPool, uuid::Uuid) -> core::result::Result<bool, morpholog_postgres::PgError>
 pub fn morpholog_postgres::tree_head_signing_bytes(&str, &str, &morpholog_postgres::TreeHead<'_>) -> alloc::vec::Vec<u8>
 pub fn morpholog_postgres::tree_head_witness_bytes(&morpholog_postgres::TreeHead<'_>) -> alloc::vec::Vec<u8>
 pub fn morpholog_postgres::validate_declarations(&morpholog_core::ir::Program) -> alloc::vec::Vec<morpholog_postgres::PolicyDeclarationError>

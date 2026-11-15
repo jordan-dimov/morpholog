@@ -657,6 +657,97 @@ async fn checkpoint_covering_a_withheld_transition_prints_the_coded_refusal() {
     assert!(stderr.contains("not found"), "{stderr}");
 }
 
+/// `--wait` asks again while the transition is withheld: a wait shorter
+/// than the older writer ends with the same coded refusal, one the writer
+/// outlasts records the checkpoint once it finishes, and an id the log
+/// does not hold fails at once whatever the wait.
+#[tokio::test(flavor = "current_thread")]
+async fn checkpoint_covering_waits_for_the_prefix_to_reach_the_transition() {
+    reset_db().await;
+    let pool = PgPool::connect(&database_url()).await.unwrap();
+    let mut older = pool.begin().await.unwrap();
+    sqlx::query(
+        "INSERT INTO morpholog.audit (
+            transition_id, transformation_name, arguments, actor,
+            invariant_epoch, invariants_checked,
+            asserted_claims, retracted_claims, emitted_intents,
+            attestation, parameters, model_hash, semantics_version, drawn_subjects,
+            operations
+         ) VALUES (gen_random_uuid(), 'in_flight', '[]',
+                   '{\"type\":\"subject\",\"value\":\"w\"}', 1, '[]', '[]', '[]', '[]',
+                   '{\"mode\":\"gateway\",\"authenticated_by\":\"test\"}', '[]',
+                   'sha256:' || repeat('0', 64), 1, '[]', '[]')",
+    )
+    .execute(&mut *older)
+    .await
+    .unwrap();
+    let id = post_balanced_entry("c1", 100).to_string();
+    let url = database_url();
+    let checkpoint = |wait: &str| {
+        Command::new(common::bin())
+            .args(["audit", "checkpoint", "--covering", &id, "--wait", wait])
+            .args(["--database-url", &url])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn morpholog binary")
+    };
+
+    let started = std::time::Instant::now();
+    let short = checkpoint("1s").wait_with_output().unwrap();
+    assert!(
+        started.elapsed() >= std::time::Duration::from_secs(1),
+        "it waited"
+    );
+    assert!(!short.status.success());
+    let refusal: Value = serde_json::from_slice(&short.stdout).expect("a coded refusal");
+    assert_eq!(refusal["code"], "transition_not_covered");
+
+    let started = std::time::Instant::now();
+    let long = checkpoint("PT60S");
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+    older.rollback().await.unwrap();
+    let long = long.wait_with_output().unwrap();
+    assert!(
+        long.status.success(),
+        "{}",
+        String::from_utf8_lossy(&long.stderr)
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(30),
+        "it stopped waiting once covered"
+    );
+    let cp: Value = serde_json::from_slice(&long.stdout).unwrap();
+    assert_eq!(cp["status"], "created");
+    assert_eq!(cp["tree_size"], 1);
+
+    let started = std::time::Instant::now();
+    let (status, stdout, stderr) = run_cli(&[
+        "audit",
+        "checkpoint",
+        "--covering",
+        "01990000-0000-7000-8000-00000000beef",
+        "--wait",
+        "60s",
+    ]);
+    assert!(!status.success());
+    assert_eq!(stdout, "");
+    assert!(stderr.contains("not found"), "{stderr}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "an unknown id does not wait"
+    );
+
+    let (status, _, stderr) = run_cli(&["audit", "checkpoint", "--wait", "1s"]);
+    assert_eq!(status.code(), Some(2), "--wait needs --covering: {stderr}");
+    for too_long in ["25h", "PT48H", "100000000000000s"] {
+        let (status, _, stderr) =
+            run_cli(&["audit", "checkpoint", "--covering", &id, "--wait", too_long]);
+        assert_eq!(status.code(), Some(2), "{too_long}: {stderr}");
+        assert!(stderr.contains("at most a day"), "{too_long}: {stderr}");
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn checkpoint_then_verify_against_the_anchor() {
     reset_db().await;
