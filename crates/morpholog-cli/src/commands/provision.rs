@@ -36,7 +36,7 @@ pub(crate) async fn indexes(args: ProvisionIndexesArgs) -> anyhow::Result<()> {
     if args.json {
         print_json(&envelopes::ProvisionReport::from(&report))?;
     } else {
-        print_plan(&report)?;
+        print_plan(&report, args.check || args.dry_run)?;
     }
     if report.has_conflict() {
         let names: Vec<&str> = report
@@ -66,8 +66,10 @@ pub(crate) async fn indexes(args: ProvisionIndexesArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The plan for a person. Not a machine surface: `--json` is.
-fn print_plan(report: &ProvisionReport) -> anyhow::Result<()> {
+/// The plan for a person. Not a machine surface: `--json` is. A check or
+/// a dry run lists only what is not already kept and counts the rest, so
+/// the line that matters in a failing gate is not buried.
+fn print_plan(report: &ProvisionReport, quiet: bool) -> anyhow::Result<()> {
     let mut out = out::stdout();
     for program in &report.programs {
         writeln!(out, "program: {} ({})", program.identity, program.hash)?;
@@ -82,7 +84,20 @@ fn print_plan(report: &ProvisionReport) -> anyhow::Result<()> {
             format!("  - {detail}")
         }
     };
+    let kept = report
+        .entries
+        .iter()
+        .filter(|e| e.action == IndexAction::Keep)
+        .count()
+        + report
+            .statistics
+            .iter()
+            .filter(|s| s.action == StatisticsAction::Keep)
+            .count();
     for entry in &report.entries {
+        if quiet && entry.action == IndexAction::Keep {
+            continue;
+        }
         let needed_by = if entry.needed_by.is_empty() {
             String::new()
         } else {
@@ -115,6 +130,9 @@ fn print_plan(report: &ProvisionReport) -> anyhow::Result<()> {
         )?;
     }
     for entry in &report.statistics {
+        if quiet && entry.action == StatisticsAction::Keep {
+            continue;
+        }
         writeln!(
             out,
             "{:<20} {}  statistics[{}]{}{}",
@@ -135,6 +153,13 @@ fn print_plan(report: &ProvisionReport) -> anyhow::Result<()> {
             "positions unknown for: {}  - provision these programmes again; no statistics object is stale until then",
             report.positions_unknown_for.join(", ")
         )?;
+    }
+    if quiet {
+        if report.is_current() {
+            writeln!(out, "{kept} kept; current")?;
+            return Ok(());
+        }
+        writeln!(out, "{kept} kept")?;
     }
     writeln!(
         out,
