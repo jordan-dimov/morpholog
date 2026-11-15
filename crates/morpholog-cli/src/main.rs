@@ -1123,6 +1123,25 @@ pub(crate) struct InitArgs {
     #[arg(long, value_name = "PREFIX", requires = "least_privilege",
           default_value = morpholog_postgres::DEFAULT_ROLE_PREFIX)]
     pub(crate) role_prefix: String,
+
+    /// Close the deployment: every actor then needs a grant, and this
+    /// actor, the root, may be asserted by --root-login alone. The root's
+    /// own acts admit the first grants. With --skip-if-exists it closes an
+    /// existing deployment; stop its writers first.
+    #[arg(long, value_name = "ACTOR", requires = "root_login")]
+    pub(crate) root_actor: Option<String>,
+
+    /// The login role that alone may assert --root-actor. It must exist,
+    /// and is held by its OID, so a role dropped and made again under
+    /// the same name is not the root.
+    #[arg(long, value_name = "LOGIN", requires = "root_actor")]
+    pub(crate) root_login: Option<String>,
+
+    /// Close even though the audit log records actors no grant names;
+    /// they are refused from then on. Without it, closing lists them and
+    /// stops.
+    #[arg(long, requires = "root_actor")]
+    pub(crate) confirm: bool,
 }
 
 /// An `--as-of` coordinate: an exact `transition_id` (UUIDv7), or an

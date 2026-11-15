@@ -69,6 +69,8 @@ BEGIN
     ALTER SEQUENCE morpholog.audit_order_seq RESTART;
     ALTER SEQUENCE morpholog.audit_ordered_at_us RESTART;
     ALTER TABLE morpholog.audit ENABLE TRIGGER audit_order;
+    DELETE FROM morpholog.deployment_identity;
+    INSERT INTO morpholog.deployment_identity DEFAULT VALUES;
     -- The managed indexes go with their registry, so a test starts from the
     -- indexes it provisions and none another test left behind.
     FOR ix IN SELECT indexname FROM pg_indexes

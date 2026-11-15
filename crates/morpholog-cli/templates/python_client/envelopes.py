@@ -1041,8 +1041,12 @@ class SessionReady:
     """The first and only unprompted line a ``morpholog session``
     emits. ``model_hash`` is the canonical rules-identity hash the
     programme was pinned at; ``protocol`` is the wire's own version,
-    distinct from the binary's."""
+    distinct from the binary's. ``identity`` is ``closed`` when every
+    actor needs a grant and ``open`` when an actor nobody restricted may
+    be asserted by any login: a host that promises enforced identity
+    refuses to start on ``open``."""
 
+    identity: str
     model_hash: str
     morpholog_version: str
     program: str
@@ -1053,15 +1057,20 @@ class SessionReady:
         data = _strict(
             "session ready",
             payload,
-            {"model_hash", "morpholog_version", "program", "protocol", "status"},
+            {"identity", "model_hash", "morpholog_version", "program", "protocol", "status"},
         )
         data.constant("status", "ready")
         return cls(
+            identity=data.member("identity", IDENTITIES),
             model_hash=_hash(data, "model_hash"),
             morpholog_version=data.text("morpholog_version"),
             program=data.text("program"),
             protocol=data.integer("protocol", minimum=1),
         )
+
+
+#: Whether a deployment needs a grant for every actor.
+IDENTITIES = frozenset({"open", "closed"})
 
 
 #: The codes a proposal can fail with - the schema's
@@ -1979,12 +1988,14 @@ class CheckReport:
     no invariants. The route belongs to the programme and the binary
     together: another version may plan differently. ``parts`` lists the
     files of a programme in parts, in order, and is ``None`` for one
-    file."""
+    file. ``identity`` is ``closed`` or ``open`` for the ``--database-url``
+    deployment, and ``None`` without one."""
 
     file: str
     diagnostics: list[Diagnostic]
     invariants: list[CheckedInvariant] | None = None
     parts: list[str] | None = None
+    identity: str | None = None
 
     @property
     def route(self) -> str | None:
@@ -2004,7 +2015,10 @@ class CheckReport:
     @classmethod
     def from_json(cls, payload: object) -> CheckReport:
         data = _strict(
-            "check report", payload, {"file", "diagnostics"}, {"invariants", "parts"}
+            "check report",
+            payload,
+            {"file", "diagnostics"},
+            {"identity", "invariants", "parts"},
         )
         return cls(
             file=data.text("file"),
@@ -2015,6 +2029,9 @@ class CheckReport:
                 else None
             ),
             parts=data.texts("parts") if "parts" in data else None,
+            identity=(
+                data.member("identity", IDENTITIES) if "identity" in data else None
+            ),
         )
 
 

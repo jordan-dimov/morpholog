@@ -84,6 +84,15 @@ transformation set_price(item, amount):
     admit Price(item, amount)
 ";
 
+/// The findings on stderr: everything but the note that this test's
+/// deployment is open, which every `check --database-url` prints on one.
+fn findings(stderr: &str) -> String {
+    stderr
+        .lines()
+        .filter(|l| !l.starts_with("note: this deployment is open"))
+        .collect()
+}
+
 fn run(args: &[&str]) -> (bool, Value, String) {
     let output = Command::new(common::bin())
         .args(args)
@@ -219,7 +228,7 @@ async fn a_ledger_outlives_a_programme_change_and_a_reshape_hides_old_claims() {
     );
     // The programme that only added a predicate fits.
     let (ok, _, stderr) = run(&["check", "--strict", new_rule.to_str().unwrap()]);
-    assert!(ok && stderr.is_empty(), "{stderr}");
+    assert!(ok && findings(&stderr).is_empty(), "{stderr}");
     // The original fits too. It does not declare `Note`, which is a hint,
     // an error under --strict, and silent when a supplied file declares it.
     let (ok, _, stderr) = run(&["check", before.to_str().unwrap()]);
@@ -283,6 +292,6 @@ async fn check_refuses_a_field_whose_stored_kind_or_unit_differs() {
     }
     for declared in ["Decimal[USD]", "Any"] {
         let (ok, _, stderr) = check(declared);
-        assert!(ok && stderr.is_empty(), "{declared}: {stderr}");
+        assert!(ok && findings(&stderr).is_empty(), "{declared}: {stderr}");
     }
 }

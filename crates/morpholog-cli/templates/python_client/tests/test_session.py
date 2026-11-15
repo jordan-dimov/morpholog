@@ -55,6 +55,7 @@ def say(line):
 
 
 ready = {
+    "identity": "open",
     "model_hash": "sha256:" + "1" * 64,
     "morpholog_version": os.environ.get("SESSION_STUB_VERSION", "0.0.0"),
     "program": "stub",

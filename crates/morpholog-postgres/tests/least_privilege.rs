@@ -28,6 +28,11 @@ const WRITES: &[(&str, &str)] = &[
          SELECT predicate_name, arguments, asserted_in FROM morpholog.claims WHERE false",
     ),
     ("claims delete", "DELETE FROM morpholog.claims WHERE false"),
+    // Every proposal reads whether the deployment is closed.
+    (
+        "identity read",
+        "SELECT closed FROM morpholog.deployment_identity",
+    ),
     // Checkpoints and the tail both read the resume horizon.
     ("writer watermark", "SELECT morpholog.audit_watermark()"),
     ("writer horizon", "SELECT * FROM morpholog.audit_horizon()"),
@@ -231,6 +236,16 @@ async fn the_writer_appends_audit_but_never_rewrites_it() {
         Some("42501"),
         "the audit log is append-only even for the writer"
     );
+    for sql in [
+        "UPDATE morpholog.deployment_identity SET closed = false",
+        "DELETE FROM morpholog.deployment_identity",
+    ] {
+        assert_eq!(
+            as_role(&pool, mine.writer(), sql).await.as_deref(),
+            Some("42501"),
+            "only the owner opens, closes or removes the identity row: {sql}"
+        );
+    }
     pool.close().await;
     scratch.clean().await;
 }

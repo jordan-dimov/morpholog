@@ -8,15 +8,24 @@
 //! governed path is the only way in from the start. It is idempotent, so
 //! with `--skip-if-exists` it can retrofit an existing database. Each
 //! deployment on a cluster names its own roles with `--role-prefix`.
+//!
+//! `--root-actor` with `--root-login` closes the deployment, a new one or,
+//! with `--skip-if-exists`, an existing one. A deployment left open says
+//! so on every run.
 
 use anyhow::{Context, anyhow};
+use morpholog_core::Subject;
+use morpholog_postgres::PgPool;
 use morpholog_postgres::{
-    DeploymentRoles, InitOutcome, drop_schema, initialise_schema, provision_least_privilege,
-    rebind_least_privilege, redact_database_url, require_can_provision_least_privilege,
+    DeploymentRoles, InitOutcome, actors_without_grant, close_deployment, drop_schema,
+    initialise_closed_schema, initialise_schema, provision_least_privilege, rebind_least_privilege,
+    redact_database_url, require_can_provision_least_privilege,
 };
 
 use crate::InitArgs;
-use crate::commands::{AlreadyReported, connect_unchecked, print_json, warn_if_roles_shared};
+use crate::commands::{
+    AlreadyReported, connect_unchecked, print_json, warn_if_open, warn_if_roles_shared,
+};
 use morpholog_cli::envelopes::{InitReport, LeastPrivilegeReport};
 
 pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
@@ -54,10 +63,18 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
     } else {
         None
     };
-    let status = match initialise_schema(&pool)
-        .await
-        .context("schema provisioning failed")?
-    {
+    let root = args
+        .root_actor
+        .as_deref()
+        .zip(args.root_login.as_deref())
+        .map(|(actor, login)| (Subject::from(actor), login));
+    // A new schema is closed in its own transaction, so a refused root
+    // leaves no deployment behind, never an open one.
+    let initialised = match &root {
+        Some((actor, login)) => initialise_closed_schema(&pool, actor, login).await,
+        None => initialise_schema(&pool).await,
+    };
+    let status = match initialised.context("schema provisioning failed")? {
         InitOutcome::Initialised => "initialised",
         InitOutcome::AlreadyInitialised if args.skip_if_exists => "already-initialised",
         InitOutcome::AlreadyInitialised => {
@@ -94,6 +111,20 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
     } else {
         None
     };
+    if let Some((actor, login)) = &root {
+        if status == "already-initialised" {
+            morpholog_postgres::require_current_schema(&pool).await?;
+            close(&pool, actor, login, args.confirm).await?;
+        }
+    } else if status == "initialised"
+        || morpholog_postgres::require_current_schema(&pool)
+            .await
+            .is_ok()
+    {
+        // An older schema has no identity row yet; `migrate` says it is
+        // open once it has one.
+        warn_if_open(&pool).await?;
+    }
     // Say whether there was actually a schema to drop.
     if let Some(dropped) = dropped {
         eprintln!(
@@ -110,4 +141,29 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
         schema: "morpholog",
         status,
     })
+}
+
+/// Close the deployment under the root, first naming the recorded actors
+/// no grant covers: closing locks them out, so it stops unless confirmed.
+async fn close(pool: &PgPool, root: &Subject, login: &str, confirm: bool) -> anyhow::Result<()> {
+    let ungranted = actors_without_grant(pool, root).await?;
+    if !ungranted.is_empty() && !confirm {
+        eprintln!(
+            "error: closing would refuse {} actor(s) the audit log records, as no \
+             ActorAssertionAuthority claim names them:",
+            ungranted.len()
+        );
+        for actor in &ungranted {
+            eprintln!("  {actor}");
+        }
+        eprintln!(
+            "Admit their grants first, or re-run with --confirm to close anyway. \
+             This lists the actors seen so far, not every actor to come."
+        );
+        return Err(AlreadyReported.into());
+    }
+    close_deployment(pool, root, login)
+        .await
+        .context("closing the deployment failed")?;
+    Ok(())
 }

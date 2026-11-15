@@ -76,7 +76,8 @@ mod witnesses;
 // The whole public surface, flat at the crate root.
 pub use activation::{CHUNK_BYTES, CHUNK_CLAIMS, write_activation_record_with};
 pub use actor_policy::{
-    AUTHORITY_PREDICATE, PolicyDeclarationError, RESTRICTED_PREDICATE, validate_declarations,
+    AUTHORITY_PREDICATE, DeploymentIdentity, PolicyDeclarationError, RESTRICTED_PREDICATE,
+    actors_without_grant, close_deployment, deployment_identity, validate_declarations,
 };
 pub use as_of::{
     list_claims_at, list_claims_at_for_predicates, read_claims_at, read_claims_at_for_predicates,
@@ -149,10 +150,10 @@ pub(crate) use provision::reapply_least_privilege;
 pub use provision::{
     DEFAULT_ROLE_PREFIX, DeploymentRoles, DroppedSchema, InitOutcome, RecordedRoles, RoleMember,
     RoleMembers, SessionCount, databases_also_reached, deployment_roles, direct_members,
-    drop_schema, initialise_schema, listed_roles, other_sessions, provision_least_privilege,
-    rebind_least_privilege, redact_database_url, require_can_provision_least_privilege,
-    require_deployment_roles, single_connection_pool, with_connection_defaults,
-    with_connection_defaults_as,
+    drop_schema, initialise_closed_schema, initialise_schema, listed_roles, other_sessions,
+    provision_least_privilege, rebind_least_privilege, redact_database_url,
+    require_can_provision_least_privilege, require_deployment_roles, single_connection_pool,
+    with_connection_defaults, with_connection_defaults_as,
 };
 pub use receipt::{
     CheckpointMatch, Completeness, Evaluation, EvaluationReceipt, ParsedReceipt, ProgramMatch,

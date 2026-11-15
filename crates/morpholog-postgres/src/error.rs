@@ -207,6 +207,41 @@ pub enum PgError {
          grant it"
     )]
     ActorAssertionUnauthorised { actor: Subject, login_role: String },
+    /// A closed deployment's root actor, asserted by a login other than
+    /// the root login it records. No claim grants the root; only the
+    /// owner can change it.
+    #[error(
+        "actor `{actor}` is this deployment's root, which only its root login \
+         may assert; login role `{login_role}` is not it, and no claim can grant it"
+    )]
+    RootActorUnauthorised { actor: Subject, login_role: String },
+    /// The database has no `morpholog.deployment_identity` row, so it
+    /// cannot say who may assert an actor; every proposal is refused
+    /// rather than treated as open.
+    #[error(
+        "this database records no deployment identity row \
+         (`morpholog.deployment_identity`), so no actor can be authorised; \
+         the owner restores it closed with \
+         `morpholog init --skip-if-exists --root-actor A --root-login L`"
+    )]
+    DeploymentIdentityMissing,
+    /// `init --root-login` named a login the cluster does not have.
+    #[error("no login role `{0}` on this cluster to be the deployment's root login")]
+    RootLoginMissing(String),
+    /// `init --root-login` named a role that cannot log in, so nobody
+    /// could act as the root.
+    #[error("role `{0}` cannot log in (NOLOGIN), so it cannot be the deployment's root login")]
+    RootLoginCannotLogIn(String),
+    /// The deployment is already closed under another root, which only
+    /// the owner's SQL changes.
+    #[error(
+        "this deployment is already closed with root actor `{root_actor}` \
+         asserted by `{root_login}`; the root is changed only by the owner, in SQL"
+    )]
+    DeploymentRootDiffers {
+        root_actor: String,
+        root_login: String,
+    },
     /// A [`morpholog_core::Transition`] named a transformation the
     /// [`morpholog_core::PreparedProgram`] does not declare.
     #[error("no transformation named `{name}` in the programme")]

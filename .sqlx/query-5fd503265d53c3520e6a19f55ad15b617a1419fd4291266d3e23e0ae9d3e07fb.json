@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT closed AS \"closed!\", root_actor, root_login,\n                  root_login_oid IS NOT DISTINCT FROM\n                      (SELECT oid FROM pg_roles WHERE rolname = $1) AS \"same_login!\"\n           FROM morpholog.deployment_identity",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "closed!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "morpholog.deployment_identity",
+            "name": "closed"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "root_actor",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.deployment_identity",
+            "name": "root_actor"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "root_login",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.deployment_identity",
+            "name": "root_login"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "same_login!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Name"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "5fd503265d53c3520e6a19f55ad15b617a1419fd4291266d3e23e0ae9d3e07fb"
+}

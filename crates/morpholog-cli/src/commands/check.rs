@@ -29,7 +29,8 @@ use std::path::Path;
 ///   is a hint and the check still passes; under `--strict` it is an
 ///   error and the check fails.
 /// - Fully clean: print nothing and exit 0, or a short summary under
-///   `--verbose`. Findings always go to stderr, so stdout stays silent
+///   `--verbose`; with `--database-url` on an open deployment, a note
+///   that it is open. Findings always go to stderr, so stdout stays silent
 ///   for scripts. `--json` prints every finding to stdout as one object,
 ///   with byte offsets and line/column; exit codes are the same.
 pub(crate) async fn run(args: CheckArgs) -> anyhow::Result<()> {
@@ -61,6 +62,7 @@ pub(crate) async fn run(args: CheckArgs) -> anyhow::Result<()> {
                 })
                 .collect(),
             file: args.file.display().to_string(),
+            identity: collected.identity,
             invariants: routes,
             parts: collected.parts.clone(),
         };
@@ -144,6 +146,8 @@ struct Collected {
     /// The prepared programme, for the invariant routes, `--verbose` and
     /// `--ir`; absent when parsing or validation failed.
     prepared: Option<PreparedProgram>,
+    /// Whether the `--database-url` deployment is closed; absent without one.
+    identity: Option<&'static str>,
 }
 
 /// Every finding for the file, in the order the layers run.
@@ -156,6 +160,7 @@ async fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
             .then(|| source.files().map(String::from).collect()),
         source,
         prepared: None,
+        identity: None,
     };
     let (program, map) = match out.source.parse() {
         Ok(parsed) => parsed,
@@ -228,6 +233,11 @@ async fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
     }
     if let Some(url) = &args.database_url {
         let pool = crate::commands::connect(url).await?;
+        let identity = crate::commands::warn_if_open(&pool).await?;
+        out.identity = Some(match identity {
+            morpholog_postgres::DeploymentIdentity::Open => "open",
+            morpholog_postgres::DeploymentIdentity::Closed { .. } => "closed",
+        });
         let shapes = morpholog_postgres::stored_claim_shapes(&pool).await?;
         for finding in misfits(prepared.program(), &shapes, &map) {
             out.failed = true;

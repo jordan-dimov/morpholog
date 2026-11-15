@@ -259,6 +259,27 @@ impl core::marker::Unpin for morpholog_postgres::DeliveryOutcome
 impl core::marker::UnsafeUnpin for morpholog_postgres::DeliveryOutcome
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::DeliveryOutcome
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::DeliveryOutcome
+pub enum morpholog_postgres::DeploymentIdentity
+pub morpholog_postgres::DeploymentIdentity::Closed
+pub morpholog_postgres::DeploymentIdentity::Closed::root_actor: morpholog_core::ir::Subject
+pub morpholog_postgres::DeploymentIdentity::Closed::root_login: alloc::string::String
+pub morpholog_postgres::DeploymentIdentity::Open
+impl core::clone::Clone for morpholog_postgres::DeploymentIdentity
+pub fn morpholog_postgres::DeploymentIdentity::clone(&self) -> morpholog_postgres::DeploymentIdentity
+impl core::cmp::Eq for morpholog_postgres::DeploymentIdentity
+pub fn morpholog_postgres::DeploymentIdentity::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::DeploymentIdentity
+pub fn morpholog_postgres::DeploymentIdentity::eq(&self, &morpholog_postgres::DeploymentIdentity) -> bool
+impl core::fmt::Debug for morpholog_postgres::DeploymentIdentity
+pub fn morpholog_postgres::DeploymentIdentity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::DeploymentIdentity
+impl core::marker::Freeze for morpholog_postgres::DeploymentIdentity
+impl core::marker::Send for morpholog_postgres::DeploymentIdentity
+impl core::marker::Sync for morpholog_postgres::DeploymentIdentity
+impl core::marker::Unpin for morpholog_postgres::DeploymentIdentity
+impl core::marker::UnsafeUnpin for morpholog_postgres::DeploymentIdentity
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::DeploymentIdentity
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::DeploymentIdentity
 pub enum morpholog_postgres::DerivedSource
 pub morpholog_postgres::DerivedSource::Cache
 pub morpholog_postgres::DerivedSource::Live
@@ -605,6 +626,10 @@ pub morpholog_postgres::PgError::CutoverRefused
 pub morpholog_postgres::PgError::CutoverRefused::reasons: alloc::vec::Vec<alloc::string::String>
 pub morpholog_postgres::PgError::Database(sqlx_core::error::Error)
 pub morpholog_postgres::PgError::DeadlockDetected
+pub morpholog_postgres::PgError::DeploymentIdentityMissing
+pub morpholog_postgres::PgError::DeploymentRootDiffers
+pub morpholog_postgres::PgError::DeploymentRootDiffers::root_actor: alloc::string::String
+pub morpholog_postgres::PgError::DeploymentRootDiffers::root_login: alloc::string::String
 pub morpholog_postgres::PgError::DuplicateIntent
 pub morpholog_postgres::PgError::Encoding(serde_json::error::Error)
 pub morpholog_postgres::PgError::InstantNotSettled(jiff::timestamp::Timestamp)
@@ -623,6 +648,11 @@ pub morpholog_postgres::PgError::ObjectDiffers::found: alloc::string::String
 pub morpholog_postgres::PgError::ObjectDiffers::object: alloc::string::String
 pub morpholog_postgres::PgError::ProgramNamedTwice(alloc::string::String)
 pub morpholog_postgres::PgError::RejectionLogFailure(alloc::boxed::Box<morpholog_postgres::PgError>)
+pub morpholog_postgres::PgError::RootActorUnauthorised
+pub morpholog_postgres::PgError::RootActorUnauthorised::actor: morpholog_core::ir::Subject
+pub morpholog_postgres::PgError::RootActorUnauthorised::login_role: alloc::string::String
+pub morpholog_postgres::PgError::RootLoginCannotLogIn(alloc::string::String)
+pub morpholog_postgres::PgError::RootLoginMissing(alloc::string::String)
 pub morpholog_postgres::PgError::SchemaAhead
 pub morpholog_postgres::PgError::SchemaAhead::binary: i32
 pub morpholog_postgres::PgError::SchemaAhead::recorded: i32
@@ -3046,6 +3076,7 @@ pub async fn morpholog_postgres::testing::AlwaysNonRetryable::deliver(&self, &mo
 impl morpholog_postgres::Deliverer for morpholog_postgres::testing::AlwaysTransient
 pub async fn morpholog_postgres::testing::AlwaysTransient::deliver(&self, &morpholog_postgres::OutboxRow) -> morpholog_postgres::DeliveryOutcome
 pub async fn morpholog_postgres::activation_preflight(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::ActivationPreflight, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::actors_without_grant(&sqlx_postgres::PgPool, &morpholog_core::ir::Subject) -> core::result::Result<alloc::vec::Vec<morpholog_core::ir::Subject>, morpholog_postgres::PgError>
 pub fn morpholog_postgres::advance_recorded(&mut morpholog_core::state::State, &morpholog_postgres::AuditRow)
 pub async fn morpholog_postgres::apply_migrations(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::apply_migrations_paused(&sqlx_postgres::PgPool, morpholog_postgres::MigrateMode, &morpholog_postgres::LockPolicy, impl core::future::future::Future<Output = ()>) -> core::result::Result<morpholog_postgres::MigrationReport, morpholog_postgres::PgError>
@@ -3061,11 +3092,13 @@ pub async fn morpholog_postgres::census(&sqlx_postgres::PgPool) -> core::result:
 pub async fn morpholog_postgres::census_paused(&sqlx_postgres::PgPool, impl core::future::future::Future<Output = ()>) -> core::result::Result<morpholog_postgres::Census, morpholog_postgres::PgError>
 pub fn morpholog_postgres::check_named_programs(&[&morpholog_postgres::PgProgram]) -> core::result::Result<(), morpholog_postgres::PgError>
 pub async fn morpholog_postgres::claim_pending_outbox_row(&sqlx_postgres::PgPool, &str, &str, core::time::Duration, jiff::timestamp::Timestamp) -> core::result::Result<core::option::Option<morpholog_postgres::OutboxRow>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::close_deployment(&sqlx_postgres::PgPool, &morpholog_core::ir::Subject, &str) -> core::result::Result<(), morpholog_postgres::PgError>
 pub async fn morpholog_postgres::complete_compensation(&sqlx_postgres::PgPool, uuid::Uuid, &str, uuid::Uuid) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub fn morpholog_postgres::compute_idempotency_key(uuid::Uuid, &morpholog_core::state::IntentInstance) -> core::result::Result<alloc::string::String, serde_json::error::Error>
 pub async fn morpholog_postgres::coverage_replay(&sqlx_postgres::PgPool, &morpholog_core::validate::ValidatedProgram<'_>) -> core::result::Result<morpholog_core::coverage::CoverageReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::create_checkpoint(&sqlx_postgres::PgPool, core::option::Option<&morpholog_postgres::CheckpointSigner>, core::option::Option<uuid::Uuid>) -> core::result::Result<morpholog_postgres::CheckpointOutcome, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::databases_also_reached(&sqlx_postgres::PgPool, &morpholog_postgres::DeploymentRoles) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::deployment_identity(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::DeploymentIdentity, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::deployment_roles(&sqlx_postgres::PgPool) -> core::result::Result<core::option::Option<morpholog_postgres::DeploymentRoles>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::direct_members(&sqlx_postgres::PgPool, &morpholog_postgres::DeploymentRoles) -> core::result::Result<morpholog_postgres::RoleMembers, morpholog_postgres::PgError>
 pub fn morpholog_postgres::document_pack_head(&[u8]) -> core::option::Option<morpholog_postgres::PackHead>
@@ -3078,6 +3111,7 @@ pub async fn morpholog_postgres::fetch_diagnostic(&mut sqlx_core::transaction::T
 pub async fn morpholog_postgres::frontier_pass_with(&sqlx_postgres::PgPool, i64, core::option::Option<usize>) -> core::result::Result<morpholog_postgres::FrontierProgress, morpholog_postgres::PgError>
 pub fn morpholog_postgres::generate_signing_key() -> ed25519_dalek::signing::SigningKey
 pub fn morpholog_postgres::head_version() -> i32
+pub async fn morpholog_postgres::initialise_closed_schema(&sqlx_postgres::PgPool, &morpholog_core::ir::Subject, &str) -> core::result::Result<morpholog_postgres::InitOutcome, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::initialise_schema(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::InitOutcome, morpholog_postgres::PgError>
 pub fn morpholog_postgres::issue_receipt(&morpholog_core::validate::ValidatedProgram<'_>, &morpholog_postgres::EvidencePack, morpholog_postgres::ReceiptQuery) -> core::result::Result<morpholog_postgres::EvaluationReceipt, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::legacy_root_full_scan(&sqlx_postgres::PgPool) -> core::result::Result<(u64, alloc::string::String), morpholog_postgres::PgError>

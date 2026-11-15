@@ -13,7 +13,7 @@ use morpholog_postgres::{
 };
 
 use crate::MigrateArgs;
-use crate::commands::{AlreadyReported, print_json, warn_if_roles_shared};
+use crate::commands::{AlreadyReported, print_json, warn_if_open, warn_if_roles_shared};
 
 /// The migration that prepares in steps before its own transaction.
 const STAGED_VERSION: i32 = 27;
@@ -70,6 +70,10 @@ pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
     // whose recorded roles already serve another.
     if let Some(roles) = deployment_roles(&pool).await? {
         warn_if_roles_shared(&pool, &roles).await?;
+    }
+    // `--prepare` stops below the head, before the identity row exists.
+    if report.is_current() {
+        warn_if_open(&pool).await?;
     }
     print_json(&report)?;
     // Also with nothing to apply: the index requirements come from the

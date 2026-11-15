@@ -29,7 +29,8 @@
 //! proof of authorship.
 
 use morpholog_core::{PredicateArgKind, Program, Subject};
-use sqlx::{Postgres, Transaction};
+use sqlx::postgres::types::Oid;
+use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::error::PgError;
 use crate::error::classify_checked_query;
@@ -133,6 +134,29 @@ pub(crate) async fn authorise(
         });
     }
 
+    let identity = sqlx::query!(
+        r#"SELECT closed AS "closed!", root_actor, root_login,
+                  root_login_oid IS NOT DISTINCT FROM
+                      (SELECT oid FROM pg_roles WHERE rolname = $1) AS "same_login!"
+           FROM morpholog.deployment_identity"#,
+        login_role,
+    )
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(classify_checked_query)?
+    .ok_or(PgError::DeploymentIdentityMissing)?;
+    if identity.closed && identity.root_actor.as_deref() == Some(actor.as_str()) {
+        let root_login = identity.root_login.as_deref() == Some(login_role);
+        return if root_login && identity.same_login {
+            Ok(())
+        } else {
+            Err(PgError::RootActorUnauthorised {
+                actor: actor.clone(),
+                login_role: login_role.to_string(),
+            })
+        };
+    }
+
     let actor_arg = serde_json::json!([{"type": "subject", "value": actor.as_str()}]);
     let restricted = sqlx::query_scalar!(
         r#"SELECT EXISTS (
@@ -145,7 +169,7 @@ pub(crate) async fn authorise(
     .fetch_one(&mut **tx)
     .await
     .map_err(classify_checked_query)?;
-    if !restricted {
+    if !restricted && !identity.closed {
         return Ok(());
     }
 
@@ -171,4 +195,140 @@ pub(crate) async fn authorise(
         actor: actor.clone(),
         login_role: login_role.to_string(),
     })
+}
+
+/// Who may assert an actor on a deployment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeploymentIdentity {
+    /// An actor nobody restricted may be asserted by any login.
+    Open,
+    /// Every actor needs a grant; the root actor is asserted by its root
+    /// login alone.
+    Closed {
+        root_actor: Subject,
+        root_login: String,
+    },
+}
+
+/// The deployment's identity row, read as a proposal reads it.
+pub async fn deployment_identity(pool: &PgPool) -> Result<DeploymentIdentity, PgError> {
+    let row = sqlx::query!(
+        r#"SELECT closed AS "closed!", root_actor, root_login FROM morpholog.deployment_identity"#
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(classify_checked_query)?
+    .ok_or(PgError::DeploymentIdentityMissing)?;
+    Ok(match (row.closed, row.root_actor, row.root_login) {
+        (true, Some(actor), Some(login)) => DeploymentIdentity::Closed {
+            root_actor: Subject::from(actor),
+            root_login: login,
+        },
+        _ => DeploymentIdentity::Open,
+    })
+}
+
+/// The actors the audit log records that no `ActorAssertionAuthority`
+/// claim names, `root` aside: the known actors a closed deployment would
+/// refuse. It says nothing of actors not yet seen.
+pub async fn actors_without_grant(pool: &PgPool, root: &Subject) -> Result<Vec<Subject>, PgError> {
+    let actors = sqlx::query_scalar!(
+        r#"SELECT DISTINCT a.actor ->> 'value' AS "actor!"
+           FROM morpholog.audit a
+           WHERE a.actor ->> 'type' = 'subject'
+             AND a.actor ->> 'value' <> $1
+             AND NOT EXISTS (
+                 SELECT 1 FROM morpholog.claims c
+                 WHERE c.predicate_name = $2 AND c.arguments -> 0 = a.actor
+             )
+           ORDER BY 1"#,
+        root.as_str(),
+        AUTHORITY_PREDICATE,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(classify_checked_query)?;
+    Ok(actors.into_iter().map(Subject::from).collect())
+}
+
+/// Close the deployment under `root_actor`, asserted by `root_login`
+/// alone, held by its OID. The owner's: the deployment's roles may not
+/// write the row. Closing again under the same root changes nothing; a
+/// different root is refused. A missing row is written closed.
+pub async fn close_deployment(
+    pool: &PgPool,
+    root_actor: &Subject,
+    root_login: &str,
+) -> Result<(), PgError> {
+    let mut tx = pool.begin().await.map_err(crate::error::classify)?;
+    let oid = root_login_oid(&mut tx, root_login).await?;
+    if write_root(&mut tx, root_actor, root_login, oid).await? {
+        return tx.commit().await.map_err(crate::error::classify);
+    }
+    let held = sqlx::query!(
+        r#"SELECT root_actor AS "root_actor!", root_login AS "root_login!",
+                  root_login_oid = $1 AS "same_oid!"
+           FROM morpholog.deployment_identity"#,
+        oid as Oid,
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(classify_checked_query)?;
+    tx.rollback().await.map_err(crate::error::classify)?;
+    if held.root_actor == root_actor.as_str() && held.root_login == root_login && held.same_oid {
+        Ok(())
+    } else {
+        Err(PgError::DeploymentRootDiffers {
+            root_actor: held.root_actor,
+            root_login: held.root_login,
+        })
+    }
+}
+
+/// The OID of `login`, which must exist and be able to log in: a root no
+/// client can authenticate as would close the deployment to everyone.
+pub(crate) async fn root_login_oid(
+    tx: &mut Transaction<'_, Postgres>,
+    login: &str,
+) -> Result<Oid, PgError> {
+    let role = sqlx::query!(
+        r#"SELECT oid AS "oid!: Oid", rolcanlogin AS "can_login!"
+           FROM pg_roles WHERE rolname = $1"#,
+        login,
+    )
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(classify_checked_query)?
+    .ok_or_else(|| PgError::RootLoginMissing(login.to_string()))?;
+    if !role.can_login {
+        return Err(PgError::RootLoginCannotLogIn(login.to_string()));
+    }
+    Ok(role.oid)
+}
+
+/// Write the root into the identity row unless it is closed already;
+/// whether it wrote.
+pub(crate) async fn write_root(
+    tx: &mut Transaction<'_, Postgres>,
+    root_actor: &Subject,
+    root_login: &str,
+    oid: Oid,
+) -> Result<bool, PgError> {
+    let closed = sqlx::query_scalar!(
+        r#"INSERT INTO morpholog.deployment_identity
+               (closed, root_actor, root_login, root_login_oid, closed_at, closed_by)
+           VALUES (true, $1, $2, $3, now(), session_user)
+           ON CONFLICT (singleton) DO UPDATE
+               SET closed = true, root_actor = $1, root_login = $2, root_login_oid = $3,
+                   closed_at = now(), closed_by = session_user
+               WHERE NOT morpholog.deployment_identity.closed
+           RETURNING true AS "closed!""#,
+        root_actor.as_str(),
+        root_login,
+        oid as Oid,
+    )
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(classify_checked_query)?;
+    Ok(closed.is_some())
 }

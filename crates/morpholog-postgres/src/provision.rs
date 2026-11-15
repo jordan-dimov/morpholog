@@ -28,6 +28,26 @@ pub enum InitOutcome {
 /// Atomic: the check and the whole script run in one transaction, so a
 /// failure leaves no partial schema to be mistaken for an initialised one.
 pub async fn initialise_schema(pool: &PgPool) -> Result<InitOutcome, PgError> {
+    initialise(pool, None).await
+}
+
+/// [`initialise_schema`], closed under `root_actor`, asserted by
+/// `root_login` alone, in the same transaction: a root that is refused
+/// leaves no schema behind, never an open one. An existing schema is
+/// left untouched, as by [`initialise_schema`]; close it with
+/// [`crate::close_deployment`].
+pub async fn initialise_closed_schema(
+    pool: &PgPool,
+    root_actor: &morpholog_core::Subject,
+    root_login: &str,
+) -> Result<InitOutcome, PgError> {
+    initialise(pool, Some((root_actor, root_login))).await
+}
+
+async fn initialise(
+    pool: &PgPool,
+    root: Option<(&morpholog_core::Subject, &str)>,
+) -> Result<InitOutcome, PgError> {
     let mut tx = pool.begin().await.map_err(classify)?;
     let exists = sqlx::query!("SELECT 1 AS one FROM pg_namespace WHERE nspname = 'morpholog'")
         .fetch_optional(&mut *tx)
@@ -42,6 +62,10 @@ pub async fn initialise_schema(pool: &PgPool) -> Result<InitOutcome, PgError> {
         .execute(&mut *tx)
         .await
         .map_err(classify)?;
+    if let Some((actor, login)) = root {
+        let oid = crate::actor_policy::root_login_oid(&mut tx, login).await?;
+        crate::actor_policy::write_root(&mut tx, actor, login, oid).await?;
+    }
     tx.commit().await.map_err(classify)?;
     Ok(InitOutcome::Initialised)
 }
@@ -942,6 +966,7 @@ fn least_privilege_sql(roles: &DeploymentRoles) -> String {
         out,
         "GRANT SELECT ON morpholog.deployment_roles TO {w}, {r};"
     );
+    let _ = writeln!(out, "GRANT SELECT ON morpholog.deployment_identity TO {w};");
     let _ = writeln!(out, "GRANT SELECT, INSERT ON morpholog.audit TO {w};");
     let _ = writeln!(out, "GRANT SELECT, INSERT ON morpholog.rejections TO {w};");
     // Grants add up, so the table-wide UPDATE an older floor granted is
