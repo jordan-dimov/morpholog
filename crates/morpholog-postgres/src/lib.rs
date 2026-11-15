@@ -76,9 +76,8 @@ mod witnesses;
 // The whole public surface, flat at the crate root.
 pub use activation::{CHUNK_BYTES, CHUNK_CLAIMS, write_activation_record_with};
 pub use actor_policy::{
-    AUTHORITY_PREDICATE, CloseOutcome, DeploymentIdentity, PolicyDeclarationError,
-    RESTRICTED_PREDICATE, actors_without_grant, close_deployment, deployment_identity,
-    validate_declarations,
+    AUTHORITY_PREDICATE, DeploymentIdentity, PolicyDeclarationError, RESTRICTED_PREDICATE,
+    actors_without_grant, close_deployment, deployment_identity, validate_declarations,
 };
 pub use as_of::{
     list_claims_at, list_claims_at_for_predicates, read_claims_at, read_claims_at_for_predicates,

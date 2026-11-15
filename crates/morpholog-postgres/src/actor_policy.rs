@@ -209,13 +209,6 @@ pub enum DeploymentIdentity {
     },
 }
 
-/// What closing found.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CloseOutcome {
-    Closed,
-    AlreadyClosed,
-}
-
 /// The deployment's identity row, read as a proposal reads it.
 pub async fn deployment_identity(pool: &PgPool) -> Result<DeploymentIdentity, PgError> {
     let row = sqlx::query!(
@@ -265,7 +258,7 @@ pub async fn close_deployment(
     pool: &PgPool,
     root_actor: &Subject,
     root_login: &str,
-) -> Result<CloseOutcome, PgError> {
+) -> Result<(), PgError> {
     let mut tx = pool.begin().await.map_err(crate::error::classify)?;
     let oid = sqlx::query_scalar!(
         r#"SELECT oid AS "oid!: sqlx::postgres::types::Oid" FROM pg_roles WHERE rolname = $1"#,
@@ -292,8 +285,7 @@ pub async fn close_deployment(
     .await
     .map_err(classify_checked_query)?;
     if closed.is_some() {
-        tx.commit().await.map_err(crate::error::classify)?;
-        return Ok(CloseOutcome::Closed);
+        return tx.commit().await.map_err(crate::error::classify);
     }
     let held = sqlx::query!(
         r#"SELECT root_actor AS "root_actor!", root_login AS "root_login!",
@@ -306,7 +298,7 @@ pub async fn close_deployment(
     .map_err(classify_checked_query)?;
     tx.rollback().await.map_err(crate::error::classify)?;
     if held.root_actor == root_actor.as_str() && held.root_login == root_login && held.same_oid {
-        Ok(CloseOutcome::AlreadyClosed)
+        Ok(())
     } else {
         Err(PgError::DeploymentRootDiffers {
             root_actor: held.root_actor,

@@ -29,7 +29,8 @@ use std::path::Path;
 ///   is a hint and the check still passes; under `--strict` it is an
 ///   error and the check fails.
 /// - Fully clean: print nothing and exit 0, or a short summary under
-///   `--verbose`. Findings always go to stderr, so stdout stays silent
+///   `--verbose`; with `--database-url` on an open deployment, a note
+///   that it is open. Findings always go to stderr, so stdout stays silent
 ///   for scripts. `--json` prints every finding to stdout as one object,
 ///   with byte offsets and line/column; exit codes are the same.
 pub(crate) async fn run(args: CheckArgs) -> anyhow::Result<()> {

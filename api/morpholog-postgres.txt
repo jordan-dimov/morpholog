@@ -181,26 +181,6 @@ impl core::marker::Unpin for morpholog_postgres::CheckpointOutcome
 impl core::marker::UnsafeUnpin for morpholog_postgres::CheckpointOutcome
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::CheckpointOutcome
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::CheckpointOutcome
-pub enum morpholog_postgres::CloseOutcome
-pub morpholog_postgres::CloseOutcome::AlreadyClosed
-pub morpholog_postgres::CloseOutcome::Closed
-impl core::clone::Clone for morpholog_postgres::CloseOutcome
-pub fn morpholog_postgres::CloseOutcome::clone(&self) -> morpholog_postgres::CloseOutcome
-impl core::clone::TrivialClone for morpholog_postgres::CloseOutcome
-impl core::cmp::Eq for morpholog_postgres::CloseOutcome
-impl core::cmp::PartialEq for morpholog_postgres::CloseOutcome
-pub fn morpholog_postgres::CloseOutcome::eq(&self, &morpholog_postgres::CloseOutcome) -> bool
-impl core::fmt::Debug for morpholog_postgres::CloseOutcome
-pub fn morpholog_postgres::CloseOutcome::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for morpholog_postgres::CloseOutcome
-impl core::marker::StructuralPartialEq for morpholog_postgres::CloseOutcome
-impl core::marker::Freeze for morpholog_postgres::CloseOutcome
-impl core::marker::Send for morpholog_postgres::CloseOutcome
-impl core::marker::Sync for morpholog_postgres::CloseOutcome
-impl core::marker::Unpin for morpholog_postgres::CloseOutcome
-impl core::marker::UnsafeUnpin for morpholog_postgres::CloseOutcome
-impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::CloseOutcome
-impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::CloseOutcome
 #[non_exhaustive] pub enum morpholog_postgres::CompileReason
 pub morpholog_postgres::CompileReason::ArgumentKind
 pub morpholog_postgres::CompileReason::ArgumentKind::kind: morpholog_core::ir::PredicateArgKind
@@ -3111,7 +3091,7 @@ pub async fn morpholog_postgres::census(&sqlx_postgres::PgPool) -> core::result:
 pub async fn morpholog_postgres::census_paused(&sqlx_postgres::PgPool, impl core::future::future::Future<Output = ()>) -> core::result::Result<morpholog_postgres::Census, morpholog_postgres::PgError>
 pub fn morpholog_postgres::check_named_programs(&[&morpholog_postgres::PgProgram]) -> core::result::Result<(), morpholog_postgres::PgError>
 pub async fn morpholog_postgres::claim_pending_outbox_row(&sqlx_postgres::PgPool, &str, &str, core::time::Duration, jiff::timestamp::Timestamp) -> core::result::Result<core::option::Option<morpholog_postgres::OutboxRow>, morpholog_postgres::PgError>
-pub async fn morpholog_postgres::close_deployment(&sqlx_postgres::PgPool, &morpholog_core::ir::Subject, &str) -> core::result::Result<morpholog_postgres::CloseOutcome, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::close_deployment(&sqlx_postgres::PgPool, &morpholog_core::ir::Subject, &str) -> core::result::Result<(), morpholog_postgres::PgError>
 pub async fn morpholog_postgres::complete_compensation(&sqlx_postgres::PgPool, uuid::Uuid, &str, uuid::Uuid) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub fn morpholog_postgres::compute_idempotency_key(uuid::Uuid, &morpholog_core::state::IntentInstance) -> core::result::Result<alloc::string::String, serde_json::error::Error>
 pub async fn morpholog_postgres::coverage_replay(&sqlx_postgres::PgPool, &morpholog_core::validate::ValidatedProgram<'_>) -> core::result::Result<morpholog_core::coverage::CoverageReport, morpholog_postgres::PgError>

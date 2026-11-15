@@ -71,7 +71,10 @@ pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
     if let Some(roles) = deployment_roles(&pool).await? {
         warn_if_roles_shared(&pool, &roles).await?;
     }
-    warn_if_open(&pool).await?;
+    // `--prepare` stops below the head, before the identity row exists.
+    if report.is_current() {
+        warn_if_open(&pool).await?;
+    }
     print_json(&report)?;
     // Also with nothing to apply: the index requirements come from the
     // binary and the programmes, so an upgrade can change them with no

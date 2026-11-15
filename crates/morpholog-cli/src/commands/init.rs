@@ -108,7 +108,13 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
             morpholog_postgres::require_current_schema(&pool).await?;
         }
         close(&pool, &Subject::from(actor.as_str()), login, args.confirm).await?;
-    } else {
+    } else if status == "initialised"
+        || morpholog_postgres::require_current_schema(&pool)
+            .await
+            .is_ok()
+    {
+        // An older schema has no identity row yet; `migrate` says it is
+        // open once it has one.
         warn_if_open(&pool).await?;
     }
     // Say whether there was actually a schema to drop.

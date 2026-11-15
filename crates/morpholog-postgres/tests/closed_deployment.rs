@@ -26,7 +26,7 @@ use common::{
 };
 use morpholog_core::{EvalValue, Subject, Transition};
 use morpholog_postgres::{
-    CloseOutcome, DeploymentIdentity, PgError, PgPool, PgProgram, Proposal, actors_without_grant,
+    DeploymentIdentity, PgError, PgPool, PgProgram, Proposal, actors_without_grant,
     close_deployment, deployment_identity, propose_all_against_pg,
 };
 
@@ -88,12 +88,9 @@ async fn close_and_grant(
     service: &str,
     service_login: &str,
 ) {
-    assert_eq!(
-        close_deployment(admin, &Subject::from(ROOT), root_login)
-            .await
-            .unwrap(),
-        CloseOutcome::Closed
-    );
+    close_deployment(admin, &Subject::from(ROOT), root_login)
+        .await
+        .unwrap();
     expect_committed(act(root, "appoint", vec![subj(ROOT)], ROOT).await.unwrap());
     expect_committed(
         act(
@@ -302,13 +299,13 @@ async fn closing_again_under_the_same_root_changes_nothing_and_another_is_refuse
         deployment_identity(&admin).await.unwrap(),
         DeploymentIdentity::Open
     );
+    close_deployment(&admin, &root, &me).await.unwrap();
+    let closed = deployment_identity(&admin).await.unwrap();
+    close_deployment(&admin, &root, &me).await.unwrap();
     assert_eq!(
-        close_deployment(&admin, &root, &me).await.unwrap(),
-        CloseOutcome::Closed
-    );
-    assert_eq!(
-        close_deployment(&admin, &root, &me).await.unwrap(),
-        CloseOutcome::AlreadyClosed
+        deployment_identity(&admin).await.unwrap(),
+        closed,
+        "closing again under the same root changes nothing"
     );
     assert!(matches!(
         close_deployment(&admin, &Subject::from("someone_else"), &me).await,
