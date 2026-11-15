@@ -325,9 +325,9 @@ async fn a_database_the_last_release_wrote_upgrades_and_verifies() {
         "C: {late_refused}"
     );
     // The legacy rows (three from the release, one after the preparation,
-    // one held across the cutover), the baseline chunk and the activation
-    // record, then the new write.
-    for (report, rows) in [(&verified, 7), (&verified_after, 8)] {
+    // one held across the cutover), then the new write. The baseline chunk
+    // and the activation record are control rows, not transitions.
+    for (report, rows) in [(&verified, 5), (&verified_after, 6)] {
         assert_eq!(report["passes"], true, "{report}");
         assert_eq!(report["replay"]["status"], "consistent", "{report}");
         assert_eq!(report["tree"]["status"], "intact", "{report}");

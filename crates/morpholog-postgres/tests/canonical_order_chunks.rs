@@ -139,7 +139,7 @@ async fn the_baseline_is_written_in_chunks_the_record_names() {
     assert!(matches!(
         verify_replay(&pool, &mut |_| {}).await.unwrap(),
         VerifyOutcome::Consistent {
-            transitions: 11,
+            transitions: 7,
             claims: 7
         }
     ));
@@ -169,10 +169,7 @@ async fn the_baseline_is_written_in_chunks_the_record_names() {
     assert_eq!(read_claims_at(&pool, next).await.unwrap().len(), 7 + 3);
     assert!(matches!(
         verify_replay(&pool, &mut |_| {}).await.unwrap(),
-        VerifyOutcome::Consistent {
-            transitions: 12,
-            ..
-        }
+        VerifyOutcome::Consistent { transitions: 8, .. }
     ));
 }
 
@@ -206,7 +203,7 @@ async fn the_byte_cap_closes_a_chunk_early() {
     assert!(matches!(
         verify_replay(&pool, &mut |_| {}).await.unwrap(),
         VerifyOutcome::Consistent {
-            transitions: 21,
+            transitions: 13,
             claims: 13
         }
     ));
