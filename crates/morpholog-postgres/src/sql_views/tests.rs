@@ -671,24 +671,43 @@ transformation note(who, amount, on, at, held_for, open, load, parts):
     admit Wide(who, amount, on, at, held_for, open, load, parts)
 ";
 
+/// A live derived view's flag and choice, typed by their declaration.
+const LIVE_KINDS: &str = "program live_kinds
+predicate Line(line: Subject, quantity: Decimal)
+predicate Flagged(line: Subject, full: Bool, state: Subject)
+derived Flagged(line):
+    over Line(line, _)
+    value full = if(sum(n | Line(line, n)) > 0, true, false)
+    value state = if(sum(n | Line(line, n)) > 0, #some, #none)
+transformation add(line, quantity):
+    admit Line(line, quantity)
+";
+
 /// Applied to PostgreSQL, every view has the described columns, in the
 /// described order, and each described type is the column's own: the
 /// name resolves, in PostgreSQL, to the type the column has. History
-/// views included.
+/// views included, and derived views read from the cache or live.
 #[tokio::test]
 async fn the_applied_views_have_the_described_columns() {
     let pool = crate::compiled_differential::test_pool().await;
     crate::testing::reset_database(&pool).await.unwrap();
     let mut programs = morpholog_examples::all_programs();
     programs.push(parse_program(EVERY_KIND).expect("fixture parses"));
-    for program in programs {
+    programs.push(parse_program(LIVE_KINDS).expect("fixture parses"));
+    let mut live = 0;
+    for (program, source) in programs
+        .iter()
+        .flat_map(|p| [(p, DerivedSource::Cache), (p, DerivedSource::Live)])
+    {
         let validated = program.validated().unwrap();
         let hash = format!("sha256:{}", "0".repeat(64));
         let schema = "described_views";
-        let Ok(rendered) = render_views(&validated, schema, &hash, DerivedSource::Cache, true)
-        else {
+        let Ok(rendered) = render_views(&validated, schema, &hash, source, true) else {
             continue;
         };
+        if source == DerivedSource::Live && !validated.as_program().derived_claims.is_empty() {
+            live += 1;
+        }
         // Safe: the schema name is this test's constant.
         sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
             "DROP SCHEMA IF EXISTS {schema} CASCADE"
@@ -725,6 +744,7 @@ async fn the_applied_views_have_the_described_columns() {
             assert_eq!(rows, described, "{}.{}", program.name, view.view);
         }
     }
+    assert!(live >= 2, "derived views applied live: {live}");
 }
 
 const LIVE_SOURCE: &str = "program live_source

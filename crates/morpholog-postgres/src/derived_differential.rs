@@ -107,8 +107,43 @@ transformation allocate(allocation, line, quantity):
     admit SalesAllocation(allocation, line, quantity)
 ";
 
+/// InvenTree's line flags and floors (#788): a choice of three, a flag,
+/// a floor at zero, and a choice whose branches read different claims,
+/// so only the chosen one can raise.
+const CHOICES: &str = "program choices
+predicate Line(line: Subject, quantity: Decimal)
+predicate Alloc(alloc: Subject, line: Subject, quantity: Decimal)
+predicate Note(line: Subject, amount: Decimal)
+predicate Shortfall(line: Subject, quantity: Decimal)
+predicate Progress(line: Subject, state: Subject)
+predicate Full(line: Subject, full: Bool)
+predicate Unallocated(line: Subject, quantity: Decimal)
+predicate Guarded(line: Subject, quantity: Decimal)
+derived Shortfall(line):
+    over Line(line, _)
+    value quantity = if(sum(q | Alloc(_, line, q)) >= sum(n | Line(line, n)), 0, sum(n | Line(line, n)) - sum(q | Alloc(_, line, q)))
+derived Progress(line):
+    over Line(line, _)
+    value state = if(sum(q | Alloc(_, line, q)) >= sum(n | Line(line, n)), #full, if(sum(q | Alloc(_, line, q)) > 0, #partial, #none))
+derived Full(line):
+    over Line(line, _)
+    value full = if(sum(q | Alloc(_, line, q)) >= sum(n | Line(line, n)), true, false)
+derived Unallocated(line):
+    over Line(line, _)
+    value quantity = max(sum(n | Line(line, n)) - sum(q | Alloc(_, line, q)), 0)
+derived Guarded(line):
+    over Line(line, _)
+    value quantity = if(sum(n | Line(line, n)) > 0, sum(n | Line(line, n)), sum(a | Note(line, a)))
+transformation add(line, quantity):
+    admit Line(line, quantity)
+transformation allocate(alloc, line, quantity):
+    admit Alloc(alloc, line, quantity)
+transformation note(line, amount):
+    admit Note(line, amount)
+";
+
 fn programs() -> Vec<Program> {
-    let mut out: Vec<Program> = [SPIKE, EDGES, ORDERS]
+    let mut out: Vec<Program> = [SPIKE, EDGES, ORDERS, CHOICES]
         .iter()
         .map(|s| morpholog_surface::parse_program(s).expect("fragment parses"))
         .collect();
@@ -215,6 +250,7 @@ fn kernel_rows(rows: &[ClaimInstance]) -> Vec<(Vec<String>, Option<String>)> {
                     .map(|v| match v {
                         EvalValue::Subject(s) => s.to_string(),
                         EvalValue::Decimal(d) => d.normalize().to_string(),
+                        EvalValue::Bool(b) => b.to_string(),
                         other => format!("{other:?}"),
                     })
                     .collect(),
@@ -580,4 +616,60 @@ async fn a_raising_sum_body_fails_its_own_key_alone() {
         ),
         "the values that compare b1's shipment are NULL, the other is computed, and the row names the failure"
     );
+}
+
+/// A choice evaluates its test, then the chosen branch alone: a branch
+/// not chosen never raises, the chosen one does, and so does the test.
+#[tokio::test]
+async fn a_choice_raises_only_in_its_test_or_its_chosen_branch() {
+    let pool = test_pool().await;
+    let choices = morpholog_surface::parse_program(CHOICES).unwrap();
+    let v = choices.validated().unwrap();
+
+    // Allocated in full, in part and not at all; a note of another kind
+    // the chosen branch never reads.
+    let state = State::from_claims(vec![
+        claim_instance("Line", &[subj("full"), dec(5)]),
+        claim_instance("Line", &[subj("part"), dec(5)]),
+        claim_instance("Line", &[subj("none"), dec(5)]),
+        claim_instance("Alloc", &[subj("a1"), subj("full"), dec(5)]),
+        claim_instance("Alloc", &[subj("a2"), subj("part"), dec(2)]),
+        claim_instance("Note", &[subj("full"), subj("not_a_number")]),
+    ]);
+    assert_eq!(agree(&pool, &v, &state, "choices built").await, 5);
+    let mut progress = live_rows(&pool, &v, "Progress").await;
+    progress.sort();
+    assert_eq!(
+        progress,
+        vec![
+            (vec!["full".to_string(), "full".to_string()], None),
+            (vec!["none".to_string(), "none".to_string()], None),
+            (vec!["part".to_string(), "partial".to_string()], None),
+        ]
+    );
+    let guarded = live_rows(&pool, &v, "Guarded").await;
+    assert!(
+        guarded.contains(&(vec!["full".to_string(), "5".to_string()], None)),
+        "the branch not chosen reads the note and does not raise: {guarded:?}"
+    );
+
+    // The chosen branch reads the note of another kind.
+    let state = State::from_claims(vec![
+        claim_instance("Line", &[subj("empty"), dec(0)]),
+        claim_instance("Note", &[subj("empty"), subj("not_a_number")]),
+    ]);
+    assert!(v.enumerate_derived("Guarded", &state).is_err());
+    assert_eq!(agree(&pool, &v, &state, "choices chosen raises").await, 5);
+    let rows = live_rows(&pool, &v, "Guarded").await;
+    assert_eq!(rows[0].1.as_deref(), Some("sum_kind"), "{rows:?}");
+
+    // The test reads a quantity of another kind.
+    let state = State::from_claims(vec![claim_instance(
+        "Line",
+        &[subj("odd"), subj("not_a_number")],
+    )]);
+    assert!(v.enumerate_derived("Guarded", &state).is_err());
+    assert_eq!(agree(&pool, &v, &state, "choices test raises").await, 5);
+    let rows = live_rows(&pool, &v, "Guarded").await;
+    assert_eq!(rows[0].1.as_deref(), Some("sum_kind"), "{rows:?}");
 }
