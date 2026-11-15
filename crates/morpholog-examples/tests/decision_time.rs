@@ -125,3 +125,54 @@ fn the_parser_refuses_it_as_a_const_or_a_body_let() {
         );
     }
 }
+
+// An explanation decides by the instant it is given and names it. With
+// none, as offline, a body that reads the clock cannot be decided, and the
+// explanation says so rather than guessing a time.
+#[test]
+fn an_explanation_decides_by_the_instant_it_is_given() {
+    use morpholog_core::{Rejection, State, Subject, Transition, Verdict};
+    use morpholog_test_support::{claim_instance, explain, fresh, subj, ts};
+    let p = program(
+        "transformation bid(lot):\n    bind Lot(lot, closes)\n    require decided_at strictly_before closes\n    admit Bid(lot, decided_at)\n",
+    );
+    p.validate().expect("validates");
+    let state = State::from_claims(vec![claim_instance(
+        "Lot",
+        &[subj("l"), ts("2030-01-01T00:00:00Z")],
+    )]);
+    let at = |decided_at: Option<&str>| Transition {
+        transformation_name: "bid".into(),
+        args: vec![subj("l")],
+        actor: Subject::from("bidder"),
+        decided_at: decided_at.map(|t| t.parse().expect("an instant")),
+    };
+
+    let before = explain(&p, &at(Some("2029-01-01T00:00:00Z")), &state, &mut fresh());
+    assert_eq!(before.verdict, Verdict::Admissible);
+    assert_eq!(
+        before.transition.decided_at,
+        at(Some("2029-01-01T00:00:00Z")).decided_at
+    );
+    assert!(
+        before
+            .render()
+            .contains("\nDecision time: 2029-01-01T00:00:00Z"),
+        "{}",
+        before.render()
+    );
+
+    let after = explain(&p, &at(Some("2031-01-01T00:00:00Z")), &state, &mut fresh());
+    assert!(
+        matches!(after.verdict, Verdict::Rejected(Rejection::Gate(_))),
+        "{after:?}"
+    );
+
+    let offline = explain(&p, &at(None), &state, &mut fresh());
+    assert!(
+        matches!(&offline.verdict, Verdict::Rejected(Rejection::Error(e)) if e.message.contains("decid")),
+        "{offline:?}"
+    );
+    assert_eq!(offline.transition.decided_at, None);
+    assert!(!offline.render().contains("Decision time"));
+}

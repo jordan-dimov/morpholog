@@ -283,8 +283,8 @@ impl Resident {
             args_named: body.args_named,
         };
         let prepared = self.prepared();
-        let transition = decode_row(prepared, batch_row).map_err(row_failure)?;
-        let state = morpholog_postgres::load_scoped_state(
+        let mut transition = decode_row(prepared, batch_row).map_err(row_failure)?;
+        let (state, decided_at) = morpholog_postgres::load_explanation_state(
             &self.pool,
             prepared,
             &transition.transformation_name,
@@ -294,6 +294,7 @@ impl Resident {
         .map_err(ResidentFailure::Operational)?
         .context("the transformation was looked up in this programme")
         .map_err(ResidentFailure::Operational)?;
+        transition.decided_at = Some(decided_at);
         let explanation = prepared.explain(
             &transition,
             &state,

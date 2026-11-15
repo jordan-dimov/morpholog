@@ -40,6 +40,12 @@ pub struct TransitionRef {
     pub transformation: String,
     pub args: Vec<String>,
     pub actor: String,
+    /// The decision time the explanation used: against a database, the
+    /// start of the read transaction its state came from; for a refusal,
+    /// the refusing proposal's own. Absent when there was none, where a
+    /// body that reads `decided_at` raises.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decided_at: Option<jiff::Timestamp>,
 }
 
 /// Admissible, or rejected with a structured reason.
@@ -151,6 +157,7 @@ pub(crate) fn explain(
         transformation: transition.transformation_name.to_string(),
         args: transition.args.iter().map(render_eval_value).collect(),
         actor: transition.actor.to_string(),
+        decided_at: transition.decided_at,
     };
 
     let Some(transformation) = program.transformation(transition.transformation_name.as_str())
@@ -201,12 +208,15 @@ impl Explanation {
     /// Render this explanation as deterministic prose, built only from
     /// names and fixed templates.
     pub fn render(&self) -> String {
-        let head = format!(
+        let mut head = format!(
             "{}({}) proposed by {}",
             self.transition.transformation,
             self.transition.args.join(", "),
             self.transition.actor,
         );
+        if let Some(at) = self.transition.decided_at {
+            head.push_str(&format!("\nDecision time: {at}"));
+        }
         let mut out = match &self.verdict {
             Verdict::Admissible => format!("Admissible: {head}"),
             Verdict::Rejected(rejection) => {
