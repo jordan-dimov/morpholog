@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT a.actor ->> 'value' AS \"actor!\"\n           FROM morpholog.audit a\n           WHERE a.actor ->> 'type' = 'subject'\n             AND a.actor ->> 'value' <> $1\n             AND NOT EXISTS (\n                 SELECT 1 FROM morpholog.claims c\n                 WHERE c.predicate_name = $2 AND c.arguments -> 0 = a.actor\n             )\n           ORDER BY 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "actor!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "951226af54dc0c1fa12a4fdc921ac18ca44f7d93d404185989a57902343f3782"
+}

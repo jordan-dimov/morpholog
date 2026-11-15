@@ -1750,6 +1750,7 @@ fn report_envelopes_serialize_as_pinned() {
         let mut ready = to_value(&SessionReady::new(
             format!("sha256:{}", "0".repeat(64)),
             "envelopes".to_string(),
+            true,
         ));
         ready["morpholog_version"] = serde_json::json!("0.0.0");
         assert_golden("session_ready.json", &ready);
@@ -1810,6 +1811,7 @@ fn report_envelopes_serialize_as_pinned() {
                 start: Some(412),
             }],
             file: "model.morph".to_string(),
+            identity: None,
             invariants: None,
             parts: None,
         }),
@@ -1843,6 +1845,7 @@ fn report_envelopes_serialize_as_pinned() {
                 },
             ],
             file: "model/shop.parts".to_string(),
+            identity: None,
             invariants: None,
             parts: Some(vec![
                 "model/00_shop.morph".to_string(),
@@ -1856,6 +1859,7 @@ fn report_envelopes_serialize_as_pinned() {
         &to_value(&CheckReport {
             diagnostics: vec![],
             file: "model.morph".to_string(),
+            identity: Some("closed"),
             invariants: Some(vec![
                 CheckedInvariant {
                     cases: bound(),
@@ -1882,6 +1886,7 @@ fn report_envelopes_serialize_as_pinned() {
         &to_value(&CheckReport {
             diagnostics: vec![],
             file: "model.morph".to_string(),
+            identity: None,
             invariants: Some(vec![
                 CheckedInvariant {
                     cases: bound(),
@@ -1922,6 +1927,7 @@ fn report_envelopes_serialize_as_pinned() {
         &to_value(&CheckReport {
             diagnostics: vec![],
             file: "model.morph".to_string(),
+            identity: None,
             invariants: Some(vec![]),
             parts: None,
         }),

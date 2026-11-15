@@ -67,7 +67,7 @@ pub(crate) async fn run(args: ServeArgs) -> anyhow::Result<()> {
             );
         }
         let presenter = Presenter {
-            resident: Resident::new(Arc::clone(&programme), pool),
+            resident: Resident::new(Arc::clone(&programme), pool).await?,
             permits: permits.remove(&uid).unwrap_or_default(),
             open: AtomicUsize::new(0),
         };
@@ -87,11 +87,7 @@ pub(crate) async fn run(args: ServeArgs) -> anyhow::Result<()> {
     }
     eprintln!(
         "serving {} on {}, presenters: {}",
-        programme
-            .ready()
-            .get("model_hash")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default(),
+        programme.model_hash(),
         args.socket.display(),
         presenters.len()
     );

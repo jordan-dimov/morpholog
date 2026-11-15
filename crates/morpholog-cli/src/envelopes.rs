@@ -16,6 +16,10 @@ use uuid::Uuid;
 pub struct CheckReport {
     pub diagnostics: Vec<CheckDiagnostic>,
     pub file: String,
+    /// `closed` or `open`, for the `--database-url` deployment; absent
+    /// without one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub invariants: Option<Vec<CheckedInvariant>>,
     /// The files of a programme in parts, in programme order; absent for
@@ -119,9 +123,12 @@ pub struct HashReport {
 
 /// `session`: the ready line, the only line a session emits unprompted.
 /// `model_hash` is the rules hash the session pinned, for staleness checks.
-/// `protocol` versions the wire, separately from the binary.
+/// `protocol` versions the wire, separately from the binary. `identity` is
+/// `closed` when every actor needs a grant, `open` when an actor nobody
+/// restricted may be asserted by any login.
 #[derive(Serialize)]
 pub struct SessionReady {
+    pub identity: &'static str,
     pub model_hash: String,
     pub morpholog_version: &'static str,
     pub program: String,
@@ -130,8 +137,9 @@ pub struct SessionReady {
 }
 
 impl SessionReady {
-    pub fn new(model_hash: String, program: String) -> Self {
+    pub fn new(model_hash: String, program: String, closed: bool) -> Self {
         Self {
+            identity: if closed { "closed" } else { "open" },
             model_hash,
             morpholog_version: env!("CARGO_PKG_VERSION"),
             program,

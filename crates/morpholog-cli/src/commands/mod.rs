@@ -278,6 +278,22 @@ pub(crate) fn read_anchor(
         .transpose()
 }
 
+/// Say on stderr that the deployment is open, on every run that reads it,
+/// so a deployment nobody closed is never taken for a closed one.
+pub(crate) async fn warn_if_open(
+    pool: &PgPool,
+) -> anyhow::Result<morpholog_postgres::DeploymentIdentity> {
+    let identity = morpholog_postgres::deployment_identity(pool).await?;
+    if identity == morpholog_postgres::DeploymentIdentity::Open {
+        eprintln!(
+            "note: this deployment is open: any login may assert an actor nobody \
+             restricted. Close it, with its writers stopped, by \
+             `morpholog init --skip-if-exists --root-actor ACTOR --root-login LOGIN`."
+        );
+    }
+    Ok(identity)
+}
+
 /// Warn on stderr when this deployment's roles also reach another
 /// database: a login granted either role holds the other deployment too.
 /// A warning, not a refusal, so an affected deployment still upgrades.

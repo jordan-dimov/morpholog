@@ -116,7 +116,7 @@ impl Permits {
 pub(crate) struct Programme {
     file: PathBuf,
     program: PgProgram,
-    ready: serde_json::Value,
+    model_hash: String,
 }
 
 impl Programme {
@@ -136,24 +136,23 @@ impl Programme {
                 file.display()
             );
         }
-        let ready = SessionReady::new(model_hash, program.prepared().program().name.clone());
-        let ready = serde_json::to_value(&ready)?;
         Ok(Self {
             file: file.to_path_buf(),
             program,
-            ready,
+            model_hash,
         })
     }
 
-    /// The ready line: the identity this programme is served under.
-    pub(crate) fn ready(&self) -> &serde_json::Value {
-        &self.ready
+    /// The rules hash this programme is served under.
+    pub(crate) fn model_hash(&self) -> &str {
+        &self.model_hash
     }
 }
 
 pub(crate) struct Resident {
     programme: Arc<Programme>,
     pool: PgPool,
+    ready: serde_json::Value,
 }
 
 impl Resident {
@@ -165,16 +164,32 @@ impl Resident {
     ) -> anyhow::Result<Self> {
         let programme = Arc::new(Programme::load(file, expect_hash)?);
         let pool = crate::commands::connect_single(database_url).await?;
-        Ok(Self::new(programme, pool))
+        Self::new(programme, pool).await
     }
 
-    pub(crate) fn new(programme: Arc<Programme>, pool: PgPool) -> Self {
-        Self { programme, pool }
+    /// Serve `programme` over `pool`. The ready line also says whether the
+    /// deployment is closed, read once here, so a host that promises
+    /// enforced identity can refuse an open one before its first write.
+    pub(crate) async fn new(programme: Arc<Programme>, pool: PgPool) -> anyhow::Result<Self> {
+        let closed = matches!(
+            morpholog_postgres::deployment_identity(&pool).await?,
+            morpholog_postgres::DeploymentIdentity::Closed { .. }
+        );
+        let ready = serde_json::to_value(SessionReady::new(
+            programme.model_hash.clone(),
+            programme.program.prepared().program().name.clone(),
+            closed,
+        ))?;
+        Ok(Self {
+            programme,
+            pool,
+            ready,
+        })
     }
 
     /// The ready line: the identity this runtime serves.
     pub(crate) fn ready(&self) -> &serde_json::Value {
-        &self.programme.ready
+        &self.ready
     }
 
     fn prepared(&self) -> &PreparedProgram {
@@ -433,7 +448,7 @@ impl Resident {
             .await
             .context("checking the database")
             .map_err(ResidentFailure::Operational)?;
-        Ok(self.programme.ready.clone())
+        Ok(self.ready.clone())
     }
 
     async fn rejections(

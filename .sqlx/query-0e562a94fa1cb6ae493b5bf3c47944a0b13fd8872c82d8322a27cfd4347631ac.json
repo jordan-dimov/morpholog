@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO morpholog.deployment_identity\n               (closed, root_actor, root_login, root_login_oid, closed_at, closed_by)\n           VALUES (true, $1, $2, $3, now(), session_user)\n           ON CONFLICT (singleton) DO UPDATE\n               SET closed = true, root_actor = $1, root_login = $2, root_login_oid = $3,\n                   closed_at = now(), closed_by = session_user\n               WHERE NOT morpholog.deployment_identity.closed\n           RETURNING true AS \"closed!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "closed!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Oid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "0e562a94fa1cb6ae493b5bf3c47944a0b13fd8872c82d8322a27cfd4347631ac"
+}

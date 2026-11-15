@@ -942,6 +942,7 @@ fn least_privilege_sql(roles: &DeploymentRoles) -> String {
         out,
         "GRANT SELECT ON morpholog.deployment_roles TO {w}, {r};"
     );
+    let _ = writeln!(out, "GRANT SELECT ON morpholog.deployment_identity TO {w};");
     let _ = writeln!(out, "GRANT SELECT, INSERT ON morpholog.audit TO {w};");
     let _ = writeln!(out, "GRANT SELECT, INSERT ON morpholog.rejections TO {w};");
     // Grants add up, so the table-wide UPDATE an older floor granted is

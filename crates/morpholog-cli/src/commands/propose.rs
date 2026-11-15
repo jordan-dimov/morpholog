@@ -351,7 +351,7 @@ pub(crate) fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
             ProposeCode::DuplicateIntent,
             "the proposal could not be decided",
         ),
-        PgError::ActorAssertionUnauthorised { .. } => (
+        PgError::ActorAssertionUnauthorised { .. } | PgError::RootActorUnauthorised { .. } => (
             ProposeCode::ActorAssertionUnauthorised,
             "the proposal could not be decided",
         ),
@@ -378,6 +378,9 @@ pub(crate) fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
         | PgError::NoTransitionAtOrBefore(_)
         | PgError::InstantNotSettled(_)
         | PgError::ActorPolicyDeclaration { .. }
+        | PgError::DeploymentIdentityMissing
+        | PgError::RootLoginMissing(_)
+        | PgError::DeploymentRootDiffers { .. }
         | PgError::UnknownTransformation { .. }
         | PgError::NoCheckpoint
         | PgError::AuditPrefixIncomplete { .. }

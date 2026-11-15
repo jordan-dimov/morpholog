@@ -791,8 +791,12 @@
     "session_ready": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["model_hash", "morpholog_version", "program", "protocol", "status"],
+      "required": ["identity", "model_hash", "morpholog_version", "program", "protocol", "status"],
       "properties": {
+        "identity": {
+          "description": "`closed` when every actor needs a grant and the root actor its root login; `open` when an actor nobody restricted may be asserted by any login. Read once, when the runtime connects.",
+          "enum": ["open", "closed"]
+        },
         "model_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
         "morpholog_version": { "type": "string" },
         "program": { "type": "string" },
@@ -1473,6 +1477,10 @@
       "required": ["file", "diagnostics"],
       "properties": {
         "file": { "type": "string" },
+        "identity": {
+          "description": "With --database-url: `closed` when every actor on that deployment needs a grant, `open` when an actor nobody restricted may be asserted by any login.",
+          "enum": ["open", "closed"]
+        },
         "parts": { "type": "array", "items": { "type": "string" } },
         "invariants": {
           "type": "array",

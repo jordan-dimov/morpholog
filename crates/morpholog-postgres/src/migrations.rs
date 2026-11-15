@@ -63,6 +63,11 @@ pub(crate) const MIGRATIONS: &[(i32, &str, &str)] = &[
         "state_snapshots",
         include_str!("../sql/migrations/030_state_snapshots.sql"),
     ),
+    (
+        31,
+        "deployment_identity",
+        include_str!("../sql/migrations/031_deployment_identity.sql"),
+    ),
 ];
 
 /// Whether `migrate` stops before the one transaction that pauses writers.

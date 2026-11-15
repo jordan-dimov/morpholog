@@ -49,6 +49,26 @@ CREATE TABLE deployment_roles (
 );
 
 
+-- Who may assert every actor on this deployment. Open, a proposal may
+-- name any actor nobody restricted; closed, every actor needs a grant,
+-- and the root actor is asserted by its root login alone, the trust
+-- anchor the first grants are admitted under. The login is held by OID
+-- as well as name, so a role dropped and made again is not trusted.
+-- Exactly one row, written by the owner; a deployment's roles may only
+-- read it, and a proposal on a deployment without it is refused.
+CREATE TABLE deployment_identity (
+    singleton       boolean      PRIMARY KEY DEFAULT true CHECK (singleton),
+    closed          boolean      NOT NULL DEFAULT false,
+    root_actor      text,
+    root_login      text,
+    root_login_oid  oid,
+    closed_at       timestamptz,
+    closed_by       text,
+    CHECK (num_nonnulls(root_actor, root_login, root_login_oid, closed_at, closed_by)
+           = CASE WHEN closed THEN 5 ELSE 0 END)
+);
+INSERT INTO deployment_identity DEFAULT VALUES;
+
 -- The digest a claim is keyed by. Keying on the whole argument array
 -- put a silent ceiling on argument size: a btree index row may not
 -- exceed 2704 bytes, so a long enough argument (an embedder's free-text
@@ -1055,4 +1075,5 @@ INSERT INTO schema_migrations (version, name) VALUES
     (27, 'canonical_order'),
     (28, 'exact_arithmetic'),
     (29, 'executor_role'),
-    (30, 'state_snapshots');
+    (30, 'state_snapshots'),
+    (31, 'deployment_identity');

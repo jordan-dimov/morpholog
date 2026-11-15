@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT root_actor AS \"root_actor!\", root_login AS \"root_login!\",\n                  root_login_oid = $1 AS \"same_oid!\"\n           FROM morpholog.deployment_identity",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "root_actor!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.deployment_identity",
+            "name": "root_actor"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "root_login!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.deployment_identity",
+            "name": "root_login"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "same_oid!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Oid"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "5d0ae214c4f934f44ae87db5a3717a56ea409982e9a672680526c78ea0aa2849"
+}
