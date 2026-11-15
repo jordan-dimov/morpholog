@@ -11,6 +11,7 @@ use morpholog_core::{
 use morpholog_postgres::PgPool;
 use morpholog_surface::{Diagnostic, SourceMap, SourceText};
 use serde::Serialize;
+use std::io::Write;
 use std::path::Path;
 
 pub(crate) mod args;
@@ -28,6 +29,7 @@ pub(crate) mod init;
 pub(crate) mod inspect;
 pub(crate) mod keygen;
 pub(crate) mod migrate;
+pub(crate) mod out;
 pub(crate) mod outbox;
 pub(crate) mod parts;
 pub(crate) mod propose;
@@ -250,7 +252,7 @@ pub(crate) fn emit<T: Serialize>(
     if json {
         print_json(value)
     } else {
-        println!("{}", prose());
+        writeln!(out::stdout(), "{}", prose())?;
         Ok(())
     }
 }
@@ -340,6 +342,6 @@ fn members_of(role: &str, members: &[morpholog_postgres::RoleMember]) -> String 
 /// for every read-only subcommand.
 pub(crate) fn print_json<T: Serialize>(value: &T) -> anyhow::Result<()> {
     let json = serde_json::to_string_pretty(value).context("JSON encoding failed")?;
-    println!("{json}");
+    writeln!(out::stdout(), "{json}")?;
     Ok(())
 }

@@ -288,7 +288,7 @@ fn report_batch_refusal(failure: RowError) -> anyhow::Result<()> {
     let Some(code) = code else {
         return Err(reason);
     };
-    let mut out = std::io::stdout().lock();
+    let mut out = super::out::stdout();
     writeln!(
         out,
         "{}",
@@ -426,7 +426,7 @@ async fn run_batch(
         Ok(pool) => pool,
         Err(e) => return report_batch_refusal(not_committed(&args.file, e)),
     };
-    let mut out = std::io::stdout().lock();
+    let mut out = super::out::stdout();
     let (mut committed, mut rejected, mut errored, mut rows) = (0u64, 0u64, 0u64, 0u64);
 
     for (line_no, line) in input.lines().enumerate() {

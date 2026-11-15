@@ -72,8 +72,7 @@ pub(crate) fn run(args: &GenerateViewsArgs) -> anyhow::Result<()> {
         None => {
             // Exactly the rendered script, for piping to psql. It has its
             // own trailing newline.
-            let stdout = std::io::stdout();
-            let mut handle = stdout.lock();
+            let mut handle = super::out::stdout();
             handle.write_all(rendered.sql.as_bytes())?;
             handle.flush()?;
             eprintln!("{summary}");

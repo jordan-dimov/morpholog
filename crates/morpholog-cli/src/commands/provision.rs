@@ -4,6 +4,8 @@
 //! non-zero when a conflict needs an operator, or, with `--check`, when
 //! anything is outstanding.
 
+use std::io::Write;
+
 use anyhow::bail;
 use morpholog_postgres::{
     IndexAction, PgProgram, ProvisionReport, StatisticsAction, check_named_programs, plan_indexes,
@@ -11,7 +13,9 @@ use morpholog_postgres::{
 };
 
 use crate::ProvisionIndexesArgs;
-use crate::commands::{AlreadyReported, connect, parse_or_report, prepare_or_report, print_json};
+use crate::commands::{
+    AlreadyReported, connect, out, parse_or_report, prepare_or_report, print_json,
+};
 use morpholog_cli::envelopes;
 
 pub(crate) async fn indexes(args: ProvisionIndexesArgs) -> anyhow::Result<()> {
@@ -32,7 +36,7 @@ pub(crate) async fn indexes(args: ProvisionIndexesArgs) -> anyhow::Result<()> {
     if args.json {
         print_json(&envelopes::ProvisionReport::from(&report))?;
     } else {
-        print_plan(&report);
+        print_plan(&report)?;
     }
     if report.has_conflict() {
         let names: Vec<&str> = report
@@ -63,12 +67,13 @@ pub(crate) async fn indexes(args: ProvisionIndexesArgs) -> anyhow::Result<()> {
 }
 
 /// The plan for a person. Not a machine surface: `--json` is.
-fn print_plan(report: &ProvisionReport) {
+fn print_plan(report: &ProvisionReport) -> anyhow::Result<()> {
+    let mut out = out::stdout();
     for program in &report.programs {
-        println!("program: {} ({})", program.identity, program.hash);
+        writeln!(out, "program: {} ({})", program.identity, program.hash)?;
     }
     if report.entries.is_empty() {
-        println!("no compiled invariants: nothing to provision");
+        writeln!(out, "no compiled invariants: nothing to provision")?;
     }
     let detail = |detail: &str| {
         if detail.is_empty() {
@@ -88,7 +93,8 @@ fn print_plan(report: &ProvisionReport) {
                 .collect();
             format!("  - needed by {}", needs.join(", "))
         };
-        println!(
+        writeln!(
+            out,
             "{:<20} {}  {}[{}] {}{}{}",
             entry.action.to_string(),
             entry.index_name,
@@ -97,18 +103,20 @@ fn print_plan(report: &ProvisionReport) {
             entry.representation,
             detail(&entry.detail),
             needed_by
-        );
+        )?;
     }
     for entry in &report.required_elsewhere {
-        println!(
+        writeln!(
+            out,
             "{:<20} {}  - required by {}",
             "REQUIRED ELSEWHERE",
             entry.index_name,
             entry.required_by.join(", ")
-        );
+        )?;
     }
     for entry in &report.statistics {
-        println!(
+        writeln!(
+            out,
             "{:<20} {}  statistics[{}]{}{}",
             entry.action.to_string(),
             entry.statistics_name,
@@ -119,15 +127,17 @@ fn print_plan(report: &ProvisionReport) {
             } else {
                 format!("  - required by {}", entry.required_by.join(", "))
             }
-        );
+        )?;
     }
     if !report.positions_unknown_for.is_empty() {
-        println!(
+        writeln!(
+            out,
             "positions unknown for: {}  - provision these programmes again; no statistics object is stale until then",
             report.positions_unknown_for.join(", ")
-        );
+        )?;
     }
-    println!(
+    writeln!(
+        out,
         "{}",
         match (report.applied, report.dry_run, report.has_conflict()) {
             (true, _, _) => "applied; morpholog.claims analyzed",
@@ -135,5 +145,6 @@ fn print_plan(report: &ProvisionReport) {
             (false, false, true) => "not applied: a conflict needs an operator first",
             (false, false, false) => "not applied",
         }
-    );
+    )?;
+    Ok(())
 }

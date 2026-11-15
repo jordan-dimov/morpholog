@@ -25,7 +25,7 @@ pub(crate) fn run(args: &KeygenArgs) -> anyhow::Result<()> {
         args.private_out.display(),
         args.public_out.display()
     );
-    println!("{public}");
+    writeln!(super::out::stdout(), "{public}")?;
     Ok(())
 }
 

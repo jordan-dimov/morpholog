@@ -46,8 +46,7 @@ pub(crate) async fn run(args: SessionArgs) -> anyhow::Result<()> {
     // The stdio caller started the process, so it already holds everything
     // the process holds: there is nothing to withhold from it.
     let permits = Permits::all();
-    let stdout = std::io::stdout();
-    let mut out = std::io::BufWriter::new(stdout.lock());
+    let mut out = std::io::BufWriter::new(crate::commands::out::stdout());
     write_line(&mut out, resident.ready())?;
 
     let stdin = std::io::stdin();

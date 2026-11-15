@@ -1857,7 +1857,13 @@ pub(crate) struct ExplainArgs {
 /// codes (2 for a usage error, 0 after `--help` or `--version`).
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
-    match run().await {
+    let outcome = run().await;
+    // A reader that stopped reading truncated the output, whatever the
+    // command then made of the failed write.
+    if commands::out::closed() {
+        return std::process::ExitCode::from(commands::out::EXIT_STDOUT_CLOSED);
+    }
+    match outcome {
         Ok(()) => std::process::ExitCode::SUCCESS,
         // The command has already printed its diagnostics.
         Err(err) if err.is::<commands::AlreadyReported>() => std::process::ExitCode::FAILURE,

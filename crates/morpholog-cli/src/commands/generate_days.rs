@@ -283,8 +283,7 @@ fn day_start(tz: &TimeZone, date: Date) -> anyhow::Result<Timestamp> {
 }
 
 fn emit(rows: &[Value], summary: &str) -> anyhow::Result<()> {
-    let stdout = std::io::stdout();
-    let mut out = std::io::BufWriter::new(stdout.lock());
+    let mut out = std::io::BufWriter::new(super::out::stdout());
     for row in rows {
         serde_json::to_writer(&mut out, row)?;
         out.write_all(b"\n")?;
