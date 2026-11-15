@@ -402,6 +402,19 @@ A plain `init` leaves the deployment open, as before, and `init`, `migrate` and 
 
 Open or closed is one row, `morpholog.deployment_identity`, which only the owner writes; the writer may only read it. A deployment without the row refuses every proposal, rather than treating itself as open. The session's ready line and `check --database-url --json` report `identity`, `closed` or `open`. A host that promises its users act only as themselves should refuse to start on `open`. An ungranted actor on a closed deployment is refused with `actor_assertion_unauthorised`, as an armed one is. The boundary above still holds: this binds callers that go through Morpholog.
 
+**Kinds of actor.** A host that proposes for many users would need one grant per user. Instead, give its login a kind. `ActorKindAuthority(kind, login_role)` lets that login assert any actor that `ActorKind(actor, kind)` gives that kind. An actor has at most one kind: no act on a closed deployment may give it a second, and closing refuses a deployment where one already has two. Kinds count on a closed deployment only. They are names you choose, nothing is built in, and no kind reaches the root. A proposal reads the deployment's kind grants and looks everything else up by the claims table's key, so its cost grows with the number of kind grants, not with the number of users.
+
+On a closed deployment only the root changes identity policy: any claim under `ActorAssertionRestricted`, `ActorAssertionAuthority`, `ActorKind`, `ActorKindAuthority` or `ActorKindEnrolment`, admitted or retracted. One exception lets a host enrol its users at sign-up. `ActorKindEnrolment(kind, registrar)` lets the registrar admit `ActorKind(x, kind)` for an `x` the same act mints, and nothing else:
+
+```morph
+transformation sign_up(email):
+    let user = new Subject()
+    admit Account(user, email)
+    admit ActorKind(user, #user)
+```
+
+So a registrar never classifies an existing actor, such as a service, into a kind its login may assert. The runtime checks what the act would write, before writing it, whatever the transformation is called and in every act of a `transact`. A refusal is `actor_assertion_unauthorised`, and nothing is recorded. An open deployment leaves policy writes to your programme's gates, as before.
+
 ## Personal data outside the record
 
 The record keeps every admitted claim, and an audit row cannot change without breaking verification. So keep personal data out of it.

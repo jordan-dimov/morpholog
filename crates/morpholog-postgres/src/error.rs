@@ -215,6 +215,23 @@ pub enum PgError {
          may assert; login role `{login_role}` is not it, and no claim can grant it"
     )]
     RootActorUnauthorised { actor: Subject, login_role: String },
+    /// A closed deployment's actor would hold more than one `ActorKind`,
+    /// so the logins of either kind could assert it: the act, or the
+    /// closing, is refused.
+    #[error(
+        "actor `{actor}` would hold {kinds} ActorKind claims on a closed deployment; \
+         an actor has at most one kind"
+    )]
+    ActorKindAmbiguous { actor: Subject, kinds: i64 },
+    /// On a closed deployment, an act changed identity policy without the
+    /// authority to: only the root changes a policy claim, and a registrar
+    /// enrols only an actor its own act mints.
+    #[error(
+        "actor `{actor}` may not {write} on this closed deployment: only its root \
+         changes identity policy, and a registrar enrols only an actor the same act \
+         mints with `new Subject()`"
+    )]
+    PolicyWriteUnauthorised { actor: Subject, write: String },
     /// The database has no `morpholog.deployment_identity` row, so it
     /// cannot say who may assert an actor; every proposal is refused
     /// rather than treated as open.

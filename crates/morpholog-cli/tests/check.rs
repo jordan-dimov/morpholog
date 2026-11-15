@@ -888,6 +888,34 @@ fn a_misshapen_actor_policy_declaration_is_refused_by_check_json() {
     assert!(found, "expected an error diagnostic naming it: {report}");
 }
 
+/// The kind names are reserved the same way: a wrong arity or a non-Subject
+/// field is refused, by name.
+#[test]
+fn a_misshapen_actor_kind_declaration_is_refused_by_check() {
+    for declaration in [
+        "ActorKind(actor: Subject)",
+        "ActorKind(actor: Subject, kind: Decimal)",
+        "ActorKindAuthority(kind: Subject, login_role: Subject, note: Subject)",
+        "ActorKindEnrolment(kind: Date, actor: Subject)",
+    ] {
+        let f = temp_morph(&format!(
+            "program p\npredicate {declaration}\npredicate Thing(id: Subject)\n\
+             transformation add(id):\n    admit Thing(id)\n"
+        ));
+        let out = Command::new(bin())
+            .args(["check", f.path().to_str().unwrap()])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let name = declaration.split('(').next().unwrap();
+        assert!(!out.status.success(), "{declaration}: check must refuse it");
+        assert!(
+            stderr.contains(name) && stderr.contains("reserved"),
+            "{declaration}: the refusal names it and why: {stderr}"
+        );
+    }
+}
+
 #[test]
 fn a_well_shaped_actor_policy_declaration_passes() {
     // The acceptance side: the contract still admits what it promises.
@@ -895,6 +923,9 @@ fn a_well_shaped_actor_policy_declaration_passes() {
         "program p
 predicate ActorAssertionRestricted(actor: Subject)
 predicate ActorAssertionAuthority(actor: Subject, login_role: Subject)
+predicate ActorKind(actor: Subject, kind: Subject)
+predicate ActorKindAuthority(kind: Subject, login_role: Subject)
+predicate ActorKindEnrolment(kind: Subject, actor: Subject)
 predicate Thing(id: Subject)
 transformation add(id):
     admit Thing(id)

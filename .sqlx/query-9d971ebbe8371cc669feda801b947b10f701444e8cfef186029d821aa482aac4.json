@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n                   SELECT 1 FROM morpholog.claims g\n                   WHERE g.predicate_name = $1 AND g.arguments -> 1 = $2\n                     AND jsonb_array_length(g.arguments) = 2\n                     AND g.arguments -> 0 ->> 'type' = 'subject'\n                     AND EXISTS (\n                         SELECT 1 FROM morpholog.claims k\n                         WHERE k.predicate_name = $3\n                           AND k.arguments_hash = morpholog.claim_digest(\n                                   jsonb_build_array($4::jsonb, g.arguments -> 0))\n                           AND k.arguments = jsonb_build_array($4::jsonb, g.arguments -> 0))\n               ) AS \"by_kind!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "by_kind!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9d971ebbe8371cc669feda801b947b10f701444e8cfef186029d821aa482aac4"
+}
