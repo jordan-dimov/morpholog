@@ -5137,25 +5137,42 @@ async fn provision_indexes_check_passes_only_when_nothing_is_outstanding() {
             .any(|i| i["action"] == "create"),
         "{stdout}"
     );
-    let (status, _, stderr) = run_cli(&["provision", "indexes", &ledger, "--check"]);
+    let (status, plan, stderr) = run_cli(&["provision", "indexes", &ledger, "--check"]);
     assert_eq!(
         status.code(),
         Some(1),
         "the printed plan fails it too: {stderr}"
     );
+    // Only what is outstanding is listed; nothing is kept yet.
+    assert!(plan.contains("CREATE"), "{plan}");
+    assert!(!plan.contains("KEEP"), "{plan}");
+    assert!(plan.contains("\n0 kept\n"), "{plan}");
 
     let (status, _, stderr) = run_cli(&["provision", "indexes", &ledger]);
     assert!(status.success(), "{stderr}");
     let (status, stdout, stderr) = run_cli(&["provision", "indexes", &ledger, "--check", "--json"]);
     assert!(status.success(), "a provisioned database passes: {stderr}");
+    let report = provision_report(&stdout);
     assert!(
-        provision_report(&stdout)["indexes"]
+        report["indexes"]
             .as_array()
             .unwrap()
             .iter()
             .all(|i| i["action"] == "keep"),
         "{stdout}"
     );
+    // A current plan is its programme line and the count it keeps.
+    let kept = report["indexes"].as_array().unwrap().len()
+        + report["statistics"].as_array().map_or(0, Vec::len);
+    let (status, plan, stderr) = run_cli(&["provision", "indexes", &ledger, "--check"]);
+    assert!(status.success(), "{stderr}");
+    let lines: Vec<&str> = plan.lines().collect();
+    assert!(lines[0].starts_with("program: "), "{plan}");
+    assert_eq!(lines[1..], [format!("{kept} kept; current")], "{plan}");
+    // Applying lists everything it keeps.
+    let (status, applied, stderr) = run_cli(&["provision", "indexes", &ledger]);
+    assert!(status.success(), "{stderr}");
+    assert!(applied.contains("KEEP"), "{applied}");
     reset_db().await;
 }
 
