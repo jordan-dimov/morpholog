@@ -318,6 +318,57 @@ fn flagged_state() -> State {
 // Reality layer: goldens are the binary's real serialization.
 // ============================================================
 
+/// An approval act whose gate reads one parameter through a pattern and
+/// one directly, for the refusal goldens that name them.
+const APPROVALS: &str = "program approvals
+predicate ApprovalLimit(approver: Subject, doc: Subject, limit: Decimal)
+predicate Approved(doc: Subject, amount: Decimal)
+transformation approve(doc, amount, memo):
+    require within_approval_limit: ApprovalLimit(actor, doc, limit) and amount <= limit
+    admit Approved(doc, amount)
+";
+
+/// Refusals by a named gate carry the parameters it reads, as every route
+/// prints them: through `envelopes::with_related_parameters`.
+#[test]
+fn a_refusal_by_a_named_gate_names_its_parameters_as_pinned() {
+    use morpholog_cli::envelopes::with_related_parameters;
+    let prepared =
+        morpholog_core::PreparedProgram::new(morpholog_surface::parse_program(APPROVALS).unwrap())
+            .unwrap();
+    let approve: morpholog_core::TransformationName = "approve".into();
+    let rejected = with_related_parameters(
+        to_value(&PgProposalOutcome::Rejected {
+            reason: "require `within_approval_limit` failed".to_string(),
+            rule: Some("within_approval_limit".to_string()),
+            witness: Vec::new(),
+            compared: None,
+        }),
+        &prepared,
+        &[&approve],
+    );
+    assert_eq!(
+        rejected["related_parameters"],
+        serde_json::json!(["doc", "amount"])
+    );
+    assert_golden("rejected_gate_with_related_parameters.json", &rejected);
+    let atomic = with_related_parameters(
+        to_value(&PgAtomicOutcome::Rejected {
+            act: 2,
+            reason: "require `within_approval_limit` failed".to_string(),
+            rule: Some("within_approval_limit".to_string()),
+            witness: Vec::new(),
+            compared: None,
+        }),
+        &prepared,
+        &[&approve, &approve],
+    );
+    assert_golden("transact_rejected_with_related_parameters.json", &atomic);
+    // An invariant's refusal, and one by an unnamed gate, carry none.
+    let invariant = with_related_parameters(to_value(&rejected_outcome()), &prepared, &[&approve]);
+    assert!(invariant.get("related_parameters").is_none(), "{invariant}");
+}
+
 #[test]
 fn run_outcomes_serialize_as_pinned() {
     assert_golden("committed.json", &to_value(&committed_outcome()));
@@ -3450,6 +3501,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("committed.json", "committed"),
         ("rejected.json", "rejected"),
         ("rejected_with_explanation.json", "rejected"),
+        ("rejected_gate_with_related_parameters.json", "rejected"),
         ("traced_committed.json", "traced_envelope"),
         ("traced_rejected.json", "traced_envelope"),
         ("traced_rejected_at_gate.json", "traced_envelope"),
@@ -3471,6 +3523,10 @@ fn every_golden_validates_against_its_defs_entry() {
         ),
         ("transact_committed.json", "atomic_outcome"),
         ("transact_rejected.json", "atomic_outcome"),
+        (
+            "transact_rejected_with_related_parameters.json",
+            "atomic_outcome",
+        ),
         ("transact_error.json", "atomic_outcome"),
         ("propose_error_not_committed.json", "request_error"),
         ("propose_error_kernel_error.json", "request_error"),

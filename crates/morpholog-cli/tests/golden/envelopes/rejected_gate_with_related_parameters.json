@@ -1,0 +1,9 @@
+{
+  "reason": "require `within_approval_limit` failed",
+  "related_parameters": [
+    "doc",
+    "amount"
+  ],
+  "rule": "within_approval_limit",
+  "status": "rejected"
+}

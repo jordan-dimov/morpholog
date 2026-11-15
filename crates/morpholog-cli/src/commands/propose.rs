@@ -43,8 +43,13 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
         };
         match traced {
             PgTracedOutcome::Outcome { outcome, trace } => {
+                let result = envelopes::with_related_parameters(
+                    serde_json::to_value(&outcome)?,
+                    program.prepared(),
+                    &[&transition.transformation_name],
+                );
                 print_json(&envelopes::Traced {
-                    result: &outcome,
+                    result: &result,
                     trace: &trace,
                 })?;
                 if let PgProposalOutcome::Rejected { reason, .. } = &outcome {
@@ -78,23 +83,35 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
                 },
                 Some(explanation),
             ) => {
-                print_json(&envelopes::RejectedWithExplanation::new(
-                    reason,
-                    rule.as_deref(),
-                    witness,
-                    compared.as_ref(),
-                    explanation,
+                print_json(&envelopes::with_related_parameters(
+                    serde_json::to_value(envelopes::RejectedWithExplanation::new(
+                        reason,
+                        rule.as_deref(),
+                        witness,
+                        compared.as_ref(),
+                        explanation,
+                    ))?,
+                    program.prepared(),
+                    &[&transition.transformation_name],
                 ))?;
                 return report_rejection(reason, &parsed);
             }
-            _ => print_json(&refused.outcome)?,
+            _ => print_json(&envelopes::with_related_parameters(
+                serde_json::to_value(&refused.outcome)?,
+                program.prepared(),
+                &[&transition.transformation_name],
+            ))?,
         }
     } else {
         let outcome = match propose_against_pg(&pool, &program, &proposal).await {
             Ok(outcome) => outcome,
             Err(err) => return report_request_failure(classify_pg_error(err)),
         };
-        print_json(&outcome)?;
+        print_json(&envelopes::with_related_parameters(
+            serde_json::to_value(&outcome)?,
+            program.prepared(),
+            &[&transition.transformation_name],
+        ))?;
         if let PgProposalOutcome::Rejected { reason, .. } = &outcome {
             return report_rejection(reason, &parsed);
         }
@@ -574,11 +591,17 @@ pub(crate) async fn propose_row_outcome(
                 explanation,
             ))
             .context("serialising the receipt")
-            .map_err(RowError::after_decision);
+            .map_err(RowError::after_decision)
+            .map(|v| {
+                envelopes::with_related_parameters(v, prepared, &[&transition.transformation_name])
+            });
         }
         serde_json::to_value(&refused.outcome)
             .context("serialising the receipt")
             .map_err(RowError::after_decision)
+            .map(|v| {
+                envelopes::with_related_parameters(v, prepared, &[&transition.transformation_name])
+            })
     } else {
         let outcome = propose_against_pg(pool, program, &Proposal::gateway(&transition))
             .await
@@ -586,6 +609,9 @@ pub(crate) async fn propose_row_outcome(
         serde_json::to_value(&outcome)
             .context("serialising the receipt")
             .map_err(RowError::after_decision)
+            .map(|v| {
+                envelopes::with_related_parameters(v, prepared, &[&transition.transformation_name])
+            })
     }
 }
 

@@ -440,3 +440,4 @@ impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::TracedError
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::TracedError
 impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::TracedError
 pub fn morpholog_cli::envelopes::audit_row_named(&morpholog_postgres::audit::AuditRow, alloc::vec::Vec<morpholog_cli::envelopes::NamedClaim>, alloc::vec::Vec<morpholog_cli::envelopes::NamedClaim>) -> serde_json::error::Result<serde_json::value::Value>
+pub fn morpholog_cli::envelopes::with_related_parameters(serde_json::value::Value, &morpholog_core::prepared::PreparedProgram, &[&morpholog_core::ir::TransformationName]) -> serde_json::value::Value

@@ -79,7 +79,8 @@ pub use admission::{Admission, EffectiveDelta, effective_delta};
 pub use analysis::{
     AnalysisError, ParamKind, has_admission_gate, predicates_asserted_by_stmt,
     predicates_read_by_stmt, predicates_referenced_by_derived, predicates_referenced_by_prop,
-    predicates_written_by, transformation_param_kinds, transformations_asserting,
+    predicates_written_by, related_parameters, transformation_param_kinds,
+    transformations_asserting,
 };
 pub use controls::{
     ControlMatrix, GateControl, GateFrontLoad, GateRef, InvariantFrontLoad, TransformationControls,

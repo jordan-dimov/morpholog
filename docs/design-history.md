@@ -1513,3 +1513,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 
 **Landed:** a `derived` block may have no `value` clause; its rows are its head keys over the `over` proposition. Nothing else changed: the evaluator, the cache, the live views and the view description already handled a row of keys alone, and the live-view differential now holds such a fragment to the kernel. A live view still refuses a domain comparison that can raise, with or without a value.
 
+
+### A refusal names the parameters its gate reads
+
+**Forced by:** the InvenTree fork (#763). Its whole backend serves InvenTree's own frontend, which reads field-keyed errors, so each family kept a table from rule to request field, restating what each rule reads and going stale when one was renamed.
+
+**Landed:** a refusal by a named gate carries `related_parameters`, the act's parameters the gate's expression reads, directly or through the `let`, `bind` and `for` statements before it, found by one walk in `morpholog_core::analysis` and added by one function on every route that prints a refusal. It is a static dependency, not a verdict on which input is wrong; an `if` test around the gate does not count. The audit record and the kernel's outcome are unchanged.

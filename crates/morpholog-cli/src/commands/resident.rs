@@ -342,9 +342,14 @@ impl Resident {
         )
         .await
         .map_err(|e| row_failure(classify_pg_error(e)))?;
-        let mut envelope = serde_json::to_value(&outcome)
-            .context("serialising the outcome")
-            .map_err(ResidentFailure::Operational)?;
+        let acts: Vec<_> = proposals.iter().map(|p| &p.transformation_name).collect();
+        let mut envelope = morpholog_cli::envelopes::with_related_parameters(
+            serde_json::to_value(&outcome)
+                .context("serialising the outcome")
+                .map_err(ResidentFailure::Operational)?,
+            self.prepared(),
+            &acts,
+        );
         if let Some(object) = envelope.as_object_mut() {
             object.insert("row".to_string(), serde_json::json!(row));
         }

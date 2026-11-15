@@ -129,6 +129,21 @@ class RunOutcomes(unittest.TestCase):
         outcome = envelopes.parse_run_outcome(golden("rejected.json"))
         self.assertEqual(outcome.rule, "no_flagged_accounts")
 
+    def test_a_named_gates_refusal_names_the_parameters_it_reads(self):
+        refused = envelopes.parse_run_outcome(
+            golden("rejected_gate_with_related_parameters.json")
+        )
+        assert isinstance(refused, envelopes.Rejected)
+        self.assertEqual(refused.related_parameters, ["doc", "amount"])
+        atomic = envelopes.parse_atomic_outcome(
+            golden("transact_rejected_with_related_parameters.json")
+        )
+        assert isinstance(atomic, envelopes.AtomicRejected)
+        self.assertEqual(atomic.related_parameters, ["doc", "amount"])
+        invariant = envelopes.parse_run_outcome(golden("rejected.json"))
+        assert isinstance(invariant, envelopes.Rejected)
+        self.assertIsNone(invariant.related_parameters)
+
     def test_rejected_with_and_without_explanation(self):
         bare = envelopes.parse_run_outcome(golden("rejected.json"))
         self.assertIsInstance(bare, envelopes.Rejected)
