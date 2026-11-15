@@ -41,6 +41,32 @@ impl Deliverer for ShutdownAfterFirstDelivery {
     }
 }
 
+/// Reads, while it holds the row, how far ahead its lease runs, then
+/// delivers and signals shutdown. A read that fails records nothing,
+/// which the test then reports.
+struct LeaseProbe {
+    pool: sqlx::PgPool,
+    shutdown: Arc<watch::Sender<bool>>,
+    lease_secs: Arc<std::sync::Mutex<Option<f64>>>,
+}
+
+impl Deliverer for LeaseProbe {
+    async fn deliver(&self, row: &OutboxRow) -> DeliveryOutcome {
+        let read: Result<(f64,), _> = sqlx::query_as(
+            "SELECT extract(epoch FROM lock_expires_at - now())::float8
+             FROM morpholog.outbox WHERE intent_id = $1",
+        )
+        .bind(row.intent_id)
+        .fetch_one(&self.pool)
+        .await;
+        if let (Ok((secs,)), Ok(mut slot)) = (read, self.lease_secs.lock()) {
+            *slot = Some(secs);
+        }
+        let _ = self.shutdown.send(true);
+        DeliveryOutcome::Delivered
+    }
+}
+
 /// Wait until `done` holds, yielding to the worker meanwhile, or fail
 /// after a second: the worker's round trips before and inside its loop
 /// are real, so a fixed number of yields would assume how many there are.
@@ -185,6 +211,42 @@ async fn worker_drains_pending_rows_and_then_observes_shutdown() {
         sleeps[0],
         Duration::from_millis(50),
         "sleep_for must request base_interval * jitter_factor (50ms * 1.0)"
+    );
+}
+
+/// The lease a worker is configured with is the one its claim takes, not
+/// the 30-second default: a deliverer that legitimately runs longer needs
+/// it.
+#[tokio::test]
+async fn worker_claims_rows_for_the_lease_it_is_given() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    commit_simple_entry(&pool, "entry_001", "p_worker").await;
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let lease_secs = Arc::new(std::sync::Mutex::new(None));
+    let worker = OutboxWorker::new(
+        pool.clone(),
+        "worker_a",
+        INTENT_TYPE,
+        LeaseProbe {
+            pool: pool.clone(),
+            shutdown: Arc::new(shutdown_tx),
+            lease_secs: lease_secs.clone(),
+        },
+        MockClock::new(Timestamp::now()),
+        FixedJitter::new(1.0),
+    )
+    .with_lease_duration(Duration::from_secs(600));
+    worker.run(shutdown_rx).await.unwrap();
+
+    let secs = lease_secs
+        .lock()
+        .unwrap()
+        .expect("the probe read the lease while it held the row");
+    assert!(
+        (590.0..=600.0).contains(&secs),
+        "the claim leased the row for {secs}s, not the configured 600s"
     );
 }
 
