@@ -1500,3 +1500,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** the same hosts (#816). A host proposing for thousands of users needed one grant per user, admitted in step with every sign-up, and only the root could admit one.
 
 **Landed:** on a closed deployment `ActorKindAuthority(kind, login)` lets a login assert any actor `ActorKind` gives that kind. No act may give an actor a second kind, and closing refuses a deployment where one has two, so a proposal looks its actor's grants up by the claims table's key instead of reading every kind claim. On a closed deployment only the root changes identity policy, except that `ActorKindEnrolment(kind, registrar)` lets a registrar enrol an actor its own act mints, so it can never classify an existing service into its own kind. The adapter checks each act's decided delta before writing it, on every path.
+
+### A live derived view chooses with `if`
+
+**Forced by:** the InvenTree fork (#788). A line's allocation state chooses between three cases, and its host kept that in a `CASE` joined by hand to the live views, because a live view refused `if(...)` and any value that was not a decimal.
+
+**Landed:** a live derived value may be an `if(...)`, rendered as a `CASE`: its test's ways of raising always count, and each branch's only where that branch is chosen, as the kernel evaluates only the chosen branch. A value may be declared `Bool` or `Subject` when it is a literal, a key, or an `if(...)` choosing between them. Two-argument `max` and `min` already rendered; the differential now holds a floor at zero too. A conditional inside a sum or arithmetic, and in compiled invariant checks, is still refused.

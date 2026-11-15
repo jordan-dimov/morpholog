@@ -11,11 +11,13 @@
 //! NULL. What the renderer cannot express refuses by name, as an
 //! invariant does.
 
-use morpholog_core::{DerivedClaim, PredicateArgKind, PredicateDecl, PredicateName};
+use morpholog_core::{
+    DerivedClaim, PredicateArgKind, PredicateDecl, PredicateName, Term, Value, ValueExpr,
+};
 
 use super::{
-    Bound, CompileReason, Ctx, Env, ErrorReport, Pending, from_list, nested_scope, quote_literal,
-    render_prop, seek_sql, value_sql,
+    Bound, CompileReason, Ctx, Env, ErrorReport, Pending, from_list, lift, nested_scope,
+    quote_literal, render_prop, seek_sql, value_sql,
 };
 use crate::sql_views::column_sql_at;
 
@@ -106,52 +108,29 @@ pub(crate) fn compile_derived(
                 detail: format!("head arity under the values of {}", head.name),
             }
         })?;
-        if *declared != PredicateArgKind::Decimal {
-            return Err(CompileReason::ArgumentKind {
-                kind: declared.clone(),
-            });
-        }
-        let operand = value_sql(&value.expr, &domain.env, &mut ctx)?;
-        let Some((amount, _unit)) = operand.dd else {
-            return Err(CompileReason::ComparisonShape {
-                detail: "a derived value that is not a decimal amount",
-            });
-        };
-        let mut own: Vec<String> = Vec::new();
-        for pending in std::mem::take(&mut ctx.pending) {
-            match pending {
-                Pending::Sum(sum) => {
-                    for probe in sum.body {
-                        own.push(probe.condition.clone());
-                        failures.push((probe.condition, class_of(&probe.report)));
-                    }
-                    if sum.can_meet_foreign {
-                        own.push(sum.kind_error.clone());
-                        failures.push((sum.kind_error, "sum_kind"));
-                    }
-                    own.push(sum.range_error.clone());
-                    failures.push((sum.range_error, "sum_range"));
-                    laterals.push(sum.lateral);
-                }
-                Pending::Covered(lateral) => laterals.push(lateral),
-                Pending::Value(probe) => {
-                    own.push(probe.condition.clone());
-                    failures.push((probe.condition, class_of(&probe.report)));
-                }
-            }
-        }
-        let computed = if own.is_empty() {
-            format!("({amount})::numeric")
+        let rendered = live_value(&value.expr, declared, &domain.env, &mut ctx, &mut laterals)?;
+        let computed = if rendered.failures.is_empty() {
+            rendered.sql
         } else {
+            let own: Vec<&str> = rendered.failures.iter().map(|(c, _)| c.as_str()).collect();
             format!(
-                "CASE WHEN {} THEN NULL ELSE ({amount})::numeric END",
-                own.join(" OR ")
+                "CASE WHEN {} THEN NULL ELSE {} END",
+                own.join(" OR "),
+                rendered.sql
             )
         };
+        failures.extend(rendered.failures);
         value_columns.push(format!(
             "{computed} AS {}",
             quote_ident(&head.args[position].name)
         ));
+    }
+    // Every value closes what it queued; anything left would name a
+    // LATERAL the view does not have.
+    if !ctx.pending.is_empty() {
+        return Err(CompileReason::UnvalidatedShape {
+            detail: "a derived domain leaving a value unclosed".to_string(),
+        });
     }
 
     let error = if failures.is_empty() {
@@ -183,6 +162,155 @@ pub(crate) fn compile_derived(
         .filter(|(predicate, _)| !predicate.as_str().starts_with(super::CALL_TABLE_PREFIX))
         .collect();
     Ok(LiveDerived { select, required })
+}
+
+/// One value of a live row: its SQL, of the column's type, and the
+/// conditions under which the kernel would raise on the row, each with
+/// its class, in the kernel's order.
+struct LiveValue {
+    sql: String,
+    failures: Vec<(String, &'static str)>,
+}
+
+/// A value of kind `kind` under the row's bindings. A decimal is any
+/// value the compiled fragment computes. A subject or a flag is a
+/// literal, a key, or an `if(...)` choosing between them. `if(...)` is a
+/// `CASE`: the kernel evaluates the test, then the chosen branch alone, so
+/// the test's ways of raising always count and each branch's only where
+/// that branch is chosen.
+fn live_value(
+    expr: &ValueExpr,
+    kind: &PredicateArgKind,
+    env: &Env,
+    ctx: &mut Ctx<'_>,
+    laterals: &mut Vec<String>,
+) -> Result<LiveValue, CompileReason> {
+    if let ValueExpr::Cond {
+        when,
+        then,
+        otherwise,
+    } = expr
+    {
+        let queued = ctx.pending.len();
+        let test = render_prop(when, env.clone(), ctx)?;
+        if ctx.pending.len() != queued {
+            return Err(CompileReason::UnvalidatedShape {
+                detail: "an `if` test leaving a value unclosed".to_string(),
+            });
+        }
+        if test.disjoins {
+            return Err(CompileReason::DisjunctionShape {
+                detail: "an `if` test ending in `or`",
+            });
+        }
+        // A test that binds no claim, a comparison over sums, reads its
+        // sums from the row itself, where its probes read them too.
+        let lifted = lift(&test.probes);
+        let holds = if test.from.is_empty() {
+            for lateral in test.laterals.iter().chain(&lifted.laterals) {
+                if !laterals.contains(lateral) {
+                    laterals.push(lateral.clone());
+                }
+            }
+            format!("({})", test.conjunction())
+        } else if lifted.laterals.is_empty() {
+            test.exists_sql()
+        } else {
+            return Err(CompileReason::UnvalidatedShape {
+                detail: "an `if` test raising before it binds a claim".to_string(),
+            });
+        };
+        let mut failures: Vec<(String, &'static str)> = lifted
+            .probes
+            .into_iter()
+            .map(|probe| {
+                let class = class_of(&probe.report);
+                (probe.condition, class)
+            })
+            .collect();
+        let chosen = live_value(then, kind, env, ctx, laterals)?;
+        let other = live_value(otherwise, kind, env, ctx, laterals)?;
+        for (condition, class) in chosen.failures {
+            failures.push((format!("({holds} AND {condition})"), class));
+        }
+        for (condition, class) in other.failures {
+            failures.push((format!("(NOT {holds} AND {condition})"), class));
+        }
+        return Ok(LiveValue {
+            sql: format!(
+                "CASE WHEN {holds} THEN {} ELSE {} END",
+                chosen.sql, other.sql
+            ),
+            failures,
+        });
+    }
+    if *kind == PredicateArgKind::Decimal {
+        return decimal_value(expr, env, ctx, laterals);
+    }
+    let refused = || CompileReason::ArgumentKind { kind: kind.clone() };
+    if *kind != PredicateArgKind::Subject && *kind != PredicateArgKind::Bool {
+        return Err(refused());
+    }
+    let sql = if let ValueExpr::Term(Term::Literal(Value::Subject(s))) = expr
+        && *kind == PredicateArgKind::Subject
+    {
+        format!("{}::text", quote_literal(s.as_str()))
+    } else if let ValueExpr::Term(Term::Literal(Value::Bool(b))) = expr
+        && *kind == PredicateArgKind::Bool
+    {
+        b.to_string()
+    } else if let ValueExpr::Term(Term::Var(v)) = expr
+        && let Some(Bound::Col(col)) = env.get(v)
+        && col.kind == *kind
+    {
+        column_sql_at(kind, &format!("{}.", col.alias), col.position).expr
+    } else {
+        return Err(refused());
+    };
+    Ok(LiveValue {
+        sql,
+        failures: Vec::new(),
+    })
+}
+
+/// A decimal value the compiled fragment computes, its sums as LATERAL
+/// items and its ways of raising as conditions on the row.
+fn decimal_value(
+    expr: &ValueExpr,
+    env: &Env,
+    ctx: &mut Ctx<'_>,
+    laterals: &mut Vec<String>,
+) -> Result<LiveValue, CompileReason> {
+    let start = ctx.pending.len();
+    let operand = value_sql(expr, env, ctx)?;
+    let Some((amount, _unit)) = operand.dd else {
+        return Err(CompileReason::ComparisonShape {
+            detail: "a derived value that is not a decimal amount",
+        });
+    };
+    let mut failures = Vec::new();
+    for pending in ctx.pending.drain(start..).collect::<Vec<_>>() {
+        match pending {
+            Pending::Sum(sum) => {
+                for probe in sum.body {
+                    failures.push((probe.condition, class_of(&probe.report)));
+                }
+                if sum.can_meet_foreign {
+                    failures.push((sum.kind_error, "sum_kind"));
+                }
+                failures.push((sum.range_error, "sum_range"));
+                laterals.push(sum.lateral);
+            }
+            Pending::Covered(lateral) => laterals.push(lateral),
+            Pending::Value(probe) => {
+                failures.push((probe.condition, class_of(&probe.report)));
+            }
+        }
+    }
+    Ok(LiveValue {
+        sql: format!("({amount})::numeric"),
+        failures,
+    })
 }
 
 fn quote_ident(name: &str) -> String {
