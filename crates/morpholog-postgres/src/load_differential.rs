@@ -220,7 +220,8 @@ async fn the_loader_follows_a_chain_of_binds_to_the_rows_the_links_name() {
 async fn relation_sireads(pool: &PgPool) -> i64 {
     sqlx::query_scalar(
         "SELECT count(*) FROM pg_locks
-          WHERE mode = 'SIReadLock' AND locktype = 'relation'
+          WHERE database = (SELECT oid FROM pg_database WHERE datname = current_database())
+            AND mode = 'SIReadLock' AND locktype = 'relation'
             AND relation = 'morpholog.claims'::regclass",
     )
     .fetch_one(pool)

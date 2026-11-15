@@ -103,7 +103,7 @@ async fn retract_around_a_no_op_admit(pool: &PgPool, pg: &Arc<PgProgram>, k: &st
     for waited in 0.. {
         let blocked: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM pg_stat_activity
-              WHERE wait_event_type = 'Lock' AND query LIKE 'DELETE FROM morpholog.claims%'",
+              WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE 'DELETE FROM morpholog.claims%'",
         )
         .fetch_one(pool)
         .await
