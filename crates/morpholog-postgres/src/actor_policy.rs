@@ -28,7 +28,7 @@
 //! gateways and credentials are. This is actor-assertion policy, not
 //! proof of authorship.
 
-use morpholog_core::{PredicateArgKind, Program, Subject};
+use morpholog_core::{ClaimInstance, EvalValue, PredicateArgKind, Program, Subject, Transition};
 use sqlx::postgres::types::Oid;
 use sqlx::{PgPool, Postgres, Transaction};
 
@@ -41,6 +41,26 @@ pub const RESTRICTED_PREDICATE: &str = "ActorAssertionRestricted";
 
 /// The grant claim: this login role may assert this actor.
 pub const AUTHORITY_PREDICATE: &str = "ActorAssertionAuthority";
+
+/// The kind claim: this actor is of this kind, at most one per actor.
+pub(crate) const KIND_PREDICATE: &str = "ActorKind";
+
+/// The kind grant: this login role may assert any actor of this kind.
+pub(crate) const KIND_AUTHORITY_PREDICATE: &str = "ActorKindAuthority";
+
+/// The registrar: this actor may enrol actors of this kind, each one only
+/// in the act that mints it.
+pub(crate) const KIND_ENROLMENT_PREDICATE: &str = "ActorKindEnrolment";
+
+/// Every reserved name: on a closed deployment only the root, or a
+/// registrar enrolling a new actor, changes a claim under one.
+const POLICY_PREDICATES: [&str; 5] = [
+    RESTRICTED_PREDICATE,
+    AUTHORITY_PREDICATE,
+    KIND_PREDICATE,
+    KIND_AUTHORITY_PREDICATE,
+    KIND_ENROLMENT_PREDICATE,
+];
 
 /// A declaration of a reserved name that the runtime cannot recognise.
 ///
@@ -68,7 +88,13 @@ impl std::fmt::Display for PolicyDeclarationError {
 /// Check any declaration of the reserved names against the shape the
 /// runtime matches. A programme that declares neither is unaffected.
 pub fn validate_declarations(program: &Program) -> Vec<PolicyDeclarationError> {
-    let expected: [(&str, usize); 2] = [(RESTRICTED_PREDICATE, 1), (AUTHORITY_PREDICATE, 2)];
+    let expected: [(&str, usize); 5] = [
+        (RESTRICTED_PREDICATE, 1),
+        (AUTHORITY_PREDICATE, 2),
+        (KIND_PREDICATE, 2),
+        (KIND_AUTHORITY_PREDICATE, 2),
+        (KIND_ENROLMENT_PREDICATE, 2),
+    ];
     let mut findings = Vec::new();
     for declaration in &program.predicates {
         let name = declaration.name.as_str();
@@ -118,10 +144,13 @@ pub(crate) async fn authorise(
         r#"SELECT count(*) AS "malformed!" FROM morpholog.claims
            WHERE (predicate_name = $1
                     AND jsonb_array_length(arguments) IS DISTINCT FROM 1)
-              OR (predicate_name = $2
+              OR (predicate_name = ANY($2)
                     AND jsonb_array_length(arguments) IS DISTINCT FROM 2)"#,
         RESTRICTED_PREDICATE,
-        AUTHORITY_PREDICATE,
+        &POLICY_PREDICATES[1..]
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
     )
     .fetch_one(&mut **tx)
     .await
@@ -129,7 +158,9 @@ pub(crate) async fn authorise(
     if malformed > 0 {
         return Err(PgError::ActorPolicyDeclaration {
             findings: vec![format!(
-                "{malformed} admitted claim(s) under `{RESTRICTED_PREDICATE}` or                  `{AUTHORITY_PREDICATE}` do not have the shape the runtime matches,                  so the restriction they look like would protect nothing"
+                "{malformed} admitted claim(s) under the actor-policy names do not have \
+                 the shape the runtime matches, so the restriction they look like would \
+                 protect nothing"
             )],
         });
     }
@@ -177,24 +208,118 @@ pub(crate) async fn authorise(
         {"type": "subject", "value": actor.as_str()},
         {"type": "subject", "value": login_role},
     ]);
-    let authorised = sqlx::query_scalar!(
-        r#"SELECT EXISTS (
-               SELECT 1 FROM morpholog.claims
-               WHERE predicate_name = $1 AND arguments = $2
-           ) AS "authorised!""#,
+    let actor_value = serde_json::json!({"type": "subject", "value": actor.as_str()});
+    let login_value = serde_json::json!({"type": "subject", "value": login_role});
+    let held = sqlx::query!(
+        r#"SELECT
+               EXISTS (SELECT 1 FROM morpholog.claims
+                       WHERE predicate_name = $1 AND arguments = $2) AS "exact!",
+               (SELECT count(*) FROM morpholog.claims
+                WHERE predicate_name = $3 AND arguments -> 0 = $4) AS "kinds!",
+               EXISTS (SELECT 1 FROM morpholog.claims k
+                       JOIN morpholog.claims g
+                         ON g.predicate_name = $5
+                        AND g.arguments -> 0 = k.arguments -> 1
+                        AND g.arguments -> 1 = $6
+                       WHERE k.predicate_name = $3 AND k.arguments -> 0 = $4) AS "by_kind!""#,
         AUTHORITY_PREDICATE,
         grant,
+        KIND_PREDICATE,
+        actor_value,
+        KIND_AUTHORITY_PREDICATE,
+        login_value,
     )
     .fetch_one(&mut **tx)
     .await
     .map_err(classify_checked_query)?;
-    if authorised {
+    // Two kinds would let either kind's logins assert the actor, so the
+    // policy is refused rather than combined.
+    if held.kinds > 1 {
+        return Err(PgError::ActorKindAmbiguous {
+            actor: actor.clone(),
+            kinds: held.kinds,
+        });
+    }
+    if held.exact || held.by_kind {
         return Ok(());
     }
     Err(PgError::ActorAssertionUnauthorised {
         actor: actor.clone(),
         login_role: login_role.to_string(),
     })
+}
+
+/// On a closed deployment, refuse a decided delta that changes identity
+/// policy without the authority to: only the root changes a claim under a
+/// reserved name, except that a registrar holding
+/// `ActorKindEnrolment(kind, registrar)` may admit `ActorKind(new, kind)`
+/// for a subject this same act drew. The delta is what the act would
+/// write, so no branch of a transformation, nor a later act of a
+/// `transact`, writes policy unchecked. An open deployment leaves policy
+/// writes to the programme's gates, as before.
+pub(crate) async fn authorise_policy_writes(
+    tx: &mut Transaction<'_, Postgres>,
+    transition: &Transition,
+    drawn: &[Subject],
+    asserted: &[ClaimInstance],
+    retracted: &[ClaimInstance],
+) -> Result<(), PgError> {
+    let is_policy = |c: &&ClaimInstance| POLICY_PREDICATES.contains(&c.predicate.as_str());
+    if !asserted.iter().chain(retracted).any(|c| is_policy(&c)) {
+        return Ok(());
+    }
+    let identity = sqlx::query!(
+        r#"SELECT closed AS "closed!", root_actor FROM morpholog.deployment_identity"#
+    )
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(classify_checked_query)?
+    .ok_or(PgError::DeploymentIdentityMissing)?;
+    if !identity.closed || identity.root_actor.as_deref() == Some(transition.actor.as_str()) {
+        return Ok(());
+    }
+    let registrar = serde_json::json!({"type": "subject", "value": transition.actor.as_str()});
+    if let Some(claim) = retracted.iter().find(is_policy) {
+        return Err(policy_write_refused(transition, claim, "retract"));
+    }
+    for claim in asserted.iter().filter(is_policy) {
+        let enrolment = match (claim.predicate.as_str(), claim.args.as_slice()) {
+            (KIND_PREDICATE, [EvalValue::Subject(new), EvalValue::Subject(kind)])
+                if drawn.contains(new) =>
+            {
+                Some(serde_json::json!([
+                    {"type": "subject", "value": kind.as_str()},
+                    registrar,
+                ]))
+            }
+            _ => None,
+        };
+        let Some(enrolment) = enrolment else {
+            return Err(policy_write_refused(transition, claim, "admit"));
+        };
+        let registered = sqlx::query_scalar!(
+            r#"SELECT EXISTS (
+                   SELECT 1 FROM morpholog.claims
+                   WHERE predicate_name = $1 AND arguments = $2
+               ) AS "registered!""#,
+            KIND_ENROLMENT_PREDICATE,
+            enrolment,
+        )
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(classify_checked_query)?;
+        if !registered {
+            return Err(policy_write_refused(transition, claim, "admit"));
+        }
+    }
+    Ok(())
+}
+
+fn policy_write_refused(transition: &Transition, claim: &ClaimInstance, verb: &str) -> PgError {
+    PgError::PolicyWriteUnauthorised {
+        actor: transition.actor.clone(),
+        write: format!("{verb} {}", claim.predicate),
+    }
 }
 
 /// Who may assert an actor on a deployment.

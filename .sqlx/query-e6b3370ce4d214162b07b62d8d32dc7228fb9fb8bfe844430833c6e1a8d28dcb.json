@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT closed AS \"closed!\", root_actor FROM morpholog.deployment_identity",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "closed!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "morpholog.deployment_identity",
+            "name": "closed"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "root_actor",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "morpholog.deployment_identity",
+            "name": "root_actor"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "e6b3370ce4d214162b07b62d8d32dc7228fb9fb8bfe844430833c6e1a8d28dcb"
+}

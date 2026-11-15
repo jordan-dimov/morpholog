@@ -568,6 +568,14 @@ pub(crate) async fn decide_act(
             emitted,
         } => {
             let transition_id = Uuid::now_v7();
+            crate::actor_policy::authorise_policy_writes(
+                tx,
+                transition,
+                &draws.subjects(),
+                &asserted,
+                &retracted,
+            )
+            .await?;
             // Check only what the database says the delta changed.
             let (effective, operations) =
                 write_claim_delta(tx, transition_id, &asserted, &retracted).await?;
@@ -1610,6 +1618,14 @@ async fn write_accepted(
     draws: &DrawRecord,
     login_role: &LoginRole,
 ) -> Result<(), PgError> {
+    crate::actor_policy::authorise_policy_writes(
+        tx,
+        transition,
+        &draws.subjects(),
+        asserted_claims,
+        retracted_claims,
+    )
+    .await?;
     let (_, operations) =
         write_claim_delta(tx, transition_id, asserted_claims, retracted_claims).await?;
     write_acceptance_record(
