@@ -1,5 +1,5 @@
 {
-  "format": 3,
+  "format": 4,
   "programme": "trade_lifecycle",
   "model_hash": "sha256:7b63dc6b0e8f297af212deede33ac714cda6418f67b0691320a5ae569496dbb5",
   "schema": "morpholog_views",
@@ -113,6 +113,10 @@
       "identity": [
         [
           "version_id"
+        ],
+        [
+          "trade",
+          "effective_from"
         ]
       ]
     },
@@ -192,7 +196,12 @@
           "position": 1
         }
       ],
-      "identity": []
+      "identity": [
+        [
+          "trade",
+          "price"
+        ]
+      ]
     },
     {
       "predicate": "MayConfirm",
@@ -229,7 +238,12 @@
           "position": 1
         }
       ],
-      "identity": []
+      "identity": [
+        [
+          "principal",
+          "commodity"
+        ]
+      ]
     },
     {
       "predicate": "TradeConfirmed",
@@ -280,7 +294,14 @@
           "position": 3
         }
       ],
-      "identity": []
+      "identity": [
+        [
+          "trade",
+          "counterparty",
+          "confirmation_id",
+          "confirmed_by"
+        ]
+      ]
     },
     {
       "predicate": "OfficialPrice",
@@ -365,7 +386,11 @@
           "position": 1
         }
       ],
-      "identity": []
+      "identity": [
+        [
+          "trade"
+        ]
+      ]
     },
     {
       "predicate": "OfficialPriceSupersedes",
@@ -402,7 +427,12 @@
           "position": 1
         }
       ],
-      "identity": []
+      "identity": [
+        [
+          "new_official_price_id",
+          "prior_official_price_id"
+        ]
+      ]
     },
     {
       "predicate": "TradeSettled",
@@ -542,7 +572,12 @@
           "position": 1
         }
       ],
-      "identity": []
+      "identity": [
+        [
+          "settlement_id",
+          "version_id"
+        ]
+      ]
     },
     {
       "predicate": "TermsTimeline",
