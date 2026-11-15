@@ -1785,6 +1785,68 @@ fn ndjson(stdout: &str) -> Vec<Value> {
         .collect()
 }
 
+/// A gate that reads `decided_at` is explained at the start of the read
+/// transaction its state came from, and the answer names that instant: a
+/// lot closing far ahead takes a seal, one closed long ago refuses it at
+/// the deadline gate. Both deadlines are far from now, so the verdicts do
+/// not depend on when the test runs.
+#[tokio::test(flavor = "current_thread")]
+async fn explain_judges_a_clock_gate_at_its_own_read_transaction_start() {
+    reset_db().await;
+    let file = common::repo_root()
+        .join("examples/26_sealed_bids/sealed_bids.morph")
+        .to_str()
+        .unwrap()
+        .to_string();
+    for (lot, closes_at) in [
+        ("ahead", "2099-01-01T00:00:00Z"),
+        ("gone", "2000-01-01T00:00:00Z"),
+    ] {
+        let (status, _, stderr) = run_cli(&[
+            "propose",
+            &file,
+            "offer",
+            "--actor",
+            "house",
+            "--args-named",
+            &format!(r#"{{"lot":"{lot}","closes_at":"{closes_at}"}}"#),
+        ]);
+        assert!(status.success(), "{stderr}");
+    }
+    let explain = |lot: &str| {
+        let before = jiff::Timestamp::now();
+        let (status, stdout, stderr) = run_cli(&[
+            "explain",
+            &file,
+            "seal",
+            "--actor",
+            "bidder",
+            "--args-named",
+            &format!(r#"{{"lot":"{lot}","commitment":"c"}}"#),
+            "--json",
+        ]);
+        let after = jiff::Timestamp::now();
+        assert!(status.success(), "{stderr}");
+        let explanation: Value = serde_json::from_str(&stdout).expect("an explanation");
+        let at: jiff::Timestamp = explanation["transition"]["decided_at"]
+            .as_str()
+            .expect("the instant is named")
+            .parse()
+            .expect("an instant");
+        assert!(
+            before <= at && at <= after,
+            "{at} outside {before}..{after}"
+        );
+        explanation
+    };
+    assert_eq!(explain("ahead")["verdict"], "admissible");
+    let refused = explain("gone");
+    assert_eq!(
+        refused["verdict"]["rejected"]["rule"], "before_the_deadline",
+        "{refused}"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn inspect_audit_streams_one_ndjson_line_per_committed_transition() {
     reset_db().await;

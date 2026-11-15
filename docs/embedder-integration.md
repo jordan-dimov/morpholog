@@ -221,6 +221,8 @@ Read-only. Exit code is always zero on a parsed-and-validated programme, whether
 
 The `--actor` you give takes part in the rules as `actor`, but `explain` does not check that the login running it may assert that actor (see "Restricting who may assert an actor"). `propose`, `transact` and the session's `propose` do. So an admissible verdict from `explain` does not mean this login's proposal would be accepted.
 
+A rule that reads `decided_at` is judged at the start of `explain`'s own read transaction, the one its state is read in, as a proposal is judged at its transaction's start; `transition.decided_at` says which instant that was, and the prose prints it. It is an input to that answer, not a promise: a proposal sent after it starts its own transaction, later, and a deadline between the two decides it differently. No caller supplies the instant.
+
 Stated once, for a loop that acts on the answer: an admissible `explain` is permission to attempt the governed act, not an authorisation. It does not check the actor-assertion policy, it holds no snapshot or lock past its one read, and it does not guarantee that a later `propose` of the same act commits, because that proposal is its own transaction against whatever the state is by then. The same holds through the session (`{"op": "explain"}`, below), which runs the same read and the same kernel.
 
 ### `morpholog check --json`

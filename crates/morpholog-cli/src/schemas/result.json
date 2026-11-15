@@ -586,7 +586,8 @@
           "properties": {
             "transformation": { "type": "string" },
             "args": { "type": "array", "items": { "type": "string" } },
-            "actor": { "type": "string" }
+            "actor": { "type": "string" },
+            "decided_at": { "type": "string", "format": "date-time" }
           }
         },
         "verdict": {

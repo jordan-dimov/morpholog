@@ -12,7 +12,7 @@
 
 use anyhow::Context;
 use morpholog_core::{Subject, Transition};
-use morpholog_postgres::load_scoped_state;
+use morpholog_postgres::load_explanation_state;
 
 use crate::ExplainArgs;
 use crate::commands::args::{CliArgs, decode_args, with_schema_hint};
@@ -37,7 +37,7 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
         .map_err(|e| with_schema_hint(e, &args.file))?;
 
     let pool = connect(&args.db.database_url).await?;
-    let state = load_scoped_state(&pool, &prepared, &transformation.name)
+    let (state, decided_at) = load_explanation_state(&pool, &prepared, &transformation.name)
         .await
         .context("failed to load scoped pre-state")?
         .context("the transformation was looked up in this programme")?;
@@ -46,7 +46,7 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
         transformation_name: transformation.name.clone(),
         args: eval_args,
         actor: Subject::from(args.actor.clone()),
-        decided_at: None,
+        decided_at: Some(decided_at),
     };
 
     let explanation = prepared.explain(

@@ -98,8 +98,8 @@ pub use checkpoints::{
 pub use claim_key::arguments_hash;
 pub use claims::{
     ClaimFilter, ClaimRead, StoredShape, list_claims, list_claims_for_predicates,
-    list_claims_where, load_scoped_state, read_claims, read_claims_for_predicates,
-    read_claims_where, stored_claim_shapes,
+    list_claims_where, load_explanation_state, load_scoped_state, read_claims,
+    read_claims_for_predicates, read_claims_where, stored_claim_shapes,
 };
 #[doc(hidden)]
 pub use compiled::fetch_diagnostic;

@@ -3096,6 +3096,7 @@ pub async fn morpholog_postgres::list_pending_outbox(&sqlx_postgres::PgPool) -> 
 pub async fn morpholog_postgres::list_rejection_rows(&sqlx_postgres::PgPool, u32, core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::RejectionRow>, morpholog_postgres::PgError>
 pub fn morpholog_postgres::listed_roles(&morpholog_postgres::DeploymentRoles) -> alloc::string::String
 pub async fn morpholog_postgres::load_checkpoint(&sqlx_postgres::PgPool, i64) -> core::result::Result<core::option::Option<morpholog_postgres::Checkpoint>, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::load_explanation_state(&sqlx_postgres::PgPool, &morpholog_core::prepared::PreparedProgram, &morpholog_core::ir::TransformationName) -> core::result::Result<core::option::Option<(morpholog_core::state::State, jiff::timestamp::Timestamp)>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::load_scoped_state(&sqlx_postgres::PgPool, &morpholog_core::prepared::PreparedProgram, &morpholog_core::ir::TransformationName) -> core::result::Result<core::option::Option<morpholog_core::state::State>, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::mark_compensation_failed(&sqlx_postgres::PgPool, uuid::Uuid, &str, &str) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::mark_outbox_delivered(&sqlx_postgres::PgPool, uuid::Uuid, &str) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
