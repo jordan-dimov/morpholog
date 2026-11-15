@@ -284,7 +284,9 @@ pub(crate) struct HistoryCheck {
     activated: bool,
     /// The missing activation was reported once.
     reported_missing: bool,
-    rows: i64,
+    /// Rows replayed that are transitions of a programme: every row but
+    /// the activation's control rows.
+    transitions: i64,
     chronology: Chronology,
     legacy_disagreement: Option<LegacyDisagreement>,
     conflicts: Vec<ReplayConflict>,
@@ -300,7 +302,7 @@ pub(crate) struct LegacyDisagreement {
 }
 
 pub(crate) struct HistoryVerdict {
-    pub(crate) rows: i64,
+    pub(crate) transitions: i64,
     pub(crate) admitted_by: HashMap<ClaimInstance, Uuid>,
     pub(crate) legacy_disagreement: Option<LegacyDisagreement>,
     pub(crate) conflicts: Vec<ReplayConflict>,
@@ -309,8 +311,10 @@ pub(crate) struct HistoryVerdict {
 impl HistoryCheck {
     /// The next row in canonical order.
     pub(crate) fn push(&mut self, row: &AuditRow) -> Result<(), serde_json::Error> {
-        self.rows += 1;
         let effect = row.effect();
+        if !effect.kind.is_control() {
+            self.transitions += 1;
+        }
         let mut faults: Vec<String> = Vec::new();
         let migration = matches!(row.attestation, Some(AuditAttestation::Migration { .. }));
         match effect.kind {
@@ -411,7 +415,7 @@ impl HistoryCheck {
             });
         }
         HistoryVerdict {
-            rows: self.rows,
+            transitions: self.transitions,
             admitted_by: self.admitted_by,
             legacy_disagreement: self.legacy_disagreement,
             conflicts: self.conflicts,
