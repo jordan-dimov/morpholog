@@ -1123,6 +1123,7 @@ class Morpholog:
         *,
         witnesses: list[str] | None = None,
         covering: str | None = None,
+        wait: float | None = None,
     ) -> envelopes.CheckpointCreated | envelopes.CheckpointNoNewRows:
         """Record a checkpoint over the current stable prefix, or return
         the unchanged head - either way a usable external anchor. Pass
@@ -1138,15 +1139,23 @@ class Morpholog:
         transition, or the call raises: ``MorphologNotCovered`` while it
         is outside the stable prefix (nothing recorded; retry after the
         prefix advances), ``MorphologError`` for an id the log does not
-        hold."""
+        hold. ``wait`` (seconds, with ``covering``) has the command ask
+        again while the transition is withheld, up to that long, before
+        raising ``MorphologNotCovered``; any other error raises at once."""
         if (signing_key is None) != (key_id is None):
             raise ValueError("signing_key and key_id must be given together")
+        if wait is not None and (covering is None or wait < 0):
+            raise ValueError("wait needs covering, and cannot be negative")
         args = ["audit", "checkpoint", "--database-url", self.database_url]
         if signing_key is not None:
             args.extend(["--signing-key", str(signing_key), "--key-id", str(key_id)])
         args += self._repeat("--witness", witnesses)
         args += self._opt("--covering", covering)
-        proc = self._run(args, timeout=self.timeout)
+        args += self._opt("--wait", None if wait is None else f"{wait}s")
+        timeout = self.timeout
+        if timeout is not None and wait is not None:
+            timeout += wait
+        proc = self._run(args, timeout=timeout)
         payload = json.loads(self._decided(proc, args))
         if isinstance(payload, dict) and payload.get("status") == "error":
             raise MorphologNotCovered(envelopes.CheckpointRefusal.from_json(payload))

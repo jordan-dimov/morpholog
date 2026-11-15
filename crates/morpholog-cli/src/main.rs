@@ -672,6 +672,15 @@ pub(crate) struct CheckpointArgs {
     /// is an ordinary error.
     #[arg(long, value_name = "TRANSITION_ID")]
     pub(crate) covering: Option<uuid::Uuid>,
+
+    /// With `--covering`: while the transition is still outside the
+    /// stable prefix, ask again until it is inside or this long has
+    /// passed (`30s`, `2m`, `PT30S`; at most a day), then record the checkpoint or give
+    /// the same `transition_not_covered` refusal. The prefix advances when
+    /// every writer that started before the transition has finished,
+    /// usually within seconds. Any other error fails at once.
+    #[arg(long, value_name = "DURATION", requires = "covering", value_parser = commands::checkpoint::parse_wait)]
+    pub(crate) wait: Option<std::time::Duration>,
 }
 
 /// Arguments for `audit witness`: which recorded checkpoint, and which
