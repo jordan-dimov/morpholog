@@ -150,10 +150,10 @@ pub(crate) use provision::reapply_least_privilege;
 pub use provision::{
     DEFAULT_ROLE_PREFIX, DeploymentRoles, DroppedSchema, InitOutcome, RecordedRoles, RoleMember,
     RoleMembers, SessionCount, databases_also_reached, deployment_roles, direct_members,
-    drop_schema, initialise_schema, listed_roles, other_sessions, provision_least_privilege,
-    rebind_least_privilege, redact_database_url, require_can_provision_least_privilege,
-    require_deployment_roles, single_connection_pool, with_connection_defaults,
-    with_connection_defaults_as,
+    drop_schema, initialise_closed_schema, initialise_schema, listed_roles, other_sessions,
+    provision_least_privilege, rebind_least_privilege, redact_database_url,
+    require_can_provision_least_privilege, require_deployment_roles, single_connection_pool,
+    with_connection_defaults, with_connection_defaults_as,
 };
 pub use receipt::{
     CheckpointMatch, Completeness, Evaluation, EvaluationReceipt, ParsedReceipt, ProgramMatch,

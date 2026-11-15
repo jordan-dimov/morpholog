@@ -228,6 +228,10 @@ pub enum PgError {
     /// `init --root-login` named a login the cluster does not have.
     #[error("no login role `{0}` on this cluster to be the deployment's root login")]
     RootLoginMissing(String),
+    /// `init --root-login` named a role that cannot log in, so nobody
+    /// could act as the root.
+    #[error("role `{0}` cannot log in (NOLOGIN), so it cannot be the deployment's root login")]
+    RootLoginCannotLogIn(String),
     /// The deployment is already closed under another root, which only
     /// the owner's SQL changes.
     #[error(

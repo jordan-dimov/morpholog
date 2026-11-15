@@ -18,8 +18,8 @@ use morpholog_core::Subject;
 use morpholog_postgres::PgPool;
 use morpholog_postgres::{
     DeploymentRoles, InitOutcome, actors_without_grant, close_deployment, drop_schema,
-    initialise_schema, provision_least_privilege, rebind_least_privilege, redact_database_url,
-    require_can_provision_least_privilege,
+    initialise_closed_schema, initialise_schema, provision_least_privilege, rebind_least_privilege,
+    redact_database_url, require_can_provision_least_privilege,
 };
 
 use crate::InitArgs;
@@ -63,10 +63,18 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
     } else {
         None
     };
-    let status = match initialise_schema(&pool)
-        .await
-        .context("schema provisioning failed")?
-    {
+    let root = args
+        .root_actor
+        .as_deref()
+        .zip(args.root_login.as_deref())
+        .map(|(actor, login)| (Subject::from(actor), login));
+    // A new schema is closed in its own transaction, so a refused root
+    // leaves no deployment behind, never an open one.
+    let initialised = match &root {
+        Some((actor, login)) => initialise_closed_schema(&pool, actor, login).await,
+        None => initialise_schema(&pool).await,
+    };
+    let status = match initialised.context("schema provisioning failed")? {
         InitOutcome::Initialised => "initialised",
         InitOutcome::AlreadyInitialised if args.skip_if_exists => "already-initialised",
         InitOutcome::AlreadyInitialised => {
@@ -103,11 +111,11 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
     } else {
         None
     };
-    if let (Some(actor), Some(login)) = (&args.root_actor, &args.root_login) {
+    if let Some((actor, login)) = &root {
         if status == "already-initialised" {
             morpholog_postgres::require_current_schema(&pool).await?;
+            close(&pool, actor, login, args.confirm).await?;
         }
-        close(&pool, &Subject::from(actor.as_str()), login, args.confirm).await?;
     } else if status == "initialised"
         || morpholog_postgres::require_current_schema(&pool)
             .await

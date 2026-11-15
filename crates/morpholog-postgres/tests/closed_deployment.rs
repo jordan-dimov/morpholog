@@ -295,6 +295,11 @@ async fn closing_again_under_the_same_root_changes_nothing_and_another_is_refuse
         close_deployment(&admin, &root, "mtest_idc_no_such_login").await,
         Err(PgError::RootLoginMissing(_))
     ));
+    // A built-in role that cannot log in: nobody could act as the root.
+    assert!(matches!(
+        close_deployment(&admin, &root, "pg_monitor").await,
+        Err(PgError::RootLoginCannotLogIn(_))
+    ));
     assert_eq!(
         deployment_identity(&admin).await.unwrap(),
         DeploymentIdentity::Open

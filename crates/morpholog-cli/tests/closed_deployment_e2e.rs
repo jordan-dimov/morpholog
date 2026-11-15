@@ -209,3 +209,41 @@ async fn closing_a_deployment_with_history_lists_the_actors_no_grant_names() {
         alice.2
     );
 }
+
+/// A closed `init` that cannot bind its root leaves no schema, never an
+/// open deployment.
+#[tokio::test(flavor = "current_thread")]
+async fn a_closed_init_that_fails_leaves_no_deployment() {
+    let (admin, name, url) = scratch("failed").await;
+    let mut outcomes = Vec::new();
+    for login in ["mtest_idc_no_such_login", "pg_monitor"] {
+        let (status, _, stderr) = run(&[
+            "init",
+            "--database-url",
+            &url,
+            "--root-actor",
+            "root_admin",
+            "--root-login",
+            login,
+        ]);
+        let db = PgPool::connect(&url).await.unwrap();
+        let schema: Option<String> = sqlx::query_scalar(
+            "SELECT nspname::text FROM pg_namespace WHERE nspname = 'morpholog'",
+        )
+        .fetch_optional(&db)
+        .await
+        .unwrap();
+        db.close().await;
+        outcomes.push((login, status, stderr, schema));
+    }
+    drop_scratch(&admin, &name).await;
+
+    for (login, status, stderr, schema) in outcomes {
+        assert_eq!(status.code(), Some(1), "{login}: {stderr}");
+        assert!(
+            stderr.contains(login),
+            "{login}: the refusal names it: {stderr}"
+        );
+        assert_eq!(schema, None, "{login}: nothing was provisioned");
+    }
+}

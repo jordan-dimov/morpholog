@@ -380,6 +380,7 @@ pub(crate) fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
         | PgError::ActorPolicyDeclaration { .. }
         | PgError::DeploymentIdentityMissing
         | PgError::RootLoginMissing(_)
+        | PgError::RootLoginCannotLogIn(_)
         | PgError::DeploymentRootDiffers { .. }
         | PgError::UnknownTransformation { .. }
         | PgError::NoCheckpoint

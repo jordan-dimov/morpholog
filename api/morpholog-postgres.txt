@@ -651,6 +651,7 @@ pub morpholog_postgres::PgError::RejectionLogFailure(alloc::boxed::Box<morpholog
 pub morpholog_postgres::PgError::RootActorUnauthorised
 pub morpholog_postgres::PgError::RootActorUnauthorised::actor: morpholog_core::ir::Subject
 pub morpholog_postgres::PgError::RootActorUnauthorised::login_role: alloc::string::String
+pub morpholog_postgres::PgError::RootLoginCannotLogIn(alloc::string::String)
 pub morpholog_postgres::PgError::RootLoginMissing(alloc::string::String)
 pub morpholog_postgres::PgError::SchemaAhead
 pub morpholog_postgres::PgError::SchemaAhead::binary: i32
@@ -3110,6 +3111,7 @@ pub async fn morpholog_postgres::fetch_diagnostic(&mut sqlx_core::transaction::T
 pub async fn morpholog_postgres::frontier_pass_with(&sqlx_postgres::PgPool, i64, core::option::Option<usize>) -> core::result::Result<morpholog_postgres::FrontierProgress, morpholog_postgres::PgError>
 pub fn morpholog_postgres::generate_signing_key() -> ed25519_dalek::signing::SigningKey
 pub fn morpholog_postgres::head_version() -> i32
+pub async fn morpholog_postgres::initialise_closed_schema(&sqlx_postgres::PgPool, &morpholog_core::ir::Subject, &str) -> core::result::Result<morpholog_postgres::InitOutcome, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::initialise_schema(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::InitOutcome, morpholog_postgres::PgError>
 pub fn morpholog_postgres::issue_receipt(&morpholog_core::validate::ValidatedProgram<'_>, &morpholog_postgres::EvidencePack, morpholog_postgres::ReceiptQuery) -> core::result::Result<morpholog_postgres::EvaluationReceipt, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::legacy_root_full_scan(&sqlx_postgres::PgPool) -> core::result::Result<(u64, alloc::string::String), morpholog_postgres::PgError>
