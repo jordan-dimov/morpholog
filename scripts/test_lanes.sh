@@ -22,16 +22,39 @@ jobs=${1:-$(( $(nproc) / 3 ))}
 pg_packages=(morpholog-cli morpholog-postgres morpholog-outbox morpholog-bench)
 
 work=$(mktemp -d)
-created=()
+# Every copy this run makes is named for it, so a later run can tell a
+# copy a killed run left behind from one a live run is using.
+run=$$
+template=""
+sweeper=""
+
+# A drop forces a checkpoint, about a second each, but drops at once
+# share them; so no binary waits on its own drop, and every copy goes
+# together once the verdict is known.
+drop_all() {
+    local url
+    url=$(db_url postgres)
+    xargs -r -P 16 -I{} psql -X -q "$url" -c 'DROP DATABASE IF EXISTS "{}" WITH (FORCE)' \
+        >/dev/null 2>&1 || true
+}
 cleanup() {
-    [ -f "$work/dbs" ] && while read -r db; do created+=("$db"); done < "$work/dbs"
-    for db in "${created[@]}"; do
-        psql -X -q "$(db_url postgres)" -c "DROP DATABASE IF EXISTS \"$db\" WITH (FORCE)" \
-            >/dev/null 2>&1 || true
-    done
+    if [ -n "${DATABASE_URL:-}" ]; then
+        [ -z "$sweeper" ] || wait "$sweeper" || true
+        { cat "$work/dbs" 2>/dev/null || true; [ -z "$template" ] || echo "$template"; } | drop_all
+    fi
     rm -rf "$work"
 }
 trap cleanup EXIT
+
+# The copies a run that no longer lives left behind.
+sweep() {
+    psql -X -At "$(db_url postgres)" \
+        -c "SELECT datname FROM pg_database WHERE datname ~ '^morpholog_lanes_[0-9]+_'" \
+        | while read -r db; do
+            local pid=${db#morpholog_lanes_}
+            kill -0 "${pid%%_*}" 2>/dev/null || echo "$db"
+        done | drop_all
+}
 
 # The URL of database `name` on DATABASE_URL's cluster: the last path
 # segment swapped, the query kept, as the tests' own `with_database` does.
@@ -40,6 +63,11 @@ db_url() {
     [[ $DATABASE_URL == *\?* ]] && query="?${DATABASE_URL#*\?}"
     printf '%s/%s%s\n' "${base%/*}" "$1" "$query"
 }
+
+if [ -n "${DATABASE_URL:-}" ]; then
+    sweep &
+    sweeper=$!
+fi
 
 echo "building every test binary"
 cargo test --workspace --all-targets --locked --no-run --message-format=json \
@@ -69,14 +97,17 @@ is_pg() {
     return 1
 }
 
-# A binary touches cluster-global roles when its source does: a lib
-# target's whole crate, a test target's own file.
-role_pattern='CREATE ROLE|DROP ROLE|least_privilege|least-privilege|pg_auth_members|morpholog_writer|morpholog_reader|morpholog_executor|deployment_roles|"roles"'
+# A binary is in the role lane when its test file creates, drops or
+# counts roles: in its own SQL, through a shared helper that does
+# (tests/common), or through the commands and library calls that
+# provision, move or list them. A new helper of that kind joins this
+# list. Unit tests never touch roles, so a crate's own lib and bin
+# targets run in the free lanes.
+role_pattern='create role|drop role|alter role|pg_auth_members|census|--least-privilege|provision_least_privilege|rebind_least_privilege|move_deployment_roles|direct_members|databases_also_reached|"roles"|recreate_roles|drop_roles_if_present|recreate_gateway_roles|with_gateway_roles|gateway_pool|Deployment::new'
 touches_roles() {
-    local src=$1
-    case "$src" in
-        */src/lib.rs | */src/main.rs) grep -rqE "$role_pattern" "$(dirname "$src")" ;;
-        *) grep -qE "$role_pattern" "$src" ;;
+    case "$1" in
+        */src/lib.rs | */src/main.rs) return 1 ;;
+        *) grep -qiE "$role_pattern" "$1" ;;
     esac
 }
 
@@ -101,13 +132,11 @@ if $skipped_pg; then
     echo "  DATABASE_URL not set; skipping the PG-backed packages (${pg_packages[*]})."
 fi
 
-template=""
 if [ -n "${DATABASE_URL:-}" ]; then
     source_db=${DATABASE_URL%%\?*}
     source_db=${source_db##*/}
-    template="morpholog_lanes_tpl_$$"
+    template="morpholog_lanes_${run}_tpl"
     psql -X -q "$(db_url postgres)" -c "CREATE DATABASE \"$template\" TEMPLATE \"$source_db\"" >/dev/null
-    created+=("$template")
 fi
 
 # run_one INDEX PACKAGE DIR EXE SRC: run one binary, its own database if
@@ -116,7 +145,7 @@ run_one() {
     local index=$1 package=$2 dir=$3 exe=$4 src=$5
     local log="$work/out.$index" env_url=()
     if is_pg "$package"; then
-        local db="morpholog_lanes_${$}_$index"
+        local db="morpholog_lanes_${run}_$index"
         psql -X -q "$(db_url postgres)" -c "CREATE DATABASE \"$db\" TEMPLATE \"$template\"" >/dev/null
         echo "$db" >> "$work/dbs"
         env_url=(DATABASE_URL="$(db_url "$db")")
@@ -127,13 +156,9 @@ run_one() {
         > "$log" 2>&1 || rc=$?
     printf '%s\t%s\t%s\t%s\n' "$rc" "$(echo "$(date +%s.%N) - $start" | bc)" "$package" "$src" \
         > "$work/verdict.$index"
-    if is_pg "$package"; then
-        psql -X -q "$(db_url postgres)" -c "DROP DATABASE IF EXISTS \"morpholog_lanes_${$}_$index\" WITH (FORCE)" \
-            >/dev/null 2>&1 || true
-    fi
 }
 export -f run_one is_pg db_url
-export work template DATABASE_URL
+export work template run DATABASE_URL
 export pg_packages_list="${pg_packages[*]}"
 
 # The role lane runs alone, one binary at a time, beside the free lanes.
@@ -161,19 +186,20 @@ wait "$role_lane"
 failed=0
 total=0
 summed=0
+role_secs=0
 for verdict in "$work"/verdict.*; do
     IFS=$'\t' read -r rc secs package src < "$verdict"
     total=$((total + 1))
     summed=$(echo "$summed + $secs" | bc)
+    [[ ${verdict##*.} != r* ]] || role_secs=$(echo "$role_secs + $secs" | bc)
     if [ "$rc" != 0 ]; then
         failed=$((failed + 1))
         printf '\n=== FAILED: %s %s (exit %s) ===\n' "$package" "$src" "$rc"
         cat "$work/out.${verdict##*.}"
     fi
 done
-role_secs=$(cat "$work"/verdict.r* 2>/dev/null | awk -F'\t' '{ s += $2 } END { printf "%.1f", s }')
-printf '\n%d test binaries, %d failed; summed binary time %.1fs, the role lane %ss\n' \
-    "$total" "$failed" "$summed" "${role_secs:-0}"
+printf '\n%d test binaries, %d failed; summed binary time %.1fs, the role lane %.1fs\n' \
+    "$total" "$failed" "$summed" "$role_secs"
 echo "slowest:"
 cat "$work"/verdict.* | sort -t$'\t' -k2 -rn | head -6 \
     | awk -F'\t' '{ printf "  %6.1fs  %s %s\n", $2, $3, $4 }'
