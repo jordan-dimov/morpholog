@@ -281,6 +281,34 @@ fn check_verbose_keys_a_read_by_a_collection_parameter_s_elements() {
     );
 }
 
+/// A rule a declaration adds is counted with the declared ones, and the
+/// summary says how many the author wrote, so the total can be matched
+/// against the source.
+#[test]
+fn check_verbose_counts_declared_invariants_apart_from_generated_ones() {
+    let tmp = temp_morph(
+        "program demo\n\
+         predicate Foo(x: Subject, n: Decimal)\n    unique by (x)\n\
+         invariant positive: Foo(x, n) implies n > 0\n\
+         transformation t(x, n):\n    admit Foo(x, n)\n",
+    );
+    let out = Command::new(bin())
+        .args(["check", "--verbose"])
+        .arg(tmp.path())
+        .output()
+        .expect("morpholog check should run");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\n  invariants: 2 (1 declared, 1 from declarations)\n"),
+        "{stdout}"
+    );
+}
+
 #[test]
 fn check_verbose_marks_a_whole_read_of_a_predicate_the_act_writes() {
     let tmp = temp_morph(
