@@ -139,18 +139,17 @@ pub(crate) async fn authorise(
     // A misshapen policy claim would never match, leaving an actor the
     // operator thinks is restricted wide open. Refuse it here, the one
     // point every durable path passes: compensation arrives with no
-    // programme, so the facades' declaration check does not cover it.
+    // programme, so the facades' declaration check does not cover it. A
+    // misshapen grant, kind or registrar never matches either, which
+    // leaves an actor refused, so those are not read here.
     let malformed = sqlx::query_scalar!(
         r#"SELECT count(*) AS "malformed!" FROM morpholog.claims
            WHERE (predicate_name = $1
                     AND jsonb_array_length(arguments) IS DISTINCT FROM 1)
-              OR (predicate_name = ANY($2)
+              OR (predicate_name = $2
                     AND jsonb_array_length(arguments) IS DISTINCT FROM 2)"#,
         RESTRICTED_PREDICATE,
-        &POLICY_PREDICATES[1..]
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>(),
+        AUTHORITY_PREDICATE,
     )
     .fetch_one(&mut **tx)
     .await
@@ -158,9 +157,9 @@ pub(crate) async fn authorise(
     if malformed > 0 {
         return Err(PgError::ActorPolicyDeclaration {
             findings: vec![format!(
-                "{malformed} admitted claim(s) under the actor-policy names do not have \
-                 the shape the runtime matches, so the restriction they look like would \
-                 protect nothing"
+                "{malformed} admitted claim(s) under `{RESTRICTED_PREDICATE}` or \
+                 `{AUTHORITY_PREDICATE}` do not have the shape the runtime matches, \
+                 so the restriction they look like would protect nothing"
             )],
         });
     }
@@ -188,60 +187,43 @@ pub(crate) async fn authorise(
         };
     }
 
-    let actor_arg = serde_json::json!([{"type": "subject", "value": actor.as_str()}]);
-    let restricted = sqlx::query_scalar!(
-        r#"SELECT EXISTS (
-               SELECT 1 FROM morpholog.claims
-               WHERE predicate_name = $1 AND arguments = $2
-           ) AS "restricted!""#,
-        RESTRICTED_PREDICATE,
-        actor_arg,
-    )
-    .fetch_one(&mut **tx)
-    .await
-    .map_err(classify_checked_query)?;
-    if !restricted && !identity.closed {
+    let actor_value = subject_value(actor.as_str());
+    let login_value = subject_value(login_role);
+    if !identity.closed
+        && !claim_held(tx, RESTRICTED_PREDICATE, serde_json::json!([actor_value])).await?
+    {
         return Ok(());
     }
-
-    let grant = serde_json::json!([
-        {"type": "subject", "value": actor.as_str()},
-        {"type": "subject", "value": login_role},
-    ]);
-    let actor_value = serde_json::json!({"type": "subject", "value": actor.as_str()});
-    let login_value = serde_json::json!({"type": "subject", "value": login_role});
-    let held = sqlx::query!(
-        r#"SELECT
-               EXISTS (SELECT 1 FROM morpholog.claims
-                       WHERE predicate_name = $1 AND arguments = $2) AS "exact!",
-               (SELECT count(*) FROM morpholog.claims
-                WHERE predicate_name = $3 AND arguments -> 0 = $4) AS "kinds!",
-               EXISTS (SELECT 1 FROM morpholog.claims k
-                       JOIN morpholog.claims g
-                         ON g.predicate_name = $5
-                        AND g.arguments -> 0 = k.arguments -> 1
-                        AND g.arguments -> 1 = $6
-                       WHERE k.predicate_name = $3 AND k.arguments -> 0 = $4) AS "by_kind!""#,
-        AUTHORITY_PREDICATE,
-        grant,
-        KIND_PREDICATE,
-        actor_value,
-        KIND_AUTHORITY_PREDICATE,
-        login_value,
-    )
-    .fetch_one(&mut **tx)
-    .await
-    .map_err(classify_checked_query)?;
-    // Two kinds would let either kind's logins assert the actor, so the
-    // policy is refused rather than combined.
-    if held.kinds > 1 {
-        return Err(PgError::ActorKindAmbiguous {
-            actor: actor.clone(),
-            kinds: held.kinds,
-        });
-    }
-    if held.exact || held.by_kind {
+    let grant = serde_json::json!([actor_value, login_value]);
+    if claim_held(tx, AUTHORITY_PREDICATE, grant).await? {
         return Ok(());
+    }
+    // A kind counts on a closed deployment only, where its claims are
+    // the root's or a registrar's to write. The login's kind grants are
+    // few; each is looked up by the claims table's key.
+    if identity.closed {
+        let by_kind = sqlx::query_scalar!(
+            r#"SELECT EXISTS (
+                   SELECT 1 FROM morpholog.claims g
+                   WHERE g.predicate_name = $1 AND g.arguments -> 1 = $2
+                     AND EXISTS (
+                         SELECT 1 FROM morpholog.claims k
+                         WHERE k.predicate_name = $3
+                           AND k.arguments_hash = morpholog.claim_digest(
+                                   jsonb_build_array($4::jsonb, g.arguments -> 0))
+                           AND k.arguments = jsonb_build_array($4::jsonb, g.arguments -> 0))
+               ) AS "by_kind!""#,
+            KIND_AUTHORITY_PREDICATE,
+            login_value,
+            KIND_PREDICATE,
+            actor_value,
+        )
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(classify_checked_query)?;
+        if by_kind {
+            return Ok(());
+        }
     }
     Err(PgError::ActorAssertionUnauthorised {
         actor: actor.clone(),
@@ -249,14 +231,55 @@ pub(crate) async fn authorise(
     })
 }
 
+fn subject_value(value: &str) -> serde_json::Value {
+    serde_json::json!({"type": "subject", "value": value})
+}
+
+/// Whether `predicate(arguments)` is admitted, found by the claims
+/// table's key rather than by reading every claim under `predicate`.
+async fn claim_held(
+    tx: &mut Transaction<'_, Postgres>,
+    predicate: &str,
+    arguments: serde_json::Value,
+) -> Result<bool, PgError> {
+    sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+               SELECT 1 FROM morpholog.claims
+               WHERE predicate_name = $1
+                 AND arguments_hash = morpholog.claim_digest($2::jsonb)
+                 AND arguments = $2
+           ) AS "held!""#,
+        predicate,
+        arguments,
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(classify_checked_query)
+}
+
+/// The `ActorKind` claims `actor` holds. Reads every kind claim, so it is
+/// asked only when the root classifies an existing actor, or at closing.
+async fn kinds_of(tx: &mut Transaction<'_, Postgres>, actor: &Subject) -> Result<i64, PgError> {
+    sqlx::query_scalar!(
+        r#"SELECT count(*) AS "kinds!" FROM morpholog.claims
+           WHERE predicate_name = $1 AND arguments -> 0 = $2"#,
+        KIND_PREDICATE,
+        subject_value(actor.as_str()),
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(classify_checked_query)
+}
+
 /// On a closed deployment, refuse a decided delta that changes identity
 /// policy without the authority to: only the root changes a claim under a
 /// reserved name, except that a registrar holding
 /// `ActorKindEnrolment(kind, registrar)` may admit `ActorKind(new, kind)`
-/// for a subject this same act drew. The delta is what the act would
-/// write, so no branch of a transformation, nor a later act of a
-/// `transact`, writes policy unchecked. An open deployment leaves policy
-/// writes to the programme's gates, as before.
+/// for a subject this same act drew. Nor may any act leave an actor with
+/// two kinds. The delta is what the act would write, so no branch of a
+/// transformation, nor a later act of a `transact`, writes policy
+/// unchecked. An open deployment leaves policy writes to the programme's
+/// gates, as before.
 pub(crate) async fn authorise_policy_writes(
     tx: &mut Transaction<'_, Postgres>,
     transition: &Transition,
@@ -275,41 +298,68 @@ pub(crate) async fn authorise_policy_writes(
     .await
     .map_err(classify_checked_query)?
     .ok_or(PgError::DeploymentIdentityMissing)?;
-    if !identity.closed || identity.root_actor.as_deref() == Some(transition.actor.as_str()) {
+    if !identity.closed {
         return Ok(());
     }
-    let registrar = serde_json::json!({"type": "subject", "value": transition.actor.as_str()});
-    if let Some(claim) = retracted.iter().find(is_policy) {
-        return Err(policy_write_refused(transition, claim, "retract"));
-    }
-    for claim in asserted.iter().filter(is_policy) {
-        let enrolment = match (claim.predicate.as_str(), claim.args.as_slice()) {
-            (KIND_PREDICATE, [EvalValue::Subject(new), EvalValue::Subject(kind)])
-                if drawn.contains(new) =>
-            {
-                Some(serde_json::json!([
-                    {"type": "subject", "value": kind.as_str()},
-                    registrar,
-                ]))
+    let root = identity.root_actor.as_deref() == Some(transition.actor.as_str());
+    if !root {
+        if let Some(claim) = retracted.iter().find(is_policy) {
+            return Err(policy_write_refused(transition, claim, "retract"));
+        }
+        let registrar = subject_value(transition.actor.as_str());
+        for claim in asserted.iter().filter(is_policy) {
+            let enrolment = match (claim.predicate.as_str(), claim.args.as_slice()) {
+                (KIND_PREDICATE, [EvalValue::Subject(new), EvalValue::Subject(kind)])
+                    if drawn.contains(new) =>
+                {
+                    serde_json::json!([subject_value(kind.as_str()), registrar])
+                }
+                _ => return Err(policy_write_refused(transition, claim, "admit")),
+            };
+            if !claim_held(tx, KIND_ENROLMENT_PREDICATE, enrolment).await? {
+                return Err(policy_write_refused(transition, claim, "admit"));
             }
-            _ => None,
+        }
+    }
+    one_kind_each(tx, drawn, asserted, retracted).await
+}
+
+/// Refuse a delta that would leave an actor with two kinds: either kind's
+/// logins could then assert it. A subject this act drew has no kind yet.
+async fn one_kind_each(
+    tx: &mut Transaction<'_, Postgres>,
+    drawn: &[Subject],
+    asserted: &[ClaimInstance],
+    retracted: &[ClaimInstance],
+) -> Result<(), PgError> {
+    let kind_of = |c: &ClaimInstance| match (c.predicate.as_str(), c.args.first()) {
+        (KIND_PREDICATE, Some(EvalValue::Subject(actor))) => Some(actor.clone()),
+        _ => None,
+    };
+    let mut classified: Vec<Subject> = Vec::new();
+    for actor in asserted.iter().filter_map(kind_of) {
+        if !classified.contains(&actor) {
+            classified.push(actor);
+        }
+    }
+    for actor in classified {
+        let count = |claims: &[ClaimInstance]| {
+            i64::try_from(
+                claims
+                    .iter()
+                    .filter(|c| kind_of(c).as_ref() == Some(&actor))
+                    .count(),
+            )
+            .unwrap_or(i64::MAX)
         };
-        let Some(enrolment) = enrolment else {
-            return Err(policy_write_refused(transition, claim, "admit"));
+        let held = if drawn.contains(&actor) {
+            0
+        } else {
+            kinds_of(tx, &actor).await?
         };
-        let registered = sqlx::query_scalar!(
-            r#"SELECT EXISTS (
-                   SELECT 1 FROM morpholog.claims
-                   WHERE predicate_name = $1 AND arguments = $2
-               ) AS "registered!""#,
-            KIND_ENROLMENT_PREDICATE,
-            enrolment,
-        )
-        .fetch_one(&mut **tx)
-        .await
-        .map_err(classify_checked_query)?;
-        if !registered {
-            return Err(policy_write_refused(transition, claim, "admit"));
+        let kinds = held - count(retracted) + count(asserted);
+        if kinds > 1 {
+            return Err(PgError::ActorKindAmbiguous { actor, kinds });
         }
     }
     Ok(())
@@ -387,6 +437,23 @@ pub async fn close_deployment(
 ) -> Result<(), PgError> {
     let mut tx = pool.begin().await.map_err(crate::error::classify)?;
     let oid = root_login_oid(&mut tx, root_login).await?;
+    // Closed, a kind grant reaches every actor of its kind; one that holds
+    // two would be reachable by both kinds' logins.
+    let doubled = sqlx::query!(
+        r#"SELECT arguments -> 0 ->> 'value' AS "actor!", count(*) AS "kinds!"
+           FROM morpholog.claims WHERE predicate_name = $1
+           GROUP BY 1 HAVING count(*) > 1 ORDER BY 1 LIMIT 1"#,
+        KIND_PREDICATE,
+    )
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(classify_checked_query)?;
+    if let Some(doubled) = doubled {
+        return Err(PgError::ActorKindAmbiguous {
+            actor: Subject::from(doubled.actor),
+            kinds: doubled.kinds,
+        });
+    }
     if write_root(&mut tx, root_actor, root_login, oid).await? {
         return tx.commit().await.map_err(crate::error::classify);
     }

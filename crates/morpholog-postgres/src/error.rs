@@ -215,11 +215,12 @@ pub enum PgError {
          may assert; login role `{login_role}` is not it, and no claim can grant it"
     )]
     RootActorUnauthorised { actor: Subject, login_role: String },
-    /// The actor holds more than one `ActorKind`, so which logins may
-    /// assert it is ambiguous; every proposal naming it is refused.
+    /// A closed deployment's actor would hold more than one `ActorKind`,
+    /// so the logins of either kind could assert it: the act, or the
+    /// closing, is refused.
     #[error(
-        "actor `{actor}` holds {kinds} ActorKind claims; an actor has at most one kind, \
-         so no login may assert it until the root removes the extra ones"
+        "actor `{actor}` would hold {kinds} ActorKind claims on a closed deployment; \
+         an actor has at most one kind"
     )]
     ActorKindAmbiguous { actor: Subject, kinds: i64 },
     /// On a closed deployment, an act changed identity policy without the

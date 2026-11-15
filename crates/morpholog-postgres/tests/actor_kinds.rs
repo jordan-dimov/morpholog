@@ -40,12 +40,16 @@ const SERVICE: &str = "risk_engine";
 const PROGRAMME: &str = "\
 program actor_kinds
 
+predicate ActorAssertionRestricted(actor: Subject)
 predicate ActorAssertionAuthority(actor: Subject, login_role: Subject)
 predicate ActorKind(actor: Subject, kind: Subject)
 predicate ActorKindAuthority(kind: Subject, login_role: Subject)
 predicate ActorKindEnrolment(kind: Subject, actor: Subject)
 predicate Account(user: Subject, email: Subject)
 predicate Note(text: Subject, author: Subject)
+
+transformation arm(person):
+    admit ActorAssertionRestricted(person)
 
 transformation grant(person, login_role):
     admit ActorAssertionAuthority(person, login_role)
@@ -59,10 +63,20 @@ transformation appoint_registrar(kind, registrar):
 transformation classify(person, kind):
     admit ActorKind(person, kind)
 
+transformation reclassify(person, from, to):
+    retract ActorKind(person, from)
+    admit ActorKind(person, to)
+
 transformation sign_up(email, kind):
     let user = new Subject()
     admit Account(user, email)
     admit ActorKind(user, kind)
+
+transformation sign_up_twice(email, first, second):
+    let user = new Subject()
+    admit Account(user, email)
+    admit ActorKind(user, first)
+    admit ActorKind(user, second)
 
 transformation note(text):
     admit Note(text, actor)
@@ -254,15 +268,31 @@ async fn no_one_but_the_root_classifies_an_existing_actor() {
 }
 
 #[tokio::test]
-async fn an_actor_with_two_kinds_is_refused_and_no_kind_reaches_the_root() {
+async fn no_act_leaves_an_actor_two_kinds_and_no_kind_reaches_the_root() {
     with_logins("two", |admin, root, host, service, logins| async move {
         deploy(&admin, &root, &logins).await;
-        committed(&root, "classify", &[SERVICE, "user"], ROOT).await;
         committed(&root, "classify", &[SERVICE, "service"], ROOT).await;
+        // Not even the root's: the logins of both kinds could assert it.
         assert!(matches!(
-            act(&service, "note", &["either way"], SERVICE).await,
+            act(&root, "classify", &[SERVICE, "user"], ROOT).await,
             Err(PgError::ActorKindAmbiguous { kinds: 2, .. })
         ));
+        // Changing the kind in one act leaves one.
+        committed(&root, "reclassify", &[SERVICE, "service", "user"], ROOT).await;
+        committed(&host, "note", &["now a user"], SERVICE).await;
+        // A registrar's new actor, enrolled into both its kinds in one act.
+        committed(&root, "appoint_registrar", &["service", HOST], ROOT).await;
+        assert!(matches!(
+            act(
+                &host,
+                "sign_up_twice",
+                &["twice@example.com", "user", "service"],
+                HOST
+            )
+            .await,
+            Err(PgError::ActorKindAmbiguous { kinds: 2, .. })
+        ));
+        let _ = service;
 
         committed(&root, "classify", &[ROOT, "user"], ROOT).await;
         assert!(matches!(
@@ -273,14 +303,30 @@ async fn an_actor_with_two_kinds_is_refused_and_no_kind_reaches_the_root() {
     .await;
 }
 
-/// The acceptance side: open, policy writes are the programme's to gate,
-/// as before.
+/// The acceptance side: open, policy writes are the programme's to gate
+/// and kinds grant nothing, as before. Closing refuses an actor that
+/// holds two kinds.
 #[tokio::test]
 async fn an_open_deployment_leaves_policy_writes_to_the_programme() {
-    with_logins("open", |_admin, _root, host, _service, logins| async move {
+    with_logins("open", |admin, _root, host, _service, logins| async move {
         committed(&host, "classify", &[SERVICE, "user"], HOST).await;
+        committed(&host, "classify", &[SERVICE, "service"], HOST).await;
         committed(&host, "grant_kind", &["user", &logins.host], HOST).await;
         committed(&host, "note", &["anyone"], SERVICE).await;
+        // Armed, the service needs an exact grant: open, a kind grants
+        // nothing.
+        committed(&host, "arm", &[SERVICE], HOST).await;
+        assert!(unauthorised(
+            &act(&host, "note", &["posing"], SERVICE).await
+        ));
+        assert!(matches!(
+            close_deployment(&admin, &Subject::from(ROOT), &logins.root).await,
+            Err(PgError::ActorKindAmbiguous { kinds: 2, .. })
+        ));
+        committed(&host, "reclassify", &[SERVICE, "service", "user"], HOST).await;
+        close_deployment(&admin, &Subject::from(ROOT), &logins.root)
+            .await
+            .unwrap();
     })
     .await;
 }

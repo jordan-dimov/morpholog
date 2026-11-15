@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"kinds!\" FROM morpholog.claims\n           WHERE predicate_name = $1 AND arguments -> 0 = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "kinds!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "942200c5e7bc8ec06537dfb8319b7b413288d3e9e4bec72859807235f4345bcf"
+}
