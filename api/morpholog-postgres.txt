@@ -611,6 +611,9 @@ pub enum morpholog_postgres::PgError
 pub morpholog_postgres::PgError::ActorAssertionUnauthorised
 pub morpholog_postgres::PgError::ActorAssertionUnauthorised::actor: morpholog_core::ir::Subject
 pub morpholog_postgres::PgError::ActorAssertionUnauthorised::login_role: alloc::string::String
+pub morpholog_postgres::PgError::ActorKindAmbiguous
+pub morpholog_postgres::PgError::ActorKindAmbiguous::actor: morpholog_core::ir::Subject
+pub morpholog_postgres::PgError::ActorKindAmbiguous::kinds: i64
 pub morpholog_postgres::PgError::ActorPolicyDeclaration
 pub morpholog_postgres::PgError::ActorPolicyDeclaration::findings: alloc::vec::Vec<alloc::string::String>
 pub morpholog_postgres::PgError::AnchorDivergedFromStart
@@ -646,6 +649,9 @@ pub morpholog_postgres::PgError::ObjectDiffers
 pub morpholog_postgres::PgError::ObjectDiffers::expected: alloc::string::String
 pub morpholog_postgres::PgError::ObjectDiffers::found: alloc::string::String
 pub morpholog_postgres::PgError::ObjectDiffers::object: alloc::string::String
+pub morpholog_postgres::PgError::PolicyWriteUnauthorised
+pub morpholog_postgres::PgError::PolicyWriteUnauthorised::actor: morpholog_core::ir::Subject
+pub morpholog_postgres::PgError::PolicyWriteUnauthorised::write: alloc::string::String
 pub morpholog_postgres::PgError::ProgramNamedTwice(alloc::string::String)
 pub morpholog_postgres::PgError::RejectionLogFailure(alloc::boxed::Box<morpholog_postgres::PgError>)
 pub morpholog_postgres::PgError::RootActorUnauthorised
