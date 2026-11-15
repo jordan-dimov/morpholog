@@ -69,4 +69,6 @@ that changes over time, the breach raised when a cap is lowered under
 open trades, and where the published days come from. The authority's
 days are trusted as claims; the record governs what is done with them.
 `morpholog generate local-days` writes a year of them as proposal rows
-for `publish_delivery_day`, with the tzdb release on each.
+for `publish_delivery_day`, with the tzdb release on each. A host that
+reads them counts each day's periods from its bounds, never as a fixed
+48 half hours: the clock-change days have 46 and 50.
