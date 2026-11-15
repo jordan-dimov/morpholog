@@ -76,8 +76,9 @@ pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
     // binary and the programmes, so an upgrade can change them with no
     // migration at all, and this command cannot see the programmes.
     eprintln!(
-        "hint: this binary may need different indexes; run `morpholog provision indexes \
-         --check <programmes>` before the first write"
+        "hint: this command cannot see your programmes, and this binary may need different \
+         indexes for them; run `morpholog provision indexes --check <programmes>` before the \
+         first write"
     );
     Ok(())
 }
