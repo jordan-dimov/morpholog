@@ -376,7 +376,7 @@ async fn the_order_is_of_effects_not_of_what_each_decision_saw() {
     for waited in 0.. {
         let blocked: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM pg_stat_activity
-              WHERE wait_event_type = 'Lock' AND query LIKE 'INSERT INTO morpholog.claims%'",
+              WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE 'INSERT INTO morpholog.claims%'",
         )
         .fetch_one(&pool)
         .await
@@ -456,7 +456,8 @@ async fn writers_queued_on_the_ordering_lock_do_not_conflict() {
     for waited in 0.. {
         let queued: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM pg_locks
-              WHERE locktype = 'advisory' AND classid = 625626 AND objid = 0 AND NOT granted",
+              WHERE database = (SELECT oid FROM pg_database WHERE datname = current_database())
+                AND locktype = 'advisory' AND classid = 625626 AND objid = 0 AND NOT granted",
         )
         .fetch_one(&pool)
         .await
