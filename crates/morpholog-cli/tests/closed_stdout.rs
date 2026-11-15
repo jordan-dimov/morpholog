@@ -83,6 +83,47 @@ fn a_stream_to_a_closed_reader_ends_with_141() {
     );
 }
 
+/// The reported case: a reader takes the first line of a long stream and
+/// stops, so the writes before succeed and a later one fails. Ten years of
+/// days are far more than a pipe holds, so the command is still writing
+/// when the reader goes.
+#[test]
+fn a_stream_its_reader_stops_midway_ends_with_141() {
+    use std::io::BufRead;
+    let file = repo_root().join("examples/23_delivery_hour_limits/delivery_hour_limits.morph");
+    let zoneinfo = repo_root().join("crates/morpholog-cli/tests/fixtures/zoneinfo");
+    let mut child = Command::new(bin())
+        .args([
+            "generate",
+            "local-days",
+            file.to_str().unwrap(),
+            "publish_delivery_day",
+            "--actor",
+            "cal_uk",
+            "--arg",
+            "calendar=uk",
+            "--zone",
+            "Europe/London",
+            "--zoneinfo",
+            zoneinfo.to_str().unwrap(),
+            "--from",
+            "2026-01-01",
+            "--until",
+            "2036-01-01",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("cli runs");
+    let mut reader = std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut first = String::new();
+    reader.read_line(&mut first).unwrap();
+    assert!(first.starts_with('{'), "the first row arrived: {first}");
+    drop(reader);
+    let output = child.wait_with_output().expect("cli ends");
+    assert_quiet_141(&output);
+}
+
 /// A full disk is not a reader that stopped: the command fails as any
 /// failed write does.
 #[test]
