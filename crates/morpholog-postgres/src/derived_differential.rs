@@ -107,8 +107,26 @@ transformation allocate(allocation, line, quantity):
     admit SalesAllocation(allocation, line, quantity)
 ";
 
+/// InvenTree's reads of the rows that meet a condition (#787), with no
+/// computed column: one row per distinct key tuple, a negation, and a
+/// head that keeps fewer variables than its domain binds.
+const MEMBERS: &str = "program members
+predicate Alloc(alloc: Subject, item: Subject, quantity: Decimal)
+predicate Shipped(alloc: Subject)
+predicate Unshipped(alloc: Subject, item: Subject)
+predicate ItemsAllocated(item: Subject)
+derived Unshipped(alloc, item):
+    over Alloc(alloc, item, _) and not Shipped(alloc)
+derived ItemsAllocated(item):
+    over Alloc(_, item, _)
+transformation allocate(alloc, item, quantity):
+    admit Alloc(alloc, item, quantity)
+transformation ship(alloc):
+    admit Shipped(alloc)
+";
+
 fn programs() -> Vec<Program> {
-    let mut out: Vec<Program> = [SPIKE, EDGES, ORDERS]
+    let mut out: Vec<Program> = [SPIKE, EDGES, ORDERS, MEMBERS]
         .iter()
         .map(|s| morpholog_surface::parse_program(s).expect("fragment parses"))
         .collect();
@@ -267,7 +285,7 @@ async fn agree(
 async fn live_views_compute_the_kernels_rows_over_generated_states() {
     let pool = test_pool().await;
     let mut compared = 0usize;
-    let mut live_programs = 0usize;
+    let mut live: Vec<String> = Vec::new();
     for program in programs() {
         let validated = program.validated().unwrap();
         if validated.as_program().derived_claims.is_empty() {
@@ -286,12 +304,16 @@ async fn live_views_compute_the_kernels_rows_over_generated_states() {
             any |= n > 0;
             compared += n;
         }
-        live_programs += usize::from(any);
+        if any {
+            live.push(program.name.to_string());
+        }
     }
-    assert!(
-        live_programs >= 2,
-        "the two fragments at least render live: {live_programs}"
-    );
+    for fragment in ["edge_shapes", "members"] {
+        assert!(
+            live.iter().any(|n| n == fragment),
+            "{fragment} renders live and is compared: {live:?}"
+        );
+    }
     assert!(compared >= 12, "comparisons: {compared}");
 }
 

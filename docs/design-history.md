@@ -1500,3 +1500,10 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** the same hosts (#816). A host proposing for thousands of users needed one grant per user, admitted in step with every sign-up, and only the root could admit one.
 
 **Landed:** on a closed deployment `ActorKindAuthority(kind, login)` lets a login assert any actor `ActorKind` gives that kind. No act may give an actor a second kind, and closing refuses a deployment where one has two, so a proposal looks its actor's grants up by the claims table's key instead of reading every kind claim. On a closed deployment only the root changes identity policy, except that `ActorKindEnrolment(kind, registrar)` lets a registrar enrol an actor its own act mints, so it can never classify an existing service into its own kind. The adapter checks each act's decided delta before writing it, on every path.
+
+### A derived claim may compute nothing
+
+**Forced by:** two embedders. The billing trial's one question became four derived views, partly because each needed a `value` (#313), and the InvenTree fork derived a quantity for every allocation only to keep the rows above zero in its own SQL (#787). The grammar had required a `value` clause, on the view that a value-less read is a domain query the host runs.
+
+**Landed:** a `derived` block may have no `value` clause; its rows are its head keys over the `over` proposition. Nothing else changed: the evaluator, the cache, the live views and the view description already handled a row of keys alone, and the live-view differential now holds such a fragment to the kernel. A live view still refuses a domain comparison that can raise, with or without a value.
+

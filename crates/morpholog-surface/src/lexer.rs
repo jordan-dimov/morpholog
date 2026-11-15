@@ -87,7 +87,7 @@ tokens! {
         KwInvariant = "invariant",
         KwTransformation = "transformation",
         /// Heads a derived-claim block:
-        /// `derived Name(keys): Indent over <expr> value <name> = <expr>+ Dedent`.
+        /// `derived Name(keys): Indent over <expr> (value <name> = <expr>)* Dedent`.
         KwDerived = "derived",
         KwDefine = "define",
         /// The derived-claim domain expression.
