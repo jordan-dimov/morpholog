@@ -740,6 +740,12 @@ async fn checkpoint_covering_waits_for_the_prefix_to_reach_the_transition() {
 
     let (status, _, stderr) = run_cli(&["audit", "checkpoint", "--wait", "1s"]);
     assert_eq!(status.code(), Some(2), "--wait needs --covering: {stderr}");
+    for too_long in ["25h", "PT48H", "100000000000000s"] {
+        let (status, _, stderr) =
+            run_cli(&["audit", "checkpoint", "--covering", &id, "--wait", too_long]);
+        assert_eq!(status.code(), Some(2), "{too_long}: {stderr}");
+        assert!(stderr.contains("at most a day"), "{too_long}: {stderr}");
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

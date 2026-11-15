@@ -91,8 +91,8 @@ pub use audit::{
 pub use checkpoints::{
     Checkpoint, CheckpointOutcome, CheckpointSigner, SignaturePolicy, SignaturePolicyViolation,
     TreeHeadSignature, TreeVerification, Witness, WitnessScheme, attach_witness, create_checkpoint,
-    load_checkpoint, verify_audit_tree, verify_audit_tree_under, verify_audit_tree_with_chain,
-    with_anchor_signatures,
+    load_checkpoint, transition_is_covered, verify_audit_tree, verify_audit_tree_under,
+    verify_audit_tree_with_chain, with_anchor_signatures,
 };
 #[doc(hidden)]
 pub use claim_key::arguments_hash;

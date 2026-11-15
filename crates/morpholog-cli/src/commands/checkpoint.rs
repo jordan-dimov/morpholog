@@ -5,6 +5,7 @@ use anyhow::Context;
 use morpholog_cli::envelopes;
 use morpholog_postgres::{
     CheckpointOutcome, CheckpointSigner, PgError, create_checkpoint, signing_key_from_pem,
+    transition_is_covered,
 };
 
 use crate::CheckpointArgs;
@@ -15,13 +16,26 @@ use crate::commands::{AlreadyReported, connect, print_json};
 /// transition: each ask reads the watermark, so a few a second is cheap.
 const WAIT_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// `--wait`'s value: a non-negative duration, written `30s`, `2m` or
-/// `PT30S`.
+/// The longest `--wait`: the prefix reaches a committed transition once
+/// the writers that started before it finish, usually within seconds.
+const WAIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// `--wait`'s value: a duration from nothing to a day, written `30s`, `2m`
+/// or `PT30S`.
 pub(crate) fn parse_wait(text: &str) -> Result<std::time::Duration, String> {
     let duration: jiff::SignedDuration = text
         .parse()
         .map_err(|e| format!("not a duration (30s, 2m or PT30S): {e}"))?;
-    std::time::Duration::try_from(duration).map_err(|_| "a wait cannot be negative".to_string())
+    let wait = std::time::Duration::try_from(duration)
+        .map_err(|_| "a wait cannot be negative".to_string())?;
+    if wait > WAIT_LIMIT {
+        return Err(
+            "a wait is at most a day: the prefix reaches a transition within seconds once \
+                    the writers before it finish"
+                .to_string(),
+        );
+    }
+    Ok(wait)
 }
 
 /// Run `audit checkpoint`: compute the audit Merkle root, chain it onto the
@@ -54,21 +68,25 @@ pub(crate) async fn run(args: CheckpointArgs) -> anyhow::Result<()> {
     };
 
     let pool = connect(&args.db.database_url).await?;
-    let deadline = args.wait.map(|wait| std::time::Instant::now() + wait);
-    let mut outcome = loop {
-        match create_checkpoint(&pool, signer.as_ref(), args.covering).await {
-            Ok(outcome) => break outcome,
-            Err(PgError::TransitionNotCovered { .. })
-                if deadline.is_some_and(|d| std::time::Instant::now() < d) =>
-            {
-                tokio::time::sleep(WAIT_POLL).await;
-            }
-            Err(PgError::TransitionNotCovered { id, tree_size }) => {
-                print_json(&envelopes::CheckpointRefusal::not_covered(id, tree_size))?;
-                return Err(AlreadyReported.into());
-            }
-            Err(e) => return Err(anyhow::Error::new(e).context("create_checkpoint failed")),
+    // Wait on the cheap question, the watermark and one lookup, then take
+    // the checkpoint once: a checkpoint reads the whole prefix.
+    if let (Some(id), Some(wait)) = (args.covering, args.wait) {
+        let deadline = std::time::Instant::now() + wait;
+        while !transition_is_covered(&pool, id)
+            .await
+            .context("create_checkpoint failed")?
+            && std::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(WAIT_POLL).await;
         }
+    }
+    let mut outcome = match create_checkpoint(&pool, signer.as_ref(), args.covering).await {
+        Ok(outcome) => outcome,
+        Err(PgError::TransitionNotCovered { id, tree_size }) => {
+            print_json(&envelopes::CheckpointRefusal::not_covered(id, tree_size))?;
+            return Err(AlreadyReported.into());
+        }
+        Err(e) => return Err(anyhow::Error::new(e).context("create_checkpoint failed")),
     };
 
     let mut failed = Vec::new();

@@ -675,7 +675,7 @@ pub(crate) struct CheckpointArgs {
 
     /// With `--covering`: while the transition is still outside the
     /// stable prefix, ask again until it is inside or this long has
-    /// passed (`30s`, `2m`, `PT30S`), then record the checkpoint or give
+    /// passed (`30s`, `2m`, `PT30S`; at most a day), then record the checkpoint or give
     /// the same `transition_not_covered` refusal. The prefix advances when
     /// every writer that started before the transition has finished,
     /// usually within seconds. Any other error fails at once.
