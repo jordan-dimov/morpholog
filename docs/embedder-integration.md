@@ -388,6 +388,20 @@ An admitted policy claim whose shape the runtime cannot read stops every durable
 
 **For direct SQL readers** (a projector that prefers the table): the `(audit_order, act_ordinal, committed_at, transition_id)` total order is stable - it is load-bearing in `verify`, coverage replay, and the as-of reconstructions, so it cannot drift; the claim JSONB inside `asserted_claims`/`retracted_claims` is the pinned `claim_instance` shape; the column set may grow additively. Name columns, in reads and writes alike: their order depends on the database's history, since a migration adds a column at the end where a fresh `init` may place it elsewhere, so `SELECT *` positions and positional `INSERT`s differ between databases. An upgraded database also keeps the audit log's required-field checks unvalidated, so its old rows stay lawful. Apart from those two, a test holds a database provisioned by the baseline release, v0.0.14, migrated to the current version, to the same schema as a fresh one, grants and policies included. A direct tail wanting lossless resume must follow the same recipe as `--after` above: read `morpholog.audit_watermark()`, take the snapshot, then page strictly below it. A direct read as of a timestamp selects rows whose `coalesce(ordered_at, committed_at)` is at or before it, and is final only as `morpholog.audit_horizon()` says, read first: with an order still held, for instants up to the last row below that order; with none, for instants up to the `quiet_at` it returns, which it has fenced the ordering clock at. The reader and writer roles `provision` creates may call both functions.
 
+### Closing a deployment
+
+Restricting actors one at a time leaves every new name open until someone arms it. A closed deployment turns that around: every actor needs a grant, from the first proposal.
+
+```
+morpholog init --database-url "$URL" --root-actor admin --root-login deployer
+```
+
+`--root-actor` names the one actor nothing needs to grant. Its root login, `--root-login`, alone may assert it, and no claim can grant it to another login. The root's own acts admit the first `ActorAssertionAuthority` claims, as an enrolment act would; from then on each login asserts only the actors granted to it. The login must exist. The deployment holds it by OID as well as by name, so a role dropped and made again under the same name is not the root. Only the owner changes the root, in SQL. On a closed deployment `ActorAssertionRestricted` changes nothing, since every actor is restricted, and existing claims can stay.
+
+A plain `init` leaves the deployment open, as before, and `init`, `migrate` and `check --database-url` say so on every run. An existing deployment closes the same way, with `--skip-if-exists`. Closing first lists the actors the audit log records that no grant names, since they are refused from then on, and stops: admit their grants, or pass `--confirm`. The list holds the actors seen so far, not every actor to come. Stop the deployment's writers while you close it; a proposal that read the deployment as open and commits after the close is not covered.
+
+Open or closed is one row, `morpholog.deployment_identity`, which only the owner writes; the writer may only read it. A deployment without the row refuses every proposal, rather than treating itself as open. The session's ready line and `check --database-url --json` report `identity`, `closed` or `open`. A host that promises its users act only as themselves should refuse to start on `open`. An ungranted actor on a closed deployment is refused with `actor_assertion_unauthorised`, as an armed one is. The boundary above still holds: this binds callers that go through Morpholog.
+
 ## Personal data outside the record
 
 The record keeps every admitted claim, and an audit row cannot change without breaking verification. So keep personal data out of it.
@@ -1150,8 +1164,9 @@ twice.
 out, strictly in order, no correlation ids. The first line out -
 unprompted - is the ready line (`session_ready` in the pinned
 schema): `status: "ready"`, the `protocol` number this wire speaks,
-and `model_hash`, the canonical rules-identity hash of the programme
-the session pinned at startup. The programme is read once: editing
+`model_hash`, the canonical rules-identity hash of the programme
+the session pinned at startup, and `identity`, whether the deployment
+was closed when the session connected (see "Closing a deployment"). The programme is read once: editing
 the file does not change a running session, and rolling out a new
 model means starting new sessions and draining old ones - the ready
 line tells a client what it got; it does not prevent an obsolete
