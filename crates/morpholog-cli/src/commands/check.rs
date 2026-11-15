@@ -39,12 +39,9 @@ pub(crate) async fn run(args: CheckArgs) -> anyhow::Result<()> {
         _ => None,
     };
     let verbose_summary = match (&collected.prepared, &routes) {
-        (Some(prepared), Some(routes)) if args.verbose => Some(summary(
-            prepared.program(),
-            routes,
-            &args.file,
-            &collected.parts,
-        )),
+        (Some(prepared), Some(routes)) if args.verbose => {
+            Some(summary(prepared, routes, &args.file, &collected.parts))
+        }
         _ => None,
     };
     if args.json {
@@ -603,22 +600,36 @@ fn refusal_kind(reason: &CompileReason) -> anyhow::Result<&'static str> {
 /// interpreted, or mixed, with each refusal named), and which a change
 /// may check whole, with the construct responsible.
 fn summary(
-    p: &Program,
+    prepared: &PreparedProgram,
     routes: &[CheckedInvariant],
     file: &Path,
     parts: &Option<Vec<String>>,
 ) -> String {
+    let p = prepared.program();
     let parts = parts
         .as_ref()
         .map(|files| format!("  parts: {}\n", files.join(", ")))
         .unwrap_or_default();
+    // A declaration such as `unique by` adds a rule the author did not
+    // write, so the author's own count is shown beside the total.
+    let generated = morpholog_core::guarantees(prepared)
+        .iter()
+        .filter(|g| g.from.is_some())
+        .count();
+    let invariants = match generated {
+        0 => p.invariants.len().to_string(),
+        n => format!(
+            "{} ({} declared, {n} from declarations)",
+            p.invariants.len(),
+            p.invariants.len() - n
+        ),
+    };
     let mut out = format!(
-        "ok: {}\nprogram: {}\n{parts}  predicates: {}\n  definitions: {}\n  invariants: {}\n  transformations: {}\n  intents: {}\n  derived claims: {}\n",
+        "ok: {}\nprogram: {}\n{parts}  predicates: {}\n  definitions: {}\n  invariants: {invariants}\n  transformations: {}\n  intents: {}\n  derived claims: {}\n",
         file.display(),
         p.name,
         p.predicates.len(),
         p.definitions.len(),
-        p.invariants.len(),
         p.transformations.len(),
         p.intents.len(),
         p.derived_claims.len(),
@@ -753,12 +764,7 @@ mod tests {
     fn summary_names_the_program_and_counts_each_declaration_kind() {
         let p = PgProgram::new(PreparedProgram::new(program("demo").build()).unwrap());
         let routes = invariant_routes(&p).unwrap();
-        let s = summary(
-            p.prepared().program(),
-            &routes,
-            Path::new("demo.morph"),
-            &None,
-        );
+        let s = summary(p.prepared(), &routes, Path::new("demo.morph"), &None);
         assert_eq!(
             s,
             "ok: demo.morph\nprogram: demo\n  predicates: 0\n  definitions: 0\n  invariants: 0\n  transformations: 0\n  intents: 0\n  derived claims: 0\n  invariant checks: compiled\n  invariant cases: all bound\n  body reads: all keyed\n"
