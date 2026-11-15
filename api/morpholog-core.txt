@@ -3732,6 +3732,7 @@ impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Transition
 pub struct morpholog_core::TransitionRef
 pub morpholog_core::TransitionRef::actor: alloc::string::String
 pub morpholog_core::TransitionRef::args: alloc::vec::Vec<alloc::string::String>
+pub morpholog_core::TransitionRef::decided_at: core::option::Option<jiff::timestamp::Timestamp>
 pub morpholog_core::TransitionRef::transformation: alloc::string::String
 impl core::clone::Clone for morpholog_core::TransitionRef
 pub fn morpholog_core::TransitionRef::clone(&self) -> morpholog_core::TransitionRef

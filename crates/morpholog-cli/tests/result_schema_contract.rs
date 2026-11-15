@@ -640,9 +640,12 @@ fn explanations_serialize_as_pinned() {
         &mut morpholog_postgres::runtime_subjects(),
     );
     assert_golden("explanation_admissible.json", &to_value(&admissible));
-    // Through the session, the same explanation carries the request row.
+    // Through the session, the same explanation carries the request row,
+    // and the decision time it was judged at, since a session always
+    // explains against the database.
     let mut in_session = to_value(&admissible);
     in_session["row"] = serde_json::json!(4);
+    in_session["transition"]["decided_at"] = serde_json::json!("2026-11-15T09:30:00.123456Z");
     assert_golden("explanation_session.json", &in_session);
     assert_golden("explanation_gate.json", &to_value(&gate));
     // Both shapes: an unnamed gate omits `rule` (above), a named one

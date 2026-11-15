@@ -892,14 +892,23 @@ class TransitionRef:
     transformation: str
     args: list[object]
     actor: str
+    # The decision time the explanation used: the start of the read
+    # transaction its state came from. None where there was none.
+    decided_at: datetime | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> TransitionRef:
-        data = _strict("transition ref", payload, {"transformation", "args", "actor"})
+        data = _strict(
+            "transition ref",
+            payload,
+            {"transformation", "args", "actor"},
+            {"decided_at"},
+        )
         return cls(
             transformation=data.text("transformation"),
             args=list(data.texts("args")),
             actor=data.text("actor"),
+            decided_at=data.optional_timestamp("decided_at"),
         )
 
 

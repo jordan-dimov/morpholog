@@ -93,7 +93,7 @@ fn stable(key: &str) -> Option<serde_json::Value> {
         "transition_id" | "rejection_id" | "asserted_in" => {
             Some(serde_json::json!("00000000-0000-0000-0000-000000000000"))
         }
-        "committed_at" | "ordered_at" | "rejected_at" => {
+        "committed_at" | "ordered_at" | "rejected_at" | "decided_at" => {
             Some(serde_json::json!("2000-01-01T00:00:00Z"))
         }
         "authenticated_by" => Some(serde_json::json!("login")),
@@ -1026,9 +1026,17 @@ async fn an_explain_records_nothing_and_answers_as_the_one_shot_command() {
         assert_eq!(explained["verdict"], *verdict, "{explained}");
         assert_eq!(explained["row"], serde_json::json!(row + 4), "{explained}");
         explained.as_object_mut().unwrap().remove("row");
+        // Each reads in its own transaction, so each names its own instant.
+        let mut one_shot = one_shot_explain(&fixture.path, act);
+        for answer in [&mut explained, &mut one_shot] {
+            let at = answer["transition"]
+                .as_object_mut()
+                .unwrap()
+                .remove("decided_at");
+            assert!(at.is_some_and(|at| at.is_string()), "{answer}");
+        }
         assert_eq!(
-            explained,
-            one_shot_explain(&fixture.path, act),
+            explained, one_shot,
             "the session's explanation is the one-shot command's"
         );
     }
