@@ -10,7 +10,9 @@ SQLX_OFFLINE = "true"
 
 # The PG-backed integration suites share one database and TRUNCATE it on
 # entry, so they only pass single-threaded. Every `cargo test` here runs them
-# so: precommit, CI and a plain local run alike.
+# so: CI and a plain local run alike. The local gate runs the test binaries
+# side by side instead, each PG-backed one on a database of its own
+# (scripts/test_lanes.sh), and each still one test at a time.
 RUST_TEST_THREADS = "1"
 
 # `cargo update` skips any version published in the last week, so a

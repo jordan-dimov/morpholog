@@ -69,72 +69,120 @@ if $smoke; then
     exit 0
 fi
 
-step 'cargo clippy --workspace --all-targets --all-features --locked -- -D warnings'
-cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+# ----------------------------------------------------------------
+# The rest runs in groups. The steps in a group do not depend on each
+# other, so they run at once; each keeps its own output, printed in
+# order under its usual header when the group is done, and the gate
+# fails if any step in it failed. A step that builds with another
+# toolchain, or beside another build, has a target directory of its
+# own, so no build waits on another's lock.
+# ----------------------------------------------------------------
+group_dir=$(mktemp -d)
+trap 'rm -rf "$group_dir"' EXIT
+group_names=()
+group_pids=()
 
-step 'RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps --all-features --locked'
-RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps --all-features --locked
+# start TITLE FUNCTION: run FUNCTION in the background as one step.
+start() {
+    local n=${#group_names[@]}
+    group_names+=("$1")
+    ( "$2" ) > "$group_dir/$n.log" 2>&1 &
+    group_pids+=($!)
+}
+
+# finish: wait for the group, print each step, fail if any did.
+finish() {
+    local i rc failed=()
+    for i in "${!group_pids[@]}"; do
+        rc=0
+        wait "${group_pids[$i]}" || rc=$?
+        step "${group_names[$i]}"
+        cat "$group_dir/$i.log"
+        [ "$rc" -eq 0 ] || failed+=("${group_names[$i]}")
+    done
+    group_names=()
+    group_pids=()
+    if [ "${#failed[@]}" -gt 0 ]; then
+        printf '\nFailed: %s\n' "${failed[@]}" >&2
+        exit 1
+    fi
+}
+
+clippy() {
+    cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+}
+
+rustdoc() {
+    CARGO_TARGET_DIR=target/gate-doc RUSTDOCFLAGS='-D warnings' \
+        cargo doc --workspace --no-deps --all-features --locked
+}
 
 # Never skipped: it needs nothing outside this repository but a pinned
 # toolchain and tool, and it names the install command when either is
 # missing.
-step 'public Rust API snapshots (scripts/public_api.sh)'
-./scripts/public_api.sh
+public_api() {
+    CARGO_TARGET_DIR=target/gate-public-api ./scripts/public_api.sh
+}
 
-step 'declared Rust floor (cargo check on rust-version)'
-floor=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml","rb"))["workspace"]["package"]["rust-version"])')
-# `rust-version` is two-part ("1.100") while rustup installs three-part
-# ("1.100.0"), so match by prefix - asking rustup for "1.100" directly
-# fails and would make this step skip forever without saying why.
-installed=$(rustup toolchain list | awk '{print $1}' | grep -E "^${floor}(\.|-)" | head -1)
-if [ -n "$installed" ]; then
-    cargo "+$installed" check --workspace --all-targets --all-features --locked
-else
-    echo "  toolchain $floor not installed; skipping (CI checks it)."
-    echo "  Install it with: rustup toolchain install $floor"
-fi
+rust_floor() {
+    local floor installed
+    floor=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml","rb"))["workspace"]["package"]["rust-version"])')
+    # `rust-version` is two-part ("1.100") while rustup installs three-part
+    # ("1.100.0"), so match by prefix - asking rustup for "1.100" directly
+    # fails and would make this step skip forever without saying why.
+    installed=$(rustup toolchain list | awk '{print $1}' | grep -E "^${floor}(\.|-)" | head -1)
+    if [ -n "$installed" ]; then
+        CARGO_TARGET_DIR=target/gate-floor \
+            cargo "+$installed" check --workspace --all-targets --all-features --locked
+    else
+        echo "  toolchain $floor not installed; skipping (CI checks it)."
+        echo "  Install it with: rustup toolchain install $floor"
+    fi
+}
 
-step 'cargo audit'
-cargo audit
-
-step 'sync test suites (every crate that needs no database)'
-cargo test --workspace --all-targets --locked \
-    --exclude morpholog-cli \
-    --exclude morpholog-postgres \
-    --exclude morpholog-outbox \
-    --exclude morpholog-bench
+audit() {
+    cargo audit
+}
 
 # The shell twin of `with_connection_defaults`, shared by both scripts and
 # pinned against the Rust rule by shell_twin_agreement.rs.
 # shellcheck source=shared/sqlx_url.sh
 source "$(dirname "${BASH_SOURCE[0]}")/shared/sqlx_url.sh"
 
-step 'sqlx offline cache freshness (cargo sqlx prepare --check)'
-if [ -z "${DATABASE_URL:-}" ]; then
-    echo '  DATABASE_URL not set; skipping (CI checks the cache against the schema).'
-elif ! cargo sqlx --version >/dev/null 2>&1; then
-    echo '  sqlx-cli not installed; skipping. Install it with:'
-    echo '    cargo install sqlx-cli --version 0.9.0 --no-default-features --features postgres,rustls'
-else
-    DATABASE_URL="$(sqlx_url "$DATABASE_URL")" SQLX_OFFLINE=false \
-        cargo sqlx prepare --workspace --check -- --all-targets --all-features --locked
-fi
+sqlx_cache() {
+    if [ -z "${DATABASE_URL:-}" ]; then
+        echo '  DATABASE_URL not set; skipping (CI checks the cache against the schema).'
+    elif ! cargo sqlx --version >/dev/null 2>&1; then
+        echo '  sqlx-cli not installed; skipping. Install it with:'
+        echo '    cargo install sqlx-cli --version 0.9.0 --no-default-features --features postgres,rustls'
+    else
+        CARGO_TARGET_DIR=target/gate-sqlx DATABASE_URL="$(sqlx_url "$DATABASE_URL")" \
+            SQLX_OFFLINE=false \
+            cargo sqlx prepare --workspace --check -- --all-targets --all-features --locked
+    fi
+}
 
-step 'async / PG-backed test suites (morpholog-cli / postgres / outbox / bench smoke)'
+start 'cargo clippy --workspace --all-targets --all-features --locked -- -D warnings' clippy
+start 'RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps --all-features --locked' rustdoc
+start 'public Rust API snapshots (scripts/public_api.sh)' public_api
+start 'declared Rust floor (cargo check on rust-version)' rust_floor
+start 'cargo audit' audit
+start 'sqlx offline cache freshness (cargo sqlx prepare --check)' sqlx_cache
+finish
+
+# Every test binary, the PG-backed ones each on a database of its own,
+# side by side (scripts/test_lanes.sh says how roles are kept apart).
+step 'test suites, every crate (scripts/test_lanes.sh)'
 if [ -z "${DATABASE_URL:-}" ]; then
-    echo '  DATABASE_URL not set; skipping.'
     echo '  These suites TRUNCATE the schema and manage cluster-global roles;'
     echo '  point at a disposable cluster (CONTRIBUTING.md has the recipe):'
     echo "    export DATABASE_URL='postgres:///morpholog_dev?port=55432'"
-    echo '    ./scripts/precommit.sh'
-else
-    cargo test \
-        -p morpholog-cli \
-        -p morpholog-postgres \
-        -p morpholog-outbox \
-        -p morpholog-bench \
-        --all-targets --locked
 fi
+./scripts/test_lanes.sh
+
+TARGET_DIR=$(cargo metadata --format-version 1 --no-deps \
+    | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
+export TARGET_DIR
 
 # ----------------------------------------------------------------
 # `morpholog check` on every .morph file in the tree.
@@ -145,23 +193,20 @@ fi
 # catches a stale .morph file even when DATABASE_URL is unset (and
 # the cli test suite is therefore skipped). The `find` picks up
 # any .morph elsewhere in the tree too, such as the CLI's test
-# fixtures.
-#
-# Uses `cargo run` so the script is location-independent (honours
-# CARGO_TARGET_DIR) and doesn't depend on `cargo install` having
-# happened. Cargo's startup amortises across the loop because the
-# build is cached after the first iteration.
+# fixtures. Each file is checked by the binary the tests built, all
+# at once.
 # ----------------------------------------------------------------
-step 'morpholog check on every .morph file'
-MORPH_FILES=$(find . -name '*.morph' -not -path './target/*')
-if [ -z "$MORPH_FILES" ]; then
-    echo '  No .morph files found; skipping.'
-else
-    for f in $MORPH_FILES; do
-        echo "  $f"
-        cargo run --quiet --locked -p morpholog-cli -- check "$f"
-    done
-fi
+morph_files() {
+    cargo build --quiet --locked -p morpholog-cli
+    local files
+    files=$(find . -name '*.morph' -not -path './target/*' | sort)
+    if [ -z "$files" ]; then
+        echo '  No .morph files found; skipping.'
+        return
+    fi
+    printf '%s\n' "$files" | xargs -P "$(nproc)" -I{} sh -c \
+        'echo "  $1"; "$2/debug/morpholog" check "$1"' _ {} "$TARGET_DIR"
+}
 
 # ----------------------------------------------------------------
 # The generated Python client (mirrors the ci.yml python-client job).
@@ -173,34 +218,39 @@ fi
 # The CI job pins the declared 3.12 floor; the local run uses
 # whatever python3 is on PATH as a smoke test.
 # ----------------------------------------------------------------
-step 'generated Python client (unit tests + worked embedder)'
-if ! command -v python3 >/dev/null 2>&1; then
-    echo '  python3 not on PATH; skipping (CI runs this at the 3.12 floor).'
-else
+python_client() {
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo '  python3 not on PATH; skipping (CI runs this at the 3.12 floor).'
+        return
+    fi
     python3 -m unittest discover crates/morpholog-cli/templates/python_client/tests
     if [ -z "${DATABASE_URL:-}" ]; then
         echo '  DATABASE_URL not set; skipping the worked-embedder run.'
     elif ! command -v psql >/dev/null 2>&1; then
         echo '  psql not on PATH; skipping the worked-embedder run.'
     else
-        # Honour CARGO_TARGET_DIR like the rest of the script (python3
-        # is guaranteed on this branch, so cargo metadata is free).
-        TARGET_DIR=$(cargo metadata --format-version 1 --no-deps \
-            | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
         MORPHOLOG_BIN="$TARGET_DIR/debug/morpholog" \
             DATABASE_URL="$DATABASE_URL" \
             python3 examples/etrm_embedder/etrm_lifecycle.py >/dev/null
         echo '  worked embedder lifecycle ran end to end.'
     fi
-fi
+}
 
 # The client seam's types, under the mypy version the script pins.
-step 'generated Python client types (mypy)'
-./scripts/python_types.sh
+python_types() {
+    ./scripts/python_types.sh
+}
 
 # The templates, their tests and the committed package under the ruff
 # version the script pins: an embedder's own run finds nothing of ours.
-step 'generated Python client lint (ruff)'
-./scripts/python_lint.sh
+python_lint() {
+    ./scripts/python_lint.sh
+}
+
+start 'morpholog check on every .morph file' morph_files
+start 'generated Python client (unit tests + worked embedder)' python_client
+start 'generated Python client types (mypy)' python_types
+start 'generated Python client lint (ruff)' python_lint
+finish
 
 printf '\n=== All checks passed. ===\n'

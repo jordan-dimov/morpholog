@@ -16,7 +16,7 @@
 //! for a read keyed by a value a `bind` found, where the loader's key is
 //! a subquery: the planner, not the SQL, decides what the read locks.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use morpholog_core::{ClaimInstance, EvalValue, Transition};
 use morpholog_test_support::differential::{sample_args, sample_state};
@@ -216,13 +216,18 @@ async fn the_loader_follows_a_chain_of_binds_to_the_rows_the_links_name() {
     assert_eq!(loaded.claims_for("Good").count(), 1, "{loaded:?}");
 }
 
-/// Relation-level SIRead locks on the claims table, seen from outside.
-async fn relation_sireads(pool: &PgPool) -> i64 {
+/// Relation-level SIRead locks on the claims table held by the sessions
+/// `pids`, seen from outside. Only theirs: a committed serializable
+/// transaction keeps its SIRead locks while any transaction that overlapped
+/// it runs, in any database on the cluster.
+async fn relation_sireads(pool: &PgPool, pids: &[i32]) -> i64 {
     sqlx::query_scalar(
         "SELECT count(*) FROM pg_locks
-          WHERE mode = 'SIReadLock' AND locktype = 'relation'
+          WHERE pid = ANY($1)
+            AND mode = 'SIReadLock' AND locktype = 'relation'
             AND relation = 'morpholog.claims'::regclass",
     )
+    .bind(pids)
     .fetch_one(pool)
     .await
     .unwrap()
@@ -289,15 +294,25 @@ fn posting(id: &str, reads: Reads) -> Contender {
     }
 }
 
-/// One writer: a SERIALIZABLE transaction that loads its scope, waits at
-/// the barrier twice (after its read, and after its write), writes its
-/// delta, and commits.
-async fn writer(pool: PgPool, act: Contender, barrier: Arc<Barrier>) -> Result<(), PgError> {
+/// One writer: a SERIALIZABLE transaction that records its session in
+/// `pids`, loads its scope, waits at the barrier twice (after its read,
+/// and after its write), writes its delta, and commits.
+async fn writer(
+    pool: PgPool,
+    act: Contender,
+    barrier: Arc<Barrier>,
+    pids: Arc<Mutex<Vec<i32>>>,
+) -> Result<(), PgError> {
     let mut tx = pool.begin().await.map_err(crate::error::classify)?;
     sqlx::raw_sql("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
         .execute(&mut *tx)
         .await
         .map_err(crate::error::classify)?;
+    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(crate::error::classify)?;
+    pids.lock().unwrap().push(pid);
     let _ = load_state(&mut tx, &act.scope).await?;
     barrier.wait().await;
     write_claim_delta(&mut tx, Uuid::now_v7(), &act.asserted, &act.retracted).await?;
@@ -313,11 +328,13 @@ async fn race(
     b: Contender,
 ) -> (Result<(), PgError>, Result<(), PgError>, i64) {
     let barrier = Arc::new(Barrier::new(3));
-    let a = tokio::spawn(writer(pool.clone(), a, barrier.clone()));
-    let b = tokio::spawn(writer(pool.clone(), b, barrier.clone()));
+    let pids = Arc::new(Mutex::new(Vec::new()));
+    let a = tokio::spawn(writer(pool.clone(), a, barrier.clone(), pids.clone()));
+    let b = tokio::spawn(writer(pool.clone(), b, barrier.clone(), pids.clone()));
     // Both have read; look before either writes.
     barrier.wait().await;
-    let relation_locks = relation_sireads(pool).await;
+    let pids = pids.lock().unwrap().clone();
+    let relation_locks = relation_sireads(pool, &pids).await;
     barrier.wait().await;
     (a.await.unwrap(), b.await.unwrap(), relation_locks)
 }

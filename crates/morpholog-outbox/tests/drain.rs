@@ -33,7 +33,7 @@ async fn drain_returns_empty_vec_when_no_rows_available() {
     reset_db(&pool).await;
 
     let outcomes =
-        process_available_outbox_rows(&pool, "worker_a", INTENT_TYPE, LEASE, &AlwaysDelivers, None)
+        process_available_outbox_rows(&pool, "worker_a", INTENT_TYPE, LEASE, &AlwaysDelivers)
             .await
             .unwrap();
     assert!(outcomes.is_empty());
@@ -48,7 +48,7 @@ async fn drain_processes_all_available_rows_in_one_pass() {
     let _ = commit_simple_entry(&pool, "entry_003", "p_drain").await;
 
     let outcomes =
-        process_available_outbox_rows(&pool, "worker_a", INTENT_TYPE, LEASE, &AlwaysDelivers, None)
+        process_available_outbox_rows(&pool, "worker_a", INTENT_TYPE, LEASE, &AlwaysDelivers)
             .await
             .unwrap();
     assert_eq!(outcomes.len(), 3);
@@ -85,7 +85,6 @@ async fn drain_does_not_redeliver_transient_row_in_same_pass() {
         &AlwaysTransient {
             next_attempt_at: later,
         },
-        None,
     )
     .await
     .unwrap();
@@ -120,16 +119,10 @@ async fn drain_pass_boundary_blocks_subsecond_retries_until_next_pass() {
         }
     }
 
-    let outcomes = process_available_outbox_rows(
-        &pool,
-        "worker_a",
-        INTENT_TYPE,
-        LEASE,
-        &SubsecondTransient,
-        None,
-    )
-    .await
-    .unwrap();
+    let outcomes =
+        process_available_outbox_rows(&pool, "worker_a", INTENT_TYPE, LEASE, &SubsecondTransient)
+            .await
+            .unwrap();
     assert_eq!(
         outcomes.len(),
         2,
@@ -187,7 +180,6 @@ async fn drain_continues_through_lease_lost_outcomes() {
             pool: pool_for_deliverer,
             call_count: 0.into(),
         },
-        None,
     )
     .await
     .unwrap();
