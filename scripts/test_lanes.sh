@@ -3,9 +3,9 @@
 # binary at a time, and `.cargo/config.toml` keeps each one serial
 # because the PG-backed suites share one database; here every PG-backed
 # binary gets a database of its own, copied from a template at the
-# schema head, so the binaries can run at once. A binary that creates,
-# drops or counts cluster-global roles runs in a lane of its own, one at
-# a time, since roles are shared by every database on the cluster.
+# schema head, so the binaries can run at once. Roles belong to the
+# whole cluster, so the run first checks that no two tests can make the
+# same one.
 #
 # Each binary still runs its own tests one at a time, as under cargo.
 # Every binary runs; the script exits non-zero if any failed, and prints
@@ -64,6 +64,32 @@ db_url() {
     printf '%s/%s%s\n' "${base%/*}" "$1" "$query"
 }
 
+# Every role a test makes is named for its file, morpholog_ci_<token>_...
+# or mtest<token>_..., with a token no other test file uses; the default
+# names count as one token, so one file at most makes them. A file is
+# held to this when it creates, drops or counts roles: in its own SQL,
+# through a shared helper that does (tests/common), or through the
+# commands and library calls that provision, move or list them. A new
+# helper of that kind joins this list.
+role_pattern='create role|drop role|alter role|pg_auth_members|census|--least-privilege|provision_least_privilege|rebind_least_privilege|move_deployment_roles|direct_members|databases_also_reached|"roles"|recreate_roles|drop_roles_if_present|recreate_gateway_roles|with_gateway_roles|gateway_pool|Deployment::new'
+role_tokens() {
+    local f
+    for f in crates/*/tests/*.rs; do
+        grep -qiE "$role_pattern" "$f" || continue
+        grep -oE 'morpholog_ci_[a-z0-9]+|mtest_[a-z0-9]+|mtest[0-9]+|morpholog_(writer|reader|executor)\b' "$f" \
+            | sed -E 's/^morpholog_(writer|reader|executor)$/the default names/; s/^morpholog_ci_|^mtest_?//' \
+            | sort -u | sed "s|^|$f\t|"
+    done
+}
+shared=$(role_tokens | awk -F'\t' '
+    { files[$2] = files[$2] "\n    " $1; n[$2]++ }
+    END { for (t in n) if (n[t] > 1) printf "  role names \"%s\" are made by more than one test file:%s\n", t, files[t] }')
+if [ -n "$shared" ]; then
+    printf 'Tests run at once, and roles are shared by the whole cluster:\n%s\n' "$shared" >&2
+    echo 'Give each file role names of its own (see role_tokens in this script).' >&2
+    exit 1
+fi
+
 if [ -n "${DATABASE_URL:-}" ]; then
     sweep &
     sweeper=$!
@@ -97,22 +123,7 @@ is_pg() {
     return 1
 }
 
-# A binary is in the role lane when its test file creates, drops or
-# counts roles: in its own SQL, through a shared helper that does
-# (tests/common), or through the commands and library calls that
-# provision, move or list them. A new helper of that kind joins this
-# list. Unit tests never touch roles, so a crate's own lib and bin
-# targets run in the free lanes.
-role_pattern='create role|drop role|alter role|pg_auth_members|census|--least-privilege|provision_least_privilege|rebind_least_privilege|move_deployment_roles|direct_members|databases_also_reached|"roles"|recreate_roles|drop_roles_if_present|recreate_gateway_roles|with_gateway_roles|gateway_pool|Deployment::new'
-touches_roles() {
-    case "$1" in
-        */src/lib.rs | */src/main.rs) return 1 ;;
-        *) grep -qiE "$role_pattern" "$1" ;;
-    esac
-}
-
-: > "$work/free.tsv"
-: > "$work/roles.tsv"
+: > "$work/run.tsv"
 skipped_pg=false
 while IFS=$'\t' read -r package dir exe src; do
     if is_pg "$package"; then
@@ -120,12 +131,8 @@ while IFS=$'\t' read -r package dir exe src; do
             skipped_pg=true
             continue
         fi
-        if touches_roles "$src"; then
-            printf '%s\t%s\t%s\t%s\n' "$package" "$dir" "$exe" "$src" >> "$work/roles.tsv"
-            continue
-        fi
     fi
-    printf '%s\t%s\t%s\t%s\n' "$package" "$dir" "$exe" "$src" >> "$work/free.tsv"
+    printf '%s\t%s\t%s\t%s\n' "$package" "$dir" "$exe" "$src" >> "$work/run.tsv"
 done < "$work/binaries.tsv"
 
 if $skipped_pg; then
@@ -161,17 +168,7 @@ export -f run_one is_pg db_url
 export work template run DATABASE_URL
 export pg_packages_list="${pg_packages[*]}"
 
-# The role lane runs alone, one binary at a time, beside the free lanes.
-(
-    n=0
-    while IFS=$'\t' read -r package dir exe src; do
-        n=$((n + 1))
-        run_one "r$n" "$package" "$dir" "$exe" "$src"
-    done < "$work/roles.tsv"
-) &
-role_lane=$!
-
-# run_line LINE: one free binary, its fields tab-separated.
+# run_line LINE: one binary, its fields tab-separated.
 run_line() {
     local index package dir exe src
     IFS=$'\t' read -r index package dir exe src <<< "$1"
@@ -179,27 +176,23 @@ run_line() {
     run_one "$index" "$package" "$dir" "$exe" "$src"
 }
 export -f run_line
-awk -F'\t' '{ printf "f%d\t%s\t%s\t%s\t%s\n", NR, $1, $2, $3, $4 }' "$work/free.tsv" \
+awk -F'\t' '{ printf "%d\t%s\t%s\t%s\t%s\n", NR, $1, $2, $3, $4 }' "$work/run.tsv" \
     | xargs -P "$jobs" -d '\n' -I{} bash -c 'run_line "$1"' _ {}
-wait "$role_lane"
 
 failed=0
 total=0
 summed=0
-role_secs=0
 for verdict in "$work"/verdict.*; do
     IFS=$'\t' read -r rc secs package src < "$verdict"
     total=$((total + 1))
     summed=$(echo "$summed + $secs" | bc)
-    [[ ${verdict##*.} != r* ]] || role_secs=$(echo "$role_secs + $secs" | bc)
     if [ "$rc" != 0 ]; then
         failed=$((failed + 1))
         printf '\n=== FAILED: %s %s (exit %s) ===\n' "$package" "$src" "$rc"
         cat "$work/out.${verdict##*.}"
     fi
 done
-printf '\n%d test binaries, %d failed; summed binary time %.1fs, the role lane %.1fs\n' \
-    "$total" "$failed" "$summed" "$role_secs"
+printf '\n%d test binaries, %d failed; summed binary time %.1fs\n' "$total" "$failed" "$summed"
 echo "slowest:"
 cat "$work"/verdict.* | sort -t$'\t' -k2 -rn | head -6 \
     | awk -F'\t' '{ printf "  %6.1fs  %s %s\n", $2, $3, $4 }'
