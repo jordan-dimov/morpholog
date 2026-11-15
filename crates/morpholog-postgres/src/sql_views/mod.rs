@@ -60,8 +60,8 @@ pub struct RenderedViews {
 /// The format of [`ViewSurface`] as written. Moves when the description's
 /// shape changes, apart from the model hash, which moves with the
 /// programme. 2 added `source` on a derived view; 3 added the `history`
-/// kind.
-pub const VIEW_SURFACE_FORMAT: u32 = 3;
+/// kind; 4 made `identity` the column sets that identify a row.
+pub const VIEW_SURFACE_FORMAT: u32 = 4;
 
 /// Where a derived predicate's view reads from: the `morpholog_read`
 /// cache `refresh derived` fills, or the claims themselves, computed at
@@ -98,11 +98,16 @@ pub struct ViewSurface {
     pub views: Vec<ViewDescription>,
 }
 
-/// One generated view. `identity` lists the field sets the programme
-/// declares unique (`unique by` clauses for a base predicate, the key
-/// fields for a derived one), as declared: whether one serves as a key
-/// is the consumer's decision, and a view may have none. A history
-/// view's is the operation's place in the log. A derived view says where
+/// One generated view. `identity` lists the column sets whose values
+/// identify a row of the view. For a base view, each field set the
+/// programme guarantees unique (`unique by`, `current pointer by`, and an
+/// `effective by` key with its date), or every field when none is
+/// declared, since two identical claims are one; for a derived view, its
+/// keys. A set holding a timestamp or a duration is left out, since its
+/// column keeps microseconds where the claim keeps nanoseconds; then a
+/// view with the exact `_morpholog_arguments` column names that. A live
+/// derived view has no such column and may have none. A history view's
+/// is the operation's place in the log. A derived view says where
 /// it reads from, `live` or `cache`; the others say nothing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ViewDescription {
@@ -631,14 +636,25 @@ fn render(
         out.push_str("\n-- no predicates: this programme declares no claim shapes.\n");
     }
     for predicate in base {
-        let identity = predicate
+        let declared: Vec<Vec<String>> = predicate
             .disciplines
             .iter()
             .filter_map(|d| match d {
-                Discipline::UniqueBy { fields } => Some(fields.clone()),
-                _ => None,
+                Discipline::UniqueBy { fields } | Discipline::CurrentPointerBy { fields } => {
+                    Some(fields.clone())
+                }
+                Discipline::EffectiveBy { keys, on, .. } => {
+                    Some(keys.iter().chain(std::iter::once(on)).cloned().collect())
+                }
+                Discipline::AppendOnly | Discipline::SupersededVia { .. } => None,
             })
             .collect();
+        let declared = if declared.is_empty() {
+            vec![predicate.args.iter().map(|a| a.name.clone()).collect()]
+        } else {
+            declared
+        };
+        let identity = identity_of(predicate, declared, Some(ARGUMENTS_COLUMN));
         views.push(render_view(
             &mut out,
             schema,
@@ -649,11 +665,13 @@ fn render(
         ));
     }
     for predicate in derived {
-        let identity = derived_keys
+        let keys: Vec<Vec<String>> = derived_keys
             .get(predicate.name.as_str())
             .cloned()
             .map(|keys| vec![keys])
             .unwrap_or_default();
+        let exact = (!live.contains_key(predicate.name.as_str())).then_some(ARGUMENTS_COLUMN);
+        let identity = identity_of(predicate, keys, exact);
         let mut description = match live.get(predicate.name.as_str()) {
             Some(select) => render_live_view(&mut out, schema, predicate, select, identity),
             None => render_view(
@@ -680,6 +698,42 @@ fn render(
 
     out.push_str("\nCOMMIT;\n");
     (out, views)
+}
+
+/// The raw arguments column of a base or cached derived view: the claim
+/// itself, exact, so it identifies a row on its own.
+const ARGUMENTS_COLUMN: &str = "_morpholog_arguments";
+
+/// The column sets among `declared` that identify a row, once each, in
+/// order. A set holding a timestamp or a duration does not: its column
+/// keeps microseconds, so two claims a nanosecond apart show one value.
+/// With none left, `exact`, when the view has it, does.
+fn identity_of(
+    predicate: &PredicateDecl,
+    declared: Vec<Vec<String>>,
+    exact: Option<&str>,
+) -> Vec<Vec<String>> {
+    let lossy = |field: &String| {
+        predicate.args.iter().any(|a| {
+            &a.name == field
+                && matches!(
+                    a.kind,
+                    PredicateArgKind::Timestamp | PredicateArgKind::Duration
+                )
+        })
+    };
+    let mut identity: Vec<Vec<String>> = Vec::new();
+    for fields in declared {
+        if !fields.iter().any(lossy) && !identity.contains(&fields) {
+            identity.push(fields);
+        }
+    }
+    if identity.is_empty()
+        && let Some(column) = exact
+    {
+        identity.push(vec![column.to_string()]);
+    }
+    identity
 }
 
 /// Render the seal: in the same transaction, read each view's definition

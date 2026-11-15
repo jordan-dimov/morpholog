@@ -28,7 +28,7 @@ def catalogue_rows(described: envelopes.ViewSurface) -> list[tuple[str, str, str
 class ReadingTheDescription(unittest.TestCase):
     def test_reads_every_view_with_typed_columns(self):
         described = surface()
-        self.assertEqual(described.format, 3)
+        self.assertEqual(described.format, 4)
         self.assertEqual(described.programme, "trade_lifecycle")
         self.assertTrue(described.model_hash.startswith("sha256:"))
         self.assertEqual(described.catalog, "_morpholog_catalog")
