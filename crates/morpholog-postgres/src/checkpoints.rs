@@ -373,17 +373,26 @@ async fn collect_leaves(
     Ok((leaves, last))
 }
 
-/// Refuse unless `id` is inside the prefix below `horizon`. `>=` mirrors
-/// the pager's strict `<`: a row at the horizon is withheld.
+/// Refuse unless `id` is inside the prefix below `horizon`.
 async fn refuse_unless_covered(
     conn: &mut sqlx::PgConnection,
     id: Uuid,
     horizon: u64,
     tree_size: i64,
 ) -> Result<(), PgError> {
+    if withheld(conn, id, horizon).await? {
+        return Err(PgError::TransitionNotCovered { id, tree_size });
+    }
+    Ok(())
+}
+
+/// Whether `id` is withheld from the prefix below `horizon`. `>=` mirrors
+/// the pager's strict `<`: a row at the horizon is withheld. A transition
+/// the log does not hold is [`PgError::TransitionNotFound`].
+async fn withheld(conn: &mut sqlx::PgConnection, id: Uuid, horizon: u64) -> Result<bool, PgError> {
     // `audit_order` is NOT NULL and the horizon is bound, so the
     // comparison is never NULL.
-    let withheld = sqlx::query_scalar!(
+    sqlx::query_scalar!(
         r#"SELECT audit_order >= $2 AS "withheld!"
            FROM morpholog.audit WHERE transition_id = $1"#,
         id,
@@ -391,12 +400,22 @@ async fn refuse_unless_covered(
     )
     .fetch_optional(conn)
     .await
-    .map_err(classify_checked_query)?;
-    match withheld {
-        None => Err(PgError::TransitionNotFound(id)),
-        Some(true) => Err(PgError::TransitionNotCovered { id, tree_size }),
-        Some(false) => Ok(()),
-    }
+    .map_err(classify_checked_query)?
+    .ok_or(PgError::TransitionNotFound(id))
+}
+
+/// Whether a checkpoint taken now would cover `id`: the watermark and one
+/// lookup of the transition, never the prefix itself, so a caller waiting
+/// for the prefix to reach a transition can ask often. The watermark only
+/// moves forward, so a covered answer holds for the checkpoint after it.
+///
+/// # Errors
+///
+/// [`PgError::TransitionNotFound`] for an id the log does not hold.
+pub async fn transition_is_covered(pool: &PgPool, id: Uuid) -> Result<bool, PgError> {
+    let horizon = crate::audit::audit_resume_watermark(pool).await?;
+    let mut conn = pool.acquire().await.map_err(crate::error::classify)?;
+    Ok(!withheld(&mut conn, id, horizon).await?)
 }
 
 /// A checkpoint row as stored, digests as text.
