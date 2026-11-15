@@ -389,8 +389,9 @@ fn header_values_cannot_break_out_of_the_comment() {
 /// The description is read off the column lists the SQL is rendered
 /// from: metadata columns first with the source's types, then the
 /// fields in declaration order with the kind as `schema` spells it and
-/// the type the view casts to; the identity is each `unique by` clause
-/// for a base predicate and the key fields for a derived one.
+/// the type the view casts to; the identity is each declared key whose
+/// columns identify a row, for a base predicate, and the key fields for a
+/// derived one.
 #[test]
 fn the_description_follows_the_rendered_columns() {
     let rendered = render_ok(
@@ -428,12 +429,11 @@ derived Exposure(book):
 
     let position = &surface.views[0];
     assert_eq!(position.predicate, "Position");
+    // `unique by (at)` holds for the claims, but `at` is a microsecond
+    // column, so it identifies no row of the view.
     assert_eq!(
         position.identity,
-        vec![
-            vec!["book".to_string(), "instrument".to_string()],
-            vec!["at".to_string()]
-        ]
+        vec![vec!["book".to_string(), "instrument".to_string()]]
     );
     type Shown = (String, String, Option<String>, String, Option<usize>);
     let shown: Vec<Shown> = position
@@ -484,9 +484,10 @@ derived Exposure(book):
             field("raw", "Any", "jsonb", 8),
         ]
     );
-    assert!(
-        surface.views[1].identity.is_empty(),
-        "no clause, no identity"
+    assert_eq!(
+        surface.views[1].identity,
+        vec![vec!["id".to_string()]],
+        "no clause: the whole claim, since claims are a set"
     );
 
     let exposure = &surface.views[2];
@@ -1001,4 +1002,112 @@ async fn switching_a_deployed_surface_to_live_needs_the_derived_views_dropped() 
     .await
     .unwrap();
     assert_eq!(derived.len(), 2);
+}
+
+/// Every discipline that guarantees uniqueness names its key, once each;
+/// a predicate with none is identified by all its fields; a key holding a
+/// timestamp or a duration falls back to the exact arguments column, and
+/// a live derived view, which has none, names nothing.
+#[test]
+fn identity_names_every_declared_key_that_identifies_a_row() {
+    let program = "program keys
+predicate Order(order: Subject, status: Subject)
+    unique by (order)
+    current pointer by (order)
+predicate Rate(book: Subject, rate: Decimal, from: Date)
+    effective by (book) on (from)
+predicate Tag(item: Subject, label: Subject)
+predicate Event(at: Timestamp, what: Subject)
+predicate Hold(id: Subject, for_: Duration)
+    unique by (for_)
+predicate Seen(at: Timestamp)
+derived Seen(at):
+    over Event(at, _)
+";
+    let identities = |source: DerivedSource| -> Vec<(String, Vec<Vec<String>>)> {
+        let program = parse_program(program).expect("fixture parses");
+        let validated = program.validated().unwrap();
+        let rendered = render_views(
+            &validated,
+            "morpholog_views",
+            "sha256:testhash",
+            source,
+            false,
+        )
+        .expect("renders");
+        rendered
+            .surface
+            .views
+            .iter()
+            .map(|v| (v.view.clone(), v.identity.clone()))
+            .collect()
+    };
+    let key = |fields: &[&str]| fields.iter().map(ToString::to_string).collect::<Vec<_>>();
+    assert_eq!(
+        identities(DerivedSource::Cache),
+        vec![
+            ("order".to_string(), vec![key(&["order"])]),
+            ("rate".to_string(), vec![key(&["book", "from"])]),
+            ("tag".to_string(), vec![key(&["item", "label"])]),
+            ("event".to_string(), vec![key(&["_morpholog_arguments"])]),
+            ("hold".to_string(), vec![key(&["_morpholog_arguments"])]),
+            ("seen".to_string(), vec![key(&["_morpholog_arguments"])]),
+        ]
+    );
+    let live = identities(DerivedSource::Live);
+    assert_eq!(live.last(), Some(&("seen".to_string(), Vec::new())));
+}
+
+/// Two claims a nanosecond apart are two claims, and their view shows
+/// one `at` for both: the description must not offer `at` as a key. The
+/// arguments column it offers instead tells them apart.
+#[tokio::test]
+async fn a_timestamp_column_shown_twice_is_no_key() {
+    let pool = crate::compiled_differential::test_pool().await;
+    crate::testing::reset_database(&pool).await.unwrap();
+    let program = parse_program(
+        "program instants
+predicate Tick(at: Timestamp)
+",
+    )
+    .unwrap();
+    let validated = program.validated().unwrap();
+    let rendered = render_views(
+        &validated,
+        "instant_views",
+        "sha256:testhash",
+        DerivedSource::Cache,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        rendered.surface.views[0].identity,
+        vec![vec![ARGUMENTS_COLUMN.to_string()]]
+    );
+    let at = |text: &str| morpholog_core::EvalValue::Timestamp(text.parse().expect("an instant"));
+    crate::load_differential::seed(
+        &pool,
+        &[
+            morpholog_test_support::claim_instance("Tick", &[at("2026-01-01T00:00:00.000000001Z")]),
+            morpholog_test_support::claim_instance("Tick", &[at("2026-01-01T00:00:00.000000002Z")]),
+        ],
+    )
+    .await;
+    // Safe: the schema name is this test's constant.
+    sqlx::raw_sql("DROP SCHEMA IF EXISTS instant_views CASCADE")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(rendered.sql))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (rows, shown, exact): (i64, i64, i64) = sqlx::query_as(
+        "SELECT count(*), count(DISTINCT at), count(DISTINCT _morpholog_arguments)
+         FROM instant_views.tick",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!((rows, shown, exact), (2, 1, 2));
 }

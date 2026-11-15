@@ -1,5 +1,5 @@
 {
-  "format": 3,
+  "format": 4,
   "programme": "double_entry_ledger",
   "model_hash": "sha256:2d85c30063c50442996e882b0376bcbc6f8088892f826ee9415f3d6b18003fcb",
   "schema": "morpholog_views",
@@ -48,7 +48,13 @@
           "position": 2
         }
       ],
-      "identity": []
+      "identity": [
+        [
+          "entry_id",
+          "posting_date",
+          "period"
+        ]
+      ]
     },
     {
       "predicate": "JournalLine",
@@ -99,7 +105,14 @@
           "position": 3
         }
       ],
-      "identity": []
+      "identity": [
+        [
+          "entry_id",
+          "account",
+          "debit_amount",
+          "credit_amount"
+        ]
+      ]
     },
     {
       "predicate": "PeriodClosed",
@@ -129,7 +142,11 @@
           "position": 0
         }
       ],
-      "identity": []
+      "identity": [
+        [
+          "period"
+        ]
+      ]
     },
     {
       "predicate": "Supersedes",

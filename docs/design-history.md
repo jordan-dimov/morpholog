@@ -1513,3 +1513,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 
 **Landed:** a `derived` block may have no `value` clause; its rows are its head keys over the `over` proposition. Nothing else changed: the evaluator, the cache, the live views and the view description already handled a row of keys alone, and the live-view differential now holds such a fragment to the kernel. A live view still refuses a domain comparison that can raise, with or without a value.
 
+
+### A view description names every key it can stand behind
+
+**Forced by:** the InvenTree fork (#789). Its read-model factory keyed every view the description gave no identity, such as a single-field predicate or a `current pointer by` one, by all its fields, on the strength of `check`'s own message that identical claims are one.
+
+**Landed:** `identity` is now the column sets that identify a row of the view: every key `unique by`, `current pointer by` or `effective by` guarantees, once each, or every field when none is declared. A set holding a timestamp or a duration is left out, since its column keeps microseconds and two claims a nanosecond apart show one value; the exact `_morpholog_arguments` column stands in. A database test holds that pair to the description. The description's format moved to 4.
