@@ -1785,6 +1785,31 @@ fn ndjson(stdout: &str) -> Vec<Value> {
         .collect()
 }
 
+/// The audit tail and the evidence export, read by a reader that stops:
+/// both end quietly with 141, never 0, so a truncated export does not
+/// read as complete under `set -o pipefail`.
+#[tokio::test(flavor = "current_thread")]
+async fn a_stream_of_the_record_to_a_closed_reader_ends_with_141() {
+    reset_db().await;
+    post_balanced_entry("entry_001", 100);
+    post_balanced_entry("entry_002", 200);
+    let (status, _, stderr) = run_cli(&["audit", "checkpoint"]);
+    assert!(status.success(), "{stderr}");
+    let url = database_url();
+    for args in [&["inspect", "audit"][..], &["audit", "export"]] {
+        let (reader, writer) = std::io::pipe().expect("pipe");
+        drop(reader);
+        let output = Command::new(common::bin())
+            .args(args)
+            .args(["--database-url", &url])
+            .stdout(writer)
+            .output()
+            .expect("spawn morpholog binary");
+        assert_eq!(output.status.code(), Some(141), "{args:?}: {output:?}");
+        assert!(output.stderr.is_empty(), "{args:?}: {output:?}");
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn inspect_audit_streams_one_ndjson_line_per_committed_transition() {
     reset_db().await;

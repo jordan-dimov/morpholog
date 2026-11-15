@@ -9,6 +9,7 @@ use morpholog_postgres::{
     list_rejection_rows, read_claims, read_claims_at, read_claims_at_for_predicates,
     read_claims_for_predicates, read_claims_where, resolve_settled_instant,
 };
+use std::io::Write;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -242,7 +243,7 @@ async fn inspect_audit(args: crate::InspectAuditArgs) -> anyhow::Result<()> {
                 Some((program, file)) => audit_row_named_json(program, file, &row)?,
                 None => serde_json::to_value(&row)?,
             };
-            println!("{}", serde_json::to_string(&line)?);
+            writeln!(super::out::stdout(), "{}", serde_json::to_string(&line)?)?;
         }
     }
     Ok(())
