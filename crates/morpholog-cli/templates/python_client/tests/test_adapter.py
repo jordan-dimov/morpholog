@@ -945,6 +945,13 @@ class AdapterDiscrimination(unittest.TestCase):
 
             argv = argv_after(lambda: self.client.audit_checkpoint(covering="t-1"))
             self.assertEqual(argv[argv.index("--covering") + 1], "t-1")
+            self.assertNotIn("--wait", argv)
+            argv = argv_after(lambda: self.client.audit_checkpoint(covering="t-1", wait=2.5))
+            self.assertEqual(argv[argv.index("--wait") + 1], "2.5s")
+            with self.assertRaises(ValueError):
+                self.client.audit_checkpoint(wait=1)
+            with self.assertRaises(ValueError):
+                self.client.audit_checkpoint(covering="t-1", wait=-1)
 
             argv = argv_after(
                 lambda: self.client.audit_checkpoint(

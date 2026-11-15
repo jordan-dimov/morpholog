@@ -11,6 +11,19 @@ use crate::CheckpointArgs;
 use crate::commands::witness::{report_failures, witness_all};
 use crate::commands::{AlreadyReported, connect, print_json};
 
+/// How often `--wait` asks again whether the prefix has reached the
+/// transition: each ask reads the watermark, so a few a second is cheap.
+const WAIT_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// `--wait`'s value: a non-negative duration, written `30s`, `2m` or
+/// `PT30S`.
+pub(crate) fn parse_wait(text: &str) -> Result<std::time::Duration, String> {
+    let duration: jiff::SignedDuration = text
+        .parse()
+        .map_err(|e| format!("not a duration (30s, 2m or PT30S): {e}"))?;
+    std::time::Duration::try_from(duration).map_err(|_| "a wait cannot be negative".to_string())
+}
+
 /// Run `audit checkpoint`: compute the audit Merkle root, chain it onto the
 /// previous checkpoint, optionally sign it, and print it as JSON.
 ///
@@ -41,13 +54,21 @@ pub(crate) async fn run(args: CheckpointArgs) -> anyhow::Result<()> {
     };
 
     let pool = connect(&args.db.database_url).await?;
-    let mut outcome = match create_checkpoint(&pool, signer.as_ref(), args.covering).await {
-        Ok(outcome) => outcome,
-        Err(PgError::TransitionNotCovered { id, tree_size }) => {
-            print_json(&envelopes::CheckpointRefusal::not_covered(id, tree_size))?;
-            return Err(AlreadyReported.into());
+    let deadline = args.wait.map(|wait| std::time::Instant::now() + wait);
+    let mut outcome = loop {
+        match create_checkpoint(&pool, signer.as_ref(), args.covering).await {
+            Ok(outcome) => break outcome,
+            Err(PgError::TransitionNotCovered { .. })
+                if deadline.is_some_and(|d| std::time::Instant::now() < d) =>
+            {
+                tokio::time::sleep(WAIT_POLL).await;
+            }
+            Err(PgError::TransitionNotCovered { id, tree_size }) => {
+                print_json(&envelopes::CheckpointRefusal::not_covered(id, tree_size))?;
+                return Err(AlreadyReported.into());
+            }
+            Err(e) => return Err(anyhow::Error::new(e).context("create_checkpoint failed")),
         }
-        Err(e) => return Err(anyhow::Error::new(e).context("create_checkpoint failed")),
     };
 
     let mut failed = Vec::new();

@@ -116,7 +116,8 @@ what is not pinned](embedder-integration.md#stability-and-what-is-not-pinned),
    `transition_id`; that is the id to cover. No tail read is needed.
 2. `morpholog audit checkpoint --covering <transition_id> --database-url "$DATABASE_URL"`.
    A coded `transition_not_covered` means the close is not yet in the
-   stable prefix: retry. Without `--covering`, `audit checkpoint` covers
+   stable prefix: retry, or add `--wait 30s` to have the command ask
+   again until it is. Without `--covering`, `audit checkpoint` covers
    everything settled at that moment.
 3. For a witnessed close:
    `morpholog audit witness --tree-size <returned tree_size> --witness rfc3161:<url> --database-url "$DATABASE_URL"`,
