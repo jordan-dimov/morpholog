@@ -515,6 +515,7 @@ morpholog explain revenue.morph run_covenant_test --actor bank_credit_cttee \
 ```
 ```
 Rejected: run_covenant_test(covtest_august, battery_07, q1_2026, 1000, f1) proposed by bank_credit_cttee
+Decision time: 2026-04-15T09:12:07.418213Z
 
 Gate not satisfied:
   CurrentFigure(asset, period, figure_id)

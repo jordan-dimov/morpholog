@@ -5,6 +5,7 @@
     "args": [
       "acct_1"
     ],
+    "decided_at": "2026-11-15T09:30:00.123456Z",
     "transformation": "flag_account"
   },
   "verdict": "admissible"

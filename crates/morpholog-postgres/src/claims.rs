@@ -1,5 +1,6 @@
 use crate::error::{PgError, classify_checked_query};
 use crate::propose::{Reads, compute_load_scope};
+use crate::txn::{TxIsolation, begin_isolated_tx};
 use morpholog_core::{
     ClaimInstance, PredicateArgKind, PredicateName, PreparedProgram, State, TransformationName,
 };
@@ -172,6 +173,13 @@ pub async fn read_claims_for_predicates(
     pool: &PgPool,
     predicates: &[String],
 ) -> Result<Vec<ClaimRead>, PgError> {
+    claim_reads_in(pool, predicates).await
+}
+
+async fn claim_reads_in<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    predicates: &[String],
+) -> Result<Vec<ClaimRead>, PgError> {
     if predicates.is_empty() {
         return Ok(Vec::new());
     }
@@ -182,7 +190,7 @@ pub async fn read_claims_for_predicates(
          ORDER BY asserted_at, predicate_name, arguments::text",
         predicates,
     )
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await
     .map_err(classify_checked_query)?;
     decode_claim_reads(
@@ -299,25 +307,55 @@ pub async fn load_scoped_state(
     prepared: &PreparedProgram,
     name: &TransformationName,
 ) -> Result<Option<State>, PgError> {
-    let Some(transformation) = prepared.transformation(name) else {
+    let Some(scope) = explanation_scope(prepared, name) else {
         return Ok(None);
     };
-    let program = prepared.program();
-    // A diagnostic read: the explanation runs the interpreter, so the
-    // invariants' predicates are loaded whatever the programme's plan.
-    let scope: Vec<String> = compute_load_scope(
-        transformation,
-        None,
-        &program.invariants,
-        &program.definitions,
-        Reads::BodyAndInvariants,
-    )
-    .predicates()
-    .into_iter()
-    .map(|p| p.to_string())
-    .collect();
     let claims = list_claims_for_predicates(pool, &scope).await?;
     Ok(Some(State::from_claims(claims)))
+}
+
+/// [`load_scoped_state`] with the decision time an explanation of it
+/// uses: the start of the read transaction the state is read in, as a
+/// proposal uses its own transaction's start. It is an input to that
+/// explanation, not a promise about a later proposal, which starts its
+/// own transaction and may decide differently.
+pub async fn load_explanation_state(
+    pool: &PgPool,
+    prepared: &PreparedProgram,
+    name: &TransformationName,
+) -> Result<Option<(State, jiff::Timestamp)>, PgError> {
+    let Some(scope) = explanation_scope(prepared, name) else {
+        return Ok(None);
+    };
+    let mut tx = begin_isolated_tx(pool, TxIsolation::RepeatableReadReadOnly).await?;
+    let decided_at = sqlx::query_scalar!(r#"SELECT transaction_timestamp() AS "decided_at!""#)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(classify_checked_query)?;
+    let claims = claims_of(claim_reads_in(&mut *tx, &scope).await?);
+    tx.rollback().await.map_err(crate::error::classify)?;
+    Ok(Some((State::from_claims(claims), decided_at.into())))
+}
+
+/// The predicates an explanation of `name` reads. A diagnostic read: the
+/// explanation runs the interpreter, so the invariants' predicates are
+/// loaded whatever the programme's plan.
+fn explanation_scope(prepared: &PreparedProgram, name: &TransformationName) -> Option<Vec<String>> {
+    let transformation = prepared.transformation(name)?;
+    let program = prepared.program();
+    Some(
+        compute_load_scope(
+            transformation,
+            None,
+            &program.invariants,
+            &program.definitions,
+            Reads::BodyAndInvariants,
+        )
+        .predicates()
+        .into_iter()
+        .map(|p| p.to_string())
+        .collect(),
+    )
 }
 
 #[cfg(test)]
