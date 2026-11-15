@@ -35,7 +35,8 @@ use uuid::Uuid;
 pub enum VerifyOutcome {
     /// Replay reproduces the claims table exactly.
     Consistent {
-        /// Audit rows replayed, the activation record among them.
+        /// Transitions replayed: every audit row but the activation's
+        /// control rows, which `tree_size` counts.
         transitions: i64,
         /// Currently-admitted claims confirmed.
         claims: usize,
@@ -78,7 +79,7 @@ impl VerifyOutcome {
         table: Option<&HashMap<ClaimInstance, Uuid>>,
     ) -> Self {
         let HistoryVerdict {
-            rows,
+            transitions,
             admitted_by,
             legacy_disagreement,
             mut conflicts,
@@ -125,13 +126,13 @@ impl VerifyOutcome {
                 only_in_baseline,
                 only_in_replay,
             }) => VerifyOutcome::Indeterminate {
-                transitions: rows,
+                transitions,
                 claims,
                 legacy_only_in_baseline: only_in_baseline,
                 legacy_only_in_replay: only_in_replay,
             },
             None => VerifyOutcome::Consistent {
-                transitions: rows,
+                transitions,
                 claims,
             },
         }
@@ -526,12 +527,12 @@ pub async fn verify_replay(
 ) -> Result<VerifyOutcome, PgError> {
     let mut tx = begin_isolated_tx(pool, TxIsolation::RepeatableReadReadOnly).await?;
     // count(*) is never null, but Postgres cannot prove it.
-    let transitions = sqlx::query!(r#"SELECT count(*) AS "count!" FROM morpholog.audit"#)
+    let rows = sqlx::query!(r#"SELECT count(*) AS "count!" FROM morpholog.audit"#)
         .fetch_one(&mut *tx)
         .await
         .map_err(classify_checked_query)?
         .count;
-    let total = u64::try_from(transitions).unwrap_or(0);
+    let total = u64::try_from(rows).unwrap_or(0);
     let mut history = HistoryCheck::default();
     let mut pages = AuditPages::new(None);
     let mut done = 0u64;
