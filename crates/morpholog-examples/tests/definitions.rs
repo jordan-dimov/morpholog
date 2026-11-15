@@ -862,3 +862,65 @@ fn a_condition_that_fixes_its_scope_by_equality_exports_nothing() {
         "{errors:?}"
     );
 }
+
+// Definitions whose body is an `or`, and a caller passing a part where
+// each expects a count. A kind every branch requires binds the caller;
+// one a branch does not require binds nothing, since that branch can
+// hold whatever is passed.
+const STEP: &str = "program p\n\npredicate Step(part: Subject, count: Decimal)\npredicate Named(x: Subject)\npredicate Counted(x: Decimal)\npredicate Out(x: Subject)\n\n";
+
+fn caller_of(body: &str) -> Result<(), Vec<ValidationError>> {
+    let source = format!(
+        "{STEP}define h(x):\n    {body}\n\ntransformation t(p):\n    require Named(p) and h(p)\n    admit Out(p)\n"
+    );
+    parse_program(&source).expect("parses").validate()
+}
+
+#[test]
+fn a_kind_every_branch_requires_binds_the_caller() {
+    let plain = caller_of("Counted(x)").expect_err("the plain body refuses a part");
+    assert_eq!(caller_of("Counted(x) or Step(_, x)"), Err(plain));
+}
+
+#[test]
+fn a_parameter_two_branches_use_at_two_kinds_binds_no_caller() {
+    caller_of("Counted(x) or Named(x)").expect("either kind may be passed");
+}
+
+#[test]
+fn a_branch_that_does_not_use_the_parameter_binds_no_caller() {
+    caller_of("Counted(x) or 1 = 1").expect("the second branch holds for a part");
+}
+
+// A plain definition that passes its parameter on to one that calls
+// itself is held to that one's kinds, as #727 holds its direct callers.
+#[test]
+fn a_definition_forwarding_to_a_recursive_one_binds_its_caller() {
+    let source = format!(
+        "{STEP}predicate Parent(part: Subject, parent: Subject)\npredicate Count(part: Subject, n: Decimal)\n\ndefine descends_from(part, ancestor):\n    Parent(part, ancestor) or (Parent(part, between) and descends_from(between, ancestor))\n\ndefine under(part, ancestor):\n    descends_from(part, ancestor)\n\ntransformation t(p):\n    bind Count(p, n)\n    require under(p, n)\n    admit Out(p)\n"
+    );
+    let errors = parse_program(&source)
+        .expect("parses")
+        .validate()
+        .expect_err("a count is not a part");
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ValidationError::VariableKindConflict { .. })),
+        "{errors:?}"
+    );
+}
+
+// #767's programme: a definition calling one whose body is an `or` gets
+// the errors it gets when that body is a single condition.
+#[test]
+fn a_definition_calling_an_or_body_is_checked_as_with_a_plain_body() {
+    let with_body = |body: &str| {
+        validation_errors(&format!(
+            "program p\n\npredicate Step(part: Subject, count: Decimal)\n\ndefine h(x, n):\n    {body}\n\ndefine g(x, n):\n    Step(x, n) and h(n, x)\n"
+        ))
+    };
+    let plain = with_body("Step(x, n)");
+    assert!(!plain.is_empty(), "the plain body refuses the swapped call");
+    assert_eq!(with_body("Step(x, n) or Step(x, n)"), plain);
+}
