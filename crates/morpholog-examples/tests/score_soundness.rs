@@ -8,7 +8,9 @@
 //! from its own predicates and replayed as the scorer's driver replays the
 //! log: the effective change read against the state before the row, then
 //! the row applied. A history whose scoring raises is skipped, as
-//! `evaluate` gives no report then; the skips are bounded.
+//! `evaluate` gives no report then; the skips are bounded. Once a history
+//! is scored, every invariant must evaluate on its final state: a raise
+//! there fails the test, so no case leaves the comparison unseen.
 
 #![expect(
     clippy::expect_used,
@@ -75,7 +77,6 @@ struct Tally {
     skipped: u64,
     zero_scores_checked: u64,
     violations_charged: u64,
-    final_errors: u64,
 }
 
 /// One history: replay it into the scorer, then hold every uncharged,
@@ -114,10 +115,12 @@ fn check_history(program: &Program, salt: u64, tally: &mut Tally) {
     tally.histories += 1;
     let score = scorer.into_report();
     for (inv, scored) in program.invariants.iter().zip(&score.invariants) {
-        let Ok(holds) = eval_invariant(program, inv, &state, None) else {
-            tally.final_errors += 1;
-            continue;
-        };
+        let holds = eval_invariant(program, inv, &state, None).unwrap_or_else(|e| {
+            panic!(
+                "{}: `{}` raises on the final state of a history it was scored over (salt {salt}): {e:?}",
+                program.name, inv.name
+            )
+        });
         if scored.initially_holds && scored.would_refuse == 0 {
             tally.zero_scores_checked += 1;
             assert!(
@@ -143,12 +146,8 @@ fn a_zero_score_from_a_lawful_start_means_the_final_state_holds() {
         }
     }
     eprintln!(
-        "histories {} skipped {} zero scores checked {} violations charged {} final errors {}",
-        tally.histories,
-        tally.skipped,
-        tally.zero_scores_checked,
-        tally.violations_charged,
-        tally.final_errors
+        "histories {} skipped {} zero scores checked {} violations charged {}",
+        tally.histories, tally.skipped, tally.zero_scores_checked, tally.violations_charged
     );
     assert!(
         tally.skipped * 4 <= tally.histories,
