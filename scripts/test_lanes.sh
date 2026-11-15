@@ -22,39 +22,29 @@ jobs=${1:-$(( $(nproc) / 3 ))}
 pg_packages=(morpholog-cli morpholog-postgres morpholog-outbox morpholog-bench)
 
 work=$(mktemp -d)
-# Every copy this run makes is named for it, so a later run can tell a
-# copy a killed run left behind from one a live run is using.
+# Every copy this run makes is named for it, and only those are dropped.
 run=$$
 template=""
-sweeper=""
 
 # A drop forces a checkpoint, about a second each, but drops at once
 # share them; so no binary waits on its own drop, and every copy goes
-# together once the verdict is known.
-drop_all() {
-    local url
-    url=$(db_url postgres)
-    xargs -r -P 16 -I{} psql -X -q "$url" -c 'DROP DATABASE IF EXISTS "{}" WITH (FORCE)' \
-        >/dev/null 2>&1 || true
-}
+# together once the verdict is known. A copy that cannot be dropped
+# fails the run, named, rather than being left behind unseen.
 cleanup() {
+    local rc=$? url
     if [ -n "${DATABASE_URL:-}" ]; then
-        [ -z "$sweeper" ] || wait "$sweeper" || true
-        { cat "$work/dbs" 2>/dev/null || true; [ -z "$template" ] || echo "$template"; } | drop_all
+        url=$(db_url postgres)
+        if ! { cat "$work/dbs" 2>/dev/null || true; [ -z "$template" ] || echo "$template"; } \
+            | xargs -r -d '\n' -P 16 -I{} psql -X -q "$url" -c 'DROP DATABASE IF EXISTS "{}" WITH (FORCE)'; then
+            echo "test_lanes: a copy of this run (morpholog_lanes_${run}_*) could not be dropped" >&2
+            rc=1
+        fi
     fi
     rm -rf "$work"
+    exit "$rc"
 }
 trap cleanup EXIT
 
-# The copies a run that no longer lives left behind.
-sweep() {
-    psql -X -At "$(db_url postgres)" \
-        -c "SELECT datname FROM pg_database WHERE datname ~ '^morpholog_lanes_[0-9]+_'" \
-        | while read -r db; do
-            local pid=${db#morpholog_lanes_}
-            kill -0 "${pid%%_*}" 2>/dev/null || echo "$db"
-        done | drop_all
-}
 
 # The URL of database `name` on DATABASE_URL's cluster: the last path
 # segment swapped, the query kept, as the tests' own `with_database` does.
@@ -74,7 +64,8 @@ db_url() {
 role_pattern='create role|drop role|alter role|pg_auth_members|census|--least-privilege|provision_least_privilege|rebind_least_privilege|move_deployment_roles|direct_members|databases_also_reached|"roles"|recreate_roles|drop_roles_if_present|recreate_gateway_roles|with_gateway_roles|gateway_pool|Deployment::new'
 role_tokens() {
     local f
-    for f in crates/*/tests/*.rs; do
+    for f in crates/*/tests/*.rs crates/*/tests/*/*.rs; do
+        [ -f "$f" ] || continue
         grep -qiE "$role_pattern" "$f" || continue
         grep -oE 'morpholog_ci_[a-z0-9]+|mtest_[a-z0-9]+|mtest[0-9]+|morpholog_(writer|reader|executor)\b' "$f" \
             | sed -E 's/^morpholog_(writer|reader|executor)$/the default names/; s/^morpholog_ci_|^mtest_?//' \
@@ -88,11 +79,6 @@ if [ -n "$shared" ]; then
     printf 'Tests run at once, and roles are shared by the whole cluster:\n%s\n' "$shared" >&2
     echo 'Give each file role names of its own (see role_tokens in this script).' >&2
     exit 1
-fi
-
-if [ -n "${DATABASE_URL:-}" ]; then
-    sweep &
-    sweeper=$!
 fi
 
 echo "building every test binary"
@@ -142,8 +128,13 @@ fi
 if [ -n "${DATABASE_URL:-}" ]; then
     source_db=${DATABASE_URL%%\?*}
     source_db=${source_db##*/}
+    if ! psql -X -q "$(db_url postgres)" \
+        -c "CREATE DATABASE \"morpholog_lanes_${run}_tpl\" TEMPLATE \"$source_db\"" >/dev/null; then
+        echo "test_lanes: cannot copy database \"$source_db\" (DATABASE_URL). PostgreSQL copies" >&2
+        echo "  a database only while no other session is connected to it; close those first." >&2
+        exit 1
+    fi
     template="morpholog_lanes_${run}_tpl"
-    psql -X -q "$(db_url postgres)" -c "CREATE DATABASE \"$template\" TEMPLATE \"$source_db\"" >/dev/null
 fi
 
 # run_one INDEX PACKAGE DIR EXE SRC: run one binary, its own database if
@@ -158,10 +149,10 @@ run_one() {
         env_url=(DATABASE_URL="$(db_url "$db")")
     fi
     local start rc=0
-    start=$(date +%s.%N)
+    start=$(date +%s%N)
     (cd "$dir" && env "${env_url[@]}" CARGO_MANIFEST_DIR="$dir" RUST_TEST_THREADS=1 "$exe") \
         > "$log" 2>&1 || rc=$?
-    printf '%s\t%s\t%s\t%s\n' "$rc" "$(echo "$(date +%s.%N) - $start" | bc)" "$package" "$src" \
+    printf '%s\t%s\t%s\t%s\n' "$rc" "$(($(date +%s%N) - start))" "$package" "$src" \
         > "$work/verdict.$index"
 }
 export -f run_one is_pg db_url
@@ -183,17 +174,18 @@ failed=0
 total=0
 summed=0
 for verdict in "$work"/verdict.*; do
-    IFS=$'\t' read -r rc secs package src < "$verdict"
+    IFS=$'\t' read -r rc nanos package src < "$verdict"
     total=$((total + 1))
-    summed=$(echo "$summed + $secs" | bc)
+    summed=$((summed + nanos))
     if [ "$rc" != 0 ]; then
         failed=$((failed + 1))
         printf '\n=== FAILED: %s %s (exit %s) ===\n' "$package" "$src" "$rc"
         cat "$work/out.${verdict##*.}"
     fi
 done
-printf '\n%d test binaries, %d failed; summed binary time %.1fs\n' "$total" "$failed" "$summed"
+printf '\n%d test binaries, %d failed; summed binary time %ss\n' "$total" "$failed" \
+    "$(awk -v ns="$summed" 'BEGIN { printf "%.1f", ns / 1e9 }')"
 echo "slowest:"
 cat "$work"/verdict.* | sort -t$'\t' -k2 -rn | head -6 \
-    | awk -F'\t' '{ printf "  %6.1fs  %s %s\n", $2, $3, $4 }'
+    | awk -F'\t' '{ printf "  %6.1fs  %s %s\n", $2 / 1e9, $3, $4 }'
 [ "$failed" -eq 0 ]
