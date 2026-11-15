@@ -569,6 +569,7 @@ fn propose_outcome_serialises_with_status_tag() {
         rule: None,
         witness: Vec::new(),
         compared: None,
+        refused_by: morpholog_postgres::RefusedBy::Gate,
     };
     let json = serde_json::to_string(&rejected).unwrap();
     assert!(

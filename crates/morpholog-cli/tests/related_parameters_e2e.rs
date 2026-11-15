@@ -1,7 +1,8 @@
 //! A refusal by a named gate names the act's parameters the gate reads,
 //! the same on every route that prints a refusal: a one-shot proposal,
 //! with `--trace` and with `--explain-on-reject`, a `--batch` row, and a
-//! `transact` act. An invariant's refusal names none.
+//! `transact` act. An invariant's refusal names none, even when the
+//! invariant shares the gate's name.
 
 #![expect(
     clippy::unwrap_used,
@@ -23,7 +24,7 @@ program approvals
 predicate ApprovalLimit(doc: Subject, limit: Decimal)
 predicate Approved(doc: Subject, amount: Decimal)
 
-invariant one_approval_per_doc:
+invariant within_limit:
     Approved(d, a) and Approved(d, b) implies a = b
 
 transformation set_limit(doc, limit):
@@ -179,6 +180,11 @@ async fn every_route_names_the_parameters_a_refusing_gate_reads() {
         assert_eq!(envelope["related_parameters"], named, "{route}: {envelope}");
     }
     assert_eq!(atomic["act"], 2, "{atomic}");
-    assert_eq!(invariant["rule"], "one_approval_per_doc", "{invariant}");
+    // The same `rule` as the gate's, from the invariant: no parameters.
+    assert_eq!(invariant["rule"], "within_limit", "{invariant}");
+    assert!(
+        invariant["reason"].as_str().unwrap().contains("invariant"),
+        "{invariant}"
+    );
     assert!(invariant.get("related_parameters").is_none(), "{invariant}");
 }

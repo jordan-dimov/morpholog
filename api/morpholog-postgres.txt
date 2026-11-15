@@ -592,8 +592,11 @@ pub morpholog_postgres::PgAtomicOutcome::Rejected
 pub morpholog_postgres::PgAtomicOutcome::Rejected::act: u64
 pub morpholog_postgres::PgAtomicOutcome::Rejected::compared: core::option::Option<morpholog_core::propose::Compared>
 pub morpholog_postgres::PgAtomicOutcome::Rejected::reason: alloc::string::String
+pub morpholog_postgres::PgAtomicOutcome::Rejected::refused_by: morpholog_postgres::RefusedBy
 pub morpholog_postgres::PgAtomicOutcome::Rejected::rule: core::option::Option<alloc::string::String>
 pub morpholog_postgres::PgAtomicOutcome::Rejected::witness: alloc::vec::Vec<morpholog_core::propose::WitnessBinding>
+impl morpholog_postgres::PgAtomicOutcome
+pub fn morpholog_postgres::PgAtomicOutcome::refused_gate(&self) -> core::option::Option<&str>
 impl core::clone::Clone for morpholog_postgres::PgAtomicOutcome
 pub fn morpholog_postgres::PgAtomicOutcome::clone(&self) -> morpholog_postgres::PgAtomicOutcome
 impl core::fmt::Debug for morpholog_postgres::PgAtomicOutcome
@@ -715,8 +718,11 @@ pub morpholog_postgres::PgProposalOutcome::Committed::transition_id: uuid::Uuid
 pub morpholog_postgres::PgProposalOutcome::Rejected
 pub morpholog_postgres::PgProposalOutcome::Rejected::compared: core::option::Option<morpholog_core::propose::Compared>
 pub morpholog_postgres::PgProposalOutcome::Rejected::reason: alloc::string::String
+pub morpholog_postgres::PgProposalOutcome::Rejected::refused_by: morpholog_postgres::RefusedBy
 pub morpholog_postgres::PgProposalOutcome::Rejected::rule: core::option::Option<alloc::string::String>
 pub morpholog_postgres::PgProposalOutcome::Rejected::witness: alloc::vec::Vec<morpholog_core::propose::WitnessBinding>
+impl morpholog_postgres::PgProposalOutcome
+pub fn morpholog_postgres::PgProposalOutcome::refused_gate(&self) -> core::option::Option<&str>
 impl core::clone::Clone for morpholog_postgres::PgProposalOutcome
 pub fn morpholog_postgres::PgProposalOutcome::clone(&self) -> morpholog_postgres::PgProposalOutcome
 impl core::fmt::Debug for morpholog_postgres::PgProposalOutcome
@@ -901,6 +907,26 @@ impl core::marker::Unpin for morpholog_postgres::ReceiptQuery
 impl core::marker::UnsafeUnpin for morpholog_postgres::ReceiptQuery
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::ReceiptQuery
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::ReceiptQuery
+pub enum morpholog_postgres::RefusedBy
+pub morpholog_postgres::RefusedBy::Gate
+pub morpholog_postgres::RefusedBy::Invariant
+impl core::clone::Clone for morpholog_postgres::RefusedBy
+pub fn morpholog_postgres::RefusedBy::clone(&self) -> morpholog_postgres::RefusedBy
+impl core::clone::TrivialClone for morpholog_postgres::RefusedBy
+impl core::cmp::Eq for morpholog_postgres::RefusedBy
+impl core::cmp::PartialEq for morpholog_postgres::RefusedBy
+pub fn morpholog_postgres::RefusedBy::eq(&self, &morpholog_postgres::RefusedBy) -> bool
+impl core::fmt::Debug for morpholog_postgres::RefusedBy
+pub fn morpholog_postgres::RefusedBy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for morpholog_postgres::RefusedBy
+impl core::marker::StructuralPartialEq for morpholog_postgres::RefusedBy
+impl core::marker::Freeze for morpholog_postgres::RefusedBy
+impl core::marker::Send for morpholog_postgres::RefusedBy
+impl core::marker::Sync for morpholog_postgres::RefusedBy
+impl core::marker::Unpin for morpholog_postgres::RefusedBy
+impl core::marker::UnsafeUnpin for morpholog_postgres::RefusedBy
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::RefusedBy
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::RefusedBy
 pub enum morpholog_postgres::RoleRebindings
 pub morpholog_postgres::RoleRebindings::Evaluated
 pub morpholog_postgres::RoleRebindings::Evaluated::changes: alloc::vec::Vec<morpholog_postgres::RoleRebinding>

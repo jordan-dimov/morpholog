@@ -63,7 +63,30 @@ pub enum PgAtomicOutcome {
         /// The comparison the refusal blamed, with its two values.
         #[serde(skip_serializing_if = "Option::is_none")]
         compared: Option<Compared>,
+        /// Whether an invariant or a gate refused the act.
+        #[serde(skip)]
+        refused_by: crate::RefusedBy,
     },
+}
+
+impl PgAtomicOutcome {
+    /// The named gate that refused the refusing act, if a named gate did:
+    /// never an invariant, whatever its name.
+    #[must_use]
+    pub fn refused_gate(&self) -> Option<&str> {
+        match self {
+            Self::Rejected {
+                rule,
+                refused_by: crate::RefusedBy::Gate,
+                ..
+            } => rule.as_deref(),
+            Self::Rejected {
+                refused_by: crate::RefusedBy::Invariant,
+                ..
+            }
+            | Self::Committed { .. } => None,
+        }
+    }
 }
 
 /// Propose every act as one decision.
@@ -174,6 +197,7 @@ async fn refuse(
         rule,
         witness,
         compared,
+        refused_by,
     } = record_refusal(pool, tx, transformation, transition, &reason).await?;
     Ok(PgAtomicOutcome::Rejected {
         act: row,
@@ -181,5 +205,6 @@ async fn refuse(
         rule,
         witness,
         compared,
+        refused_by,
     })
 }

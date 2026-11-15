@@ -47,6 +47,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
                     serde_json::to_value(&outcome)?,
                     program.prepared(),
                     &[&transition.transformation_name],
+                    outcome.refused_gate(),
                 );
                 print_json(&envelopes::Traced {
                     result: &result,
@@ -80,6 +81,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
                     rule,
                     witness,
                     compared,
+                    ..
                 },
                 Some(explanation),
             ) => {
@@ -93,6 +95,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
                     ))?,
                     program.prepared(),
                     &[&transition.transformation_name],
+                    refused.outcome.refused_gate(),
                 ))?;
                 return report_rejection(reason, &parsed);
             }
@@ -100,6 +103,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
                 serde_json::to_value(&refused.outcome)?,
                 program.prepared(),
                 &[&transition.transformation_name],
+                refused.outcome.refused_gate(),
             ))?,
         }
     } else {
@@ -111,6 +115,7 @@ pub(crate) async fn run(args: ProposeArgs) -> anyhow::Result<()> {
             serde_json::to_value(&outcome)?,
             program.prepared(),
             &[&transition.transformation_name],
+            outcome.refused_gate(),
         ))?;
         if let PgProposalOutcome::Rejected { reason, .. } = &outcome {
             return report_rejection(reason, &parsed);
@@ -579,6 +584,7 @@ pub(crate) async fn propose_row_outcome(
                 rule,
                 witness,
                 compared,
+                ..
             },
             Some(explanation),
         ) = (&refused.outcome, refused.explanation(prepared, &transition))
@@ -593,14 +599,24 @@ pub(crate) async fn propose_row_outcome(
             .context("serialising the receipt")
             .map_err(RowError::after_decision)
             .map(|v| {
-                envelopes::with_related_parameters(v, prepared, &[&transition.transformation_name])
+                envelopes::with_related_parameters(
+                    v,
+                    prepared,
+                    &[&transition.transformation_name],
+                    refused.outcome.refused_gate(),
+                )
             });
         }
         serde_json::to_value(&refused.outcome)
             .context("serialising the receipt")
             .map_err(RowError::after_decision)
             .map(|v| {
-                envelopes::with_related_parameters(v, prepared, &[&transition.transformation_name])
+                envelopes::with_related_parameters(
+                    v,
+                    prepared,
+                    &[&transition.transformation_name],
+                    refused.outcome.refused_gate(),
+                )
             })
     } else {
         let outcome = propose_against_pg(pool, program, &Proposal::gateway(&transition))
@@ -610,7 +626,12 @@ pub(crate) async fn propose_row_outcome(
             .context("serialising the receipt")
             .map_err(RowError::after_decision)
             .map(|v| {
-                envelopes::with_related_parameters(v, prepared, &[&transition.transformation_name])
+                envelopes::with_related_parameters(
+                    v,
+                    prepared,
+                    &[&transition.transformation_name],
+                    outcome.refused_gate(),
+                )
             })
     }
 }

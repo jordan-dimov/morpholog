@@ -115,6 +115,7 @@ pub(crate) async fn run(args: TransactArgs) -> anyhow::Result<()> {
                 serde_json::to_value(&outcome)?,
                 program.prepared(),
                 &acts,
+                outcome.refused_gate(),
             ))?;
             match outcome {
                 PgAtomicOutcome::Committed { .. } => Ok(()),

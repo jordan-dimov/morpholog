@@ -694,21 +694,21 @@ pub fn audit_row_named(
 
 /// Add `related_parameters` to a refusal by a named gate: the act's
 /// parameters that gate reads, as `morpholog_core::related_parameters`
-/// finds them. One rule for every route that prints a refusal. `acts`
+/// finds them. One rule for every route that prints a refusal. `gate` is
+/// the outcome's own `refused_gate()`: the envelope's `rule` may name an
+/// invariant that shares a gate's name, so it is not read here. `acts`
 /// are the transformations of the proposal's acts in order; an atomic
 /// refusal's `act` says which one refused. Anything else passes through.
 pub fn with_related_parameters(
     mut envelope: serde_json::Value,
     prepared: &morpholog_core::PreparedProgram,
     acts: &[&morpholog_core::TransformationName],
+    gate: Option<&str>,
 ) -> serde_json::Value {
-    let Some(object) = envelope.as_object_mut() else {
+    let Some(rule) = gate else {
         return envelope;
     };
-    if object.get("status").and_then(serde_json::Value::as_str) != Some("rejected") {
-        return envelope;
-    }
-    let Some(rule) = object.get("rule").and_then(serde_json::Value::as_str) else {
+    let Some(object) = envelope.as_object_mut() else {
         return envelope;
     };
     let act = object

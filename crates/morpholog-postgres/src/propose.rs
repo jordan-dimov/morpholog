@@ -59,7 +59,48 @@ pub enum PgProposalOutcome {
         /// values. Omitted when it blamed none, or could not evaluate it.
         #[serde(skip_serializing_if = "Option::is_none")]
         compared: Option<Compared>,
+        /// Whether an invariant or a gate refused. `rule` names either,
+        /// and a gate may share an invariant's name.
+        #[serde(skip)]
+        refused_by: RefusedBy,
     },
+}
+
+/// What refused a proposal: an invariant, or a gate (a `require`, or a
+/// `bind` that found nothing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefusedBy {
+    Invariant,
+    Gate,
+}
+
+impl RefusedBy {
+    pub(crate) fn of(reason: &RejectionReason) -> Self {
+        match reason {
+            RejectionReason::Invariant { .. } => Self::Invariant,
+            RejectionReason::Require { .. } | RejectionReason::BindNone { .. } => Self::Gate,
+        }
+    }
+}
+
+impl PgProposalOutcome {
+    /// The named gate that refused, if a named gate did: never an
+    /// invariant, whatever its name.
+    #[must_use]
+    pub fn refused_gate(&self) -> Option<&str> {
+        match self {
+            Self::Rejected {
+                rule,
+                refused_by: RefusedBy::Gate,
+                ..
+            } => rule.as_deref(),
+            Self::Rejected {
+                refused_by: RefusedBy::Invariant,
+                ..
+            }
+            | Self::Committed { .. } => None,
+        }
+    }
 }
 
 /// Propose a transformation against the live `morpholog.*` tables.
@@ -792,6 +833,7 @@ pub(crate) struct Refusal {
     pub(crate) rule: Option<String>,
     pub(crate) witness: Vec<WitnessBinding>,
     pub(crate) compared: Option<Compared>,
+    pub(crate) refused_by: RefusedBy,
 }
 
 /// Roll back, then record the refusal in `morpholog.rejections`. Every
@@ -828,6 +870,7 @@ pub(crate) async fn record_refusal(
         rule: rule_identity(reason),
         witness,
         compared,
+        refused_by: RefusedBy::of(reason),
     })
 }
 
@@ -875,12 +918,14 @@ async fn finalise_outcome(
                 rule,
                 witness,
                 compared,
+                refused_by,
             } = record_refusal(pool, tx, transformation, transition, &reason).await?;
             Ok(PgProposalOutcome::Rejected {
                 reason,
                 rule,
                 witness,
                 compared,
+                refused_by,
             })
         }
     }

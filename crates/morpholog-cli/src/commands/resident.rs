@@ -349,6 +349,7 @@ impl Resident {
                 .map_err(ResidentFailure::Operational)?,
             self.prepared(),
             &acts,
+            outcome.refused_gate(),
         );
         if let Some(object) = envelope.as_object_mut() {
             object.insert("row".to_string(), serde_json::json!(row));
