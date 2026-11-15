@@ -883,6 +883,27 @@ fn parses_simple_derived_claim() {
     assert_eq!(d.values[0].name, "sum_amount");
 }
 
+/// A derived claim with no `value` clause: its rows are its head keys over
+/// the `over` proposition, the claims that meet a condition.
+#[test]
+fn a_derived_claim_with_no_value_parses_validates_and_round_trips() {
+    let source = "program active
+predicate Alloc(alloc: Subject, item: Subject, quantity: Decimal)
+predicate Shipped(alloc: Subject)
+predicate Unshipped(alloc: Subject, item: Subject)
+
+derived Unshipped(alloc, item):
+    over Alloc(alloc, item, _) and not Shipped(alloc)
+";
+    let program = parse_program(source).expect("a value-less derived claim parses");
+    assert!(program.derived_claims[0].values.is_empty());
+    assert!(program.validate().is_ok(), "{:?}", program.validate());
+    let formatted = morpholog_core::format::format_program(&program);
+    let reparsed = parse_program(&formatted)
+        .unwrap_or_else(|e| panic!("formatted source should reparse; got {e:?}\n{formatted}"));
+    assert_eq!(reparsed, program, "round-trip must be lossless");
+}
+
 #[test]
 fn parses_derived_with_multiple_values() {
     let source = "program demo\n\
@@ -912,15 +933,6 @@ fn parses_derived_with_multiple_keys() {
     let d = &program.derived_claims[0];
     assert_eq!(d.keys, vec!["account", "period"]);
 }
-
-parse_err!(
-    derived_with_no_value_clauses_is_rejected,
-    "program demo\n\
-     predicate Foo(x: Subject)\n\
-     \n\
-     derived Empty(x):\n\
-     \x20\x20\x20\x20over Foo(x)\n"
-);
 
 #[test]
 fn duplicate_derived_name_carries_both_spans() {

@@ -1506,3 +1506,10 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** the InvenTree fork (#788). A line's allocation state chooses between three cases, and its host kept that in a `CASE` joined by hand to the live views, because a live view refused `if(...)` and any value that was not a decimal.
 
 **Landed:** a live derived value may be an `if(...)`, rendered as a `CASE`: its test's ways of raising always count, and each branch's only where that branch is chosen, as the kernel evaluates only the chosen branch. A value may be declared `Bool` or `Subject` when it is a literal, a key, or an `if(...)` choosing between them. Two-argument `max` and `min` already rendered; the differential now holds a floor at zero too. A conditional inside a sum or arithmetic, and in compiled invariant checks, is still refused.
+
+### A derived claim may compute nothing
+
+**Forced by:** two embedders. The billing trial's one question became four derived views, partly because each needed a `value` (#313), and the InvenTree fork derived a quantity for every allocation only to keep the rows above zero in its own SQL (#787). The grammar had required a `value` clause, on the view that a value-less read is a domain query the host runs.
+
+**Landed:** a `derived` block may have no `value` clause; its rows are its head keys over the `over` proposition. Nothing else changed: the evaluator, the cache, the live views and the view description already handled a row of keys alone, and the live-view differential now holds such a fragment to the kernel. A live view still refuses a domain comparison that can raise, with or without a value.
+

@@ -500,12 +500,17 @@ invariant every_enrolment_was_consented:
 
 -- A read computed from the claims whenever asked, never stored: the
 -- head lists the keys, one row per distinct key tuple the domain binds,
--- and each `value` clause computes a field. At least one is required.
+-- and each `value` clause computes a field. With no `value` clause the
+-- rows are the keys alone: the claims that meet a condition.
 predicate TrialBalance(account: Subject, balance: Decimal)
+predicate ActiveAccount(account: Subject)
 
 derived TrialBalance(account):
     over Journal(account: account, ..)
     value balance = balance_of(account)
+
+derived ActiveAccount(account):
+    over Journal(account: account, ..) and balance_of(account) != 0
 ```
 
 A `bind` may name a condition as well as a claim. `bind

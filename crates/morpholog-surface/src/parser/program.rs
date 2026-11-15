@@ -674,7 +674,7 @@ where
             )
         });
 
-    // derived_decl ::= "derived" Ident "(" key_list ")" ":" Indent over_clause value_clause+ Dedent
+    // derived_decl ::= "derived" Ident "(" key_list ")" ":" Indent over_clause value_clause* Dedent
     //   over_clause  ::= "over" expression
     //   value_clause ::= "value" Ident "=" expression
     //   key_list     ::= Ident ("," Ident)* ","?
@@ -692,7 +692,7 @@ where
         .map(|(name, expr)| DerivedValue { name, expr });
     let derived_body = just(Token::Indent)
         .ignore_then(over_clause)
-        .then(value_clause.repeated().at_least(1).collect::<Vec<_>>())
+        .then(value_clause.repeated().collect::<Vec<_>>())
         .then_ignore(just(Token::Dedent));
     let derived_decl = just(Token::KwDerived)
         .ignore_then(ident)
