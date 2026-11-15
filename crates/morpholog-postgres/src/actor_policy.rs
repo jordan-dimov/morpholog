@@ -139,9 +139,10 @@ pub(crate) async fn authorise(
     // A misshapen policy claim would never match, leaving an actor the
     // operator thinks is restricted wide open. Refuse it here, the one
     // point every durable path passes: compensation arrives with no
-    // programme, so the facades' declaration check does not cover it. A
-    // misshapen grant, kind or registrar never matches either, which
-    // leaves an actor refused, so those are not read here.
+    // programme, so the facades' declaration check does not cover it. The
+    // grant, kind and registrar lookups match a claim's whole arguments,
+    // and the kind grant its shape, so a misshapen one is never used and
+    // leaves the actor refused; those are not read here.
     let malformed = sqlx::query_scalar!(
         r#"SELECT count(*) AS "malformed!" FROM morpholog.claims
            WHERE (predicate_name = $1
@@ -199,13 +200,17 @@ pub(crate) async fn authorise(
         return Ok(());
     }
     // A kind counts on a closed deployment only, where its claims are
-    // the root's or a registrar's to write. The login's kind grants are
-    // few; each is looked up by the claims table's key.
+    // the root's or a registrar's to write. The kind grants are read under
+    // their name, each of the login's then looked up by the claims
+    // table's key. A grant of another shape, such as one admitted before
+    // the name was reserved, is not used.
     if identity.closed {
         let by_kind = sqlx::query_scalar!(
             r#"SELECT EXISTS (
                    SELECT 1 FROM morpholog.claims g
                    WHERE g.predicate_name = $1 AND g.arguments -> 1 = $2
+                     AND jsonb_array_length(g.arguments) = 2
+                     AND g.arguments -> 0 ->> 'type' = 'subject'
                      AND EXISTS (
                          SELECT 1 FROM morpholog.claims k
                          WHERE k.predicate_name = $3
@@ -257,16 +262,19 @@ async fn claim_held(
     .map_err(classify_checked_query)
 }
 
-/// The `ActorKind` claims `actor` holds. Reads every kind claim, so it is
-/// asked only when the root classifies an existing actor, or at closing.
-async fn kinds_of(tx: &mut Transaction<'_, Postgres>, actor: &Subject) -> Result<i64, PgError> {
+/// The kinds `actor` holds. Reads every kind claim, so it is asked only
+/// when the root classifies an existing actor.
+async fn kinds_of(
+    tx: &mut Transaction<'_, Postgres>,
+    actor: &Subject,
+) -> Result<Vec<serde_json::Value>, PgError> {
     sqlx::query_scalar!(
-        r#"SELECT count(*) AS "kinds!" FROM morpholog.claims
+        r#"SELECT arguments -> 1 AS "kind!" FROM morpholog.claims
            WHERE predicate_name = $1 AND arguments -> 0 = $2"#,
         KIND_PREDICATE,
         subject_value(actor.as_str()),
     )
-    .fetch_one(&mut **tx)
+    .fetch_all(&mut **tx)
     .await
     .map_err(classify_checked_query)
 }
@@ -325,41 +333,54 @@ pub(crate) async fn authorise_policy_writes(
 }
 
 /// Refuse a delta that would leave an actor with two kinds: either kind's
-/// logins could then assert it. A subject this act drew has no kind yet.
+/// logins could then assert it. What counts is the set of kinds the actor
+/// would hold, so admitting a kind it already holds changes nothing. A
+/// subject this act drew has no kind yet.
 async fn one_kind_each(
     tx: &mut Transaction<'_, Postgres>,
     drawn: &[Subject],
     asserted: &[ClaimInstance],
     retracted: &[ClaimInstance],
 ) -> Result<(), PgError> {
-    let kind_of = |c: &ClaimInstance| match (c.predicate.as_str(), c.args.first()) {
-        (KIND_PREDICATE, Some(EvalValue::Subject(actor))) => Some(actor.clone()),
-        _ => None,
+    let classifies = |c: &ClaimInstance, actor: &Subject| {
+        c.predicate.as_str() == KIND_PREDICATE
+            && matches!(c.args.first(), Some(EvalValue::Subject(a)) if a == actor)
     };
-    let mut classified: Vec<Subject> = Vec::new();
-    for actor in asserted.iter().filter_map(kind_of) {
-        if !classified.contains(&actor) {
+    let kinds_in = |claims: &[ClaimInstance], actor: &Subject| -> Result<Vec<_>, PgError> {
+        claims
+            .iter()
+            .filter(|c| classifies(c, actor))
+            .filter_map(|c| c.args.get(1))
+            .map(|kind| serde_json::to_value(kind).map_err(PgError::from))
+            .collect()
+    };
+    let mut classified: Vec<&Subject> = Vec::new();
+    for claim in asserted {
+        if let (KIND_PREDICATE, Some(EvalValue::Subject(actor))) =
+            (claim.predicate.as_str(), claim.args.first())
+            && !classified.contains(&actor)
+        {
             classified.push(actor);
         }
     }
     for actor in classified {
-        let count = |claims: &[ClaimInstance]| {
-            i64::try_from(
-                claims
-                    .iter()
-                    .filter(|c| kind_of(c).as_ref() == Some(&actor))
-                    .count(),
-            )
-            .unwrap_or(i64::MAX)
-        };
-        let held = if drawn.contains(&actor) {
-            0
+        let mut kinds = if drawn.contains(actor) {
+            Vec::new()
         } else {
-            kinds_of(tx, &actor).await?
+            kinds_of(tx, actor).await?
         };
-        let kinds = held - count(retracted) + count(asserted);
-        if kinds > 1 {
-            return Err(PgError::ActorKindAmbiguous { actor, kinds });
+        let gone = kinds_in(retracted, actor)?;
+        kinds.retain(|k| !gone.contains(k));
+        for kind in kinds_in(asserted, actor)? {
+            if !kinds.contains(&kind) {
+                kinds.push(kind);
+            }
+        }
+        if kinds.len() > 1 {
+            return Err(PgError::ActorKindAmbiguous {
+                actor: actor.clone(),
+                kinds: i64::try_from(kinds.len()).unwrap_or(i64::MAX),
+            });
         }
     }
     Ok(())

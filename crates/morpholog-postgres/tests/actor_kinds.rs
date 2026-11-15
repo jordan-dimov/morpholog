@@ -63,6 +63,10 @@ transformation appoint_registrar(kind, registrar):
 transformation classify(person, kind):
     admit ActorKind(person, kind)
 
+transformation classify_twice(person, kind):
+    admit ActorKind(person, kind)
+    admit ActorKind(person, kind)
+
 transformation reclassify(person, from, to):
     retract ActorKind(person, from)
     admit ActorKind(person, to)
@@ -327,6 +331,57 @@ async fn an_open_deployment_leaves_policy_writes_to_the_programme() {
         close_deployment(&admin, &Subject::from(ROOT), &logins.root)
             .await
             .unwrap();
+    })
+    .await;
+}
+
+/// One kind per actor counts kinds, not admissions: admitting a kind the
+/// actor already holds is a no-op, as for any claim.
+#[tokio::test]
+async fn admitting_a_kind_the_actor_holds_again_changes_nothing() {
+    with_logins("again", |admin, root, host, _service, logins| async move {
+        deploy(&admin, &root, &logins).await;
+        committed(&root, "classify", &[SERVICE, "user"], ROOT).await;
+        committed(&root, "classify", &[SERVICE, "user"], ROOT).await;
+        committed(&root, "classify_twice", &[SERVICE, "user"], ROOT).await;
+        committed(&host, "note", &["still one kind"], SERVICE).await;
+        assert!(matches!(
+            act(&root, "classify", &[SERVICE, "service"], ROOT).await,
+            Err(PgError::ActorKindAmbiguous { kinds: 2, .. })
+        ));
+    })
+    .await;
+}
+
+/// A deployment that was open when these names were not yet reserved can
+/// hold a kind grant of another shape. Once closed, it grants nothing; a
+/// grant of the reserved shape does.
+#[tokio::test]
+async fn a_misshapen_kind_grant_from_an_open_past_grants_nothing() {
+    with_logins("legacy", |admin, root, host, _service, logins| async move {
+        committed(&host, "classify", &["legacy_user", "user"], HOST).await;
+        let extra = serde_json::json!([
+            {"type": "subject", "value": "user"},
+            {"type": "subject", "value": logins.host},
+            {"type": "subject", "value": "extra"},
+        ]);
+        sqlx::query(
+            "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+             VALUES ('ActorKindAuthority', $1, gen_random_uuid())",
+        )
+        .bind(extra)
+        .execute(&admin)
+        .await
+        .unwrap();
+        close_deployment(&admin, &Subject::from(ROOT), &logins.root)
+            .await
+            .unwrap();
+
+        assert!(unauthorised(
+            &act(&host, "note", &["posing"], "legacy_user").await
+        ));
+        committed(&root, "grant_kind", &["user", &logins.host], ROOT).await;
+        committed(&host, "note", &["granted now"], "legacy_user").await;
     })
     .await;
 }
