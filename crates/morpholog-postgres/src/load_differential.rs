@@ -486,6 +486,126 @@ async fn the_same_shipments_conflict_under_whole_reads() {
     assert!(relation_locks > 0);
 }
 
+/// An order completes once its every shipment is sent: the shipments
+/// are found inside the gate, and the sent claims keyed by them.
+fn orders_program() -> morpholog_core::Program {
+    morpholog_surface::parse_program(
+        "program orders
+predicate Ship(s: Subject, order: Subject)
+predicate Sent(s: Subject)
+predicate Done(order: Subject)
+transformation complete(order):
+    require not (exists s: Ship(s, order) and not Sent(s))
+    admit Done(order)
+",
+    )
+    .unwrap()
+}
+
+/// `n` orders, each with one sent shipment.
+async fn populate_orders(pool: &PgPool, n: i64) {
+    // Safe: the one interpolated value is this test's row count.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'Ship', jsonb_build_array(jsonb_build_object('type','subject','value','s' || i), jsonb_build_object('type','subject','value','o' || i)), '00000000-0000-0000-0000-000000000000'
+         FROM generate_series(1, {n}) AS i;
+         INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+         SELECT 'Sent', jsonb_build_array(jsonb_build_object('type','subject','value','s' || i)), '00000000-0000-0000-0000-000000000000'
+         FROM generate_series(1, {n}) AS i;
+         ANALYZE morpholog.claims"
+    )))
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+fn completion(order: &str) -> Contender {
+    let program = orders_program();
+    let t = program.transformation("complete").unwrap();
+    let transition = Transition {
+        transformation_name: t.name.clone(),
+        args: vec![subj(order)],
+        actor: test_actor(),
+        decided_at: None,
+    };
+    Contender {
+        scope: compute_load_scope(
+            t,
+            Some(&transition),
+            &program.invariants,
+            &program.definitions,
+            Reads::Body,
+        ),
+        asserted: vec![claim_instance("Done", &[subj(order)])],
+        retracted: vec![],
+    }
+}
+
+async fn orders_pool() -> PgPool {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    populate_orders(&pool, 5000).await;
+    let program = crate::program::PgProgram::new(
+        morpholog_core::PreparedProgram::new(orders_program()).unwrap(),
+    );
+    crate::indexes::provision_indexes(&pool, &[&program], false)
+        .await
+        .unwrap();
+    pool
+}
+
+/// Two orders complete together: the sent claims, keyed by the shipments
+/// the gate finds, leave no relation-level lock.
+#[tokio::test]
+async fn two_orders_complete_together_under_keys_found_inside_the_gate() {
+    let pool = orders_pool().await;
+    let (a, b, relation_locks) = race(&pool, completion("o1"), completion("o2")).await;
+    assert!(a.is_ok() && b.is_ok(), "keyed reads: {a:?} / {b:?}");
+    assert_eq!(
+        relation_locks, 0,
+        "a read keyed inside a proposition must leave no relation-level SIRead lock"
+    );
+}
+
+/// The completion's load seeks both predicates by their own indexes,
+/// planned with its values and as a cached generic plan alike: no scan
+/// of the table. The planner may seek the sent claims by a bitmap over
+/// their index, as it may any key read through a parent.
+#[tokio::test]
+async fn a_completion_loads_through_its_indexes() {
+    let pool = orders_pool().await;
+    let scope = completion("o1").scope;
+    for generic in [false, true] {
+        let plan = load_plan(&pool, &scope, generic).await;
+        assert!(
+            !plan.iter().any(|node| node.starts_with("Seq Scan")),
+            "generic={generic}: {plan:?}"
+        );
+        for index in ["morpholog_ci_ship_1_", "morpholog_ci_sent_0_"] {
+            assert!(
+                plan.iter()
+                    .any(|node| node.contains(&format!("Scan using {index}"))),
+                "generic={generic}: no seek on {index}: {plan:?}"
+            );
+        }
+    }
+}
+
+/// The control: the same two completions reading the sent claims whole
+/// conflict.
+#[tokio::test]
+async fn the_same_completions_conflict_under_whole_reads() {
+    let pool = orders_pool().await;
+    let (a, b, relation_locks) =
+        race(&pool, whole(completion("o1")), whole(completion("o2"))).await;
+    assert!(
+        matches!(a, Err(PgError::SerializationFailure))
+            || matches!(b, Err(PgError::SerializationFailure)),
+        "whole reads must conflict: {a:?} / {b:?}"
+    );
+    assert!(relation_locks > 0);
+}
+
 /// The merge shape: a target's stock, the stock of the items a collection
 /// names, summed and retracted, the target's row rewritten.
 pub(crate) fn merges_program() -> morpholog_core::Program {
