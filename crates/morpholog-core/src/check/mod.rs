@@ -192,6 +192,10 @@ impl KindEnv {
         self.bindings.get(name).map(|slot| slot.cell)
     }
 
+    fn names(&self) -> impl Iterator<Item = &Var> {
+        self.bindings.keys()
+    }
+
     fn slot_mut(&mut self, name: &Var, cells: &mut Cells) -> &mut Slot {
         self.bindings.entry(name.clone()).or_insert_with(|| Slot {
             inferred: InferredKind::UnknownOrAny,
@@ -903,12 +907,31 @@ impl CheckCtx<'_> {
             Prop::Or(items) => {
                 // Each branch starts from the same scope, as at runtime.
                 // A name bound in every branch is bound after the `or`.
-                // Refinements are dropped: that can only miss an error,
-                // never invent one.
+                // A kind holds after it only where every branch gave an
+                // outer name that same kind: a branch that leaves the
+                // name alone can hold whatever it is, so a kind one
+                // branch alone refines is dropped. Dropping can only miss
+                // an error, never invent one.
                 let mut merged: Option<BoundEnv> = None;
+                let mut agreed: Option<HashMap<Var, PredicateArgKind>> = None;
                 for item in items {
                     let mut branch = scope.clone();
                     self.walk_prop(item, &mut branch);
+                    let kinds: HashMap<Var, PredicateArgKind> = scope
+                        .kinds
+                        .names()
+                        .filter_map(|name| match branch.kinds.lookup(name) {
+                            InferredKind::Known(kind) => Some((name.clone(), kind)),
+                            InferredKind::UnknownOrAny => None,
+                        })
+                        .collect();
+                    agreed = Some(match agreed {
+                        None => kinds,
+                        Some(mut acc) => {
+                            acc.retain(|name, kind| kinds.get(name) == Some(kind));
+                            acc
+                        }
+                    });
                     merged = Some(match merged {
                         None => branch.bound,
                         Some(mut acc) => {
@@ -919,6 +942,13 @@ impl CheckCtx<'_> {
                 }
                 if let Some(merged) = merged {
                     scope.bound = merged;
+                }
+                for (name, kind) in agreed.into_iter().flatten() {
+                    // Every branch refined from this scope's kind without
+                    // conflict, so refining it here cannot conflict.
+                    let _ = scope
+                        .kinds
+                        .refine(&name, InferredKind::Known(kind), &mut self.cells);
                 }
             }
             Prop::Xor(left, right) => {
