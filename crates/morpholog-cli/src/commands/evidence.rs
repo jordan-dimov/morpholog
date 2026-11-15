@@ -74,7 +74,7 @@ async fn export_prefix(
     let mut export = begin_prefix_export(pool, tree_size)
         .await
         .context("export failed")?;
-    let mut out = std::io::BufWriter::new(std::io::stdout());
+    let mut out = std::io::BufWriter::new(super::out::stdout());
     write_line(&mut out, &export.manifest)?;
     for checkpoint in &export.checkpoints {
         write_line(&mut out, checkpoint)?;
