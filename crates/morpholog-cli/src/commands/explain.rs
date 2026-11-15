@@ -10,6 +10,8 @@
 //! (bad programme or `--args`, unknown transformation, database error) exit
 //! non-zero. Scripts that want the gate use `propose`.
 
+use std::io::Write;
+
 use anyhow::Context;
 use morpholog_core::{Subject, Transition};
 use morpholog_postgres::load_scoped_state;
@@ -57,7 +59,7 @@ pub(crate) async fn run(args: ExplainArgs) -> anyhow::Result<()> {
     if args.json {
         print_json(&explanation)
     } else {
-        println!("{}", explanation.render());
+        writeln!(super::out::stdout(), "{}", explanation.render())?;
         Ok(())
     }
 }

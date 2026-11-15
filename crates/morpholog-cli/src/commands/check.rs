@@ -1,5 +1,7 @@
 //! `morpholog check` - parse + validate + lint a `.morph` source file.
 
+use std::io::Write;
+
 use crate::CheckArgs;
 use crate::commands::{AlreadyReported, colour, print_json};
 use morpholog_cli::envelopes::{
@@ -81,7 +83,7 @@ pub(crate) async fn run(args: CheckArgs) -> anyhow::Result<()> {
         return Err(AlreadyReported.into());
     }
     if let Some(text) = verbose_summary {
-        print!("{text}");
+        write!(super::out::stdout(), "{text}")?;
     }
     if let (Some(prepared), true) = (&collected.prepared, args.ir) {
         return print_ir(prepared.program());
