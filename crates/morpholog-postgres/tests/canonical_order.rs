@@ -140,14 +140,15 @@ async fn legacy_uncertainty_survives_later_transitions() {
         }
         other => panic!("expected indeterminate: {other:?}"),
     };
-    assert_eq!(indeterminate(verdict(&pool).await, 4), 0);
+    // Three legacy transitions; the activation record is a control row.
+    assert_eq!(indeterminate(verdict(&pool).await, 3), 0);
 
     let pg = pg_program(program());
     act(&pool, &pg, "admit_x", "a").await;
     act(&pool, &pg, "retract_x", "a").await;
     act(&pool, &pg, "admit_x", "a").await;
     assert_eq!(
-        indeterminate(verdict(&pool).await, 7),
+        indeterminate(verdict(&pool).await, 6),
         1,
         "a lawful readmit does not settle it"
     );
@@ -283,10 +284,12 @@ async fn the_activation_record_is_the_one_its_prefix_implies() {
     testing::activate(&pool).await.unwrap();
     let pg = pg_program(program());
     act(&pool, &pg, "admit_x", "b").await;
+    // The legacy admit and the new one; the baseline chunk and the record
+    // are control rows.
     assert!(matches!(
         verdict(&pool).await,
         VerifyOutcome::Consistent {
-            transitions: 4,
+            transitions: 2,
             claims: 2
         }
     ));
