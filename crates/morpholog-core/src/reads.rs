@@ -566,10 +566,21 @@ impl Walker<'_> {
                 continue;
             }
             let patterns = &conjuncts[at..at + block];
+            // A key found later in the block can key a pattern earlier in
+            // it, and what that pattern then binds can key others: scan
+            // until nothing new is known. Each pass learns a name or ends.
             let mut own: Vec<Vec<Var>> = vec![Vec::new(); block];
-            for (names, pattern) in own.iter_mut().zip(patterns) {
-                if let Prop::Claim { predicate, args } = pattern {
-                    names.extend(self.fields(predicate, args, &mut env));
+            loop {
+                let mut learned = false;
+                for (names, pattern) in own.iter_mut().zip(patterns) {
+                    if let Prop::Claim { predicate, args } = pattern {
+                        let made = self.fields(predicate, args, &mut env);
+                        learned |= !made.is_empty();
+                        names.extend(made);
+                    }
+                }
+                if !learned {
+                    break;
                 }
             }
             for names in &own {

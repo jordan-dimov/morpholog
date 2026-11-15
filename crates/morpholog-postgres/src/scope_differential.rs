@@ -1812,12 +1812,40 @@ fn a_key_found_inside_a_proposition_keys_the_reads_after_it() {
         keyed_by(&[&[(0, field_of("Ship", 0, &[(1, param_of("order"))]))]])
     );
 
-    // Patterns before their key, with only patterns between, are keyed.
+    // Patterns before their key, with only patterns between, are keyed,
+    // and what they then bind keys the reads after them.
+    let line = field_of("Line", 0, &[(1, param_of("order"))]);
     let p = plan_of("join_reversed");
+    assert_eq!(p.reads[&"Alloc".into()], keyed_by(&[&[(1, line.clone())]]));
     assert_eq!(
-        p.reads[&"Alloc".into()],
-        keyed_by(&[&[(1, field_of("Line", 0, &[(1, param_of("order"))]))]])
+        p.reads[&"Sent".into()],
+        keyed_by(&[&[(0, field_of("Alloc", 2, &[(1, line)]))]])
     );
+}
+
+/// The order's allocations are found through its lines, though the gate
+/// names the allocation first; another order's unsent shipment is not
+/// loaded, and this order's refuses alike.
+#[test]
+fn a_key_found_after_its_pattern_decides_alike() {
+    use morpholog_test_support::{claim_instance, subj};
+    let full = |sent: &[&str]| {
+        let mut claims = vec![
+            claim_instance("Line", &[subj("l1"), subj("o1")]),
+            claim_instance("Line", &[subj("l2"), subj("o2")]),
+            claim_instance("Alloc", &[subj("a1"), subj("l1"), subj("s1")]),
+            claim_instance("Alloc", &[subj("a2"), subj("l2"), subj("s2")]),
+        ];
+        claims.extend(sent.iter().map(|s| claim_instance("Sent", &[subj(s)])));
+        claims
+    };
+    let args = || vec![subj("o"), subj("o1")];
+    let (shown, projected) = stage_over("join_reversed", args(), full(&["s1"]));
+    assert!(shown.starts_with("staged:"), "{shown}");
+    assert_eq!(projected.claims_for("Alloc").count(), 1);
+    assert_eq!(projected.claims_for("Sent").count(), 1);
+    let (shown, _) = stage_over("join_reversed", args(), full(&["s2"]));
+    assert!(shown.starts_with("rejected:"), "{shown}");
 }
 
 /// Where a key found inside a proposition would change what the kernel
