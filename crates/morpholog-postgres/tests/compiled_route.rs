@@ -1193,3 +1193,129 @@ async fn both_routes_check_a_scope_read_before_its_binding_whole() {
     assert_eq!(outcomes[0].0.as_deref(), Some("rows_ok_once_tagged"));
     assert_eq!(outcomes[0].1[0].value, subj("new"));
 }
+
+/// Two sums in one rule, each through a definition that tests a status
+/// against a list (#821). The compiled check once placed the first sum's
+/// subquery inside the second sum's status test, where the rule's own
+/// comparison could not see it, and PostgreSQL refused the SQL. Every
+/// form here compiles, and both routes decide alike over statuses on
+/// each side of both lists.
+fn two_sums_program(rule: &str, allocated: &str) -> Program {
+    morpholog_surface::parse_program(&format!(
+        "program two_sums
+predicate StockItem(item: Subject, quantity: Decimal)
+    unique by (item)
+predicate OrderStatus(order: Subject, status: Subject)
+    unique by (order)
+predicate SalesLine(line: Subject, order: Subject)
+    unique by (line)
+predicate SalesAllocation(allocation: Subject, line: Subject, item: Subject, quantity: Decimal)
+    unique by (allocation)
+predicate TransferStatus(order: Subject, status: Subject)
+    unique by (order)
+predicate TransferAllocation(allocation: Subject, order: Subject, item: Subject, quantity: Decimal)
+    unique by (allocation)
+define order_open(order):
+    OrderStatus(order, s) and s in (#pending, #in_progress)
+define sales_counts(line):
+    SalesLine(line, order) and order_open(order)
+define sales_allocated(item) = (sum(q | SalesAllocation(_, l, item, q) and sales_counts(l)))
+define transfer_open(order):
+    TransferStatus(order, s) and s in (#pending, #issued, #on_hold)
+define transfer_allocated(item) = (sum(q | TransferAllocation(_, o, item, q) and transfer_open(o)))
+define allocated(item) = ({allocated})
+invariant allocations_within_stock:
+    {rule}
+transformation allocate(allocation, line, item, quantity):
+    admit SalesAllocation(allocation, line, item, quantity)
+"
+    ))
+    .unwrap()
+}
+
+/// Item `i` holds 10. A sales allocation of 4 on an order with status
+/// `sales_status`, and a transfer allocation of 2 on one with status
+/// `transfer_status`.
+fn two_sums_state(sales_status: &str, transfer_status: &str) -> Vec<ClaimInstance> {
+    use morpholog_test_support::claim_instance;
+    vec![
+        claim_instance("StockItem", &[subj("i"), dec(10)]),
+        claim_instance("OrderStatus", &[subj("so"), subj(sales_status)]),
+        claim_instance("SalesLine", &[subj("l1"), subj("so")]),
+        claim_instance("SalesLine", &[subj("l2"), subj("so")]),
+        claim_instance(
+            "SalesAllocation",
+            &[subj("a1"), subj("l1"), subj("i"), dec(4)],
+        ),
+        claim_instance("TransferStatus", &[subj("to"), subj(transfer_status)]),
+        claim_instance(
+            "TransferAllocation",
+            &[subj("t1"), subj("to"), subj("i"), dec(2)],
+        ),
+    ]
+}
+
+#[tokio::test]
+async fn two_sums_through_status_tests_compile_and_decide_as_the_kernel_does() {
+    let pool = test_pool().await;
+    let forms = [
+        (
+            "StockItem(i, q) implies allocated(i) <= q",
+            "sales_allocated(item) + transfer_allocated(item)",
+        ),
+        (
+            "StockItem(i, q) implies allocated(i) <= q",
+            "transfer_allocated(item) + sales_allocated(item)",
+        ),
+        (
+            "StockItem(i, q) implies sales_allocated(i) <= q - transfer_allocated(i)",
+            "sales_allocated(item)",
+        ),
+    ];
+    // (sales status, transfer status, quantity allocated, admitted?): 4
+    // and 2 count while their orders are open, so an allocation of 4
+    // fits and 5 does not. A closed order's allocations do not count,
+    // the new one included, since it is on the same sales order.
+    let cases = [
+        ("pending", "on_hold", 4, true),
+        ("in_progress", "issued", 5, false),
+        ("pending", "complete", 5, true),
+        ("complete", "pending", 8, true),
+        ("complete", "complete", 11, true),
+        ("pending", "pending", 5, false),
+    ];
+    for (rule, allocated) in forms {
+        let program = two_sums_program(rule, allocated);
+        let compiled = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
+        assert!(
+            matches!(compiled.plan(), InvariantPlan::Compiled),
+            "{rule} with {allocated}: {:?}",
+            compiled.plan()
+        );
+        let interpreted = PgProgram::interpreted(PreparedProgram::new(program).unwrap());
+        for (sales, transfer, quantity, admitted) in cases {
+            let seeded = two_sums_state(sales, transfer);
+            let transition = Transition {
+                transformation_name: "allocate".into(),
+                args: vec![subj("a2"), subj("l2"), subj("i"), dec(quantity)],
+                actor: Subject::from("route_test"),
+                decided_at: None,
+            };
+            let spec = observe(&pool, &interpreted, &seeded, &transition).await;
+            let real = observe(&pool, &compiled, &seeded, &transition).await;
+            assert_eq!(
+                spec, real,
+                "{rule} with {allocated}, case {sales}/{transfer}/{quantity}"
+            );
+            let RouteObservation::Decided(decided) = real else {
+                panic!("{rule}: not a decision: {real:?}");
+            };
+            assert_eq!(
+                decided.outcome.starts_with("committed"),
+                admitted,
+                "{rule} with {allocated}, case {sales}/{transfer}/{quantity}: {}",
+                decided.outcome
+            );
+        }
+    }
+}
