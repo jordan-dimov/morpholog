@@ -602,6 +602,135 @@ transformation mint(x):
     admit Minted(x, s)
 ",
     ),
+    (
+        "join_in_sum",
+        "program join_in_sum
+predicate Alloc(a: Subject, item: Subject, q: Decimal)
+predicate Live(a: Subject)
+predicate Out(t: Subject)
+transformation t(out, item):
+    require sum(q | Alloc(a, item, q) and Live(a)) <= 10
+    admit Out(out)
+",
+    ),
+    (
+        "join_in_negated_exists",
+        "program join_in_negated_exists
+predicate Ship(s: Subject, order: Subject)
+predicate Sent(s: Subject)
+predicate Out(t: Subject)
+transformation t(out, order):
+    require not (exists s: Ship(s, order) and not Sent(s))
+    admit Out(out)
+",
+    ),
+    (
+        "join_through_definitions",
+        "program join_through_definitions
+predicate Alloc(a: Subject, line: Subject, item: Subject, q: Decimal)
+predicate Line(line: Subject, order: Subject)
+predicate Status(order: Subject, s: Subject)
+predicate Out(t: Subject)
+define open(order):
+    Status(order, s) and s in (#open, #held)
+define counts(line):
+    Line(line, order) and open(order)
+transformation t(out, item):
+    require sum(q | Alloc(_, l, item, q) and counts(l)) <= 10
+    admit Out(out)
+",
+    ),
+    (
+        "join_reversed",
+        "program join_reversed
+predicate Alloc(a: Subject, line: Subject, sh: Subject)
+predicate Line(line: Subject, order: Subject)
+predicate Sent(sh: Subject)
+predicate Out(t: Subject)
+transformation t(out, order):
+    require not (exists a: Alloc(a, l, sh) and Line(l, order) and not Sent(sh))
+    admit Out(out)
+",
+    ),
+    (
+        "member_between_patterns",
+        "program member_between_patterns
+predicate P(x: Subject)
+predicate Q(x: Subject, tag: Subject)
+predicate Out(t: Subject)
+transformation t(out, xs, tag):
+    let ys = xs
+    require not (P(x) and x in ys and Q(x, tag))
+    admit Out(out)
+",
+    ),
+    (
+        "two_occurrences",
+        "program two_occurrences
+predicate Link(from: Subject, to: Subject)
+predicate Mark(x: Subject)
+predicate Out(t: Subject)
+transformation t(out, start):
+    require exists y: Link(start, y) and Link(y, z) and Mark(z)
+    admit Out(out)
+",
+    ),
+    (
+        "repeated_variable",
+        "program repeated_variable
+predicate Pair(k: Subject, x: Subject, y: Subject)
+predicate Val(x: Subject, q: Decimal)
+predicate Out(t: Subject)
+transformation t(out, k):
+    require sum(q | Pair(k, x, x) and Val(x, q)) <= 10
+    admit Out(out)
+",
+    ),
+    (
+        "raising_between_patterns",
+        "program raising_between_patterns
+predicate Live(a: Subject, q: Decimal)
+predicate Alloc(a: Subject, item: Subject)
+predicate Out(t: Subject)
+transformation t(out, item):
+    require not (Live(a, q) and 1 / q > 0 and Alloc(a, item))
+    admit Out(out)
+",
+    ),
+    (
+        "raising_after_parent",
+        "program raising_after_parent
+predicate Alloc(a: Subject, item: Subject)
+predicate Live(a: Subject, q: Decimal)
+predicate Out(t: Subject)
+transformation t(out, item):
+    require sum(q | Alloc(a, item) and Live(a, q) and 1 / q > 0) >= 0
+    admit Out(out)
+",
+    ),
+    (
+        "exists_shadows_parameter",
+        "program exists_shadows_parameter
+predicate Ship(s: Subject, order: Subject)
+predicate Sent(s: Subject)
+predicate Out(t: Subject)
+transformation t(out, order, s):
+    require not (exists s: Ship(s, order) and not Sent(s))
+    admit Out(out)
+",
+    ),
+    (
+        "let_named_like_a_binder",
+        "program let_named_like_a_binder
+predicate Alloc(a: Subject, line: Subject, item: Subject)
+predicate Line(line: Subject)
+predicate Out(t: Subject)
+transformation t(out, item):
+    let l = out
+    require not (exists a: Alloc(a, l, item) and not Line(l))
+    admit Out(out)
+",
+    ),
 ];
 
 pub(crate) fn hostile_program(name: &str) -> Program {
@@ -1586,6 +1715,336 @@ transformation ship(a):
     );
     alone.after_admissions_of(&BTreeSet::from(["Allocation".into()]));
     assert_eq!(alone.filters[&"Stock".into()], LoadFilter::Whole);
+}
+
+/// The read plan of a fragment's transformation `t`.
+fn plan_of(fragment: &str) -> morpholog_core::ReadPlan {
+    let program = hostile_program(fragment);
+    let t = program
+        .transformations
+        .iter()
+        .find(|t| t.name.as_str() == "t")
+        .unwrap();
+    morpholog_core::ReadPlan::of(t, &program.definitions)
+}
+
+fn keyed_by(patterns: &[&[(usize, morpholog_core::KnownTerm)]]) -> morpholog_core::ReadFilter {
+    morpholog_core::ReadFilter::Keyed(
+        patterns
+            .iter()
+            .map(|c| morpholog_core::KeyedPattern {
+                coordinates: c.to_vec(),
+            })
+            .collect(),
+    )
+}
+
+fn field_of(
+    predicate: &str,
+    position: usize,
+    of: &[(usize, morpholog_core::KnownTerm)],
+) -> morpholog_core::KnownTerm {
+    morpholog_core::KnownTerm::Field {
+        predicate: predicate.into(),
+        position,
+        of: of.to_vec(),
+    }
+}
+
+fn param_of(name: &str) -> morpholog_core::KnownTerm {
+    morpholog_core::KnownTerm::Parameter(name.into())
+}
+
+/// A pattern inside a proposition keys the patterns after it by what it
+/// binds, and never itself.
+#[test]
+fn a_key_found_inside_a_proposition_keys_the_reads_after_it() {
+    let by_item = [(1, param_of("item"))];
+    let p = plan_of("join_in_sum");
+    assert_eq!(p.reads[&"Alloc".into()], keyed_by(&[&by_item]));
+    assert_eq!(
+        p.reads[&"Live".into()],
+        keyed_by(&[&[(0, field_of("Alloc", 0, &by_item))]])
+    );
+
+    let p = plan_of("join_in_negated_exists");
+    assert_eq!(
+        p.reads[&"Sent".into()],
+        keyed_by(&[&[(0, field_of("Ship", 0, &[(1, param_of("order"))]))]])
+    );
+
+    let line = field_of("Alloc", 1, &[(2, param_of("item"))]);
+    let p = plan_of("join_through_definitions");
+    assert_eq!(p.reads[&"Line".into()], keyed_by(&[&[(0, line.clone())]]));
+    assert_eq!(
+        p.reads[&"Status".into()],
+        keyed_by(&[&[(0, field_of("Line", 1, &[(0, line)]))]])
+    );
+
+    // A pattern with a known name and a new one: keyed by the known one.
+    let start = [(0, param_of("start"))];
+    let p = plan_of("two_occurrences");
+    assert_eq!(
+        p.reads[&"Link".into()],
+        keyed_by(&[&start, &[(0, field_of("Link", 1, &start))]])
+    );
+    assert_eq!(
+        p.reads[&"Mark".into()],
+        keyed_by(&[&[(0, field_of("Link", 1, &[(0, field_of("Link", 1, &start))]))]])
+    );
+
+    let p = plan_of("repeated_variable");
+    assert_eq!(
+        p.reads[&"Val".into()],
+        keyed_by(&[&[(0, field_of("Pair", 1, &[(0, param_of("k"))]))]])
+    );
+
+    let p = plan_of("raising_after_parent");
+    assert_eq!(
+        p.reads[&"Live".into()],
+        keyed_by(&[&[(0, field_of("Alloc", 0, &by_item))]])
+    );
+
+    // The binder of an `exists` is its own, not the parameter it shadows.
+    let p = plan_of("exists_shadows_parameter");
+    assert_eq!(
+        p.reads[&"Sent".into()],
+        keyed_by(&[&[(0, field_of("Ship", 0, &[(1, param_of("order"))]))]])
+    );
+
+    // Patterns before their key, with only patterns between, are keyed,
+    // and what they then bind keys the reads after them.
+    let line = field_of("Line", 0, &[(1, param_of("order"))]);
+    let p = plan_of("join_reversed");
+    assert_eq!(p.reads[&"Alloc".into()], keyed_by(&[&[(1, line.clone())]]));
+    assert_eq!(
+        p.reads[&"Sent".into()],
+        keyed_by(&[&[(0, field_of("Alloc", 2, &[(1, line)]))]])
+    );
+}
+
+/// The order's allocations are found through its lines, though the gate
+/// names the allocation first; another order's unsent shipment is not
+/// loaded, and this order's refuses alike.
+#[test]
+fn a_key_found_after_its_pattern_decides_alike() {
+    use morpholog_test_support::{claim_instance, subj};
+    let full = |sent: &[&str]| {
+        let mut claims = vec![
+            claim_instance("Line", &[subj("l1"), subj("o1")]),
+            claim_instance("Line", &[subj("l2"), subj("o2")]),
+            claim_instance("Alloc", &[subj("a1"), subj("l1"), subj("s1")]),
+            claim_instance("Alloc", &[subj("a2"), subj("l2"), subj("s2")]),
+        ];
+        claims.extend(sent.iter().map(|s| claim_instance("Sent", &[subj(s)])));
+        claims
+    };
+    let args = || vec![subj("o"), subj("o1")];
+    let (shown, projected) = stage_over("join_reversed", args(), full(&["s1"]));
+    assert!(shown.starts_with("staged:"), "{shown}");
+    assert_eq!(projected.claims_for("Alloc").count(), 1);
+    assert_eq!(projected.claims_for("Sent").count(), 1);
+    let (shown, _) = stage_over("join_reversed", args(), full(&["s2"]));
+    assert!(shown.starts_with("rejected:"), "{shown}");
+}
+
+/// Where a key found inside a proposition would change what the kernel
+/// sees, the read stays whole.
+#[test]
+fn a_key_found_inside_a_proposition_stays_out_of_reads_it_could_change() {
+    // Behind a membership test, which can raise.
+    let p = plan_of("member_between_patterns");
+    assert_eq!(p.reads[&"P".into()], morpholog_core::ReadFilter::Whole);
+    assert_eq!(p.reads[&"Q".into()], keyed_by(&[&[(1, param_of("tag"))]]));
+    // Behind a conjunct that can raise.
+    let p = plan_of("raising_between_patterns");
+    assert_eq!(p.reads[&"Live".into()], morpholog_core::ReadFilter::Whole);
+    // A name a `let` binds is never known.
+    let p = plan_of("let_named_like_a_binder");
+    assert_eq!(p.reads[&"Line".into()], morpholog_core::ReadFilter::Whole);
+}
+
+/// Two allocations of the item, each live, sum past the limit: the sum
+/// counts both rows, over the full state and the projection alike. A
+/// third item's allocation and its live claim are not loaded.
+#[test]
+fn a_join_inside_a_sum_counts_every_row_it_keeps() {
+    use morpholog_test_support::{claim_instance, dec, subj};
+    let full = |live_a2: bool| {
+        let mut claims = vec![
+            claim_instance("Alloc", &[subj("a1"), subj("i1"), dec(6)]),
+            claim_instance("Alloc", &[subj("a2"), subj("i1"), dec(6)]),
+            claim_instance("Alloc", &[subj("a3"), subj("i2"), dec(6)]),
+            claim_instance("Live", &[subj("a1")]),
+            claim_instance("Live", &[subj("a3")]),
+        ];
+        if live_a2 {
+            claims.push(claim_instance("Live", &[subj("a2")]));
+        }
+        claims
+    };
+    let (shown, projected) = stage_over("join_in_sum", vec![subj("o"), subj("i1")], full(true));
+    assert!(shown.starts_with("rejected:"), "{shown}");
+    assert_eq!(projected.claims_for("Alloc").count(), 2);
+    assert_eq!(projected.claims_for("Live").count(), 2);
+    let (shown, _) = stage_over("join_in_sum", vec![subj("o"), subj("i1")], full(false));
+    assert!(shown.starts_with("staged:"), "{shown}");
+}
+
+/// The order's lines through two definitions: only its own line and
+/// status load, and the decision is the full state's.
+#[test]
+fn a_join_through_definitions_reads_only_the_rows_it_reaches() {
+    use morpholog_test_support::{claim_instance, dec, subj};
+    let full = vec![
+        claim_instance("Alloc", &[subj("a1"), subj("l1"), subj("i1"), dec(6)]),
+        claim_instance("Alloc", &[subj("a2"), subj("l2"), subj("i2"), dec(6)]),
+        claim_instance("Line", &[subj("l1"), subj("o1")]),
+        claim_instance("Line", &[subj("l2"), subj("o2")]),
+        claim_instance("Status", &[subj("o1"), subj("open")]),
+        claim_instance("Status", &[subj("o2"), subj("open")]),
+    ];
+    let (shown, projected) = stage_over(
+        "join_through_definitions",
+        vec![subj("o"), subj("i1")],
+        full,
+    );
+    assert!(shown.starts_with("staged:"), "{shown}");
+    assert_eq!(projected.claims_for("Line").count(), 1);
+    assert_eq!(projected.claims_for("Status").count(), 1);
+}
+
+/// A shipment of another order is unsent; only this order's shipments
+/// load, and this order's one unsent shipment refuses alike.
+#[test]
+fn a_join_inside_a_negated_existential_decides_alike() {
+    use morpholog_test_support::{claim_instance, subj};
+    let full = |sent: &[&str]| {
+        let mut claims = vec![
+            claim_instance("Ship", &[subj("s1"), subj("o1")]),
+            claim_instance("Ship", &[subj("s2"), subj("o1")]),
+            claim_instance("Ship", &[subj("s3"), subj("o2")]),
+        ];
+        claims.extend(sent.iter().map(|s| claim_instance("Sent", &[subj(s)])));
+        claims
+    };
+    let args = || vec![subj("o"), subj("o1")];
+    let (shown, projected) = stage_over("join_in_negated_exists", args(), full(&["s1", "s2"]));
+    assert!(shown.starts_with("staged:"), "{shown}");
+    assert_eq!(projected.claims_for("Ship").count(), 2);
+    assert_eq!(projected.claims_for("Sent").count(), 2);
+    let (shown, _) = stage_over("join_in_negated_exists", args(), full(&["s1"]));
+    assert!(shown.starts_with("rejected:"), "{shown}");
+    let (shown, _) = stage_over("join_in_negated_exists", args(), vec![]);
+    assert!(shown.starts_with("staged:"), "no shipments: {shown}");
+}
+
+/// A repeated name matches only rows whose two fields agree; the key is
+/// every first field, a superset, and the sum is the full state's.
+#[test]
+fn a_repeated_name_decides_alike() {
+    use morpholog_test_support::{claim_instance, dec, subj};
+    let full = vec![
+        claim_instance("Pair", &[subj("k1"), subj("a"), subj("a")]),
+        claim_instance("Pair", &[subj("k1"), subj("b"), subj("c")]),
+        claim_instance("Val", &[subj("a"), dec(4)]),
+        claim_instance("Val", &[subj("b"), dec(20)]),
+        claim_instance("Val", &[subj("c"), dec(20)]),
+        claim_instance("Val", &[subj("d"), dec(1)]),
+    ];
+    let (shown, projected) = stage_over("repeated_variable", vec![subj("o"), subj("k1")], full);
+    assert!(shown.starts_with("staged:"), "{shown}");
+    assert_eq!(projected.claims_for("Val").count(), 2);
+}
+
+/// A collection argument that is not a collection makes the membership
+/// test raise once a row reaches it. A load that narrowed `P` by `Q`,
+/// which holds nothing, would never reach the test and would stage.
+#[test]
+fn a_membership_test_between_patterns_keeps_its_error() {
+    use morpholog_test_support::{claim_instance, subj};
+    let full = vec![claim_instance("P", &[subj("a")])];
+    let (shown, projected) = stage_over(
+        "member_between_patterns",
+        vec![subj("o"), subj("a"), subj("active")],
+        full,
+    );
+    assert!(shown.contains("In expects a collection"), "{shown}");
+    assert_eq!(projected.claims_for("P").count(), 1);
+}
+
+/// A live claim of another item divides by zero: a row that reaches the
+/// division before its allocation is matched raises on the full state,
+/// and the read stays whole so it raises on the projection too.
+#[test]
+fn a_raising_conjunct_between_patterns_keeps_its_error() {
+    use morpholog_test_support::{claim_instance, dec, subj};
+    let full = vec![
+        claim_instance("Live", &[subj("a0"), dec(0)]),
+        claim_instance("Live", &[subj("a1"), dec(5)]),
+        claim_instance("Alloc", &[subj("a1"), subj("i1")]),
+    ];
+    let (shown, projected) = stage_over(
+        "raising_between_patterns",
+        vec![subj("o"), subj("i1")],
+        full,
+    );
+    assert!(shown.starts_with("error:"), "{shown}");
+    assert_eq!(projected.claims_for("Live").count(), 2);
+}
+
+/// After its parent, a raising conjunct sees only rows that join it: the
+/// other item's zero never reaches the division, on either load; this
+/// item's zero raises on both.
+#[test]
+fn a_raising_conjunct_after_the_parent_errors_alike() {
+    use morpholog_test_support::{claim_instance, dec, subj};
+    let full = |q: i64| {
+        vec![
+            claim_instance("Alloc", &[subj("a1"), subj("i1")]),
+            claim_instance("Alloc", &[subj("a2"), subj("i2")]),
+            claim_instance("Live", &[subj("a1"), dec(q)]),
+            claim_instance("Live", &[subj("a2"), dec(0)]),
+        ]
+    };
+    let (shown, projected) =
+        stage_over("raising_after_parent", vec![subj("o"), subj("i1")], full(5));
+    assert!(shown.starts_with("staged:"), "{shown}");
+    assert_eq!(projected.claims_for("Live").count(), 1);
+    let (shown, _) = stage_over("raising_after_parent", vec![subj("o"), subj("i1")], full(0));
+    assert!(shown.starts_with("error:"), "{shown}");
+}
+
+/// In an atomic batch, a key found inside a proposition through a
+/// predicate an earlier act admits goes, as a bind's does.
+#[test]
+fn a_proposition_key_through_an_earlier_admission_is_dropped() {
+    use crate::propose::LoadFilter;
+    use std::collections::BTreeSet;
+    let program = hostile_program("join_in_sum");
+    let t = &program.transformations[0];
+    let transition = morpholog_core::Transition {
+        transformation_name: t.name.clone(),
+        args: vec![
+            morpholog_test_support::subj("o"),
+            morpholog_test_support::subj("i1"),
+        ],
+        actor: morpholog_test_support::test_actor(),
+        decided_at: None,
+    };
+    let mut scope = compute_load_scope(
+        t,
+        Some(&transition),
+        &program.invariants,
+        &program.definitions,
+        Reads::Body,
+    );
+    assert!(matches!(
+        scope.filters[&"Live".into()],
+        LoadFilter::Keyed(_)
+    ));
+    scope.after_admissions_of(&BTreeSet::from(["Alloc".into()]));
+    assert_eq!(scope.filters[&"Live".into()], LoadFilter::Whole);
 }
 
 /// A walk up the tree from a bound part, in a batch: an earlier act that

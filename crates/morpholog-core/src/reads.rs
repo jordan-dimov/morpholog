@@ -531,38 +531,68 @@ impl Walker<'_> {
         }
     }
 
-    /// The environment a conjunction's conjuncts are walked in: a
-    /// variable a membership test ranges over a known parameter is one
-    /// of its elements. The scan stops at the first conjunct that is
-    /// neither a pattern nor a membership test: the kernel evaluates a
-    /// conjunction left to right over every live binding, so a row the
-    /// pattern matched outside the collection reaches each conjunct
-    /// before the test, and a conjunct there that can raise would raise
-    /// on it. A load without that row would answer differently.
-    fn members(&self, conjuncts: &[Prop], known: &Env) -> Env {
-        let mut inner = known.clone();
-        for conjunct in conjuncts {
-            match conjunct {
-                Prop::Claim { .. } => {}
-                Prop::In(Term::Var(x), ValueExpr::Term(Term::Var(source))) => {
-                    self.element(x, source, &mut inner);
-                }
-                Prop::In(_, _) => {}
-                Prop::Defined { .. }
-                | Prop::Implies { .. }
-                | Prop::Exists { .. }
-                | Prop::And(_)
-                | Prop::Or(_)
-                | Prop::Pre(_)
-                | Prop::Not(_)
-                | Prop::Xor(..)
-                | Prop::Eq(..)
-                | Prop::Neq(..)
-                | Prop::Compare { .. }
-                | Prop::Forall { .. } => break,
+    /// The environment each conjunct of a conjunction is walked in. The
+    /// kernel matches a conjunction left to right, so its leading run of
+    /// patterns and membership tests is matched before anything that can
+    /// raise, and a narrowed load must not change which rows reach a
+    /// conjunct that can.
+    ///
+    /// An element of a known parameter is known to every conjunct. A keyed
+    /// pattern in the run makes the names it binds known to every conjunct
+    /// after it and to the patterns just before it, never across a
+    /// membership test, which can raise (`In expects a collection`), and
+    /// never to itself.
+    fn members(&self, conjuncts: &[Prop], known: &Env) -> Vec<Env> {
+        let run = conjuncts
+            .iter()
+            .position(|c| !matches!(c, Prop::Claim { .. } | Prop::In(..)))
+            .unwrap_or(conjuncts.len());
+        let mut env = known.clone();
+        for conjunct in &conjuncts[..run] {
+            if let Prop::In(Term::Var(x), ValueExpr::Term(Term::Var(source))) = conjunct {
+                self.element(x, source, &mut env);
             }
         }
-        inner
+        let mut envs = Vec::with_capacity(conjuncts.len());
+        let mut at = 0;
+        while at < conjuncts.len() {
+            let block = conjuncts[at..run.max(at)]
+                .iter()
+                .take_while(|c| matches!(c, Prop::Claim { .. }))
+                .count();
+            if block == 0 {
+                envs.push(env.clone());
+                at += 1;
+                continue;
+            }
+            let patterns = &conjuncts[at..at + block];
+            // A key found later in the block can key a pattern earlier in
+            // it, and what that pattern then binds can key others: scan
+            // until nothing new is known. Each pass learns a name or ends.
+            let mut own: Vec<Vec<Var>> = vec![Vec::new(); block];
+            loop {
+                let mut learned = false;
+                for (names, pattern) in own.iter_mut().zip(patterns) {
+                    if let Prop::Claim { predicate, args } = pattern {
+                        let made = self.fields(predicate, args, &mut env);
+                        learned |= !made.is_empty();
+                        names.extend(made);
+                    }
+                }
+                if !learned {
+                    break;
+                }
+            }
+            for names in &own {
+                let mut inner = env.clone();
+                for name in names {
+                    inner.remove(name);
+                }
+                envs.push(inner);
+            }
+            at += block;
+        }
+        envs
     }
 
     /// What a statement makes known to the statements after it in its
@@ -583,10 +613,12 @@ impl Walker<'_> {
 
     /// What a claim pattern with a known coordinate makes known: each
     /// variable it binds is that row's value at the variable's position.
-    fn fields(&self, predicate: &PredicateName, args: &[Term], known: &mut Env) {
+    /// Returns the names it made known.
+    fn fields(&self, predicate: &PredicateName, args: &[Term], known: &mut Env) -> Vec<Var> {
         let of = coordinates(args, known);
+        let mut made = Vec::new();
         if of.is_empty() {
-            return;
+            return made;
         }
         for (position, term) in args.iter().enumerate() {
             if let Term::Var(name) = term
@@ -601,8 +633,10 @@ impl Walker<'_> {
                         of: of.clone(),
                     },
                 );
+                made.push(name.clone());
             }
         }
+        made
     }
 
     fn pattern(&mut self, predicate: &PredicateName, args: &[Term], known: &Env) {
@@ -677,8 +711,7 @@ impl Walker<'_> {
                 }
             }
             Prop::And(props) => {
-                let known = self.members(props, known);
-                for p in props {
+                for (p, known) in props.iter().zip(self.members(props, known)) {
                     self.prop(p, &known, seen);
                 }
             }

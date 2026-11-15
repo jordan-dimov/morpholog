@@ -288,9 +288,9 @@ fn check_verbose_marks_a_whole_read_of_a_predicate_the_act_writes() {
          predicate Alloc(alloc: Subject, item: Subject, qty: Decimal)\n    unique by (alloc)\n\
          predicate Item(item: Subject, part: Subject)\n    unique by (item)\n\
          predicate Shipped(item: Subject)\n\n\
-         define live(a):\n    Alloc(a, _, _)\n\n\
+         define allocated(a, q):\n    Alloc(a, _, q)\n\n\
          transformation allocate(alloc, item, qty):\n    \
-         require within_stock: sum(q | Alloc(a, item, q) and live(a)) + qty <= 10\n    \
+         require within_capacity: sum(q | allocated(a, q)) + qty <= 10\n    \
          admit Alloc(alloc, item, qty)\n\n\
          transformation ship(alloc):\n    \
          bind the_alloc: Alloc(alloc, _, _)\n    \
@@ -311,7 +311,7 @@ fn check_verbose_marks_a_whole_read_of_a_predicate_the_act_writes() {
     assert!(
         stdout.ends_with(
             "  body reads: 2 whole\n    \
-             allocate reads Alloc whole: statement 1 `within_stock`, through live; \
+             allocate reads Alloc whole: statement 1 `within_capacity`, through allocated; \
              allocate also writes Alloc, so concurrent allocate proposals can conflict even on different records\n    \
              ship reads Item whole: statement 2 `the_item`\n"
         ),
