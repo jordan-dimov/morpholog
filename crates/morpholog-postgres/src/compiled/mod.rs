@@ -3465,6 +3465,7 @@ fn equality_sql(
     env: &Env,
     ctx: &mut Ctx<'_>,
 ) -> Result<Rendered, CompileReason> {
+    let start = ctx.pending.len();
     let l = value_sql(a, env, ctx)?;
     let r = value_sql(b, env, ctx)?;
     let clause = match (&l.key, &r.key, &l.ordered, &r.ordered) {
@@ -3490,7 +3491,7 @@ fn equality_sql(
     } else {
         clause
     };
-    Ok(close_comparison(clause, None, env, ctx))
+    Ok(close_comparison(clause, None, start, env, ctx))
 }
 
 /// An ordered comparison. Where the kernel raises (an operand of another
@@ -3503,6 +3504,7 @@ fn ordered_sql(
     env: &Env,
     ctx: &mut Ctx<'_>,
 ) -> Result<Rendered, CompileReason> {
+    let start = ctx.pending.len();
     let l = value_sql(a, env, ctx)?;
     let r = value_sql(b, env, ctx)?;
     let op = match op {
@@ -3536,7 +3538,7 @@ fn ordered_sql(
         }
         let clause = format!("({xa}) {op} ({ya})");
         let raises = raising(and_all(&tests), domain, lt, rt);
-        return Ok(close_comparison(clause, raises, env, ctx));
+        return Ok(close_comparison(clause, raises, start, env, ctx));
     }
     let (clause, raises) = match (domain, &l.ordered, &r.ordered) {
         (
@@ -3582,7 +3584,7 @@ fn ordered_sql(
             });
         }
     };
-    Ok(close_comparison(clause, raises, env, ctx))
+    Ok(close_comparison(clause, raises, start, env, ctx))
 }
 
 /// The comparison's own way of raising: its operands are not what the
@@ -3604,14 +3606,17 @@ fn raising(well_typed: String, domain: OrderedDomain, left: &str, right: &str) -
 /// A comparison's rendering: its clause as a conjunct, and, where
 /// anything can raise, one scope holding its sums' probes ahead of its
 /// own, as the kernel meets them. A comparison over a sum closes its
-/// scope.
+/// scope. It closes only what its own operands queued, from `start`:
+/// a comparison inside a sum's body must leave a sum the enclosing
+/// operand queued earlier for the comparison that encloses both.
 fn close_comparison(
     clause: String,
     raises: Option<Probe>,
+    start: usize,
     env: &Env,
     ctx: &mut Ctx<'_>,
 ) -> Rendered {
-    let pending = std::mem::take(&mut ctx.pending);
+    let pending: Vec<Pending> = ctx.pending.drain(start..).collect();
     let mut probes: Vec<Probe> = Vec::new();
     let mut laterals: Vec<String> = Vec::new();
     for p in pending {
