@@ -19,7 +19,7 @@ use std::io::Write as _;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, anyhow, bail};
-use jiff::civil::{Date, Weekday};
+use jiff::civil::{Date, Time, Weekday};
 use jiff::tz::{AmbiguousOffset, TimeZone};
 use jiff::{SignedDuration, Timestamp};
 use morpholog_core::{
@@ -27,29 +27,40 @@ use morpholog_core::{
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use sha2::{Digest as _, Sha256};
 
 use crate::commands::args::{CliArgs, decode_args, with_schema_hint};
 use crate::commands::{lookup_transformation, parse_or_report, prepare_or_report};
-use crate::{GenerateBusinessDaysArgs, GenerateLocalDaysArgs, GeneratedRowsArgs};
+use crate::{
+    GenerateBusinessDaysArgs, GenerateLocalDaysArgs, GeneratedRowsArgs, Repeated, Skipped,
+};
 
 const LOCAL_DAY_FIELDS: [&str; 4] = ["local_date", "starts_at", "ends_at", "tzdb_version"];
+/// Filled only where the transformation declares it.
+const LOCAL_DAY_OPTIONAL: [&str; 1] = ["tzdb_digest"];
 const BUSINESS_DAY_FIELDS: [&str; 3] = ["date", "authority", "version"];
 
 pub(crate) fn local_days(args: &GenerateLocalDaysArgs) -> anyhow::Result<()> {
-    let target = Target::resolve(&args.rows, &LOCAL_DAY_FIELDS)?;
+    let target = Target::resolve(&args.rows, &LOCAL_DAY_FIELDS, &LOCAL_DAY_OPTIONAL)?;
     let zone = check_zone_name(&args.zone)?;
     let dir = zoneinfo_dir(args.zoneinfo.as_deref());
     let version = tzdb_version(&dir)?;
-    let tz = {
+    let (tz, digest) = {
         let path = dir.join(zone);
         let bytes = std::fs::read(&path)
             .with_context(|| format!("read the zone `{zone}` at {}", path.display()))?;
-        TimeZone::tzif(zone, &bytes)
-            .with_context(|| format!("{} is not a TZif zone file", path.display()))?
+        let tz = TimeZone::tzif(zone, &bytes)
+            .with_context(|| format!("{} is not a TZif zone file", path.display()))?;
+        let hex: String = Sha256::digest(&bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        (tz, format!("sha256:{hex}"))
     };
+    let start = |date: Date| day_start(&tz, zone, date, args.at, args.skipped, args.repeated);
     let fields = target.dates().into_iter().map(|date| {
-        let starts_at = day_start(&tz, date)?;
-        let ends_at = day_start(&tz, date.tomorrow()?)?;
+        let starts_at = start(date)?;
+        let ends_at = start(date.tomorrow()?)?;
         if ends_at <= starts_at {
             bail!(
                 "{date} does not exist in {zone}: its clock skips from {starts_at} straight \
@@ -61,14 +72,20 @@ pub(crate) fn local_days(args: &GenerateLocalDaysArgs) -> anyhow::Result<()> {
             ("starts_at", starts_at.to_string()),
             ("ends_at", ends_at.to_string()),
             ("tzdb_version", version.clone()),
+            ("tzdb_digest", digest.clone()),
         ])
     });
     let rows = target.rows(fields)?;
     emit(
         &rows,
         &format!(
-            "{} local days of {zone} for `{}`, {} to {} inclusive, tzdb {version} from {}",
+            "{} local days of {zone}{} for `{}`, {} to {} inclusive, tzdb {version} from {}",
             rows.len(),
+            if args.at == Time::midnight() {
+                String::new()
+            } else {
+                format!(" starting {}", args.at)
+            },
             target.transformation.name,
             args.rows.from,
             args.rows.until,
@@ -78,7 +95,7 @@ pub(crate) fn local_days(args: &GenerateLocalDaysArgs) -> anyhow::Result<()> {
 }
 
 pub(crate) fn business_days(args: &GenerateBusinessDaysArgs) -> anyhow::Result<()> {
-    let target = Target::resolve(&args.rows, &BUSINESS_DAY_FIELDS)?;
+    let target = Target::resolve(&args.rows, &BUSINESS_DAY_FIELDS, &[])?;
     let holidays = HolidayList::read(&args.holidays)?;
     if args.rows.from < holidays.from || holidays.until < args.rows.until {
         bail!(
@@ -131,7 +148,13 @@ struct Target<'a> {
 }
 
 impl<'a> Target<'a> {
-    fn resolve(args: &'a GeneratedRowsArgs, generated: &[&str]) -> anyhow::Result<Self> {
+    /// `optional` fields are filled when the transformation declares
+    /// them and left out when it does not.
+    fn resolve(
+        args: &'a GeneratedRowsArgs,
+        generated: &[&str],
+        optional: &[&str],
+    ) -> anyhow::Result<Self> {
         let parsed = parse_or_report(&args.file)?;
         let prepared = prepare_or_report(&parsed)?;
         let transformation = lookup_transformation(&prepared, &args.transformation)?.clone();
@@ -141,11 +164,16 @@ impl<'a> Target<'a> {
             let Some((name, value)) = pair.split_once('=') else {
                 bail!("--arg `{pair}` is not `name=value`");
             };
-            if generated.contains(&name) {
+            if generated.contains(&name) || optional.contains(&name) {
                 bail!(
                     "--arg `{name}` names a field the generator fills ({}); a generated \
                      value is never overridden",
-                    generated.join(", ")
+                    generated
+                        .iter()
+                        .chain(optional)
+                        .copied()
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 );
             }
             if fixed.insert(name.to_string(), value.to_string()).is_some() {
@@ -161,7 +189,7 @@ impl<'a> Target<'a> {
         let missing: Vec<&str> = declared
             .iter()
             .copied()
-            .filter(|p| !generated.contains(p) && !fixed.contains_key(*p))
+            .filter(|p| !generated.contains(p) && !optional.contains(p) && !fixed.contains_key(*p))
             .collect();
         let unexpected: Vec<&str> = generated
             .iter()
@@ -266,20 +294,48 @@ fn fixed_value(kind: &ParamKind, text: &str) -> Value {
     typed.unwrap_or_else(|| Value::String(text.to_string()))
 }
 
-/// The first instant of the local date. Where midnight is skipped by a
-/// clock change, the day begins at the change itself, which may fall at
-/// any minute of the gap; where midnight occurs twice, at the first.
-fn day_start(tz: &TimeZone, date: Date) -> anyhow::Result<Timestamp> {
-    let midnight = tz.to_ambiguous_timestamp(date.at(0, 0, 0, 0));
-    let compatible = midnight.compatible()?;
-    if !matches!(midnight.offset(), AmbiguousOffset::Gap { .. }) {
-        return Ok(compatible);
+/// The instant the local date's day starts: `at` on that date. Where a
+/// clock change skips `at`, `after` starts the day at the change itself,
+/// which may fall at any minute of the gap; where it repeats `at`, the
+/// named occurrence is taken. A refusal names the date and the policy
+/// that would choose.
+fn day_start(
+    tz: &TimeZone,
+    zone: &str,
+    date: Date,
+    at: Time,
+    skipped: Skipped,
+    repeated: Repeated,
+) -> anyhow::Result<Timestamp> {
+    let local = tz.to_ambiguous_timestamp(date.to_datetime(at));
+    match local.offset() {
+        AmbiguousOffset::Unambiguous { .. } => Ok(local.compatible()?),
+        AmbiguousOffset::Gap { .. } => match skipped {
+            Skipped::After => {
+                let just_after = local
+                    .compatible()?
+                    .checked_add(SignedDuration::from_nanos(1))?;
+                tz.preceding(just_after)
+                    .next()
+                    .map(|transition| transition.timestamp())
+                    .ok_or_else(|| {
+                        anyhow!("{date}: {at} falls in a clock change with no transition")
+                    })
+            }
+            Skipped::Refuse => bail!(
+                "{date} {at} does not exist in {zone}: a clock change skips it; \
+                 --skipped after starts that day at the change"
+            ),
+        },
+        AmbiguousOffset::Fold { .. } => match repeated {
+            Repeated::First => Ok(local.earlier()?),
+            Repeated::Second => Ok(local.later()?),
+            Repeated::Refuse => bail!(
+                "{date} {at} occurs twice in {zone}: a clock change repeats it; \
+                 --repeated first or second names the one the day starts at"
+            ),
+        },
     }
-    let just_after = compatible.checked_add(SignedDuration::from_nanos(1))?;
-    tz.preceding(just_after)
-        .next()
-        .map(|transition| transition.timestamp())
-        .ok_or_else(|| anyhow!("{date}: midnight falls in a clock change with no transition"))
 }
 
 fn emit(rows: &[Value], summary: &str) -> anyhow::Result<()> {

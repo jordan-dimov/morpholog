@@ -448,6 +448,36 @@ pub(crate) struct GenerateLocalDaysArgs {
     /// read from. Defaults to `TZDIR`, then `/usr/share/zoneinfo`.
     #[arg(long)]
     pub(crate) zoneinfo: Option<PathBuf>,
+
+    /// The local time each day starts at, `HH:MM`: a GB gas day starts
+    /// at `05:00`. Each day ends where the next one starts.
+    #[arg(long, default_value = "00:00")]
+    pub(crate) at: jiff::civil::Time,
+
+    /// Where a clock change skips the start time: `after` starts the day
+    /// at the change itself, `refuse` stops the run.
+    #[arg(long, value_enum, default_value_t = Skipped::After)]
+    pub(crate) skipped: Skipped,
+
+    /// Where a clock change repeats the start time: the `first` or
+    /// `second` occurrence, or `refuse`.
+    #[arg(long, value_enum, default_value_t = Repeated::First)]
+    pub(crate) repeated: Repeated,
+}
+
+/// What `generate local-days` does with a start time a clock change skips.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum Skipped {
+    After,
+    Refuse,
+}
+
+/// What `generate local-days` does with a start time a clock change repeats.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum Repeated {
+    First,
+    Second,
+    Refuse,
 }
 
 /// Arguments for `generate business-days`.

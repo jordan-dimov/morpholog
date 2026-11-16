@@ -29,6 +29,8 @@ base64 = { workspace = true }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 # Evidence packs may arrive gzip-compressed; pure Rust.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# The digest of a zone file `generate local-days` read.
+sha2 = { workspace = true }
 
 [dev-dependencies]
 # Tests only: the binary stays file-path-driven and bundles no
@@ -36,7 +38,6 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # instead of re-walking examples/ with its own heuristic.
 morpholog-examples = { path = "../morpholog-examples" }
 morpholog-test-support = { path = "../morpholog-test-support" }
-sha2 = { workspace = true }
 sqlx = { workspace = true }
 tempfile = "3"
 

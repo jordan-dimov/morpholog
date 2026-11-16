@@ -674,3 +674,216 @@ async fn a_business_day_programme_admits_the_generated_year() {
         253,
     );
 }
+
+/// `local_days_in` with extra flags after the range.
+fn local_days_with(zone: &str, from: &str, until: &str, extra: &[&str]) -> Output {
+    let file = example_23();
+    let zoneinfo = zoneinfo();
+    let mut args = vec![
+        "generate",
+        "local-days",
+        file.to_str().unwrap(),
+        "publish_delivery_day",
+        "--actor",
+        "cal",
+        "--arg",
+        "calendar=c",
+        "--zone",
+        zone,
+        "--zoneinfo",
+        &zoneinfo,
+        "--from",
+        from,
+        "--until",
+        until,
+    ];
+    args.extend(extra);
+    run(&args)
+}
+
+fn bounds(rows: &[Value]) -> Vec<(String, String)> {
+    rows.iter()
+        .map(|r| {
+            (
+                named(r, "starts_at").to_string(),
+                named(r, "ends_at").to_string(),
+            )
+        })
+        .collect()
+}
+
+/// A GB gas day runs from 05:00 to 05:00 London time, so it is 23 hours
+/// on the spring change and 25 on the autumn one, and starts at 04:00 UTC
+/// all summer, not at 05:00 UTC.
+#[test]
+fn a_day_starting_at_a_local_hour_follows_the_clock_changes() {
+    let gas_days = |from, until| {
+        bounds(&rows(&local_days_with(
+            "Europe/London",
+            from,
+            until,
+            &["--at", "05:00"],
+        )))
+    };
+    let pairs = |p: &[(&str, &str)]| -> Vec<(String, String)> {
+        p.iter()
+            .map(|(a, b)| ((*a).to_string(), (*b).to_string()))
+            .collect()
+    };
+    assert_eq!(
+        gas_days("2026-03-28", "2026-03-29"),
+        pairs(&[
+            ("2026-03-28T05:00:00Z", "2026-03-29T04:00:00Z"),
+            ("2026-03-29T04:00:00Z", "2026-03-30T04:00:00Z"),
+        ])
+    );
+    assert_eq!(
+        gas_days("2026-10-24", "2026-10-25"),
+        pairs(&[
+            ("2026-10-24T04:00:00Z", "2026-10-25T05:00:00Z"),
+            ("2026-10-25T05:00:00Z", "2026-10-26T05:00:00Z"),
+        ])
+    );
+}
+
+/// The GB gas day and the continental one are the same span of time:
+/// 05:00 London and 06:00 Amsterdam, on every day since GB moved to
+/// 05:00 on 1 October 2015, under the committed zone files.
+#[test]
+fn london_at_five_and_amsterdam_at_six_bound_the_same_days() {
+    let london = rows(&local_days_with(
+        "Europe/London",
+        "2015-10-01",
+        "2035-12-31",
+        &["--at", "05:00"],
+    ));
+    let amsterdam = rows(&local_days_with(
+        "Europe/Amsterdam",
+        "2015-10-01",
+        "2035-12-31",
+        &["--at", "06:00"],
+    ));
+    assert_eq!(london.len(), amsterdam.len());
+    assert_eq!(bounds(&london), bounds(&amsterdam));
+}
+
+/// Naming midnight is the default, byte for byte.
+#[test]
+fn midnight_named_is_midnight_by_default() {
+    let plain = local_days_with("Europe/London", "2026-03-27", "2026-10-26", &[]);
+    let named_midnight = local_days_with(
+        "Europe/London",
+        "2026-03-27",
+        "2026-10-26",
+        &["--at", "00:00"],
+    );
+    assert!(plain.status.success() && named_midnight.status.success());
+    assert_eq!(plain.stdout, named_midnight.stdout);
+}
+
+/// 01:30 occurs twice in London on 25 October 2026. The day starts at
+/// the occurrence named, the first by default, or the run is refused.
+#[test]
+fn a_repeated_start_time_takes_the_occurrence_named() {
+    let start = |extra: &[&str]| {
+        let mut flags = vec!["--at", "01:30"];
+        flags.extend(extra);
+        named(
+            &rows(&local_days_with(
+                "Europe/London",
+                "2026-10-25",
+                "2026-10-25",
+                &flags,
+            ))[0],
+            "starts_at",
+        )
+        .to_string()
+    };
+    assert_eq!(start(&[]), "2026-10-25T00:30:00Z");
+    assert_eq!(start(&["--repeated", "first"]), "2026-10-25T00:30:00Z");
+    assert_eq!(start(&["--repeated", "second"]), "2026-10-25T01:30:00Z");
+    refused(
+        &local_days_with(
+            "Europe/London",
+            "2026-10-25",
+            "2026-10-25",
+            &["--at", "01:30", "--repeated", "refuse"],
+        ),
+        "2026-10-25 01:30:00 occurs twice in Europe/London",
+    );
+}
+
+/// 01:30 does not exist in London on 29 March 2026. By default the day
+/// starts at the change; refusing stops the run with nothing written.
+#[test]
+fn a_skipped_start_time_starts_at_the_change_or_is_refused() {
+    let day = rows(&local_days_with(
+        "Europe/London",
+        "2026-03-29",
+        "2026-03-29",
+        &["--at", "01:30"],
+    ));
+    assert_eq!(named(&day[0], "starts_at"), "2026-03-29T01:00:00Z");
+    refused(
+        &local_days_with(
+            "Europe/London",
+            "2026-03-28",
+            "2026-03-30",
+            &["--at", "01:30", "--skipped", "refuse"],
+        ),
+        "2026-03-29 01:30:00 does not exist in Europe/London",
+    );
+}
+
+/// A transformation that declares `tzdb_digest` gets the sha256 of the
+/// zone file's bytes, so the rules that produced the instants are pinned,
+/// not only the release the directory declares. One that does not
+/// declare it is unchanged (example 23 above).
+#[test]
+fn a_declared_digest_pins_the_zone_file_read() {
+    use sha2::{Digest as _, Sha256};
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("digest.morph");
+    std::fs::write(
+        &file,
+        "program digested
+predicate GasDay(day: Date, starts_at: Timestamp, ends_at: Timestamp, tzdb_version: Subject, tzdb_digest: Subject)
+transformation publish(local_date, starts_at, ends_at, tzdb_version, tzdb_digest):
+    admit GasDay(local_date, starts_at, ends_at, tzdb_version, tzdb_digest)
+",
+    )
+    .unwrap();
+    let zoneinfo = zoneinfo();
+    let digest_of = |zone: &str| {
+        let out = run(&[
+            "generate",
+            "local-days",
+            file.to_str().unwrap(),
+            "publish",
+            "--actor",
+            "cal",
+            "--zone",
+            zone,
+            "--zoneinfo",
+            &zoneinfo,
+            "--from",
+            "2026-01-01",
+            "--until",
+            "2026-01-01",
+            "--at",
+            "05:00",
+        ]);
+        named(&rows(&out)[0], "tzdb_digest").to_string()
+    };
+    let expected = |zone: &str| {
+        let bytes = std::fs::read(fixture("zoneinfo").join(zone)).unwrap();
+        let hex: String = Sha256::digest(&bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        format!("sha256:{hex}")
+    };
+    assert_eq!(digest_of("Europe/London"), expected("Europe/London"));
+    assert_eq!(digest_of("Europe/Amsterdam"), expected("Europe/Amsterdam"));
+    assert_ne!(digest_of("Europe/London"), digest_of("Europe/Amsterdam"));
+}
