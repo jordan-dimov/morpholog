@@ -1,9 +1,13 @@
 //! A condition that calls itself is read keyed only when it walks one
 //! link up from an argument it knows: the loader then follows the link
-//! through the database instead of reading the predicate whole. Every
-//! other shape is read whole, which is always safe and only slower; a
-//! shape taken for a walk when it is not one would load too few rows.
-//! Found untested by the mutation census (#359).
+//! through the database instead of reading the predicate whole. Found
+//! untested by the mutation census (#359).
+//!
+//! Two contracts, held apart. The safety one is permanent: a shape taken
+//! for a walk when it is not one would load too few rows, so each near
+//! miss below must never be read keyed by this walk. Which shapes are
+//! keyed is today's optimisation: a planner that keys a near miss some
+//! other way, without losing rows, may change what these tests expect.
 
 #![expect(
     clippy::expect_used,
