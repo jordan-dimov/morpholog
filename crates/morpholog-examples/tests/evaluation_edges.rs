@@ -1,6 +1,6 @@
 //! Evaluation at shapes the ordinary suites do not reach, found by the
-//! mutation census (#359): a pattern whose repeated variable is its only
-//! test, a value lookup keyed on one field and filtered on another, a
+//! mutation census (#359): a `for` whose repeated variable is its
+//! pattern's only test, a value lookup keyed on one field and filtered on another, a
 //! recursive condition that calls another condition, and a period index
 //! across the whole calendar.
 
@@ -25,9 +25,11 @@ predicate Closes(book: Subject, on: Date)
 predicate Periods(book: Subject, index: Decimal)
 
 
--- A link to itself: the repeated variable is the pattern's only test.
-invariant no_self_links:
-    not Link(x, x)
+-- Remove every link to itself: the repeated variable is the pattern's
+-- only test.
+transformation prune():
+    for Link(n, n):
+        retract Link(n, n)
 
 derived UsdPrice(item):
     over Item(item)
@@ -70,23 +72,34 @@ fn rows(derived: &str, claims: Vec<ClaimInstance>) -> Vec<Vec<EvalValue>> {
 }
 
 #[test]
-fn a_repeated_variable_alone_decides_a_match() {
+fn a_repeated_variable_alone_decides_what_a_for_visits() {
     let program = program();
-    let invariant = &program.invariants[0];
-    let holds = |claims| {
-        morpholog_test_support::eval_invariant(
-            &program,
-            invariant,
-            &State::from_claims(claims),
-            None,
-        )
-        .expect("evaluates")
+    let prune = program
+        .transformations
+        .iter()
+        .find(|t| t.name.as_str() == "prune")
+        .expect("transformation");
+    let state = State::from_claims(vec![
+        claim_instance("Link", &[subj("a"), subj("b")]),
+        claim_instance("Link", &[subj("c"), subj("c")]),
+    ]);
+    let outcome = morpholog_test_support::propose(
+        &program,
+        &morpholog_test_support::test_transition(prune, vec![]),
+        &state,
+        &mut morpholog_test_support::fresh(),
+    )
+    .expect("decides");
+    let morpholog_core::Outcome::Accepted {
+        retracted_claims, ..
+    } = outcome
+    else {
+        panic!("refused: {outcome:?}");
     };
-    assert!(holds(vec![claim_instance("Link", &[subj("a"), subj("b")])]));
-    assert!(!holds(vec![claim_instance(
-        "Link",
-        &[subj("a"), subj("a")]
-    )]));
+    assert_eq!(
+        retracted_claims,
+        vec![claim_instance("Link", &[subj("c"), subj("c")])]
+    );
 }
 
 #[test]
@@ -95,6 +108,10 @@ fn a_lookup_keyed_on_one_field_keeps_to_its_other_fields() {
         claim_instance("Item", &[subj("i1")]),
         claim_instance("Price", &[subj("i1"), subj("eur"), dec(3)]),
         claim_instance("Price", &[subj("i1"), subj("usd"), dec(5)]),
+        // More prices in dollars than prices of i1, so the lookup scans
+        // i1's prices and must still hold each to the currency.
+        claim_instance("Price", &[subj("i2"), subj("usd"), dec(7)]),
+        claim_instance("Price", &[subj("i3"), subj("usd"), dec(9)]),
     ];
     assert_eq!(rows("UsdPrice", claims), vec![vec![subj("i1"), dec(5)]]);
 }

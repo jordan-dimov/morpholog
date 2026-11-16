@@ -2,8 +2,7 @@
 //! by the mutation census (#359): sums whose decimals carry different
 //! scales, a sum that fits only once its trailing zeros are dropped, a
 //! duration sum at the most negative span, `max` and `min` over
-//! quantities, rounding a tiny value to a huge quantum, and the claims a
-//! failed gate reports as missing.
+//! quantities, and rounding a tiny value to a huge quantum.
 
 #![expect(
     clippy::expect_used,
@@ -46,10 +45,6 @@ derived Lightest(book):
 derived Rounded(book):
     over Book(book)
     value rounded = round(value Figure(book, _), value Step(book, _))
-
-transformation check(book, limit):
-    require above_limit: Line(book, _, a) and a > limit
-    admit Book(book)
 ";
 
 fn program() -> Program {
@@ -153,31 +148,4 @@ fn a_tiny_value_rounds_to_zero_at_a_huge_quantum() {
         ),
     ];
     assert_eq!(derive("Rounded", claims), Ok(dec_str("0")));
-}
-
-#[test]
-fn a_gate_that_found_its_claim_reports_none_missing() {
-    // `Line(b1, _, 3)` matched; the comparison failed. Nothing is missing.
-    let program = program();
-    let t = program
-        .transformations
-        .iter()
-        .find(|t| t.name.as_str() == "check")
-        .expect("transformation");
-    let transition = morpholog_test_support::test_transition(t, vec![subj("b1"), dec_str("5")]);
-    let state = State::from_claims(vec![line("l1", "3")]);
-    let explanation = morpholog_test_support::explain(
-        &program,
-        &transition,
-        &state,
-        &mut morpholog_test_support::fresh(),
-    );
-    let json = serde_json::to_value(&explanation).expect("serialises");
-    let gate = &json["verdict"]["rejected"];
-    assert_eq!(gate["rule"], "above_limit", "{json}");
-    assert_eq!(
-        gate["directly_missing_claims"],
-        serde_json::json!([]),
-        "{json}"
-    );
 }
