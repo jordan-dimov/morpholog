@@ -1374,3 +1374,45 @@ transformation place_hold(order, hold):
         );
     }
 }
+
+/// A stored date held to a date literal. The compiled check compares the
+/// two as ordinals; both routes admit a date on the boundary and refuse
+/// the day before it.
+#[tokio::test]
+async fn a_date_compared_with_a_literal_is_decided_alike_on_both_routes() {
+    let pool = test_pool().await;
+    let program = || {
+        morpholog_surface::parse_program(
+            "program date_literal
+predicate Opened(account: Subject, on: Date)
+invariant opened_since_launch:
+    Opened(a, on) implies on on_or_after @2000-01-01
+transformation open(account, on):
+    admit Opened(account, on)
+",
+        )
+        .unwrap()
+    };
+    let open = |on: &str| Transition {
+        transformation_name: "open".into(),
+        args: vec![subj("a1"), date(on)],
+        actor: Subject::from("route_test"),
+        decided_at: None,
+    };
+    let compiled = PgProgram::new(PreparedProgram::new(program()).unwrap());
+    assert!(matches!(compiled.plan(), InvariantPlan::Compiled));
+    let interpreted = PgProgram::interpreted(PreparedProgram::new(program()).unwrap());
+    for (on, admitted) in [("2000-01-01", true), ("1999-12-31", false)] {
+        let spec = observe(&pool, &interpreted, &[], &open(on)).await;
+        assert!(
+            matches!(&spec, RouteObservation::Decided(o)
+                if o.outcome.starts_with("committed") == admitted),
+            "{on}: {spec:?}"
+        );
+        assert_eq!(
+            observe(&pool, &compiled, &[], &open(on)).await,
+            spec,
+            "{on}"
+        );
+    }
+}
