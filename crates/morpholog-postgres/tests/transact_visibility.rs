@@ -106,6 +106,10 @@ transformation set_parent(part, parent):
 transformation fill(part, line_part):
     require same_part: descends_from(part, line_part)
     admit Filled(part, line_part)
+transformation fill_all(parts, line_part):
+    for part in parts:
+        require same_part: descends_from(part, line_part)
+        admit Filled(part, line_part)
 ",
     )
     .unwrap()
@@ -247,5 +251,32 @@ async fn a_gate_that_walks_the_tree_follows_it_as_it_changes() {
         assert_eq!(decide("d", "s").await, "fits");
         assert_eq!(decide("d", "t").await, "fits");
         assert_eq!(decide("d", "a").await, "fits");
+    }
+}
+
+/// A walk whose seed is an empty list reaches nothing, and the gate over
+/// it holds for every part of none: the load must still be a query
+/// PostgreSQL can run, on both routes.
+#[tokio::test]
+async fn a_walk_from_an_empty_list_loads_nothing_and_commits() {
+    let pool = test_pool().await;
+    for route in [
+        PgProgram::interpreted(PreparedProgram::new(tree()).unwrap()),
+        PgProgram::new(PreparedProgram::new(tree()).unwrap()),
+    ] {
+        reset_db(&pool).await;
+        let none = Proposal::gateway(&Transition {
+            transformation_name: "fill_all".into(),
+            args: vec![morpholog_core::EvalValue::Collection(vec![]), subj("a")],
+            actor: Subject::from("visibility_test"),
+            decided_at: None,
+        });
+        let outcome = propose_all_against_pg(&pool, &route, &[none])
+            .await
+            .unwrap();
+        assert!(
+            matches!(outcome, PgAtomicOutcome::Committed { .. }),
+            "{outcome:?}"
+        );
     }
 }
