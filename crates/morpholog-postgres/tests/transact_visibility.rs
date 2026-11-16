@@ -106,6 +106,10 @@ transformation set_parent(part, parent):
 transformation fill(part, line_part):
     require same_part: descends_from(part, line_part)
     admit Filled(part, line_part)
+transformation fill_all(parts, line_part):
+    for part in parts:
+        require same_part: descends_from(part, line_part)
+        admit Filled(part, line_part)
 ",
     )
     .unwrap()
@@ -247,5 +251,64 @@ async fn a_gate_that_walks_the_tree_follows_it_as_it_changes() {
         assert_eq!(decide("d", "s").await, "fits");
         assert_eq!(decide("d", "t").await, "fits");
         assert_eq!(decide("d", "a").await, "fits");
+    }
+}
+
+/// A walk whose seed is a list starts from each part in it. An empty
+/// list reaches nothing, and the gate holds for every part of none: the
+/// load must still be a query PostgreSQL can run. On both routes.
+#[tokio::test]
+async fn a_walk_from_a_list_starts_at_each_part_in_it() {
+    let pool = test_pool().await;
+    for route in [
+        PgProgram::interpreted(PreparedProgram::new(tree()).unwrap()),
+        PgProgram::new(PreparedProgram::new(tree()).unwrap()),
+    ] {
+        reset_db(&pool).await;
+        let outcome = propose_all_against_pg(
+            &pool,
+            &route,
+            &[
+                set_parent("b", "a"),
+                set_parent("c", "b"),
+                set_parent("s", "a"),
+            ],
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(outcome, PgAtomicOutcome::Committed { .. }),
+            "{outcome:?}"
+        );
+        let fill_all = |parts: &[&str], line_part: &str| {
+            Proposal::gateway(&Transition {
+                transformation_name: "fill_all".into(),
+                args: vec![
+                    morpholog_core::EvalValue::Collection(parts.iter().map(|p| subj(p)).collect()),
+                    subj(line_part),
+                ],
+                actor: Subject::from("visibility_test"),
+                decided_at: None,
+            })
+        };
+        for (parts, line_part, fits) in [
+            (&[][..], "a", true),
+            (&["c", "s"][..], "a", true),
+            (&["c", "s"][..], "b", false),
+        ] {
+            let outcome = propose_all_against_pg(&pool, &route, &[fill_all(parts, line_part)])
+                .await
+                .unwrap();
+            match outcome {
+                PgAtomicOutcome::Committed { .. } => assert!(fits, "{parts:?} under {line_part}"),
+                PgAtomicOutcome::Rejected {
+                    rule: Some(ref rule),
+                    ..
+                } if rule == "same_part" => {
+                    assert!(!fits, "{parts:?} under {line_part}");
+                }
+                other @ PgAtomicOutcome::Rejected { .. } => panic!("{other:?}"),
+            }
+        }
     }
 }

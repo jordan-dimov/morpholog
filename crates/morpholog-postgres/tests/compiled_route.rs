@@ -1319,3 +1319,100 @@ async fn two_sums_through_status_tests_compile_and_decide_as_the_kernel_does() {
         }
     }
 }
+
+/// An implication inside an implication's consequent: every hold on an
+/// order must be active. Both routes admit an active hold and refuse an
+/// inactive one, so the inner antecedent matching is not itself a
+/// violation.
+#[tokio::test]
+async fn a_nested_implication_is_violated_only_where_its_consequent_fails() {
+    let pool = test_pool().await;
+    let program = || {
+        morpholog_surface::parse_program(
+            "program nested_implication
+predicate Order(order: Subject)
+predicate Hold(order: Subject, hold: Subject)
+predicate Active(hold: Subject)
+invariant holds_are_active:
+    Order(o) implies (Hold(o, h) implies Active(h))
+transformation place_hold(order, hold):
+    admit Hold(order, hold)
+",
+        )
+        .unwrap()
+    };
+    let seeded = vec![
+        ClaimInstance {
+            predicate: "Order".into(),
+            args: vec![subj("o1")],
+        },
+        ClaimInstance {
+            predicate: "Active".into(),
+            args: vec![subj("h1")],
+        },
+    ];
+    let hold = |h: &str| Transition {
+        transformation_name: "place_hold".into(),
+        args: vec![subj("o1"), subj(h)],
+        actor: Subject::from("route_test"),
+        decided_at: None,
+    };
+    let compiled = PgProgram::new(PreparedProgram::new(program()).unwrap());
+    assert!(matches!(compiled.plan(), InvariantPlan::Compiled));
+    let interpreted = PgProgram::interpreted(PreparedProgram::new(program()).unwrap());
+    for (h, admitted) in [("h1", true), ("h2", false)] {
+        let spec = observe(&pool, &interpreted, &seeded, &hold(h)).await;
+        assert!(
+            matches!(&spec, RouteObservation::Decided(o)
+                if o.outcome.starts_with("committed") == admitted),
+            "{h}: {spec:?}"
+        );
+        assert_eq!(
+            observe(&pool, &compiled, &seeded, &hold(h)).await,
+            spec,
+            "{h}"
+        );
+    }
+}
+
+/// A stored date held to a date literal. The compiled check compares the
+/// two as ordinals; both routes admit a date on the boundary and refuse
+/// the day before it.
+#[tokio::test]
+async fn a_date_compared_with_a_literal_is_decided_alike_on_both_routes() {
+    let pool = test_pool().await;
+    let program = || {
+        morpholog_surface::parse_program(
+            "program date_literal
+predicate Opened(account: Subject, on: Date)
+invariant opened_since_launch:
+    Opened(a, on) implies on on_or_after @2000-01-01
+transformation open(account, on):
+    admit Opened(account, on)
+",
+        )
+        .unwrap()
+    };
+    let open = |on: &str| Transition {
+        transformation_name: "open".into(),
+        args: vec![subj("a1"), date(on)],
+        actor: Subject::from("route_test"),
+        decided_at: None,
+    };
+    let compiled = PgProgram::new(PreparedProgram::new(program()).unwrap());
+    assert!(matches!(compiled.plan(), InvariantPlan::Compiled));
+    let interpreted = PgProgram::interpreted(PreparedProgram::new(program()).unwrap());
+    for (on, admitted) in [("2000-01-01", true), ("1999-12-31", false)] {
+        let spec = observe(&pool, &interpreted, &[], &open(on)).await;
+        assert!(
+            matches!(&spec, RouteObservation::Decided(o)
+                if o.outcome.starts_with("committed") == admitted),
+            "{on}: {spec:?}"
+        );
+        assert_eq!(
+            observe(&pool, &compiled, &[], &open(on)).await,
+            spec,
+            "{on}"
+        );
+    }
+}
