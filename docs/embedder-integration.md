@@ -978,9 +978,21 @@ longer, by an hour in most zones and half an hour in some. So count
 a day's periods from its bounds, never from a constant: in
 Europe/London 29 March 2026 has 46 half-hour periods and 25 October
 50, and a fixed 48 loses the last hour of the long day. A day starts
-at its local midnight, or at the clock change itself when midnight is
-skipped. A date a zone skips entirely, as Samoa skipped 30 December
-2011, is refused rather than written with no instants. `business-days`
+at its local midnight, or at the local time `--at HH:MM` names: a GB
+gas day is `--zone Europe/London --at 05:00`, which is 04:00 UTC all
+summer, 23 hours on the spring change and 25 on the autumn one. A
+clock change can skip the start time or show it twice. `--skipped
+after` (the default) starts that day at the change itself, and
+`--skipped refuse` stops the run; `--repeated first` (the default) or
+`second` names the occurrence, and `--repeated refuse` stops the run.
+A deadline in local time is generated the same way: `--at 13:00` gives
+13:00 London on every date, never an offset from another instant that
+a clock change would put an hour out. A transformation that declares
+`tzdb_digest` also gets `sha256:` of the zone file's bytes, which pins
+the rules the instants came from; `tzdb_version` is only the release
+the directory's `tzdata.zi` declares. A date a zone skips entirely, as
+Samoa skipped 30 December 2011, is refused rather than written with no
+instants. `business-days`
 fills `date`, `authority` and `version` for every Monday to Friday the
 holiday list does not name. The list is one JSON object:
 

@@ -1525,3 +1525,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** the InvenTree fork (#763). Its whole backend serves InvenTree's own frontend, which reads field-keyed errors, so each family kept a table from rule to request field, restating what each rule reads and going stale when one was renamed.
 
 **Landed:** a refusal by a named gate carries `related_parameters`, the act's parameters the gate's expression reads, directly or through the `let`, `bind` and `for` statements before it, found by one walk in `morpholog_core::analysis` and added by one function on every route that prints a refusal. It is a static dependency, not a verdict on which input is wrong; an `if` test around the gate does not count. The audit record and the kernel's outcome are unchanged.
+
+### A local day may start at a local hour
+
+**Forced by:** the GB gas day (#834). The UNC runs it from 05:00 to 05:00 London time, so it starts at 04:00 UTC all summer and lasts 23 or 25 hours on the clock changes; a training guide's fixed 05:00 UTC put every summer gas day an hour out. Its deadlines, such as 13:00 the day before, are local times too.
+
+**Landed:** `generate local-days --at HH:MM`. A start time a clock change skips or repeats follows `--skipped` and `--repeated`, whose defaults are the midnight policy the generator already had, named, so `--at 00:00` is today's output. A transformation that declares `tzdb_digest` also gets the sha256 of the zone file the instants came from, since `tzdb_version` is only what the directory declares. No calendar engine and no deadline construct: a deadline is a generated local instant.
