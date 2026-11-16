@@ -5,6 +5,11 @@
 //! shape taken for a walk when it is not one would load too few rows.
 //! Found untested by the mutation census (#359).
 
+#![expect(
+    clippy::expect_used,
+    reason = "helper functions here fail fast on a broken fixture, and clippy exempts only `#[test]` functions"
+)]
+
 use morpholog_core::{ReadFilter, ReadPlan};
 use morpholog_surface::parse_program;
 
