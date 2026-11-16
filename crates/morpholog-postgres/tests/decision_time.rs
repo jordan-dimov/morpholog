@@ -19,9 +19,9 @@ use std::time::Duration;
 use jiff::Timestamp;
 use morpholog_core::{EvalValue, PreparedProgram, Program, Subject, Transition};
 use morpholog_postgres::{
-    PgAtomicOutcome, PgPool, PgProposalOutcome, Proposal, create_checkpoint, export_pack,
-    list_audit_rows, list_claims, propose_against_pg, propose_all_against_pg, rehearse_candidate,
-    rehearse_candidate_against_pack,
+    PgAtomicOutcome, PgPool, PgProposalOutcome, PgTracedOutcome, Proposal, create_checkpoint,
+    export_pack, list_audit_rows, list_claims, propose_against_pg, propose_against_pg_with_trace,
+    propose_all_against_pg, rehearse_candidate, rehearse_candidate_against_pack,
 };
 use morpholog_surface::parse_program;
 use morpholog_test_support::subj;
@@ -134,6 +134,27 @@ async fn the_body_reads_the_rows_committed_at_never_the_callers_instant() {
         later > recorded,
         "each transaction decides at its own start"
     );
+}
+
+/// A traced proposal is decided as an untraced one is: at the
+/// transaction's start, never at the caller's instant.
+#[tokio::test]
+async fn a_traced_proposal_reads_the_rows_committed_at_too() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let pg = common::pg_program(fixture());
+    let outcome = propose_against_pg_with_trace(&pool, &pg, &act("stamp", vec![subj("a")]))
+        .await
+        .unwrap();
+    let PgTracedOutcome::Outcome {
+        outcome: PgProposalOutcome::Committed { transition_id, .. },
+        ..
+    } = outcome
+    else {
+        panic!("`stamp` must commit: {outcome:?}");
+    };
+    let (recorded, _) = committed_at(&pool, transition_id).await;
+    assert_eq!(instant_of(&pool, "Stamped", "a").await, recorded);
 }
 
 #[tokio::test]
