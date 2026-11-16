@@ -110,7 +110,13 @@ pub(crate) async fn run(args: TransactArgs) -> anyhow::Result<()> {
     };
     match propose_all_against_pg(&pool, &program, &proposals).await {
         Ok(outcome) => {
-            print_json(&outcome)?;
+            let acts: Vec<_> = proposals.iter().map(|p| &p.transformation_name).collect();
+            print_json(&morpholog_cli::envelopes::with_related_parameters(
+                serde_json::to_value(&outcome)?,
+                program.prepared(),
+                &acts,
+                outcome.refused_gate(),
+            ))?;
             match outcome {
                 PgAtomicOutcome::Committed { .. } => Ok(()),
                 PgAtomicOutcome::Rejected { .. } => Err(AlreadyReported.into()),

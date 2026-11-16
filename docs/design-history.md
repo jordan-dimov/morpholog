@@ -1519,3 +1519,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** the InvenTree fork (#789). Its read-model factory keyed every view the description gave no identity, such as a single-field predicate or a `current pointer by` one, by all its fields, on the strength of `check`'s own message that identical claims are one.
 
 **Landed:** `identity` is now the column sets that identify a row of the view: every key `unique by`, `current pointer by` or `effective by` guarantees, once each, or every field when none is declared. A set holding a timestamp or a duration is left out, since its column keeps microseconds and two claims a nanosecond apart show one value; the exact `_morpholog_arguments` column stands in. A database test holds that pair to the description. The description's format moved to 4.
+
+### A refusal names the parameters its gate reads
+
+**Forced by:** the InvenTree fork (#763). Its whole backend serves InvenTree's own frontend, which reads field-keyed errors, so each family kept a table from rule to request field, restating what each rule reads and going stale when one was renamed.
+
+**Landed:** a refusal by a named gate carries `related_parameters`, the act's parameters the gate's expression reads, directly or through the `let`, `bind` and `for` statements before it, found by one walk in `morpholog_core::analysis` and added by one function on every route that prints a refusal. It is a static dependency, not a verdict on which input is wrong; an `if` test around the gate does not count. The audit record and the kernel's outcome are unchanged.

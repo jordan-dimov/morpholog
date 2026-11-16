@@ -51,6 +51,7 @@ CASES = {
     "rejected_with_witness.json": ("rejected", E.parse_run_outcome),
     "rejected_gate_with_witness.json": ("rejected", E.parse_run_outcome),
     "rejected_gate_with_compared.json": ("rejected", E.parse_run_outcome),
+    "rejected_gate_with_related_parameters.json": ("rejected", E.parse_run_outcome),
     "traced_committed.json": ("traced_envelope", E.TracedEnvelope.from_json),
     "traced_rejected.json": ("traced_envelope", E.TracedEnvelope.from_json),
     "traced_rejected_at_gate.json": ("traced_envelope", E.TracedEnvelope.from_json),
@@ -69,6 +70,10 @@ CASES = {
     ),
     "transact_committed.json": ("atomic_outcome", E.parse_atomic_outcome),
     "transact_rejected.json": ("atomic_outcome", E.parse_atomic_outcome),
+    "transact_rejected_with_related_parameters.json": (
+        "atomic_outcome",
+        E.parse_atomic_outcome,
+    ),
     "transact_rejected_session.json": ("atomic_outcome", E.parse_atomic_outcome),
     "transact_error.json": ("atomic_outcome", E.RequestError.from_json),
     "propose_error_not_committed.json": ("request_error", E.RequestError.from_json),

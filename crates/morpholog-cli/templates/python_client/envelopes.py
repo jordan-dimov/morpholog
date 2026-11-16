@@ -398,6 +398,11 @@ class Rejected:
     # The comparison the refusal blamed, with its two evaluated values.
     # None when it blamed none, or could not evaluate it.
     compared: Compared | None = None
+    # On a refusal by a named gate: the act's parameters the gate reads,
+    # in parameter order, possibly none. A static dependency, not a
+    # judgement of which input is wrong. None for an invariant or an
+    # unnamed gate.
+    related_parameters: list[str] | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> Rejected:
@@ -405,7 +410,7 @@ class Rejected:
             "rejected outcome",
             payload,
             {"status", "reason"},
-            {"explanation", "rule", "witness", "compared"},
+            {"explanation", "rule", "witness", "compared", "related_parameters"},
         )
         data.constant("status", "rejected")
         return cls(
@@ -414,6 +419,11 @@ class Rejected:
             explanation=data.optional_nested("explanation", Explanation.from_json),
             witness=data.optional_array("witness", WitnessBinding.from_json, non_empty=True),
             compared=data.optional_nested("compared", Compared.from_json),
+            related_parameters=(
+                data.texts("related_parameters")
+                if "related_parameters" in data
+                else None
+            ),
         )
 
 
@@ -498,14 +508,16 @@ class AtomicCommitted:
 class AtomicRejected:
     """The first refused act, by 1-based position, and nothing written:
     the acts before it were staged and rolled back, and get no receipt.
-    ``rule``, ``witness`` and ``compared`` are as on ``Rejected``; they may
-    name values the rolled-back prefix staged."""
+    ``rule``, ``witness``, ``compared`` and ``related_parameters`` are as
+    on ``Rejected``, for the act that refused; the values may be ones the
+    rolled-back prefix staged."""
 
     act: int
     reason: str
     rule: str | None = None
     witness: list[WitnessBinding] = field(default_factory=list)
     compared: Compared | None = None
+    related_parameters: list[str] | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> AtomicRejected:
@@ -513,7 +525,7 @@ class AtomicRejected:
             "atomic rejected",
             payload,
             {"status", "act", "reason"},
-            optional={"rule", "witness", "compared", "row"},
+            optional={"rule", "witness", "compared", "related_parameters", "row"},
         )
         data.constant("status", "rejected")
         data.optional_integer("row", minimum=1)
@@ -523,6 +535,11 @@ class AtomicRejected:
             rule=data.optional_text("rule"),
             witness=data.optional_array("witness", WitnessBinding.from_json, non_empty=True),
             compared=data.optional_nested("compared", Compared.from_json),
+            related_parameters=(
+                data.texts("related_parameters")
+                if "related_parameters" in data
+                else None
+            ),
         )
 
 

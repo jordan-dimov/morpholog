@@ -6,10 +6,10 @@
 //! nodes and match exhaustively (no `_` arm), so a new variant cannot slip
 //! through and leave the read path loading too few claims.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::definitions::DefinitionTable;
-use crate::fold::{Node, walk_prop, walk_stmt, walk_value};
+use crate::fold::{Node, walk_prop, walk_prop_scoped, walk_stmt, walk_value, walk_value_scoped};
 use crate::ir::{
     CompareOp, Definition, DefinitionName, DerivedClaim, OrderedDomain, PredicateArgKind,
     PredicateName, Program, Prop, Stmt, Term, TransformationName, ValueExpr, Var,
@@ -825,5 +825,141 @@ mod blocker_tests {
             ),
         ]);
         assert_eq!(blockers(&prop, &[]), Some(pset(&["Dead"])));
+    }
+}
+
+/// The act's parameters a refusal by the gate named `rule` reads: what the
+/// expression of the `require` or `bind` of that name reads, directly or
+/// through the `let`, `bind` and `for` statements before it, in parameter
+/// order. `None` when no gate of the act has that name, as for an
+/// invariant or an unnamed gate. A static dependency, not a judgement of
+/// which input is wrong: the gate may refuse because the state changed.
+/// The test of an `if` around the gate is control flow, and does not
+/// count.
+pub fn related_parameters(
+    transformation: &crate::ir::Transformation,
+    rule: &str,
+) -> Option<Vec<String>> {
+    let env: Deps = transformation
+        .parameters
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.clone(), BTreeSet::from([i])))
+        .collect();
+    let mut found = None;
+    related_in(&transformation.body, env, rule, &mut found);
+    found.map(|positions: BTreeSet<usize>| {
+        positions
+            .into_iter()
+            .map(|i| transformation.parameters[i].as_str().to_string())
+            .collect()
+    })
+}
+
+/// Each name in scope, and the positions of the parameters it depends on.
+type Deps = BTreeMap<Var, BTreeSet<usize>>;
+
+fn related_in(body: &[Stmt], mut env: Deps, rule: &str, found: &mut Option<BTreeSet<usize>>) {
+    let named =
+        |name: &Option<crate::ir::RuleName>| name.as_ref().is_some_and(|n| n.as_str() == rule);
+    for stmt in body {
+        match stmt {
+            Stmt::Require { prop, name } => {
+                if named(name) {
+                    found
+                        .get_or_insert_default()
+                        .extend(reads(&names_in_prop(prop), &env));
+                }
+            }
+            Stmt::BindOne { prop, name } => {
+                let names = names_in_prop(prop);
+                let read = reads(&names, &env);
+                if named(name) {
+                    found.get_or_insert_default().extend(read.iter().copied());
+                }
+                bind_new(&names, &read, &mut env);
+            }
+            Stmt::Let { name, value } => {
+                let read = reads(&names_in_value(value), &env);
+                env.insert(name.clone(), read);
+            }
+            Stmt::LetNewSubject { name } => {
+                env.insert(name.clone(), BTreeSet::new());
+            }
+            Stmt::For {
+                binding,
+                collection,
+                body,
+            } => {
+                let mut inner = env.clone();
+                inner.insert(binding.clone(), reads(&names_in_value(collection), &env));
+                related_in(body, inner, rule, found);
+            }
+            Stmt::ForEach { args, body, .. } => {
+                let names: Vec<Var> = args.iter().filter_map(term_var).collect();
+                let read = reads(&names, &env);
+                let mut inner = env.clone();
+                bind_new(&names, &read, &mut inner);
+                related_in(body, inner, rule, found);
+            }
+            Stmt::If {
+                then, otherwise, ..
+            } => {
+                related_in(then, env.clone(), rule, found);
+                related_in(otherwise, env.clone(), rule, found);
+            }
+            Stmt::Assert(_) | Stmt::Retract { .. } | Stmt::Emit(_) => {}
+        }
+    }
+}
+
+/// A pattern's new names depend on everything the pattern reads: the
+/// claim it finds is the one those keys select.
+fn bind_new(names: &[Var], read: &BTreeSet<usize>, env: &mut Deps) {
+    for name in names {
+        if !env.contains_key(name) {
+            env.insert(name.clone(), read.clone());
+        }
+    }
+}
+
+fn reads(names: &[Var], env: &Deps) -> BTreeSet<usize> {
+    names
+        .iter()
+        .filter_map(|n| env.get(n))
+        .flatten()
+        .copied()
+        .collect()
+}
+
+fn term_var(term: &Term) -> Option<Var> {
+    if let Term::Var(v) = term {
+        Some(v.clone())
+    } else {
+        None
+    }
+}
+
+/// The names a proposition mentions, quantifier binders' own names
+/// within their bodies excepted.
+fn names_in_prop(prop: &Prop) -> Vec<Var> {
+    let mut out = Vec::new();
+    walk_prop_scoped(prop, &mut |node, scope| collect_name(node, scope, &mut out));
+    out
+}
+
+fn names_in_value(value: &ValueExpr) -> Vec<Var> {
+    let mut out = Vec::new();
+    walk_value_scoped(value, &mut |node, scope| {
+        collect_name(node, scope, &mut out)
+    });
+    out
+}
+
+fn collect_name(node: Node<'_>, scope: &[&Var], out: &mut Vec<Var>) {
+    if let Node::Slot(Term::Var(v)) | Node::Value(ValueExpr::Term(Term::Var(v))) = node
+        && !scope.contains(&v)
+    {
+        out.push(v.clone());
     }
 }

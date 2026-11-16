@@ -13,8 +13,9 @@
 //! assertion here first.
 
 use morpholog_core::{
-    CoverageTracker, PredicateName, PreparedProgram, Program, controls, format::format_program,
-    lints, predicates_referenced_by_prop, transformation_param_kinds,
+    CoverageTracker, PredicateName, PreparedProgram, Program, Stmt, controls,
+    format::format_program, lints, predicates_referenced_by_prop, related_parameters,
+    transformation_param_kinds,
 };
 use morpholog_surface::parse_program;
 
@@ -706,6 +707,7 @@ fn parsed(name: &str, source: &str) -> Program {
 
 #[test]
 fn every_fragment_survives_every_walker_deterministically() {
+    let mut named_gates = 0;
     for (name, source) in corpus() {
         let program = parsed(name, source);
 
@@ -751,6 +753,42 @@ fn every_fragment_survives_every_walker_deterministically() {
             );
         }
 
+        // Every named gate's related parameters resolve, and are the
+        // act's own parameters in their order, however deeply the gate
+        // nests in `for`, `if` and the bindings before it.
+        for t in &program.transformations {
+            let mut gates = Vec::new();
+            for stmt in &t.body {
+                morpholog_core::fold::walk_stmt(stmt, &mut |node| {
+                    if let morpholog_core::fold::Node::Stmt(
+                        Stmt::Require { name: Some(n), .. } | Stmt::BindOne { name: Some(n), .. },
+                    ) = node
+                    {
+                        gates.push(n.as_str().to_string());
+                    }
+                });
+            }
+            for gate in gates {
+                named_gates += 1;
+                let related = related_parameters(t, &gate).unwrap_or_else(|| {
+                    panic!("`{name}`: `{}`'s gate `{gate}` has no entry", t.name)
+                });
+                let positions: Vec<usize> = related
+                    .iter()
+                    .map(|p| {
+                        t.parameters
+                            .iter()
+                            .position(|q| q.as_str() == p)
+                            .unwrap_or_else(|| panic!("`{name}`: `{p}` is no parameter"))
+                    })
+                    .collect();
+                assert!(
+                    positions.windows(2).all(|w| w[0] < w[1]),
+                    "`{name}`: `{gate}` names parameters out of order: {related:?}"
+                );
+            }
+        }
+
         // Parameter-kind inference is total over the corpus.
         let validated = program.validated().expect("validated above");
         for t in &program.transformations {
@@ -759,6 +797,7 @@ fn every_fragment_survives_every_walker_deterministically() {
             });
         }
     }
+    assert!(named_gates > 0, "anti-vacuity: the corpus names no gate");
 }
 
 #[test]

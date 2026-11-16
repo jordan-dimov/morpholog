@@ -141,7 +141,7 @@ pub use preparation::{
 };
 pub use program::{InvariantPlan, PgProgram};
 pub use propose::{
-    AuditedInvariantCheck, PgProposalOutcome, PgTracedOutcome, ProposalPhases,
+    AuditedInvariantCheck, PgProposalOutcome, PgTracedOutcome, ProposalPhases, RefusedBy,
     RejectionStateOutcome, TimedProposalOutcome, compute_idempotency_key, propose_against_pg,
     propose_against_pg_timed, propose_against_pg_with_rejection_state,
     propose_against_pg_with_trace, runtime_subjects,

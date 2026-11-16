@@ -53,6 +53,7 @@ pub fn morpholog_core::analysis::predicates_read_by_stmt(&morpholog_core::Stmt, 
 pub fn morpholog_core::analysis::predicates_referenced_by_derived(&morpholog_core::DerivedClaim, &[morpholog_core::Definition]) -> alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>
 pub fn morpholog_core::analysis::predicates_referenced_by_prop(&morpholog_core::Prop, &[morpholog_core::Definition], &mut alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>)
 pub fn morpholog_core::analysis::predicates_written_by(&morpholog_core::Transformation) -> alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>
+pub fn morpholog_core::analysis::related_parameters(&morpholog_core::Transformation, &str) -> core::option::Option<alloc::vec::Vec<alloc::string::String>>
 pub fn morpholog_core::analysis::transformation_param_kinds(&morpholog_core::ValidatedProgram<'_>, &morpholog_core::TransformationName) -> core::result::Result<alloc::vec::Vec<(morpholog_core::Var, morpholog_core::analysis::ParamKind)>, morpholog_core::analysis::AnalysisError>
 pub fn morpholog_core::analysis::transformations_asserting(&morpholog_core::Program, &str) -> alloc::vec::Vec<alloc::string::String>
 pub mod morpholog_core::calendar
@@ -3953,6 +3954,7 @@ pub fn morpholog_core::predicates_read_by_stmt(&morpholog_core::Stmt, &[morpholo
 pub fn morpholog_core::predicates_referenced_by_derived(&morpholog_core::DerivedClaim, &[morpholog_core::Definition]) -> alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>
 pub fn morpholog_core::predicates_referenced_by_prop(&morpholog_core::Prop, &[morpholog_core::Definition], &mut alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>)
 pub fn morpholog_core::predicates_written_by(&morpholog_core::Transformation) -> alloc::collections::btree::set::BTreeSet<morpholog_core::PredicateName>
+pub fn morpholog_core::related_parameters(&morpholog_core::Transformation, &str) -> core::option::Option<alloc::vec::Vec<alloc::string::String>>
 pub fn morpholog_core::render_controls(&morpholog_core::ControlMatrix) -> alloc::string::String
 pub fn morpholog_core::render_coverage(&morpholog_core::CoverageReport) -> alloc::string::String
 pub fn morpholog_core::render_guarantees(&str, &[morpholog_core::Guarantee]) -> alloc::string::String
