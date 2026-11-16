@@ -15,6 +15,7 @@ use morpholog_test_support::{claim_instance, dec, subj};
 const PROGRAMME: &str = "program evaluation_edges
 predicate Link(source: Subject, target: Subject)
 predicate Closed(node: Subject)
+predicate Loop(node: Subject)
 predicate Price(item: Subject, currency: Subject, amount: Decimal)
 predicate Item(item: Subject)
 predicate UsdPrice(item: Subject, amount: Decimal)
@@ -25,11 +26,11 @@ predicate Closes(book: Subject, on: Date)
 predicate Periods(book: Subject, index: Decimal)
 
 
--- Remove every link to itself: the repeated variable is the pattern's
+-- Mark every link to itself: the repeated variable is the pattern's
 -- only test.
-transformation prune():
+transformation mark_loops():
     for Link(n, n):
-        retract Link(n, n)
+        admit Loop(n)
 
 derived UsdPrice(item):
     over Item(item)
@@ -74,10 +75,10 @@ fn rows(derived: &str, claims: Vec<ClaimInstance>) -> Vec<Vec<EvalValue>> {
 #[test]
 fn a_repeated_variable_alone_decides_what_a_for_visits() {
     let program = program();
-    let prune = program
+    let mark_loops = program
         .transformations
         .iter()
-        .find(|t| t.name.as_str() == "prune")
+        .find(|t| t.name.as_str() == "mark_loops")
         .expect("transformation");
     let state = State::from_claims(vec![
         claim_instance("Link", &[subj("a"), subj("b")]),
@@ -85,21 +86,18 @@ fn a_repeated_variable_alone_decides_what_a_for_visits() {
     ]);
     let outcome = morpholog_test_support::propose(
         &program,
-        &morpholog_test_support::test_transition(prune, vec![]),
+        &morpholog_test_support::test_transition(mark_loops, vec![]),
         &state,
         &mut morpholog_test_support::fresh(),
     )
     .expect("decides");
     let morpholog_core::Outcome::Accepted {
-        retracted_claims, ..
+        asserted_claims, ..
     } = outcome
     else {
         panic!("refused: {outcome:?}");
     };
-    assert_eq!(
-        retracted_claims,
-        vec![claim_instance("Link", &[subj("c"), subj("c")])]
-    );
+    assert_eq!(asserted_claims, vec![claim_instance("Loop", &[subj("c")])]);
 }
 
 #[test]
