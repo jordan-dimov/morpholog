@@ -5636,10 +5636,15 @@ async fn the_stamp_covers_the_whole_programme() {
     }
     // Each run draws its own line ids, so the claims compare with every
     // drawn subject named by its place in the draw.
-    let drawn_by_place = |row: &serde_json::Value| {
-        let mut claims = row["asserted_claims"].to_string();
-        for (place, drawn) in row["drawn_subjects"].as_array().unwrap().iter().enumerate() {
-            claims = claims.replace(drawn.as_str().unwrap(), &format!("<drawn {place}>"));
+    let drawn_by_place = |row: &Value| {
+        let drawn: Vec<&Value> = row["drawn_subjects"].as_array().unwrap().iter().collect();
+        let mut claims = row["asserted_claims"].clone();
+        for claim in claims.as_array_mut().unwrap() {
+            for arg in claim["args"].as_array_mut().unwrap() {
+                if let Some(place) = drawn.iter().position(|d| **d == arg["value"]) {
+                    arg["value"] = Value::from(format!("drawn {place}"));
+                }
+            }
         }
         claims
     };
