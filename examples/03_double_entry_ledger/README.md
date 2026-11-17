@@ -18,8 +18,8 @@ See [`ledger.morph`](ledger.morph) for the surface syntax.
 
 | Predicate | Role |
 | --- | --- |
-| `JournalEntry(entry_id, posting_date, period)` | The header for a posted entry. Append-only. |
-| `JournalLine(entry_id, line_id, account, debit, credit)` | One line of an entry, identified by a line id each posting mints, so two lines with the same account and amounts stay two lines. Append-only. Per-line shape (e.g. "exactly one side is non-zero") is not enforced. |
+| `JournalEntry(entry_id, posting_date, period)` | The header for a posted entry, one per id (`unique by (entry_id)`). Append-only. |
+| `JournalLine(entry_id, line_no, account, debit, credit)` | One line of an entry, numbered within it, so two lines with the same account and amounts stay two lines. Append-only. Per-line shape (e.g. "exactly one side is non-zero") is not enforced. |
 | `PeriodClosed(period)` | The period is closed against further normal posting. Append-only and **terminal in v0** - no `reopen_period`. |
 | `Supersedes(new_entry_id, prior_entry_id)` | Restatement lineage. Append-only. |
 
@@ -31,6 +31,7 @@ Every predicate here is content, terminal state, or lineage - no retractable poi
 | --- | --- |
 | `balanced_posted_entry` | For every `JournalEntry`, sum of line debits equals sum of line credits. `Eq(Sum, Sum)` over the entry's lines. |
 | `journal_entry_has_lines` | Every `JournalEntry` must have at least one `JournalLine`. Without this, a zero-line entry would trivially satisfy `balanced_posted_entry`. |
+| `journal_entry_unique_by_entry_id` | No two entries share an id, whichever transformation admits them. The posting gates still refuse posting the same entry twice, which would add its lines again. |
 | `supersedes_unique_by_prior_entry_id` | A `JournalEntry` can be superseded by at most one direct restatement; parallel chains are forbidden. |
 
 **No invariant ties `JournalEntry` to `PeriodClosed`.** Period-close gating lives in `require` on the posting transformations, not in an invariant. As an invariant it would force either rejecting close (because pre-close postings would now violate the rule) or cascade-retracting historical postings. The `require` formulation matches the business: postings made before close stay valid; postings attempted after close are rejected at admission time.

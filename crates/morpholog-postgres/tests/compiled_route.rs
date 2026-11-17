@@ -99,14 +99,14 @@ fn max() -> EvalValue {
 
 fn line(
     entry: &str,
-    line_id: &str,
+    line_no: i64,
     account: &str,
     debit: EvalValue,
     credit: EvalValue,
 ) -> ClaimInstance {
     ClaimInstance {
         predicate: "JournalLine".into(),
-        args: vec![subj(entry), subj(line_id), subj(account), debit, credit],
+        args: vec![subj(entry), dec(line_no), subj(account), debit, credit],
     }
 }
 
@@ -153,12 +153,12 @@ async fn admission_is_case_local_on_both_routes() {
     let pool = test_pool().await;
     let seeded = vec![
         entry("e0"),
-        line("e0", "e0_l1", "account_cash", dec(5), dec(0)),
+        line("e0", 1, "account_cash", dec(5), dec(0)),
         entry("e1"),
-        line("e1", "e1_l1", "account_cash", max(), dec(0)),
-        line("e1", "e1_l2", "account_other", dec(1), dec(0)),
-        line("e1", "e1_l3", "account_revenue", dec(0), max()),
-        line("e1", "e1_l4", "account_revenue", dec(0), dec(1)),
+        line("e1", 1, "account_cash", max(), dec(0)),
+        line("e1", 2, "account_other", dec(1), dec(0)),
+        line("e1", 3, "account_revenue", dec(0), max()),
+        line("e1", 4, "account_revenue", dec(0), dec(1)),
     ];
 
     let (spec, real) = both_routes(&pool, &seeded, "fresh", 10).await;
@@ -267,12 +267,12 @@ async fn an_excess_that_cancels_is_representable_on_both_routes() {
     let pool = test_pool().await;
     let seeded = vec![
         entry("e1"),
-        line("e1", "e1_l1", "account_cash", max(), dec(0)),
-        line("e1", "e1_l2", "account_cash", dec(1), dec(0)),
-        line("e1", "e1_l3", "account_cash", dec(-1), dec(0)),
-        line("e1", "e1_l4", "account_revenue", dec(0), max()),
-        line("e1", "e1_l5", "account_revenue", dec(0), dec(1)),
-        line("e1", "e1_l6", "account_revenue", dec(0), dec(-1)),
+        line("e1", 1, "account_cash", max(), dec(0)),
+        line("e1", 2, "account_cash", dec(1), dec(0)),
+        line("e1", 3, "account_cash", dec(-1), dec(0)),
+        line("e1", 4, "account_revenue", dec(0), max()),
+        line("e1", 5, "account_revenue", dec(0), dec(1)),
+        line("e1", 6, "account_revenue", dec(0), dec(-1)),
     ];
     // A zero posting onto the entry forces its check: the totals stay
     // at the maximum, and both routes admit.

@@ -5,27 +5,19 @@
 //! a closed period can be restated, keeping the original entry and recording
 //! `Supersedes`; an entry cannot be restated twice; a period cannot be
 //! closed twice; two lines with the same account and amounts stay two
-//! lines.
+//! lines; an entry id names one entry even for an act without the gate.
 
 mod common;
 use std::sync::OnceLock;
 
 use common::{Example, claim_instance, dec, has_claim, refused_by, subj};
-use morpholog_core::{EvalValue, State};
+use morpholog_core::{State, Stmt};
 use morpholog_examples::double_entry_ledger;
 use morpholog_test_support::{enumerate_derived, eval_invariant};
 
 fn ex() -> &'static Example {
     static EX: OnceLock<Example> = OnceLock::new();
     EX.get_or_init(|| Example::new(&double_entry_ledger::program()))
-}
-
-/// Whether `state` holds a journal line for this entry with these values,
-/// whatever line id its posting minted.
-fn has_line(state: &State, values: &[EvalValue]) -> bool {
-    state
-        .claims_for("JournalLine")
-        .any(|c| c.args[..1] == values[..1] && c.args[2..] == values[1..])
 }
 
 #[test]
@@ -55,13 +47,27 @@ fn simple_entry_balances_and_commits() {
         "JournalEntry",
         &[subj("entry_001"), subj("d_2026_04_15"), subj("p_2026_04")],
     ));
-    assert!(has_line(
+    assert!(has_claim(
         &state,
-        &[subj("entry_001"), subj("account_cash"), dec(100), dec(0)],
+        "JournalLine",
+        &[
+            subj("entry_001"),
+            dec(1),
+            subj("account_cash"),
+            dec(100),
+            dec(0)
+        ],
     ));
-    assert!(has_line(
+    assert!(has_claim(
         &state,
-        &[subj("entry_001"), subj("account_revenue"), dec(0), dec(100)],
+        "JournalLine",
+        &[
+            subj("entry_001"),
+            dec(2),
+            subj("account_revenue"),
+            dec(0),
+            dec(100)
+        ],
     ));
 }
 
@@ -93,18 +99,34 @@ fn split_entry_balances_and_commits() {
 
     assert_eq!(state.len(), 4, "1 JournalEntry + 3 JournalLine");
     // Lines: 100 debit cash, 70 credit revenue, 30 credit deferred.
-    assert!(has_line(
+    assert!(has_claim(
         &state,
-        &[subj("entry_001"), subj("account_cash"), dec(100), dec(0)],
-    ));
-    assert!(has_line(
-        &state,
-        &[subj("entry_001"), subj("account_revenue"), dec(0), dec(70)],
-    ));
-    assert!(has_line(
-        &state,
+        "JournalLine",
         &[
             subj("entry_001"),
+            dec(1),
+            subj("account_cash"),
+            dec(100),
+            dec(0)
+        ],
+    ));
+    assert!(has_claim(
+        &state,
+        "JournalLine",
+        &[
+            subj("entry_001"),
+            dec(2),
+            subj("account_revenue"),
+            dec(0),
+            dec(70)
+        ],
+    ));
+    assert!(has_claim(
+        &state,
+        "JournalLine",
+        &[
+            subj("entry_001"),
+            dec(3),
             subj("account_deferred_revenue"),
             dec(0),
             dec(30),
@@ -249,9 +271,16 @@ fn restatement_into_closed_period_preserves_original() {
         "original entry must remain in admitted state"
     );
     assert!(
-        has_line(
+        has_claim(
             &s3,
-            &[subj("entry_001"), subj("account_cash"), dec(100), dec(0)],
+            "JournalLine",
+            &[
+                subj("entry_001"),
+                dec(1),
+                subj("account_cash"),
+                dec(100),
+                dec(0)
+            ],
         ),
         "original debit line must remain"
     );
@@ -262,9 +291,16 @@ fn restatement_into_closed_period_preserves_original() {
         "JournalEntry",
         &[subj("entry_002"), subj("d_2026_05_10"), subj("p_2026_04")],
     ));
-    assert!(has_line(
+    assert!(has_claim(
         &s3,
-        &[subj("entry_002"), subj("account_cash"), dec(101), dec(0)],
+        "JournalLine",
+        &[
+            subj("entry_002"),
+            dec(1),
+            subj("account_cash"),
+            dec(101),
+            dec(0)
+        ],
     ));
 
     // Supersession lineage recorded.
@@ -361,7 +397,7 @@ fn cannot_restate_already_restated_entry() {
 
 #[test]
 fn identical_credit_lines_stay_two_lines() {
-    // Debit 100 to cash; credit 50 to revenue twice. Without a line id of
+    // Debit 100 to cash; credit 50 to revenue twice. Without a number of
     // their own the two credit lines would be one claim, the credits would
     // sum to 50, and this balanced entry would be refused.
     let args = vec![
@@ -381,11 +417,20 @@ fn identical_credit_lines_stay_two_lines() {
         State::default(),
     );
 
-    let line_ids: std::collections::HashSet<_> = state
-        .claims_for("JournalLine")
-        .map(|c| c.args[1].clone())
-        .collect();
-    assert_eq!(line_ids.len(), 3, "three lines, three line ids");
+    assert_eq!(state.claims_for("JournalLine").count(), 3, "three lines");
+    for (line, credit) in [(2, 50), (3, 50)] {
+        assert!(has_claim(
+            &state,
+            "JournalLine",
+            &[
+                subj("entry_001"),
+                dec(line),
+                subj("account_revenue"),
+                dec(0),
+                dec(credit)
+            ],
+        ));
+    }
 
     let rows = enumerate_derived(
         &double_entry_ledger::program(),
@@ -397,4 +442,38 @@ fn identical_credit_lines_stay_two_lines() {
         let row = claim_instance("TrialBalanceRow", &[subj(account), dec(balance)]);
         assert!(rows.contains(&row), "expected {row:?}; got {rows:#?}");
     }
+}
+
+#[test]
+fn an_entry_id_names_one_entry_even_without_the_gate() {
+    // The posting act with its entry-id gate removed: an act someone could
+    // write next. The declared key, not the gate, refuses a second entry
+    // under the same id in another period.
+    let mut program = double_entry_ledger::program();
+    for t in &mut program.transformations {
+        t.body.retain(|s| {
+            !matches!(s, Stmt::Require { name: Some(n), .. } if n.as_str() == "entry_id_unused")
+        });
+    }
+    let ungated = Example::new(&program);
+    let post = program.transformation("post_simple_entry").unwrap().clone();
+    let posting = |date: &str, period: &str| {
+        vec![
+            subj("entry_001"),
+            subj(date),
+            subj(period),
+            subj("account_cash"),
+            subj("account_revenue"),
+            dec(10),
+        ]
+    };
+    let state = ungated.must_accept(
+        &post,
+        posting("d_2026_11_01", "p_2026_11"),
+        State::default(),
+    );
+    refused_by(
+        &ungated.must_reject(&post, posting("d_2026_10_31", "p_2026_10"), &state),
+        "journal_entry_unique_by_entry_id",
+    );
 }

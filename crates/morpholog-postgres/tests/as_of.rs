@@ -530,7 +530,7 @@ async fn list_claims_at_moves_a_readmitted_claim_to_the_tail() {
     );
 }
 
-/// Two lines with the same account and amounts keep their own line ids
+/// Two lines with the same account and amounts keep their own numbers
 /// through a replay: the read at the posting finds three lines and the
 /// balance they make, after a later entry has committed.
 #[tokio::test]
@@ -567,7 +567,7 @@ async fn identical_lines_stay_two_lines_through_replay() {
         .filter(|c| c.predicate.as_str() == "JournalLine")
         .map(|c| c.args[1].clone())
         .collect();
-    assert_eq!(lines.len(), 3, "three lines, three line ids");
+    assert_eq!(lines.len(), 3, "three lines, three numbers");
 
     let at_split = list_derived_at(
         &pool,

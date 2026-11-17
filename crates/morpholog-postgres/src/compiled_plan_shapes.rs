@@ -126,13 +126,7 @@ async fn assert_required_indexes_used(pool: &PgPool, program: &Program, planner_
         claim_instance("JournalEntry", &[subj("e_probe"), subj("d1"), subj("p1")]),
         claim_instance(
             "JournalLine",
-            &[
-                subj("e_probe"),
-                subj("l_probe"),
-                subj("cash"),
-                dec(100),
-                dec(0),
-            ],
+            &[subj("e_probe"), dec(1), subj("cash"), dec(100), dec(0)],
         ),
         claim_instance("Supersedes", &[subj("e_probe"), subj("e_prior")]),
     ];
@@ -264,16 +258,16 @@ pub(crate) async fn populate_ledger(pool: &PgPool, entries: i64) {
     .execute(pool)
     .await
     .unwrap();
-    for (debit, credit, account) in [
-        ("100", "0", "account_cash"),
-        ("0", "100", "account_revenue"),
+    for (line, debit, credit, account) in [
+        ("1", "100", "0", "account_cash"),
+        ("2", "0", "100", "account_revenue"),
     ] {
         sqlx::query(
             "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
              SELECT 'JournalLine',
                     jsonb_build_array(
                         jsonb_build_object('type','subject','value','entry_' || i),
-                        jsonb_build_object('type','subject','value','line_' || i || '_' || $3::text),
+                        jsonb_build_object('type','decimal','value',$6::text),
                         jsonb_build_object('type','subject','value',$3::text),
                         jsonb_build_object('type','decimal','value',$4::text),
                         jsonb_build_object('type','decimal','value',$5::text)),
@@ -285,6 +279,7 @@ pub(crate) async fn populate_ledger(pool: &PgPool, entries: i64) {
         .bind(account)
         .bind(debit)
         .bind(credit)
+        .bind(line)
         .execute(pool)
         .await
         .unwrap();
