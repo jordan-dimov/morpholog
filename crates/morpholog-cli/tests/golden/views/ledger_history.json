@@ -1,7 +1,7 @@
 {
   "format": 4,
   "programme": "double_entry_ledger",
-  "model_hash": "sha256:2d85c30063c50442996e882b0376bcbc6f8088892f826ee9415f3d6b18003fcb",
+  "model_hash": "sha256:4dea5e037111d72ae59a2089b202b3502938b84f9fa2c07f40c3daa35be8b0a4",
   "schema": "morpholog_views",
   "catalog": "_morpholog_catalog",
   "seal_table": "_morpholog_view_defs",
@@ -84,30 +84,38 @@
           "position": 0
         },
         {
-          "name": "account",
+          "name": "line_id",
           "role": "field",
           "kind": "Subject",
           "sql_type": "text",
           "position": 1
         },
         {
+          "name": "account",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 2
+        },
+        {
           "name": "debit_amount",
           "role": "field",
           "kind": "Decimal",
           "sql_type": "numeric",
-          "position": 2
+          "position": 3
         },
         {
           "name": "credit_amount",
           "role": "field",
           "kind": "Decimal",
           "sql_type": "numeric",
-          "position": 3
+          "position": 4
         }
       ],
       "identity": [
         [
           "entry_id",
+          "line_id",
           "account",
           "debit_amount",
           "credit_amount"
@@ -408,25 +416,32 @@
           "position": 0
         },
         {
-          "name": "account",
+          "name": "line_id",
           "role": "field",
           "kind": "Subject",
           "sql_type": "text",
           "position": 1
         },
         {
+          "name": "account",
+          "role": "field",
+          "kind": "Subject",
+          "sql_type": "text",
+          "position": 2
+        },
+        {
           "name": "debit_amount",
           "role": "field",
           "kind": "Decimal",
           "sql_type": "numeric",
-          "position": 2
+          "position": 3
         },
         {
           "name": "credit_amount",
           "role": "field",
           "kind": "Decimal",
           "sql_type": "numeric",
-          "position": 3
+          "position": 4
         }
       ],
       "identity": [

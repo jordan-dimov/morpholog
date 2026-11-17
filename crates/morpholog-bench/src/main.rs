@@ -1014,6 +1014,7 @@ fn in_memory_book(n: usize) -> Vec<ClaimInstance> {
             predicate: "JournalLine".into(),
             args: vec![
                 entry.clone(),
+                subj(&format!("bench_line_{i}_d")),
                 subj(&format!("account_{}", i % 2)),
                 dec(100),
                 dec(0),
@@ -1023,6 +1024,7 @@ fn in_memory_book(n: usize) -> Vec<ClaimInstance> {
             predicate: "JournalLine".into(),
             args: vec![
                 entry,
+                subj(&format!("bench_line_{i}_c")),
                 subj(&format!("account_{}", (i + 1) % 2)),
                 dec(0),
                 dec(100),
@@ -3378,6 +3380,7 @@ async fn fabricate_audit_rows(pool: &PgPool, n: usize, retract_stride: i64) -> R
                         'predicate', 'JournalLine',
                         'args', jsonb_build_array(
                             jsonb_build_object('type','subject','value','bench_entry_' || target),
+                            jsonb_build_object('type','subject','value','bench_line_' || target || '_d'),
                             jsonb_build_object('type','subject','value','account_cash'),
                             jsonb_build_object('type','decimal','value','100'),
                             jsonb_build_object('type','decimal','value','0')
@@ -3387,6 +3390,7 @@ async fn fabricate_audit_rows(pool: &PgPool, n: usize, retract_stride: i64) -> R
                         'predicate', 'JournalLine',
                         'args', jsonb_build_array(
                             jsonb_build_object('type','subject','value','bench_entry_' || target),
+                            jsonb_build_object('type','subject','value','bench_line_' || target || '_c'),
                             jsonb_build_object('type','subject','value','account_revenue'),
                             jsonb_build_object('type','decimal','value','0'),
                             jsonb_build_object('type','decimal','value','100')
@@ -3432,11 +3436,13 @@ async fn fabricate_revision_log(pool: &PgPool, n: usize, k: usize) -> Result<()>
                     jsonb_build_object('type','subject','value','p_bench'))),
                 jsonb_build_object('predicate', 'JournalLine', 'args', jsonb_build_array(
                     jsonb_build_object('type','subject','value','bench_entry_' || {rec}),
+                    jsonb_build_object('type','subject','value','bench_line_' || {ver} || '_d'),
                     jsonb_build_object('type','subject','value','account_cash'),
                     jsonb_build_object('type','decimal','value',{ver}::text),
                     jsonb_build_object('type','decimal','value','0'))),
                 jsonb_build_object('predicate', 'JournalLine', 'args', jsonb_build_array(
                     jsonb_build_object('type','subject','value','bench_entry_' || {rec}),
+                    jsonb_build_object('type','subject','value','bench_line_' || {ver} || '_c'),
                     jsonb_build_object('type','subject','value','account_revenue'),
                     jsonb_build_object('type','decimal','value','0'),
                     jsonb_build_object('type','decimal','value',{ver}::text))))"
@@ -3526,12 +3532,13 @@ async fn insert_n_entries(pool: &PgPool, n: usize, k: usize) -> Result<()> {
     .await
     .context("insert JournalEntry fixture rows")?;
 
-    // JournalLine(entry_id, account_{i % k}, 100, 0)  - debit side
+    // JournalLine(entry_id, line_id, account_{i % k}, 100, 0)  - debit side
     sqlx::query(
         "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
          SELECT 'JournalLine',
                 jsonb_build_array(
                     jsonb_build_object('type','subject','value','entry_bench_' || i),
+                    jsonb_build_object('type','subject','value','line_bench_' || i || '_d'),
                     jsonb_build_object('type','subject','value','account_' || (i % $3)),
                     jsonb_build_object('type','decimal','value','100'),
                     jsonb_build_object('type','decimal','value','0')
@@ -3546,12 +3553,13 @@ async fn insert_n_entries(pool: &PgPool, n: usize, k: usize) -> Result<()> {
     .await
     .context("insert JournalLine debit-side fixture rows")?;
 
-    // JournalLine(entry_id, account_{(i+1) % k}, 0, 100)  - credit side
+    // JournalLine(entry_id, line_id, account_{(i+1) % k}, 0, 100)  - credit side
     sqlx::query(
         "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
          SELECT 'JournalLine',
                 jsonb_build_array(
                     jsonb_build_object('type','subject','value','entry_bench_' || i),
+                    jsonb_build_object('type','subject','value','line_bench_' || i || '_c'),
                     jsonb_build_object('type','subject','value','account_' || ((i + 1) % $3)),
                     jsonb_build_object('type','decimal','value','0'),
                     jsonb_build_object('type','decimal','value','100')

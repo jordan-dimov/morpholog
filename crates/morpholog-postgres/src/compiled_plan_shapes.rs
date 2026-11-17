@@ -126,7 +126,13 @@ async fn assert_required_indexes_used(pool: &PgPool, program: &Program, planner_
         claim_instance("JournalEntry", &[subj("e_probe"), subj("d1"), subj("p1")]),
         claim_instance(
             "JournalLine",
-            &[subj("e_probe"), subj("cash"), dec(100), dec(0)],
+            &[
+                subj("e_probe"),
+                subj("l_probe"),
+                subj("cash"),
+                dec(100),
+                dec(0),
+            ],
         ),
         claim_instance("Supersedes", &[subj("e_probe"), subj("e_prior")]),
     ];
@@ -267,6 +273,7 @@ pub(crate) async fn populate_ledger(pool: &PgPool, entries: i64) {
              SELECT 'JournalLine',
                     jsonb_build_array(
                         jsonb_build_object('type','subject','value','entry_' || i),
+                        jsonb_build_object('type','subject','value','line_' || i || '_' || $3::text),
                         jsonb_build_object('type','subject','value',$3::text),
                         jsonb_build_object('type','decimal','value',$4::text),
                         jsonb_build_object('type','decimal','value',$5::text)),

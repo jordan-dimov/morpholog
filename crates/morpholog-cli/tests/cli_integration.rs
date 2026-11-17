@@ -5634,8 +5634,18 @@ async fn the_stamp_covers_the_whole_programme() {
         assert_eq!(row["model_hash"], programme_hash(file).as_str());
         stamped.push(row);
     }
+    // Each run draws its own line ids, so the claims compare with every
+    // drawn subject named by its place in the draw.
+    let drawn_by_place = |row: &serde_json::Value| {
+        let mut claims = row["asserted_claims"].to_string();
+        for (place, drawn) in row["drawn_subjects"].as_array().unwrap().iter().enumerate() {
+            claims = claims.replace(drawn.as_str().unwrap(), &format!("<drawn {place}>"));
+        }
+        claims
+    };
     assert_eq!(
-        stamped[0]["asserted_claims"], stamped[1]["asserted_claims"],
+        drawn_by_place(&stamped[0]),
+        drawn_by_place(&stamped[1]),
         "the same proposal makes the same claims under both programmes"
     );
     assert_ne!(

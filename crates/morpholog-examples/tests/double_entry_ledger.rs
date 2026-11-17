@@ -4,19 +4,28 @@
 //! Proves: posted entries balance; a closed period refuses normal posting;
 //! a closed period can be restated, keeping the original entry and recording
 //! `Supersedes`; an entry cannot be restated twice; a period cannot be
-//! closed twice.
+//! closed twice; two lines with the same account and amounts stay two
+//! lines.
 
 mod common;
 use std::sync::OnceLock;
 
 use common::{Example, claim_instance, dec, has_claim, refused_by, subj};
-use morpholog_core::State;
+use morpholog_core::{EvalValue, State};
 use morpholog_examples::double_entry_ledger;
-use morpholog_test_support::eval_invariant;
+use morpholog_test_support::{enumerate_derived, eval_invariant};
 
 fn ex() -> &'static Example {
     static EX: OnceLock<Example> = OnceLock::new();
     EX.get_or_init(|| Example::new(&double_entry_ledger::program()))
+}
+
+/// Whether `state` holds a journal line for this entry with these values,
+/// whatever line id its posting minted.
+fn has_line(state: &State, values: &[EvalValue]) -> bool {
+    state
+        .claims_for("JournalLine")
+        .any(|c| c.args[..1] == values[..1] && c.args[2..] == values[1..])
 }
 
 #[test]
@@ -46,14 +55,12 @@ fn simple_entry_balances_and_commits() {
         "JournalEntry",
         &[subj("entry_001"), subj("d_2026_04_15"), subj("p_2026_04")],
     ));
-    assert!(has_claim(
+    assert!(has_line(
         &state,
-        "JournalLine",
         &[subj("entry_001"), subj("account_cash"), dec(100), dec(0)],
     ));
-    assert!(has_claim(
+    assert!(has_line(
         &state,
-        "JournalLine",
         &[subj("entry_001"), subj("account_revenue"), dec(0), dec(100)],
     ));
 }
@@ -86,19 +93,16 @@ fn split_entry_balances_and_commits() {
 
     assert_eq!(state.len(), 4, "1 JournalEntry + 3 JournalLine");
     // Lines: 100 debit cash, 70 credit revenue, 30 credit deferred.
-    assert!(has_claim(
+    assert!(has_line(
         &state,
-        "JournalLine",
         &[subj("entry_001"), subj("account_cash"), dec(100), dec(0)],
     ));
-    assert!(has_claim(
+    assert!(has_line(
         &state,
-        "JournalLine",
         &[subj("entry_001"), subj("account_revenue"), dec(0), dec(70)],
     ));
-    assert!(has_claim(
+    assert!(has_line(
         &state,
-        "JournalLine",
         &[
             subj("entry_001"),
             subj("account_deferred_revenue"),
@@ -245,9 +249,8 @@ fn restatement_into_closed_period_preserves_original() {
         "original entry must remain in admitted state"
     );
     assert!(
-        has_claim(
+        has_line(
             &s3,
-            "JournalLine",
             &[subj("entry_001"), subj("account_cash"), dec(100), dec(0)],
         ),
         "original debit line must remain"
@@ -259,9 +262,8 @@ fn restatement_into_closed_period_preserves_original() {
         "JournalEntry",
         &[subj("entry_002"), subj("d_2026_05_10"), subj("p_2026_04")],
     ));
-    assert!(has_claim(
+    assert!(has_line(
         &s3,
-        "JournalLine",
         &[subj("entry_002"), subj("account_cash"), dec(101), dec(0)],
     ));
 
@@ -355,4 +357,44 @@ fn cannot_restate_already_restated_entry() {
         ),
         "new_entry_id_unused",
     );
+}
+
+#[test]
+fn identical_credit_lines_stay_two_lines() {
+    // Debit 100 to cash; credit 50 to revenue twice. Without a line id of
+    // their own the two credit lines would be one claim, the credits would
+    // sum to 50, and this balanced entry would be refused.
+    let args = vec![
+        subj("entry_001"),
+        subj("d_2026_04_15"),
+        subj("p_2026_04"),
+        subj("account_cash"),
+        dec(100),
+        subj("account_revenue"),
+        dec(50),
+        subj("account_revenue"),
+        dec(50),
+    ];
+    let state = ex().must_accept(
+        &double_entry_ledger::post_split_entry(),
+        args,
+        State::default(),
+    );
+
+    let line_ids: std::collections::HashSet<_> = state
+        .claims_for("JournalLine")
+        .map(|c| c.args[1].clone())
+        .collect();
+    assert_eq!(line_ids.len(), 3, "three lines, three line ids");
+
+    let rows = enumerate_derived(
+        &double_entry_ledger::program(),
+        &double_entry_ledger::trial_balance_row(),
+        &state,
+    )
+    .expect("the trial balance evaluates");
+    for (account, balance) in [("account_cash", 100), ("account_revenue", -100)] {
+        let row = claim_instance("TrialBalanceRow", &[subj(account), dec(balance)]);
+        assert!(rows.contains(&row), "expected {row:?}; got {rows:#?}");
+    }
 }

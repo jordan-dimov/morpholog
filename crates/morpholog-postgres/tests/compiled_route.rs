@@ -97,10 +97,13 @@ fn max() -> EvalValue {
     EvalValue::Decimal(rust_decimal::Decimal::MAX)
 }
 
+/// A seeded line, its id made from its values, so distinct lines stay
+/// distinct.
 fn line(entry: &str, account: &str, debit: EvalValue, credit: EvalValue) -> ClaimInstance {
+    let id = subj(&format!("{entry}_{account}_{debit:?}_{credit:?}"));
     ClaimInstance {
         predicate: "JournalLine".into(),
-        args: vec![subj(entry), subj(account), debit, credit],
+        args: vec![subj(entry), id, subj(account), debit, credit],
     }
 }
 
@@ -278,14 +281,16 @@ async fn an_excess_that_cancels_is_representable_on_both_routes() {
     assert_eq!(real, spec);
 }
 
-/// The ledger without its entry-id guard, so a posting can reach an entry
-/// already on the record: these tests are about how each route checks
-/// that entry, not about the guard.
+/// The ledger without its entry-id and restatement guards, so a posting
+/// can reach an entry already on the record and a batch can restate one
+/// entry twice: these tests are about how each route checks the rules,
+/// not about the guards.
 fn ledger_program() -> Program {
     let mut program = double_entry_ledger::program();
     for t in &mut program.transformations {
         t.body.retain(|s| {
-            !matches!(s, Stmt::Require { name: Some(n), .. } if n.as_str() == "entry_id_unused")
+            !matches!(s, Stmt::Require { name: Some(n), .. }
+                if ["entry_id_unused", "prior_entry_not_yet_superseded"].contains(&n.as_str()))
         });
     }
     program
@@ -318,6 +323,23 @@ fn posting(entry: &str, amount: i64) -> Proposal {
 }
 
 /// One debit against two credits; balanced only when they sum to it.
+fn restatement(new_entry: &str, prior_entry: &str) -> Proposal {
+    Proposal::gateway(&Transition {
+        transformation_name: "restate_entry".into(),
+        args: vec![
+            subj(new_entry),
+            subj(prior_entry),
+            subj("d_2026_05_18"),
+            subj("p_2026_05"),
+            subj("account_cash"),
+            subj("account_revenue"),
+            dec(100),
+        ],
+        actor: Subject::from("route_test"),
+        decided_at: None,
+    })
+}
+
 fn split_posting(entry: &str, debit: i64, credit_a: i64, credit_b: i64) -> Proposal {
     Proposal::gateway(&Transition {
         transformation_name: "post_split_entry".into(),
@@ -352,9 +374,9 @@ async fn a_failing_compiled_check_is_an_operational_error_never_a_decision() {
     // it.
     let corrupted = sqlx::query(
         "UPDATE morpholog.claims
-            SET arguments = jsonb_set(arguments, '{2,value}', '\"abc\"')
+            SET arguments = jsonb_set(arguments, '{3,value}', '\"abc\"')
           WHERE predicate_name = 'JournalLine'
-            AND arguments -> 1 ->> 'value' = 'account_cash'",
+            AND arguments -> 2 ->> 'value' = 'account_cash'",
     )
     .execute(&pool)
     .await
@@ -421,22 +443,21 @@ async fn a_compiled_batch_checks_each_act_against_the_acts_before_it() {
         3
     );
 
-    // The same split after a simple posting of the same entry in one
-    // batch: its debit line is the earlier act's line (claims are a
-    // set), so credits exceed debits. Only a check that sees the first
-    // act's delta can refuse the second.
+    // Two restatements of one entry in one batch: each is lawful alone,
+    // and together the entry is superseded twice. Only a check that sees
+    // the first act's delta can refuse the second.
     let outcome = propose_all_against_pg(
         &pool,
         &program,
-        &[posting("e4", 10), split_posting("e4", 10, 6, 4)],
+        &[restatement("e4a", "e1"), restatement("e4b", "e1")],
     )
     .await
     .unwrap();
     let PgAtomicOutcome::Rejected { act, rule, .. } = outcome else {
-        panic!("the combined entry refuses, got {outcome:?}");
+        panic!("the second restatement refuses, got {outcome:?}");
     };
     assert_eq!(act, 2);
-    assert_eq!(rule.as_deref(), Some("balanced_posted_entry"));
+    assert_eq!(rule.as_deref(), Some("supersedes_unique_by_prior_entry_id"));
     assert_eq!(
         count(&pool, "SELECT count(*) FROM morpholog.audit").await,
         3,
