@@ -412,6 +412,9 @@ class Morpholog:
         reset: bool = False,
         i_know_this_deletes_data: bool = False,
         role_prefix: str | None = None,
+        root_actor: str | None = None,
+        root_login: str | None = None,
+        confirm: bool = False,
     ) -> envelopes.InitReport:
         """Provision the Morpholog tables.
 
@@ -426,6 +429,13 @@ class Morpholog:
         Roles belong to the whole cluster, so a second deployment on one
         needs its own. It goes with `least_privilege`; the binary refuses
         it alone, and refuses an unlawful prefix.
+
+        `root_actor` with `root_login` closes the deployment: every actor
+        then needs a grant, and the root actor may be asserted by that
+        login alone. With `skip_if_exists` it closes an existing
+        deployment, whose writers must be stopped first; `confirm` closes
+        it even though the audit log records actors no grant names. The
+        binary checks the pairing and the login.
         """
         args = ["init", "--database-url", self.database_url]
         if skip_if_exists:
@@ -438,6 +448,12 @@ class Morpholog:
             args.append("--i-know-this-deletes-data")
         if role_prefix is not None:
             args.extend(["--role-prefix", role_prefix])
+        if root_actor is not None:
+            args.extend(["--root-actor", root_actor])
+        if root_login is not None:
+            args.extend(["--root-login", root_login])
+        if confirm:
+            args.append("--confirm")
         return envelopes.InitReport.from_json(self._json(*args))
 
     def migrate(
