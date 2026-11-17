@@ -73,7 +73,7 @@ fn verified_revenue_program_has_expected_shape() {
 fn double_entry_ledger_program_has_expected_shape() {
     let p = double_entry_ledger::program();
     assert_eq!(p.name, "double_entry_ledger");
-    assert_eq!(p.invariants.len(), 3);
+    assert_eq!(p.invariants.len(), 4);
     assert_eq!(p.transformations.len(), 4);
 
     assert!(p.transformation("post_simple_entry").is_some());
@@ -84,6 +84,7 @@ fn double_entry_ledger_program_has_expected_shape() {
     assert!(p.invariant("balanced_posted_entry").is_some());
     assert!(p.invariant("journal_entry_has_lines").is_some());
     assert!(p.invariant("supersedes_unique_by_prior_entry_id").is_some());
+    assert!(p.invariant("journal_entry_unique_by_entry_id").is_some());
 }
 
 #[test]

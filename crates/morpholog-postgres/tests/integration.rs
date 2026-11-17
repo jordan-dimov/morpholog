@@ -1332,8 +1332,8 @@ async fn list_audit_rows_returns_committed_transformations_in_order() {
     assert_eq!(first.invariant_epoch, 1);
 
     // invariants_checked: every invariant active at admission, named with
-    // its version. The ledger example has three invariants.
-    assert_eq!(first.invariants_checked.len(), 3);
+    // its version. The ledger example has four invariants.
+    assert_eq!(first.invariants_checked.len(), 4);
     assert!(
         first
             .invariants_checked

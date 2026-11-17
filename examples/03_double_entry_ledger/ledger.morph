@@ -45,7 +45,10 @@ program double_entry_ledger
 -- hold, and the shape of its arguments. These are the only nouns the
 -- system knows: entries and their lines, which periods are closed,
 -- which entry supersedes which, and the trial balance we read back out.
+-- An entry id names one entry: `unique by` refuses a second entry under
+-- the same id, whichever action admits it.
 predicate JournalEntry(entry_id: Subject, posting_date: Subject, period: Subject)
+    unique by (entry_id)
 -- A line carries an id of its own. The record is a set of claims, so two
 -- lines with the same entry, account and amounts would otherwise be one
 -- claim, and an entry crediting revenue 50 twice would keep one 50. Each

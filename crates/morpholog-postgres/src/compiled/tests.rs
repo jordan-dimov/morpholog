@@ -24,11 +24,12 @@ fn ledger_compiles_fully_in_programme_order() {
     assert_eq!(
         names,
         [
+            "journal_entry_unique_by_entry_id",
             "supersedes_unique_by_prior_entry_id",
             "balanced_posted_entry",
             "journal_entry_has_lines"
         ],
-        "generated discipline invariant first, then authored order"
+        "generated discipline invariants first, then authored order"
     );
 }
 
@@ -36,7 +37,7 @@ fn ledger_compiles_fully_in_programme_order() {
 fn balanced_posted_entry_sql_is_pinned() {
     let program = ledger_program();
     let set = compiled(&program);
-    let sql = set.invariants[1].violation_sql(None);
+    let sql = set.invariants[2].violation_sql(None);
     assert_eq!(
         sql,
         r#"/* morpholog compiled invariant balanced_posted_entry v1 stage1 */
@@ -51,7 +52,7 @@ LIMIT 1"#
     // entry in scope, in the kernel's order, whose lines hold a value a
     // sum cannot take, or whose total no decimal can hold.
     assert_eq!(
-        set.invariants[1].error_sqls(None, &[]).unwrap(),
+        set.invariants[2].error_sqls(None, &[]).unwrap(),
         [
             r#"SELECT CASE WHEN l2.f THEN 'sum_kind' WHEN NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) THEN 'range' WHEN l4.f THEN 'sum_kind' WHEN NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric) THEN 'range' END AS "kind",
        NULL::text AS "domain",
@@ -63,9 +64,9 @@ ORDER BY t0.arguments_hash
 LIMIT 1"#
         ]
     );
-    assert!(set.invariants[0].error_sqls(None, &[]).unwrap().is_empty());
+    assert!(set.invariants[1].error_sqls(None, &[]).unwrap().is_empty());
     // Bounded to the obligation, like the violation query.
-    let bounded = set.invariants[1]
+    let bounded = set.invariants[2]
         .error_sqls(Some("((t0.arguments -> 0 ->> 'value') = 'e42')"), &[])
         .unwrap()
         .pop()
@@ -79,7 +80,7 @@ LIMIT 1"#
 fn supersedes_uniqueness_sql_is_pinned() {
     let program = ledger_program();
     let set = compiled(&program);
-    let sql = set.invariants[0].violation_sql(None);
+    let sql = set.invariants[1].violation_sql(None);
     assert_eq!(
         sql,
         r#"/* morpholog compiled invariant supersedes_unique_by_prior_entry_id v1 stage1 */
@@ -98,7 +99,7 @@ LIMIT 1"#
 fn journal_entry_has_lines_sql_is_pinned() {
     let program = ledger_program();
     let set = compiled(&program);
-    let sql = set.invariants[2].violation_sql(None);
+    let sql = set.invariants[3].violation_sql(None);
     assert_eq!(
         sql,
         r#"/* morpholog compiled invariant journal_entry_has_lines v1 stage1 */
@@ -126,14 +127,14 @@ fn post_simple_entry_delta_bounds_every_ledger_invariant_to_the_entry() {
             &[subj("e42"), subj("l2"), subj("rev"), dec(0), dec(100)],
         ),
     ];
-    let balanced = &set.invariants[1];
+    let balanced = &set.invariants[2];
     assert_eq!(
         bounded(balanced.case_filter(&asserted, &[])),
         "((morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = morpholog.claim_digest(morpholog.value_key_v1('{\"type\":\"subject\",\"value\":\"e42\"}'::jsonb)))"
     );
     // Supersedes is untouched by this delta entirely.
     assert!(matches!(
-        set.invariants[0].case_filter(&asserted, &[]),
+        set.invariants[1].case_filter(&asserted, &[]),
         CaseFilter::Untouched
     ));
 }
@@ -171,7 +172,7 @@ fn retraction_also_touches_cases() {
         &[subj("e7"), subj("l1"), subj("cash"), dec(5), dec(0)],
     )];
     assert_eq!(
-        bounded(set.invariants[1].case_filter(&[], &retracted)),
+        bounded(set.invariants[2].case_filter(&[], &retracted)),
         "((morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = morpholog.claim_digest(morpholog.value_key_v1('{\"type\":\"subject\",\"value\":\"e7\"}'::jsonb)))"
     );
 }
@@ -580,6 +581,8 @@ fn ledger_required_indexes_are_pinned() {
         shape,
         [
             ("JournalEntry".to_string(), 0),
+            ("JournalEntry".to_string(), 1),
+            ("JournalEntry".to_string(), 2),
             ("JournalLine".to_string(), 0),
             ("Supersedes".to_string(), 0),
             ("Supersedes".to_string(), 1),

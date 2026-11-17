@@ -18,6 +18,7 @@ Here is part of a double-entry ledger:
 
 ```morph
 predicate JournalEntry(entry_id: Subject, posting_date: Subject, period: Subject)
+    unique by (entry_id)
 predicate JournalLine(entry_id: Subject, line_id: Subject, account: Subject, debit_amount: Decimal, credit_amount: Decimal)
 predicate PeriodClosed(period: Subject)
 
@@ -40,7 +41,7 @@ transformation post_simple_entry(
 
 Read it line by line:
 
-- Each `predicate` declares a kind of record: an entry, a line of an entry, a closed period. A line carries its own line id, so two lines with the same account and amount stay two lines.
+- Each `predicate` declares a kind of record: an entry, a line of an entry, a closed period. `unique by` says an entry id names one entry. A line carries its own line id, so two lines with the same account and amount stay two lines.
 - The `invariant` is a rule about the records: for every entry, the debits add up to the credits. Every change is checked against it.
 - The `transformation` is an action, and the only way records change. It `require`s that the entry is new and its period still open, `admit`s the entry and its two lines, each with a fresh line id from `new Subject()`, and `emit`s a notification for other systems.
 

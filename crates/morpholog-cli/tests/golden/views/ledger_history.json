@@ -1,7 +1,7 @@
 {
   "format": 4,
   "programme": "double_entry_ledger",
-  "model_hash": "sha256:4dea5e037111d72ae59a2089b202b3502938b84f9fa2c07f40c3daa35be8b0a4",
+  "model_hash": "sha256:9a6299b45b6c063139d8bf1742a06bcb783070217bede4f634b354426dc5343a",
   "schema": "morpholog_views",
   "catalog": "_morpholog_catalog",
   "seal_table": "_morpholog_view_defs",
@@ -50,9 +50,7 @@
       ],
       "identity": [
         [
-          "entry_id",
-          "posting_date",
-          "period"
+          "entry_id"
         ]
       ]
     },
