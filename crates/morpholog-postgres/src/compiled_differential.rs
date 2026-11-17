@@ -1399,7 +1399,7 @@ async fn dirty_history_blocks_only_the_writes_that_touch_it() {
         ),
         (
             "JournalLine",
-            serde_json::json!([{"type":"subject","value":"e_dirty"}, {"type":"subject","value":"cash"}, {"type":"decimal","value":"100"}, {"type":"decimal","value":"0"}]),
+            serde_json::json!([{"type":"subject","value":"e_dirty"}, {"type":"subject","value":"l_dirty"}, {"type":"subject","value":"cash"}, {"type":"decimal","value":"100"}, {"type":"decimal","value":"0"}]),
         ),
     ] {
         sqlx::query("INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in) VALUES ($1, $2, $3)")

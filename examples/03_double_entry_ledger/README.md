@@ -19,7 +19,7 @@ See [`ledger.morph`](ledger.morph) for the surface syntax.
 | Predicate | Role |
 | --- | --- |
 | `JournalEntry(entry_id, posting_date, period)` | The header for a posted entry. Append-only. |
-| `JournalLine(entry_id, account, debit, credit)` | One line of an entry. Append-only. Per-line shape (e.g. "exactly one side is non-zero") is not enforced. |
+| `JournalLine(entry_id, line_id, account, debit, credit)` | One line of an entry, identified by a line id each posting mints, so two lines with the same account and amounts stay two lines. Append-only. Per-line shape (e.g. "exactly one side is non-zero") is not enforced. |
 | `PeriodClosed(period)` | The period is closed against further normal posting. Append-only and **terminal in v0** - no `reopen_period`. |
 | `Supersedes(new_entry_id, prior_entry_id)` | Restatement lineage. Append-only. |
 
@@ -48,12 +48,10 @@ The split between `post_simple_entry` (guaranteed-balanced) and `post_split_entr
 
 ### Read-side: the trial balance as a derived claim
 
-```
-derived TrialBalanceRow(account, balance)
-    where balance ==
-        sum { d | JournalLine(_, account, d, _) }
-      - sum { c | JournalLine(_, account, _, c) }
-    over JournalLine(_, account, _, _)
+```morph
+derived TrialBalanceRow(account):
+    over JournalLine(account: account, ..)
+    value balance = sum(d | JournalLine(account: account, debit_amount: d, ..)) - sum(c | JournalLine(account: account, credit_amount: c, ..))
 ```
 
 The shape is **keys, values, domain**: one row per distinct account; balance = sum(debits) - sum(credits) per account; the domain expression defines which accounts the row applies to. The kernel evaluator enumerates the domain, deduplicates by key tuple, and runs the value expression once per distinct key. No materialised storage, no precomputed indices - the same machinery that evaluates invariants enumerates the derived view.

@@ -41,7 +41,7 @@ fn balanced_posted_entry_sql_is_pinned() {
         sql,
         r#"/* morpholog compiled invariant balanced_posted_entry v1 stage1 */
 SELECT 1 AS "w"
-FROM morpholog.claims t0, LATERAL (SELECT COALESCE(sum((CASE WHEN (t1.arguments -> 2 ->> 'type') = 'decimal' THEN (t1.arguments -> 2 ->> 'value')::numeric END)), 0::numeric) AS s, COALESCE(bool_or((t1.arguments -> 2 ->> 'type') IS DISTINCT FROM 'decimal'), false) AS f FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0)))) l2, LATERAL (SELECT COALESCE(sum((CASE WHEN (t3.arguments -> 3 ->> 'type') = 'decimal' THEN (t3.arguments -> 3 ->> 'value')::numeric END)), 0::numeric) AS s, COALESCE(bool_or((t3.arguments -> 3 ->> 'type') IS DISTINCT FROM 'decimal'), false) AS f FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t3.arguments -> 0)))) l4
+FROM morpholog.claims t0, LATERAL (SELECT COALESCE(sum((CASE WHEN (t1.arguments -> 3 ->> 'type') = 'decimal' THEN (t1.arguments -> 3 ->> 'value')::numeric END)), 0::numeric) AS s, COALESCE(bool_or((t1.arguments -> 3 ->> 'type') IS DISTINCT FROM 'decimal'), false) AS f FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0)))) l2, LATERAL (SELECT COALESCE(sum((CASE WHEN (t3.arguments -> 4 ->> 'type') = 'decimal' THEN (t3.arguments -> 4 ->> 'value')::numeric END)), 0::numeric) AS s, COALESCE(bool_or((t3.arguments -> 4 ->> 'type') IS DISTINCT FROM 'decimal'), false) AS f FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t3.arguments -> 0)))) l4
 WHERE t0.predicate_name = 'JournalEntry'
   AND ((l2.f OR NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) OR l4.f OR NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric)) OR NOT (l2.s) = (l4.s))
 ORDER BY (morpholog.value_key_v1(t0.arguments -> 0))::text
@@ -57,7 +57,7 @@ LIMIT 1"#
        NULL::text AS "domain",
        NULL::text AS "left",
        NULL::text AS "right"
-FROM morpholog.claims t0, LATERAL (SELECT COALESCE(sum((CASE WHEN (t1.arguments -> 2 ->> 'type') = 'decimal' THEN (t1.arguments -> 2 ->> 'value')::numeric END)), 0::numeric) AS s, COALESCE(bool_or((t1.arguments -> 2 ->> 'type') IS DISTINCT FROM 'decimal'), false) AS f FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0)))) l2, LATERAL (SELECT COALESCE(sum((CASE WHEN (t3.arguments -> 3 ->> 'type') = 'decimal' THEN (t3.arguments -> 3 ->> 'value')::numeric END)), 0::numeric) AS s, COALESCE(bool_or((t3.arguments -> 3 ->> 'type') IS DISTINCT FROM 'decimal'), false) AS f FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t3.arguments -> 0)))) l4
+FROM morpholog.claims t0, LATERAL (SELECT COALESCE(sum((CASE WHEN (t1.arguments -> 3 ->> 'type') = 'decimal' THEN (t1.arguments -> 3 ->> 'value')::numeric END)), 0::numeric) AS s, COALESCE(bool_or((t1.arguments -> 3 ->> 'type') IS DISTINCT FROM 'decimal'), false) AS f FROM morpholog.claims t1 WHERE t1.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t1.arguments -> 0)))) l2, LATERAL (SELECT COALESCE(sum((CASE WHEN (t3.arguments -> 4 ->> 'type') = 'decimal' THEN (t3.arguments -> 4 ->> 'value')::numeric END)), 0::numeric) AS s, COALESCE(bool_or((t3.arguments -> 4 ->> 'type') IS DISTINCT FROM 'decimal'), false) AS f FROM morpholog.claims t3 WHERE t3.predicate_name = 'JournalLine' AND (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0))) = (morpholog.claim_digest(morpholog.value_key_v1(t3.arguments -> 0)))) l4
 WHERE (t0.predicate_name = 'JournalEntry' AND (l2.f OR NOT (min_scale(l2.s) <= 28 AND abs(l2.s) * power(10::numeric, min_scale(l2.s)) < 79228162514264337593543950336::numeric) OR l4.f OR NOT (min_scale(l4.s) <= 28 AND abs(l4.s) * power(10::numeric, min_scale(l4.s)) < 79228162514264337593543950336::numeric)))
 ORDER BY t0.arguments_hash
 LIMIT 1"#
@@ -119,9 +119,12 @@ fn post_simple_entry_delta_bounds_every_ledger_invariant_to_the_entry() {
         claim_instance("JournalEntry", &[subj("e42"), subj("d1"), subj("p1")]),
         claim_instance(
             "JournalLine",
-            &[subj("e42"), subj("cash"), dec(100), dec(0)],
+            &[subj("e42"), subj("l1"), subj("cash"), dec(100), dec(0)],
         ),
-        claim_instance("JournalLine", &[subj("e42"), subj("rev"), dec(0), dec(100)]),
+        claim_instance(
+            "JournalLine",
+            &[subj("e42"), subj("l2"), subj("rev"), dec(0), dec(100)],
+        ),
     ];
     let balanced = &set.invariants[1];
     assert_eq!(
@@ -165,7 +168,7 @@ fn retraction_also_touches_cases() {
     let set = compiled(&program);
     let retracted = vec![claim_instance(
         "JournalLine",
-        &[subj("e7"), subj("cash"), dec(5), dec(0)],
+        &[subj("e7"), subj("l1"), subj("cash"), dec(5), dec(0)],
     )];
     assert_eq!(
         bounded(set.invariants[1].case_filter(&[], &retracted)),

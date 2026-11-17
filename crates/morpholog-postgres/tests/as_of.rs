@@ -529,3 +529,55 @@ async fn list_claims_at_moves_a_readmitted_claim_to_the_tail() {
         "p1 was granted first, revoked, and granted again: it sits at the tail"
     );
 }
+
+/// Two lines with the same account and amounts keep their own line ids
+/// through a replay: the read at the posting finds three lines and the
+/// balance they make, after a later entry has committed.
+#[tokio::test]
+async fn identical_lines_stay_two_lines_through_replay() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let program = common::pg_program(double_entry_ledger::program());
+    let split = expect_committed(
+        common::propose_pg_with_test_actor(
+            &pool,
+            &program,
+            &double_entry_ledger::post_split_entry(),
+            vec![
+                subj("entry_split"),
+                subj("d_2026_05_01"),
+                subj("p_as_of"),
+                subj("account_cash"),
+                dec(100),
+                subj("account_revenue"),
+                dec(50),
+                subj("account_revenue"),
+                dec(50),
+            ],
+        )
+        .await
+        .unwrap(),
+    );
+    three_step_ledger(&pool).await;
+
+    let lines: std::collections::HashSet<_> = list_claims_at(&pool, split)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.predicate.as_str() == "JournalLine")
+        .map(|c| c.args[1].clone())
+        .collect();
+    assert_eq!(lines.len(), 3, "three lines, three line ids");
+
+    let at_split = list_derived_at(
+        &pool,
+        &morpholog_test_support::validated(&double_entry_ledger::program()),
+        double_entry_ledger::trial_balance_row().predicate.as_str(),
+        split,
+    )
+    .await
+    .unwrap()
+    .expect("the programme derives it");
+    assert_balance(&at_split, "account_cash", 100);
+    assert_balance(&at_split, "account_revenue", -100);
+}

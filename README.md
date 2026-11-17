@@ -18,12 +18,12 @@ Here is part of a double-entry ledger:
 
 ```morph
 predicate JournalEntry(entry_id: Subject, posting_date: Subject, period: Subject)
-predicate JournalLine(entry_id: Subject, account: Subject, debit_amount: Decimal, credit_amount: Decimal)
+predicate JournalLine(entry_id: Subject, line_id: Subject, account: Subject, debit_amount: Decimal, credit_amount: Decimal)
 predicate PeriodClosed(period: Subject)
 
 invariant balanced_posted_entry:
-    let debits = (sum(d | JournalLine(entry, _, d, _)))
-    let credits = (sum(c | JournalLine(entry, _, _, c)))
+    let debits = (sum(d | JournalLine(entry_id: entry, debit_amount: d, ..)))
+    let credits = (sum(c | JournalLine(entry_id: entry, credit_amount: c, ..)))
     JournalEntry(entry, _, _) implies debits = credits
 
 transformation post_simple_entry(
@@ -33,16 +33,16 @@ transformation post_simple_entry(
     require entry_id_unused: not JournalEntry(entry_id, _, _)
     require period_is_open: not PeriodClosed(period)
     admit JournalEntry(entry_id, posting_date, period)
-    admit JournalLine(entry_id, debit_account, amount, 0)
-    admit JournalLine(entry_id, credit_account, 0, amount)
+    admit JournalLine(entry_id, new Subject(), debit_account, amount, 0)
+    admit JournalLine(entry_id, new Subject(), credit_account, 0, amount)
     emit JournalEntryPosted(entry_id)
 ```
 
 Read it line by line:
 
-- Each `predicate` declares a kind of record: an entry, a line of an entry, a closed period.
+- Each `predicate` declares a kind of record: an entry, a line of an entry, a closed period. A line carries its own line id, so two lines with the same account and amount stay two lines.
 - The `invariant` is a rule about the records: for every entry, the debits add up to the credits. Every change is checked against it.
-- The `transformation` is an action, and the only way records change. It `require`s that the entry is new and its period still open, `admit`s the entry and its two lines, and `emit`s a notification for other systems.
+- The `transformation` is an action, and the only way records change. It `require`s that the entry is new and its period still open, `admit`s the entry and its two lines, each with a fresh line id from `new Subject()`, and `emit`s a notification for other systems.
 
 Those are Morpholog's two building blocks: rules and actions. Everything else is built from them.
 

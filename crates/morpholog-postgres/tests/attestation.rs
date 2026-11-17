@@ -162,11 +162,12 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
     // Then the canonical order: the activation record closes the legacy
     // prefix, and every row after it is ordered and records operations.
     morpholog_postgres::testing::activate(&pool).await.unwrap();
+    // Closing a period mints nothing, so the newest row records no draws.
     propose_pg_with_test_actor(
         &pool,
         &program,
-        &double_entry_ledger::post_simple_entry(),
-        ledger_args("e_attested"),
+        &double_entry_ledger::close_period(),
+        vec![subj("p_attested")],
     )
     .await
     .map(expect_committed)
@@ -299,7 +300,7 @@ async fn a_legacy_prefix_verifies_whole_and_new_unattested_rows_are_refused() {
         Some(morpholog_core::SEMANTICS_VERSION),
         "and the semantics that decided it"
     );
-    let declared: Vec<String> = double_entry_ledger::post_simple_entry()
+    let declared: Vec<String> = double_entry_ledger::close_period()
         .parameters
         .iter()
         .map(ToString::to_string)
