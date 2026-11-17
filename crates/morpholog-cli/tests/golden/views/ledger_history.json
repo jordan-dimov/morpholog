@@ -1,7 +1,7 @@
 {
   "format": 4,
   "programme": "double_entry_ledger",
-  "model_hash": "sha256:9a6299b45b6c063139d8bf1742a06bcb783070217bede4f634b354426dc5343a",
+  "model_hash": "sha256:020f60c452e642e1f8ada44dcfa11c19d40891bb0e7400541e444dae7bf33ec6",
   "schema": "morpholog_views",
   "catalog": "_morpholog_catalog",
   "seal_table": "_morpholog_view_defs",
@@ -82,10 +82,10 @@
           "position": 0
         },
         {
-          "name": "line_id",
+          "name": "line_no",
           "role": "field",
-          "kind": "Subject",
-          "sql_type": "text",
+          "kind": "Decimal",
+          "sql_type": "numeric",
           "position": 1
         },
         {
@@ -113,7 +113,7 @@
       "identity": [
         [
           "entry_id",
-          "line_id",
+          "line_no",
           "account",
           "debit_amount",
           "credit_amount"
@@ -414,10 +414,10 @@
           "position": 0
         },
         {
-          "name": "line_id",
+          "name": "line_no",
           "role": "field",
-          "kind": "Subject",
-          "sql_type": "text",
+          "kind": "Decimal",
+          "sql_type": "numeric",
           "position": 1
         },
         {

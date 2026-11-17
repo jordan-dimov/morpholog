@@ -687,21 +687,6 @@ async fn claim_exists(pool: &PgPool, predicate: &str, args: &[EvalValue]) -> boo
     n > 0
 }
 
-/// Whether a journal line with these values is on the record, whatever
-/// line id its posting minted (the array without position 1).
-async fn line_exists(pool: &PgPool, values: &[EvalValue]) -> bool {
-    let values_json = serde_json::to_value(values).unwrap();
-    let n: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM morpholog.claims
-         WHERE predicate_name = 'JournalLine' AND arguments - 1 = $1",
-    )
-    .bind(values_json)
-    .fetch_one(pool)
-    .await
-    .unwrap();
-    n > 0
-}
-
 // ============================================================
 // Verified revenue through propose_against_pg: admission, standing from
 // several authorities, decisions, a correction that retracts standing on
@@ -1130,17 +1115,31 @@ async fn double_entry_full_chain_through_pg() {
         "original entry must remain in admitted state after restatement"
     );
     assert!(
-        line_exists(
+        claim_exists(
             &pool,
-            &[subj("entry_001"), subj("account_cash"), dec(100), dec(0)],
+            "JournalLine",
+            &[
+                subj("entry_001"),
+                dec(1),
+                subj("account_cash"),
+                dec(100),
+                dec(0)
+            ],
         )
         .await,
         "original debit line must remain"
     );
     assert!(
-        line_exists(
+        claim_exists(
             &pool,
-            &[subj("entry_001"), subj("account_revenue"), dec(0), dec(100)],
+            "JournalLine",
+            &[
+                subj("entry_001"),
+                dec(2),
+                subj("account_revenue"),
+                dec(0),
+                dec(100)
+            ],
         )
         .await,
         "original credit line must remain"
@@ -1156,9 +1155,16 @@ async fn double_entry_full_chain_through_pg() {
         .await
     );
     assert!(
-        line_exists(
+        claim_exists(
             &pool,
-            &[subj("entry_002"), subj("account_cash"), dec(101), dec(0)],
+            "JournalLine",
+            &[
+                subj("entry_002"),
+                dec(1),
+                subj("account_cash"),
+                dec(101),
+                dec(0)
+            ],
         )
         .await
     );

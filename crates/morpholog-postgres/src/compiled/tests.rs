@@ -120,11 +120,11 @@ fn post_simple_entry_delta_bounds_every_ledger_invariant_to_the_entry() {
         claim_instance("JournalEntry", &[subj("e42"), subj("d1"), subj("p1")]),
         claim_instance(
             "JournalLine",
-            &[subj("e42"), subj("l1"), subj("cash"), dec(100), dec(0)],
+            &[subj("e42"), dec(1), subj("cash"), dec(100), dec(0)],
         ),
         claim_instance(
             "JournalLine",
-            &[subj("e42"), subj("l2"), subj("rev"), dec(0), dec(100)],
+            &[subj("e42"), dec(2), subj("rev"), dec(0), dec(100)],
         ),
     ];
     let balanced = &set.invariants[2];
@@ -169,7 +169,7 @@ fn retraction_also_touches_cases() {
     let set = compiled(&program);
     let retracted = vec![claim_instance(
         "JournalLine",
-        &[subj("e7"), subj("l1"), subj("cash"), dec(5), dec(0)],
+        &[subj("e7"), dec(1), subj("cash"), dec(5), dec(0)],
     )];
     assert_eq!(
         bounded(set.invariants[2].case_filter(&[], &retracted)),

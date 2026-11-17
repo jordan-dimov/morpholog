@@ -19,7 +19,7 @@ See [`ledger.morph`](ledger.morph) for the surface syntax.
 | Predicate | Role |
 | --- | --- |
 | `JournalEntry(entry_id, posting_date, period)` | The header for a posted entry, one per id (`unique by (entry_id)`). Append-only. |
-| `JournalLine(entry_id, line_id, account, debit, credit)` | One line of an entry, identified by a line id each posting mints, so two lines with the same account and amounts stay two lines. Append-only. Per-line shape (e.g. "exactly one side is non-zero") is not enforced. |
+| `JournalLine(entry_id, line_no, account, debit, credit)` | One line of an entry, numbered within it, so two lines with the same account and amounts stay two lines. Append-only. Per-line shape (e.g. "exactly one side is non-zero") is not enforced. |
 | `PeriodClosed(period)` | The period is closed against further normal posting. Append-only and **terminal in v0** - no `reopen_period`. |
 | `Supersedes(new_entry_id, prior_entry_id)` | Restatement lineage. Append-only. |
 
