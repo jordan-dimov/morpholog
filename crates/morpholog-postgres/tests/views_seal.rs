@@ -244,13 +244,14 @@ async fn a_history_view_outlives_the_script_that_stops_asking_for_it() {
         .execute(&pool)
         .await
         .unwrap();
-    let (answers,): (i64,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+    // The audit log is shared with other suites, so how many rows the view
+    // returns is theirs to say; that it can be read at all is the point.
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT count(*) FROM {SCHEMA}.journal_line_history"
     )))
     .fetch_one(&pool)
     .await
-    .unwrap();
-    assert_eq!(answers, 0, "the view is still there to be read");
+    .expect("the view is still there to be read");
     let (sealed,): (i64,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT count(*) FROM {SCHEMA}._morpholog_view_defs WHERE view_name LIKE '%\\_history'"
     )))
