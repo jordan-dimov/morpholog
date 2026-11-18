@@ -87,6 +87,7 @@ example_module!(clinical_trial_enrolment {
 example_module!(covenant_reporting);
 example_module!(delivery_hour_limits);
 example_module!(double_entry_ledger);
+example_module!(gas_day_cash_out);
 example_module!(insurance_claim_settlement);
 example_module!(kyc_sanctions_screening {
     pub const SANCTIONS: &str = "sanctions";
