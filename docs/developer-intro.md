@@ -22,7 +22,7 @@ the same way, but they can span many records, do exact decimal arithmetic, and
 say "for all", "there exists" and "the sum of". Those are the rules that live in
 application code today, and drift.
 
-**A transformation is the only door for writes.** You propose a change: some
+**A transformation is the only governed door for writes.** You propose a change: some
 records to add, some to remove. The runtime checks that everything it touches
 still obeys every invariant. If anything would break, nothing is written. There
 is no second door, no ORM path that writes its own way. (Raw SQL access to the
@@ -518,8 +518,9 @@ transformations:
 ```
 
 The `in_force` line is the August attempt. A rule that has refused a real
-proposal is the best evidence it is alive. The one to watch for is the opposite:
-a rule shown as `never fired` is text with a load-bearing name and no effect.
+proposal is the best evidence it is alive. A rule shown as `never fired` has only
+ever been trivially true. That is a reason to look, not proof it does nothing: it
+may guard a state no proposal has tried to reach yet.
 
 ## Say the rules on the declarations
 
