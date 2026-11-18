@@ -22,15 +22,17 @@ The rules are the Uniform Network Code: TPD Sections C and F v6.27 (14 September
 | `OcmTrade(trade, gas_day, qty_kwh, price_p_per_kwh)` | A balancing trade, from the appointed market data source. |
 | `SapDetermination(version, gas_day, sap_p_per_kwh, precision)` | One SAP, with an identity, the policy it was kept to, and (`SapUsedTrade`, `SapUsedPrior`) the evidence it used. |
 | `CurrentSap(gas_day, version)` | The day's current determination, replaced only through `SapSupersedes`. |
-| `Statement(statement, shipper, gas_day, sap_version, ...)` | A cash-out statement: the SAP version, both SMPs, the charging policy and price, who pays, and the charge. |
+| `Imbalance(imbalance, shipper, gas_day, imbalance_kwh)` | A shipper's imbalance for a day, with an identity a statement names. |
+| `Statement(statement, shipper, gas_day, sap_version, imbalance, ...)` | A cash-out statement: the SAP version and imbalance it used, both SMPs, the charging policy and price, and one signed cash flow, positive when National Gas pays the shipper. |
 | `CurrentStatement(shipper, gas_day, statement)` | The current statement, corrected only through `StatementCorrects`. |
 | `NeedsReview(statement)` | A view: current statements whose SAP no longer matches the evidence. |
 
 | Rules | |
 | --- | --- |
 | `stale(v)` | A determination's named inputs differ from the evidence now held, directly or through any day it leaned on. |
-| `in_time` | A nomination's receipt is before the published 13:00 deadline on the day before. |
+| `received_by_the_network`, `in_time` | A nomination's receipt comes from the network's own system, and is before the published 13:00 deadline on the day before. |
 | `first_or_stale` | A new determination or statement replaces the current one only when that one is stale. |
+| `sap_not_stale`, `inputs_current` | No statement uses, and no quiet day leans on, a SAP the record already knows is stale. |
 
 | Acts | |
 | --- | --- |
@@ -65,4 +67,9 @@ The tests in `crates/morpholog-examples/tests/gas_day_cash_out.rs` walk the stor
 
 ## What it does not cover
 
-Renominations and their effective times, trade nominations, the OCM operator's role, Gemini's clock-change outage, completeness evidence for closing a receipt window, the EU timetable, capacity, and multi-day trades. Those are the next steps for this example, on the same programme.
+Two limits of this slice:
+
+- A statement names its SAP determination and its imbalance, but not which National Gas action, if any, set the SMP. Every action for the day is on the record, and the statement's SMP figures show which limb applied, but the action itself is not named.
+- The authorities rest on a trusted start: `appoint_operator` is first come, first served, so a deployment's first act must be its operator's. On a closed deployment each name can be asserted only by the logins granted it, so a shipper's login cannot act as the operator or a receiver, and cannot appoint a receipt authority or record a receipt for itself.
+
+Not modelled yet: renominations and their effective times, trade nominations, the OCM operator's role, Gemini's clock-change outage, completeness evidence for closing a receipt window, the EU timetable, capacity, and multi-day trades. Those are the next steps for this example, on the same programme.

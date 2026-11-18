@@ -113,8 +113,9 @@ predicate CurrentSap(gas_day: Date, version: Subject)
 predicate SapSupersedes(new_version: Subject, prior_version: Subject)
 
 -- A shipper's imbalance for a day, in kWh: positive when long, negative
--- when short.
-predicate Imbalance(shipper: Subject, gas_day: Date, imbalance_kwh: Decimal)
+-- when short. It has an identity, so a statement can name the one it used.
+predicate Imbalance(imbalance: Subject, shipper: Subject, gas_day: Date, imbalance_kwh: Decimal)
+    unique by (imbalance)
     unique by (shipper, gas_day)
 
 -- How a price becomes a charge. The code gives the price formula but no
@@ -126,13 +127,15 @@ predicate ChargingPolicy(policy: Subject, quantum_p_per_kwh: Decimal)
     unique by (policy)
     append only
 
--- A cash-out statement names the SAP determination it used, the prices it
--- computed, the policy and the price it charged at, and who pays whom. The
--- charge is in pence and is not rounded to whole pence: no monetary
--- rounding is stated either, so this is a calculated charge, not an
--- amount payable. A correction is a new statement that names the one it
--- corrects; the original stays.
-predicate Statement(statement: Subject, shipper: Subject, gas_day: Date, sap_version: Subject, smp_buy: Decimal, smp_sell: Decimal, policy: Subject, charging_price: Decimal, payer: Subject, charge_pence: Decimal)
+-- A cash-out statement names the SAP determination and the imbalance it
+-- used, the prices it computed, and the policy and price it charged at.
+-- The money is one signed figure: positive when National Gas pays the
+-- shipper, negative when the shipper pays. A price can be negative, so
+-- the sign cannot be read off the imbalance alone. It is in pence and not
+-- rounded to whole pence: no monetary rounding is stated either, so it is
+-- a calculated cash flow, not an amount payable. A correction is a new
+-- statement that names the one it corrects; the original stays.
+predicate Statement(statement: Subject, shipper: Subject, gas_day: Date, sap_version: Subject, imbalance: Subject, smp_buy: Decimal, smp_sell: Decimal, policy: Subject, charging_price: Decimal, cash_flow_to_shipper_pence: Decimal)
     unique by (statement)
     append only
 predicate CurrentStatement(shipper: Subject, gas_day: Date, statement: Subject)
@@ -216,11 +219,13 @@ transformation receive(message, boundary, received_at: Timestamp):
 -- A daily-metered output nomination (TPD C1.2, C2.3.1): due by 13:00 on
 -- the day before the gas day. The deadline is read from the published
 -- 13:00 row for that date, never typed in by whoever nominates, and
--- lateness is judged on the receipt, not on when this act runs.
+-- lateness is judged on the receipt from the network's own system,
+-- Gemini, not on when this act runs or on a receipt from anywhere else.
 transformation nominate_output(message, shipper, gas_day: Date, qty_kwh: Decimal):
     require may_nominate: MayNominate(actor, shipper)
     require gas_day_published: LocalDay(#gas_day, gas_day, _, _, _, _)
-    bind Received(message, _, received_at)
+    require received_by_the_network: Received(message, #gemini, _)
+    bind Received(message, #gemini, received_at)
     let preceding_day = gas_day - span(P1D)
     bind LocalDay(#dm_output_deadline, preceding_day, due, _, _, _)
     require in_time: received_at strictly_before due
@@ -249,9 +254,9 @@ transformation publish_default_smp(market, effective_from: Date, p_per_kwh: Deci
     require source: MarketDataSource(actor)
     admit DefaultSmp(market, effective_from, p_per_kwh)
 
-transformation record_imbalance(shipper, gas_day: Date, imbalance_kwh: Decimal):
+transformation record_imbalance(imbalance, shipper, gas_day: Date, imbalance_kwh: Decimal):
     require agent: SettlementAgent(actor)
-    admit Imbalance(shipper, gas_day, imbalance_kwh)
+    admit Imbalance(imbalance, shipper, gas_day, imbalance_kwh)
 
 
 -- SAP for a day with trades (F1.2.1(c)): the sum of each trade's
@@ -277,13 +282,16 @@ transformation determine_sap(gas_day: Date, precision):
 
 -- SAP for a day with no trades (F1.2.2): the mean of the current SAP of
 -- each of the seven days before it, whichever rule determined them. It
--- names all seven, and is kept to the precision policy it is given.
+-- names all seven, and is kept to the precision policy it is given. It
+-- may not lean on a day whose own figure is already stale: that day is
+-- re-determined first, or the new figure would be stale on arrival.
 transformation determine_fallback_sap(gas_day: Date, precision):
     require agent: SettlementAgent(actor)
     require no_trades: not OcmTrade(gas_day: gas_day, ..)
     require first_or_stale: not CurrentSap(gas_day, _) or (CurrentSap(gas_day, current) and stale(current))
     let start = gas_day - span(P7D)
     require seven_preceding_days: sum(1 | CurrentSap(d, _) and start on_or_before d and d before gas_day) = 7
+    require inputs_current: not (CurrentSap(d, v) and start on_or_before d and d before gas_day and stale(v))
     bind SapPrecision(precision, quantum)
     let sap = round(sum(p | CurrentSap(d, v) and SapDetermination(v, d, p, _) and start on_or_before d and d before gas_day) / 7, quantum)
     let version = new Subject()
@@ -304,23 +312,24 @@ transformation determine_fallback_sap(gas_day: Date, precision):
 -- day National Gas took no action. This example reads it as absent, and
 -- only once the day's actions are known to be complete. A long shipper
 -- is paid its surplus at the Sell price, a short one pays its shortfall
--- at the Buy price, each at the charging policy's price.
+-- at the Buy price, each at the charging policy's price. A statement may
+-- not use a SAP the record already knows is stale.
 transformation issue_statement(shipper, gas_day: Date, policy):
     require agent: SettlementAgent(actor)
     require actions_complete: ActionsComplete(gas_day)
     require first_or_stale: not CurrentStatement(shipper, gas_day, _) or (CurrentStatement(shipper, gas_day, current) and Statement(statement: current, sap_version: used, ..) and stale(used))
     bind CurrentSap(gas_day, version)
+    require sap_not_stale: not stale(version)
     bind SapDetermination(version, gas_day, sap, _)
     bind default_smp_in_force_on(#nbp, gas_day, margin)
-    bind Imbalance(shipper, gas_day, imbalance)
+    bind Imbalance(imbalance_id, shipper, gas_day, imbalance)
     bind ChargingPolicy(policy, quantum)
     let smp_buy = if(NgBuyAction(_, gas_day, _), max(sap + margin, max(b | NgBuyAction(_, gas_day, b))), sap + margin)
     let smp_sell = if(NgSellAction(_, gas_day, _), min(sap - margin, min(s | NgSellAction(_, gas_day, s))), sap - margin)
     let charging_price = if(0 < imbalance, round(smp_sell, quantum), round(smp_buy, quantum))
-    let payer = if(0 < imbalance, #national_gas_pays_user, #user_pays_national_gas)
-    let charge = if(0 < imbalance, imbalance * charging_price, (0 - imbalance) * charging_price)
+    let cash_flow = imbalance * charging_price
     let statement = new Subject()
-    admit Statement(statement, shipper, gas_day, version, smp_buy, smp_sell, policy, charging_price, payer, charge)
+    admit Statement(statement, shipper, gas_day, version, imbalance_id, smp_buy, smp_sell, policy, charging_price, cash_flow)
     for CurrentStatement(shipper, gas_day, prior):
         retract CurrentStatement(shipper, gas_day, prior)
         admit StatementCorrects(statement, prior)

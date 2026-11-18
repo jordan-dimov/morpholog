@@ -257,14 +257,29 @@ fn needs_review(state: &State) -> Vec<ClaimInstance> {
     .unwrap()
 }
 
-/// SMP Buy, SMP Sell, charging price and charge of a statement.
+/// SMP Buy, SMP Sell, charging price and cash flow to the shipper of a
+/// statement.
 fn figures(row: &ClaimInstance) -> [EvalValue; 4] {
     [
-        row.args[4].clone(),
         row.args[5].clone(),
-        row.args[7].clone(),
+        row.args[6].clone(),
+        row.args[8].clone(),
         row.args[9].clone(),
     ]
+}
+
+fn imbalance(state: State, shipper: &str, day: &str, kwh: i64) -> State {
+    accept(
+        state,
+        "record_imbalance",
+        "settlement",
+        vec![
+            subj(&format!("imbalance_{shipper}_{day}")),
+            subj(shipper),
+            date(day),
+            dec(kwh),
+        ],
+    )
 }
 
 #[test]
@@ -298,12 +313,7 @@ fn a_late_trade_flags_the_statement_that_used_it_and_the_correction_stands_besid
         "market_data",
         vec![date("2026-10-21")],
     );
-    s = accept(
-        s,
-        "record_imbalance",
-        "settlement",
-        vec![subj("shipper_a"), date("2026-10-21"), dec(-1_200_000)],
-    );
+    s = imbalance(s, "shipper_a", "2026-10-21", -1_200_000);
     s = statement(s, "shipper_a", "2026-10-21", CHARGING);
     let original = statements(&s).pop().unwrap();
     assert_eq!(
@@ -312,10 +322,10 @@ fn a_late_trade_flags_the_statement_that_used_it_and_the_correction_stands_besid
             dec_str("3.19220204"),
             dec_str("3.03800204"),
             dec_str("3.1922"),
-            dec_str("3830640.0000"),
+            dec_str("-3830640.0000"),
         ]
     );
-    assert_eq!(original.args[8], subj("user_pays_national_gas"));
+    assert_eq!(original.args[4], subj("imbalance_shipper_a_2026-10-21"));
     assert!(needs_review(&s).is_empty());
 
     // A Monday trade nobody had reported: the 14th is stale, and so is
@@ -359,7 +369,7 @@ fn a_late_trade_flags_the_statement_that_used_it_and_the_correction_stands_besid
             dec_str("3.20265102"),
             dec_str("3.04845102"),
             dec_str("3.2027"),
-            dec_str("3843240.0000"),
+            dec_str("-3843240.0000"),
         ]
     );
     assert!(
@@ -385,28 +395,24 @@ fn charged(
     state: State,
     day: &str,
     price: &str,
-    imbalance: i64,
+    kwh: i64,
     shipper: &str,
     policy: &str,
 ) -> (State, EvalValue, EvalValue) {
-    let mut s = trade(state, &format!("t_{day}_{shipper}"), day, 1_000, price);
+    let mut s = state;
     if !s.claims_for("CurrentSap").any(|c| c.args[0] == date(day)) {
+        s = trade(s, &format!("t_{day}"), day, 1_000, price);
         s = determine(s, "determine_sap", day);
         s = accept(s, "report_actions_complete", "market_data", vec![date(day)]);
     }
-    s = accept(
-        s,
-        "record_imbalance",
-        "settlement",
-        vec![subj(shipper), date(day), dec(imbalance)],
-    );
+    s = imbalance(s, shipper, day, kwh);
     s = statement(s, shipper, day, policy);
     let row = statements(&s)
         .into_iter()
         .find(|r| r.args[1] == subj(shipper) && r.args[2] == date(day))
         .unwrap();
-    let (price, charge) = (row.args[7].clone(), row.args[9].clone());
-    (s, price, charge)
+    let (price, cash_flow) = (row.args[8].clone(), row.args[9].clone());
+    (s, price, cash_flow)
 }
 
 #[test]
@@ -448,8 +454,8 @@ fn a_price_difference_below_the_quantum_moves_a_large_charge_only_as_the_policy_
         "shipper_a",
         CHARGING,
     );
-    assert_eq!(below, dec_str("153855000.0000"));
-    assert_eq!(at, dec_str("153860000.0000"));
+    assert_eq!(below, dec_str("-153855000.0000"));
+    assert_eq!(at, dec_str("-153860000.0000"));
 }
 
 #[test]
@@ -475,7 +481,7 @@ fn statements_under_different_charging_policies_keep_their_own_figures() {
     assert_eq!(second_price, dec_str("3.08"));
     let rows = statements(&s);
     assert!(rows.contains(&first), "the first statement is unchanged");
-    let policies: Vec<_> = rows.iter().map(|r| r.args[6].clone()).collect();
+    let policies: Vec<_> = rows.iter().map(|r| r.args[7].clone()).collect();
     assert!(policies.contains(&subj(CHARGING)));
     assert!(policies.contains(&subj("example_charging_price_2dp_v1")));
 }
@@ -485,12 +491,7 @@ fn no_statement_before_the_days_actions_are_known_complete() {
     let mut s = set_up();
     s = trade(s, "t1", "2026-10-11", 1_000, "3.00");
     s = determine(s, "determine_sap", "2026-10-11");
-    s = accept(
-        s,
-        "record_imbalance",
-        "settlement",
-        vec![subj("shipper_a"), date("2026-10-11"), dec(-1_000)],
-    );
+    s = imbalance(s, "shipper_a", "2026-10-11", -1_000);
     refused_by(
         &refuse(
             &s,
@@ -516,5 +517,95 @@ fn no_statement_before_the_days_actions_are_known_complete() {
     );
     s = statement(s, "shipper_a", "2026-10-11", CHARGING);
     let row = statements(&s).pop().unwrap();
-    assert_eq!(row.args[4], dec_str("3.5"));
+    assert_eq!(row.args[5], dec_str("3.5"));
+}
+
+#[test]
+fn a_nomination_counts_only_the_networks_own_receipt() {
+    let mut s = accept(
+        set_up(),
+        "appoint_receipt_authority",
+        "operator",
+        vec![subj("other_system"), subj("other_receiver")],
+    );
+    s = accept(
+        s,
+        "receive",
+        "other_receiver",
+        vec![
+            subj("nom_elsewhere"),
+            subj("other_system"),
+            ts("2026-10-23T11:00:00Z"),
+        ],
+    );
+    refused_by(
+        &refuse(
+            &s,
+            "nominate_output",
+            "nominator_a",
+            nomination("nom_elsewhere"),
+        ),
+        "received_by_the_network",
+    );
+}
+
+#[test]
+fn no_statement_or_fallback_rests_on_a_price_already_known_to_be_stale() {
+    let mut s = set_up();
+    for (id, day, qty, price) in TRADES {
+        s = trade(s, id, day, qty, price);
+    }
+    for day in 13..=19 {
+        s = determine(s, "determine_sap", &format!("2026-10-{day}"));
+    }
+    // A late trade for the 19th arrives before anything else is decided.
+    s = trade(s, "t19late", "2026-10-19", 100_000, "3.50");
+    refused_by(
+        &refuse(
+            &s,
+            "determine_fallback_sap",
+            "settlement",
+            vec![date("2026-10-20"), subj(PRECISION)],
+        ),
+        "inputs_current",
+    );
+    s = accept(
+        s,
+        "report_actions_complete",
+        "market_data",
+        vec![date("2026-10-19")],
+    );
+    s = imbalance(s, "shipper_a", "2026-10-19", -1_000);
+    refused_by(
+        &refuse(
+            &s,
+            "issue_statement",
+            "settlement",
+            vec![subj("shipper_a"), date("2026-10-19"), subj(CHARGING)],
+        ),
+        "sap_not_stale",
+    );
+    // Re-determined, the 19th carries both: the statement and the fallback go.
+    s = determine(s, "determine_sap", "2026-10-19");
+    s = statement(s, "shipper_a", "2026-10-19", CHARGING);
+    determine(s, "determine_fallback_sap", "2026-10-20");
+}
+
+#[test]
+fn the_cash_flow_is_signed_by_imbalance_and_price_together() {
+    // SAP 3: Buy 3.0771, Sell 2.9229. SAP 0.01: Sell -0.0671. SAP -1:
+    // Buy -0.9229. Positive is National Gas paying the shipper.
+    let cases = [
+        ("2026-10-02", "3", 1_000, "2922.9000"),
+        ("2026-10-03", "3", -1_000, "-3077.1000"),
+        ("2026-10-04", "0.01", 1_000, "-67.1000"),
+        ("2026-10-05", "-1", -1_000, "922.9000"),
+        ("2026-10-06", "3", 0, "0.0000"),
+    ];
+    let mut s = set_up();
+    for (day, sap, kwh, expected) in cases {
+        let (next, _, cash_flow) = charged(s, day, sap, kwh, "shipper_a", CHARGING);
+        assert_eq!(cash_flow, dec_str(expected), "{day}: SAP {sap}, {kwh} kWh");
+        s = next;
+    }
 }
