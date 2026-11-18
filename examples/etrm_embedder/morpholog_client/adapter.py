@@ -103,6 +103,8 @@ class MorphologRequestError(MorphologError):
     the request's own fault.
     ``row`` is the session request number, or ``None`` for a one-shot
     ``propose``, ``transact`` or a batch refused before its first row.
+    ``check``, ``migrate`` and ``provision_indexes`` raise it with one of
+    ``envelopes.PREFLIGHT_CODES`` when they could not produce a report.
     ``kind`` names the kernel error on a ``kernel_error``, and is ``None``
     on every other code. ``parameter`` is the one request key an
     ``invalid_arguments`` points at, when the binary could name one."""
@@ -394,6 +396,16 @@ class Morpholog:
         return json.loads(self._invoke(*args))
 
     @staticmethod
+    def _report(stdout: str) -> object:
+        """A deployment report, or the coded failure the binary printed in
+        its place, raised."""
+        payload = json.loads(stdout)
+        if isinstance(payload, dict) and payload.get("status") == "error":
+            refused = envelopes.PreflightError.from_json(payload)
+            raise MorphologRequestError(refused.code, refused.error)
+        return payload
+
+    @staticmethod
     def _opt(flag: str, value: str | None) -> list[str]:
         return [] if value is None else [flag, value]
 
@@ -493,7 +505,7 @@ class Morpholog:
             args.append("--check")
         if prepare:
             args.append("--prepare")
-        return envelopes.MigrationReport.from_json(self._json(*args))
+        return envelopes.MigrationReport.from_json(self._report(self._invoke(*args)))
 
     def provision_indexes(
         self,
@@ -544,7 +556,7 @@ class Morpholog:
         proc = self._run(args, timeout=timeout)
         if not proc.stdout.strip():
             raise MorphologError(f"`{_redact_argv(args)}`:\n{self._redact_stderr(proc.stderr)}")
-        return envelopes.ProvisionReport.from_json(json.loads(proc.stdout))
+        return envelopes.ProvisionReport.from_json(self._report(proc.stdout))
 
     def hash(self) -> envelopes.HashReport:
         """The stamps the binary reports for the file. When this call runs
@@ -558,13 +570,16 @@ class Morpholog:
     def check(self, strict: bool = False, *, with_database: bool = False) -> envelopes.CheckReport:
         """Check the programme. With ``with_database``, also check that it
         fits the claims this client's database holds now: a deploy step,
-        not a guard on every call."""
+        not a guard on every call. A database the check cannot reach, or
+        cannot serve, raises ``MorphologRequestError`` with one of
+        ``envelopes.PREFLIGHT_CODES``, as ``migrate`` and
+        ``provision_indexes`` do."""
         args = ["check", "--json", self.file]
         if strict:
             args.append("--strict")
         if with_database:
             args.extend(["--database-url", self.database_url])
-        return envelopes.CheckReport.from_json(self._json(*args))
+        return envelopes.CheckReport.from_json(self._report(self._invoke(*args)))
 
     def guarantees(self) -> list[envelopes.Guarantee]:
         """Every invariant of this client's programme file, generated ones

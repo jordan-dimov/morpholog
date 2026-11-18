@@ -180,6 +180,16 @@ class RunOutcomes(unittest.TestCase):
         self.assertEqual(errored.result.code, "kernel_error")
         self.assertTrue(errored.trace)
 
+    def test_a_preflight_error_parses_and_its_codes_are_the_schema_s(self):
+        error = envelopes.PreflightError.from_json(golden("preflight_error_not_initialised.json"))
+        self.assertEqual(error.code, "not_initialised")
+        schema = json.loads(
+            (GOLDEN_DIR.parents[2] / "src" / "schemas" / "result.json").read_text()
+        )
+        self.assertEqual(envelopes.PREFLIGHT_CODES, set(schema["$defs"]["preflight_code"]["enum"]))
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.PreflightError.from_json({**golden("preflight_error_not_initialised.json"), "code": "other"})
+
     def test_a_one_shot_error_object_parses_and_its_codes_are_the_schema_s(self):
         error = envelopes.RequestError.from_json(golden("propose_error_not_committed.json"))
         self.assertEqual(error.code, "not_committed")

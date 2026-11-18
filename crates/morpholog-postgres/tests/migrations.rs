@@ -337,8 +337,10 @@ async fn a_database_below_the_baseline_is_refused_by_name() {
         let err = outcome.unwrap_err();
         let rendered = err.to_string();
         assert!(
-            matches!(err, morpholog_postgres::PgError::InvalidState(_))
-                && rendered.contains(&format!("but not migration {BASELINE_VERSION}"))
+            matches!(
+                err,
+                morpholog_postgres::PgError::MigrationRecordAltered { .. }
+            ) && rendered.contains(&format!("but not migration {BASELINE_VERSION}"))
                 && !rendered.contains("upgrade"),
             "{err:?}"
         );

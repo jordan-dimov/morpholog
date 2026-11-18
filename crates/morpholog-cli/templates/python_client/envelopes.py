@@ -3680,6 +3680,36 @@ class CheckpointRefusal:
         )
 
 
+#: Why ``check``, ``migrate`` or ``provision_indexes`` produced no report.
+PREFLIGHT_CODES = frozenset(
+    {
+        "connect_failed",
+        "not_initialised",
+        "schema_below_baseline",
+        "schema_ahead",
+        "schema_behind",
+        "schema_record_altered",
+    }
+)
+
+
+@dataclass(frozen=True)
+class PreflightError:
+    """What ``check`` with a database, ``migrate`` or ``provision_indexes``
+    met before its first query of the deployment, in place of its report.
+    Nothing durable happened. The client raises it as a
+    ``MorphologRequestError`` carrying the code."""
+
+    code: str
+    error: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> PreflightError:
+        data = _strict("preflight error", payload, {"code", "error", "status"})
+        data.constant("status", "error")
+        return cls(code=data.member("code", PREFLIGHT_CODES), error=data.text("error"))
+
+
 @dataclass(frozen=True)
 class PrefixPackManifest:
     """Line 1 of a complete-prefix evidence pack. The next

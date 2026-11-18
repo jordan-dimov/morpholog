@@ -644,6 +644,9 @@ pub morpholog_postgres::PgError::Kernel(morpholog_core::eval::EvalError)
 pub morpholog_postgres::PgError::LockNotAcquired
 pub morpholog_postgres::PgError::LockNotAcquired::attempts: u32
 pub morpholog_postgres::PgError::LockNotAcquired::statement: alloc::string::String
+pub morpholog_postgres::PgError::MigrationRecordAltered
+pub morpholog_postgres::PgError::MigrationRecordAltered::baseline: i32
+pub morpholog_postgres::PgError::MigrationRecordAltered::newest: i32
 pub morpholog_postgres::PgError::MigrationRunning
 pub morpholog_postgres::PgError::NoCheckpoint
 pub morpholog_postgres::PgError::NoProgramNamed
@@ -670,6 +673,7 @@ pub morpholog_postgres::PgError::SchemaBehind::detail: alloc::string::String
 pub morpholog_postgres::PgError::SchemaBelowBaseline
 pub morpholog_postgres::PgError::SchemaBelowBaseline::baseline: i32
 pub morpholog_postgres::PgError::SchemaBelowBaseline::recorded: core::option::Option<i32>
+pub morpholog_postgres::PgError::SchemaMissing
 pub morpholog_postgres::PgError::SerializationFailure
 pub morpholog_postgres::PgError::SigningKeyUnauthorised
 pub morpholog_postgres::PgError::SigningKeyUnauthorised::key_id: alloc::string::String

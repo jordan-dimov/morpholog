@@ -35,6 +35,34 @@ impl core::marker::Unpin for morpholog_cli::envelopes::ErrorCode
 impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::ErrorCode
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::ErrorCode
 impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::ErrorCode
+pub enum morpholog_cli::envelopes::PreflightCode
+pub morpholog_cli::envelopes::PreflightCode::ConnectFailed
+pub morpholog_cli::envelopes::PreflightCode::NotInitialised
+pub morpholog_cli::envelopes::PreflightCode::SchemaAhead
+pub morpholog_cli::envelopes::PreflightCode::SchemaBehind
+pub morpholog_cli::envelopes::PreflightCode::SchemaBelowBaseline
+pub morpholog_cli::envelopes::PreflightCode::SchemaRecordAltered
+impl morpholog_cli::envelopes::PreflightCode
+pub const morpholog_cli::envelopes::PreflightCode::ALL: &'static [morpholog_cli::envelopes::PreflightCode]
+impl core::clone::Clone for morpholog_cli::envelopes::PreflightCode
+pub fn morpholog_cli::envelopes::PreflightCode::clone(&self) -> morpholog_cli::envelopes::PreflightCode
+impl core::clone::TrivialClone for morpholog_cli::envelopes::PreflightCode
+impl core::cmp::Eq for morpholog_cli::envelopes::PreflightCode
+impl core::cmp::PartialEq for morpholog_cli::envelopes::PreflightCode
+pub fn morpholog_cli::envelopes::PreflightCode::eq(&self, &morpholog_cli::envelopes::PreflightCode) -> bool
+impl core::fmt::Debug for morpholog_cli::envelopes::PreflightCode
+pub fn morpholog_cli::envelopes::PreflightCode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for morpholog_cli::envelopes::PreflightCode
+impl core::marker::StructuralPartialEq for morpholog_cli::envelopes::PreflightCode
+impl serde_core::ser::Serialize for morpholog_cli::envelopes::PreflightCode
+pub fn morpholog_cli::envelopes::PreflightCode::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_cli::envelopes::PreflightCode
+impl core::marker::Send for morpholog_cli::envelopes::PreflightCode
+impl core::marker::Sync for morpholog_cli::envelopes::PreflightCode
+impl core::marker::Unpin for morpholog_cli::envelopes::PreflightCode
+impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::PreflightCode
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::PreflightCode
+impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::PreflightCode
 pub enum morpholog_cli::envelopes::ProposeCode
 pub morpholog_cli::envelopes::ProposeCode::ActorAssertionUnauthorised
 pub morpholog_cli::envelopes::ProposeCode::CommitOutcomeUnknown
@@ -255,6 +283,21 @@ impl core::marker::Unpin for morpholog_cli::envelopes::NamedClaimRead
 impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::NamedClaimRead
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::NamedClaimRead
 impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::NamedClaimRead
+pub struct morpholog_cli::envelopes::PreflightError
+pub morpholog_cli::envelopes::PreflightError::code: morpholog_cli::envelopes::PreflightCode
+pub morpholog_cli::envelopes::PreflightError::error: alloc::string::String
+pub morpholog_cli::envelopes::PreflightError::status: &'static str
+impl morpholog_cli::envelopes::PreflightError
+pub fn morpholog_cli::envelopes::PreflightError::new(morpholog_cli::envelopes::PreflightCode, alloc::string::String) -> Self
+impl serde_core::ser::Serialize for morpholog_cli::envelopes::PreflightError
+pub fn morpholog_cli::envelopes::PreflightError::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_cli::envelopes::PreflightError
+impl core::marker::Send for morpholog_cli::envelopes::PreflightError
+impl core::marker::Sync for morpholog_cli::envelopes::PreflightError
+impl core::marker::Unpin for morpholog_cli::envelopes::PreflightError
+impl core::marker::UnsafeUnpin for morpholog_cli::envelopes::PreflightError
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::PreflightError
+impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::PreflightError
 pub struct morpholog_cli::envelopes::ProvisionReport<'a>
 pub morpholog_cli::envelopes::ProvisionReport::applied: bool
 pub morpholog_cli::envelopes::ProvisionReport::dry_run: bool

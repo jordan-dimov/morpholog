@@ -130,6 +130,22 @@ pub enum PgError {
         recorded: Option<i32>,
         baseline: i32,
     },
+    /// The database has no `morpholog` schema: `init` never ran on it.
+    #[error(
+        "this database has no `morpholog` schema. Run `morpholog init` to provision it - \
+         a fresh database is created at the head and needs no migrations."
+    )]
+    SchemaMissing,
+    /// The migration record holds a version past the baseline but not the
+    /// baseline itself, which no release writes: it was changed outside
+    /// `morpholog migrate`.
+    #[error(
+        "this database records migration {newest} but not migration {baseline}, which \
+         every release since v{} records; its migration record was changed outside \
+         `morpholog migrate`, and no release can be trusted to migrate it",
+        crate::migrations::BASELINE_RELEASE
+    )]
+    MigrationRecordAltered { newest: i32, baseline: i32 },
     /// A supplied `transition_id` does not name an existing audit row.
     /// Every unknown id is refused, including one that sorts between known
     /// ids.

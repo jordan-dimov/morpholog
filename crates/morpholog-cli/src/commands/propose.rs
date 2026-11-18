@@ -391,6 +391,8 @@ pub(crate) fn classify_pg_error(err: morpholog_postgres::PgError) -> RowError {
         | PgError::SchemaBehind { .. }
         | PgError::SchemaAhead { .. }
         | PgError::SchemaBelowBaseline { .. }
+        | PgError::SchemaMissing
+        | PgError::MigrationRecordAltered { .. }
         | PgError::LockNotAcquired { .. }
         | PgError::ObjectDiffers { .. }
         | PgError::MigrationRunning

@@ -14,7 +14,7 @@ use morpholog_postgres::{
 
 use crate::ProvisionIndexesArgs;
 use crate::commands::{
-    AlreadyReported, connect, out, parse_or_report, prepare_or_report, print_json,
+    AlreadyReported, connect_or_report, out, parse_or_report, prepare_or_report, print_json,
 };
 use morpholog_cli::envelopes;
 
@@ -27,7 +27,7 @@ pub(crate) async fn indexes(args: ProvisionIndexesArgs) -> anyhow::Result<()> {
     let programs: Vec<&PgProgram> = programs.iter().collect();
     // A usage error should not need a database to be reported.
     check_named_programs(&programs)?;
-    let pool = connect(&args.db.database_url).await?;
+    let pool = connect_or_report(&args.db.database_url, args.json).await?;
     let report = if args.dry_run || args.check {
         plan_indexes(&pool, &programs, args.prune).await?
     } else {
