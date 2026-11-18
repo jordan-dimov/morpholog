@@ -5411,10 +5411,13 @@ async fn every_command_refuses_a_schema_behind_or_ahead_of_the_binary() {
             stderr.contains("does not record migration") && stderr.contains("v0.0.14 binary"),
             "{what} names the baseline and the remedy: {stderr}"
         );
-        if what != "write" {
+        if what == "read" {
             assert!(stdout.is_empty(), "{what}: {stdout}");
         }
     }
+    let coded: Value =
+        serde_json::from_str(&apply.1).unwrap_or_else(|e| panic!("{e}: {}", apply.1));
+    assert_eq!(coded["code"], "schema_below_baseline", "{}", apply.1);
     // A proposal states its non-commit with the published code.
     let refusal: Value =
         serde_json::from_str(&write.1).unwrap_or_else(|e| panic!("{e}: {}", write.1));
