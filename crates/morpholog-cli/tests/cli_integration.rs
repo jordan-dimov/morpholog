@@ -5494,6 +5494,34 @@ async fn every_command_refuses_a_schema_behind_or_ahead_of_the_binary() {
     assert!(status.success(), "{stderr}");
 }
 
+/// `check -v` reports the programme's read plan, which says nothing about
+/// whether a database holds its indexes. With a database it says so, and
+/// names the command that does judge provisioning, on a database that has
+/// none of the programme's indexes.
+#[tokio::test(flavor = "current_thread")]
+async fn check_verbose_does_not_vouch_for_a_database_s_indexes() {
+    reset_db().await;
+    let ledger = ledger_morph();
+    let provisioning =
+        "  index and statistics provisioning: not checked (run provision indexes --check)\n";
+    let (status, stdout, stderr) = run_cli(&["check", "-v", &ledger]);
+    assert!(status.success(), "{stderr}");
+    assert!(stdout.contains("  body read plan: all keyed\n"), "{stdout}");
+    assert!(stdout.ends_with(provisioning), "{stdout}");
+    let (status, _, stderr) = run_cli(&["provision", "indexes", "--check", &ledger]);
+    assert!(
+        !status.success(),
+        "nothing is provisioned, and the gate says so: {stderr}"
+    );
+
+    let offline = Command::new(common::bin())
+        .args(["check", "-v", &ledger])
+        .output()
+        .unwrap();
+    let offline = String::from_utf8(offline.stdout).unwrap();
+    assert!(!offline.contains("provisioning"), "{offline}");
+}
+
 /// A database-backed report that cannot be produced says why by a code:
 /// `check --json`, `provision indexes --json` and `migrate` print one
 /// `preflight_error` on stdout, keep the prose on stderr, and exit 1.

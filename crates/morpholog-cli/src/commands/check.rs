@@ -43,7 +43,16 @@ pub(crate) async fn run(args: CheckArgs) -> anyhow::Result<()> {
     };
     let verbose_summary = match (&collected.prepared, &routes) {
         (Some(prepared), Some(routes)) if args.verbose => {
-            Some(summary(prepared, routes, &args.file, &collected.parts))
+            let mut text = summary(prepared, routes, &args.file, &collected.parts);
+            if args.database_url.is_some() {
+                // The plan above is the programme's; whether this database
+                // holds its indexes is `provision indexes --check`'s to say.
+                text.push_str(
+                    "  index and statistics provisioning: not checked \
+                     (run provision indexes --check)\n",
+                );
+            }
+            Some(text)
         }
         _ => None,
     };
@@ -722,9 +731,13 @@ fn whole_reads(p: &Program) -> String {
         }
     }
     if lines.is_empty() {
-        return "  body reads: all keyed\n".to_string();
+        return "  body read plan: all keyed\n".to_string();
     }
-    format!("  body reads: {} whole\n{}", lines.len(), lines.concat())
+    format!(
+        "  body read plan: {} whole\n{}",
+        lines.len(),
+        lines.concat()
+    )
 }
 
 #[cfg(test)]
@@ -779,7 +792,7 @@ mod tests {
         let s = summary(p.prepared(), &routes, Path::new("demo.morph"), &None);
         assert_eq!(
             s,
-            "ok: demo.morph\nprogram: demo\n  predicates: 0\n  definitions: 0\n  invariants: 0\n  transformations: 0\n  intents: 0\n  derived claims: 0\n  invariant checks: compiled\n  invariant cases: all bound\n  body reads: all keyed\n"
+            "ok: demo.morph\nprogram: demo\n  predicates: 0\n  definitions: 0\n  invariants: 0\n  transformations: 0\n  intents: 0\n  derived claims: 0\n  invariant checks: compiled\n  invariant cases: all bound\n  body read plan: all keyed\n"
         );
     }
 }
