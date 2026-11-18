@@ -204,7 +204,7 @@ program: reported_revenue
   derived claims: 1
   invariant checks: compiled
   invariant cases: all bound
-  body reads: all keyed
+  body read plan: all keyed
 ```
 
 Without `-v`, success is silent and a mistake comes back with a caret on its

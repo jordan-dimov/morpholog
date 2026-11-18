@@ -68,7 +68,7 @@ fn check_verbose_clean_program_prints_summary() {
         String::from_utf8_lossy(&out.stderr)
     );
     let expected = format!(
-        "ok: {}\nprogram: demo\n  predicates: 1\n  definitions: 0\n  invariants: 1\n  transformations: 1\n  intents: 1\n  derived claims: 0\n  invariant checks: compiled\n  invariant cases: all bound\n  body reads: all keyed\n",
+        "ok: {}\nprogram: demo\n  predicates: 1\n  definitions: 0\n  invariants: 1\n  transformations: 1\n  intents: 1\n  derived claims: 0\n  invariant checks: compiled\n  invariant cases: all bound\n  body read plan: all keyed\n",
         tmp.path().display()
     );
     assert_eq!(
@@ -115,7 +115,7 @@ fn check_verbose_reports_a_mixed_programme_with_its_counts() {
     );
     assert!(
         stdout.ends_with(
-            "  invariant cases: 1 may check whole\n    sticky: `pre`\n  body reads: all keyed\n"
+            "  invariant cases: 1 may check whole\n    sticky: `pre`\n  body read plan: all keyed\n"
         ),
         "got: {stdout}"
     );
@@ -164,7 +164,7 @@ fn check_verbose_names_a_gate_that_reads_a_predicate_whole() {
     ));
     assert!(
         generated.ends_with(
-            "  body reads: 1 whole\n    capture reads Terms whole: statement 1 `within_limit`, through terms_in_force_on; capture also writes Terms, so concurrent capture proposals can conflict even on different records\n"
+            "  body read plan: 1 whole\n    capture reads Terms whole: statement 1 `within_limit`, through terms_in_force_on; capture also writes Terms, so concurrent capture proposals can conflict even on different records\n"
         ),
         "got: {generated}"
     );
@@ -176,7 +176,10 @@ fn check_verbose_names_a_gate_that_reads_a_predicate_whole() {
          and not (exists f2: Terms(org: org, item: item, from: f2, ..) and f1 before f2 and f2 on_or_before as_of)\n{}",
         gate("terms_in_org(org, i, on, q)")
     ));
-    assert!(keyed.ends_with("  body reads: all keyed\n"), "got: {keyed}");
+    assert!(
+        keyed.ends_with("  body read plan: all keyed\n"),
+        "got: {keyed}"
+    );
 }
 
 /// A definition that looks a claim up again by a key bound inside a sum
@@ -220,7 +223,10 @@ fn check_verbose_keys_a_read_by_what_an_earlier_bind_found() {
          retract Stock(item, on_hand)\n    \
          admit Stock(item, left)\n",
     );
-    assert!(keyed.ends_with("  body reads: all keyed\n"), "got: {keyed}");
+    assert!(
+        keyed.ends_with("  body read plan: all keyed\n"),
+        "got: {keyed}"
+    );
 
     let through_let = verbose(
         "transformation ship(a):\n    \
@@ -230,7 +236,8 @@ fn check_verbose_keys_a_read_by_what_an_earlier_bind_found() {
          admit Good(customer)\n",
     );
     assert!(
-        through_let.ends_with("  body reads: 1 whole\n    ship reads Order whole: statement 3\n"),
+        through_let
+            .ends_with("  body read plan: 1 whole\n    ship reads Order whole: statement 3\n"),
         "got: {through_let}"
     );
 }
@@ -268,7 +275,10 @@ fn check_verbose_keys_a_read_by_a_collection_parameter_s_elements() {
          retract Stock(o, _)\n    \
          admit Out(t)\n",
     );
-    assert!(keyed.ends_with("  body reads: all keyed\n"), "got: {keyed}");
+    assert!(
+        keyed.ends_with("  body read plan: all keyed\n"),
+        "got: {keyed}"
+    );
 
     let raising = verbose(
         "transformation check(t, others):\n    \
@@ -276,7 +286,7 @@ fn check_verbose_keys_a_read_by_a_collection_parameter_s_elements() {
          admit Out(t)\n",
     );
     assert!(
-        raising.ends_with("  body reads: 1 whole\n    check reads Stock whole: statement 1\n"),
+        raising.ends_with("  body read plan: 1 whole\n    check reads Stock whole: statement 1\n"),
         "got: {raising}"
     );
 }
@@ -338,7 +348,7 @@ fn check_verbose_marks_a_whole_read_of_a_predicate_the_act_writes() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.ends_with(
-            "  body reads: 2 whole\n    \
+            "  body read plan: 2 whole\n    \
              allocate reads Alloc whole: statement 1 `within_capacity`, through allocated; \
              allocate also writes Alloc, so concurrent allocate proposals can conflict even on different records\n    \
              ship reads Item whole: statement 2 `the_item`\n"
@@ -1276,7 +1286,7 @@ fn check_json_routes_agree_with_the_verbose_summary_for_every_worked_example() {
         let tail = stdout
             .find("  invariant checks: ")
             .map(|at| &stdout[at..])
-            .and_then(|tail| tail.find("  body reads: ").map(|end| &tail[..end]))
+            .and_then(|tail| tail.find("  body read plan: ").map(|end| &tail[..end]))
             .unwrap_or_else(|| panic!("{}: no verdict in: {stdout}", example.name));
         assert_eq!(
             tail,
