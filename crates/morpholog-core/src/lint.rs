@@ -1281,14 +1281,14 @@ fn pattern_without(
     })
 }
 
-/// Every variable a statement names, its `for` body included.
+/// Every variable a statement names, every nested body included.
 fn mentions(stmt: &crate::ir::Stmt) -> BTreeSet<&crate::ir::Var> {
-    let mut out: BTreeSet<&crate::ir::Var> = named_here(stmt).into_iter().collect();
-    if let crate::ir::Stmt::For { body, .. } | crate::ir::Stmt::ForEach { body, .. } = stmt {
-        for inner in body {
-            out.extend(mentions(inner));
+    let mut out = BTreeSet::new();
+    crate::fold::walk_stmt(stmt, &mut |node| {
+        if let crate::fold::Node::Stmt(inner) = node {
+            out.extend(named_here(inner));
         }
-    }
+    });
     out
 }
 

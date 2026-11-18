@@ -1652,6 +1652,44 @@ fn a_bind_that_only_feeds_a_retract_is_hinted_with_the_pattern_form() {
     );
 }
 
+const NESTED_USE: &str = r#"
+program nested_use
+
+predicate Row(row: Subject, a: Decimal)
+    unique by (row)
+predicate Flag(row: Subject)
+intent Dropped(row: Subject, a: Decimal)
+
+transformation in_a_branch(row, loud: Bool):
+    bind the_row: Row(row, a)
+    retract Row(row, a)
+    if loud = true:
+        emit Dropped(row, a)
+
+transformation in_an_else(row, quiet: Bool):
+    bind the_row: Row(row, a)
+    retract Row(row, a)
+    if quiet = true:
+        emit Dropped(row, 0)
+    else:
+        emit Dropped(row, a)
+
+transformation in_a_loop(row):
+    bind the_row: Row(row, a)
+    retract Row(row, a)
+    for Flag(row):
+        emit Dropped(row, a)
+"#;
+
+/// A field read anywhere later keeps the hint quiet, however deep: in an
+/// `if` branch, an `else` branch or a `for` body. Dropping the bind there
+/// would leave the field unbound where it is read.
+#[test]
+fn a_field_read_in_a_nested_body_keeps_the_hint_quiet() {
+    let found = lints_of(NESTED_USE);
+    assert_eq!(bind_only_to_retract(&found), vec![], "{found:?}");
+}
+
 const KEYS: &str = r#"
 program keys
 
