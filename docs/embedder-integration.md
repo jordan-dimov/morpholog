@@ -610,6 +610,8 @@ For the whole programme, ask `rehearse`. `morpholog rehearse new.morph` re-decid
 
 `rehearse` exits zero whatever it finds. The report is the result, as a batch's receipts are, and `totals` is what a gate reads: `jq '.totals.would_error + .totals.different_delta'`, say, counts the rows the candidate errors on or admits with a different effect. Read each listed row before concluding anything from a count. On a long record, when a candidate changes one act, the log gives a fast first look: `inspect audit` lists the rows that act decided, the ones the change may matter for. It does not decide them again under the candidate, or follow what later rows did with their effects, so it narrows the question rather than answering it. When the change must be shown safe for the record, rehearse it. On one record of 137,398 rows, reading a respelled act's 59,377 recorded transitions took 0.3 s, where the full rehearsal had not finished in 36 minutes.
 
+Rehearse when the pinned binary moves, not only when the programme does. The programme hash names the rules, not what a binary makes of them, so a new release can decide a committed proposal differently under the same hash. A CI that rehearses on change should key on the binary pin as well as the hash.
+
 Two limits, which the report's `contract` line (`canonical_audit_prefix_v1`) names. The prefix state is each row's recorded operations applied in the one audit order, `(audit_order, act_ordinal)`. That order is the order of effects, taken when each transaction wrote its first audit row, not the order in which each decision saw the state: a proposal that read a claim, then committed after another that removed it, sorts after the removal, so re-deciding it against its prefix can find the claim gone. For a serial history the two coincide. `evaluate` reconstructs state the same way and carries the same limit, and its `--train-until <timestamp>` splits by each row's instant as its snapshot holds the log, settled or not. And it compares whole programmes: a candidate built on a newer baseline carries that baseline's other changes, and a refusal by one of them is a true answer about the candidate, not about the amendment you meant to measure. To measure one rule, build the candidate from the programme that admitted the rows plus that rule alone. The log holds admitted history only: a rehearsal says what the candidate would have refused, never what demand there was, and nothing about proposals it has not seen. A row admitted under another semantics version is still rehearsed under this binary's, which the report states beside each row's; that is the question asked, not a reproduction of the original decision.
 
 What a reshape breaks: see [a predicate's shape, once there is history](#a-predicates-shape-once-there-is-history). The stored claims stay and `audit verify` still passes, but rules of the new shape do not see them. `check --database-url` refuses that programme by name.
@@ -695,6 +697,18 @@ def governed_db():
         check=True,
     )
 ```
+
+### A seeded ledger per test (`createdb -T`)
+
+A suite that seeds the same world many times can seed it once and copy it per test. PostgreSQL copies a database whole: `createdb -T seeded test_1`. The copy is a complete ledger. It decides, verifies and exports on its own, and a closed source gives a closed copy. PostgreSQL refuses the copy while any session is connected to the source, so close the seeding client first.
+
+A copy shares three things with its source:
+
+- **The audit prefix**, with its transition ids and checkpoints. A copy is a fork of the record. That is fine for a test, and never a second live deployment.
+- **The least-privilege roles.** Roles belong to the cluster, so `init` and `migrate` on a copy warn that its roles also reach the source, as they do for a rehearsal copy.
+- **Pending outbox intents**, with the same idempotency keys. Run a worker against one copy at most.
+
+Advisory locks are per database, so copies never wait on each other.
 
 ## Reading governed state as SQL (`generate views`)
 

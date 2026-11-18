@@ -281,13 +281,18 @@ class NamedClaim:
 
 
 @dataclass(frozen=True)
-class ClaimRead:
+class ClaimRead(ClaimInstance):
     """One claim of the claims read, with `asserted_in`: the transition
     whose commit made it present. Read now, that is the database's own
     record, which no audit leaf covers; read `as_of` a transition, it is
-    taken from replaying the audit history."""
+    taken from replaying the audit history.
 
-    predicate: str
+    A ``ClaimInstance``, so a seam typed on the plain row takes it. A
+    ``list`` is invariant: a Protocol returning ``list[ClaimInstance]``
+    still refuses ``list[ClaimRead]``, where ``Sequence[ClaimInstance]``
+    takes it. Equality stays per class."""
+
+    # Redeclared without the base's default, so `asserted_in` can follow.
     args: list[object]
     asserted_in: str
 
@@ -302,12 +307,11 @@ class ClaimRead:
 
 
 @dataclass(frozen=True)
-class NamedClaimRead:
+class NamedClaimRead(NamedClaim):
     """One row of the named claims read, with `asserted_in` as on
-    ``ClaimRead``."""
+    ``ClaimRead``, and a ``NamedClaim`` as ``ClaimRead`` is a
+    ``ClaimInstance``."""
 
-    predicate: str
-    args: dict[str, object]
     asserted_in: str
 
     @classmethod

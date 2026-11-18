@@ -2,6 +2,7 @@
 test pins byte-equal to the binary's real serialization - one sample
 set holding the binary, result.json, and this client together."""
 
+import dataclasses
 import json
 import unittest
 from datetime import date, datetime, timezone
@@ -762,6 +763,24 @@ class Reports(unittest.TestCase):
             envelopes.ClaimInstance.from_json(golden("claim_reads.json")[0])
         with self.assertRaisesRegex(envelopes.EnvelopeError, "regenerate"):
             envelopes.NamedClaim.from_json(golden("named_claim_reads.json")[0])
+
+    def test_a_read_row_is_a_plain_row_with_asserted_in(self):
+        (read,) = [envelopes.ClaimRead.from_json(c) for c in golden("claim_reads.json")]
+        (named,) = [envelopes.NamedClaimRead.from_json(c) for c in golden("named_claim_reads.json")]
+        self.assertIsInstance(read, envelopes.ClaimInstance)
+        self.assertIsInstance(named, envelopes.NamedClaim)
+        # Each adds only asserted_in, after the base's fields.
+        for base, sub in (
+            (envelopes.ClaimInstance, envelopes.ClaimRead),
+            (envelopes.NamedClaim, envelopes.NamedClaimRead),
+        ):
+            names = [f.name for f in dataclasses.fields(sub)]
+            self.assertEqual(names, [f.name for f in dataclasses.fields(base)] + ["asserted_in"])
+        # Both keep their positional constructors, and equality stays per class.
+        self.assertEqual(envelopes.ClaimInstance("P").args, [])
+        plain = envelopes.NamedClaim("P", {"x": 1})
+        self.assertEqual(envelopes.NamedClaimRead("P", {"x": 1}, "t").args, plain.args)
+        self.assertNotEqual(envelopes.NamedClaimRead("P", {"x": 1}, "t"), plain)
 
     def test_check_hash_init_and_named_claim(self):
         check = envelopes.CheckReport.from_json(golden("check_report.json"))
