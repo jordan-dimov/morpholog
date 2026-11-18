@@ -286,10 +286,11 @@ pub(crate) fn preflight_code(err: &anyhow::Error) -> Option<PreflightCode> {
 /// when the command speaks JSON and the failure has a code, and hand the
 /// error back for `main` to print as prose and exit 1.
 pub(crate) fn preflight_failed(json: bool, err: anyhow::Error) -> anyhow::Error {
-    if json && let Some(code) = preflight_code(&err) {
-        if let Err(print) = print_json(&PreflightError::new(code, format!("{err:#}"))) {
-            return print;
-        }
+    if json
+        && let Some(code) = preflight_code(&err)
+        && let Err(print) = print_json(&PreflightError::new(code, format!("{err:#}")))
+    {
+        return print;
     }
     err
 }
