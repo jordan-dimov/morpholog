@@ -22,12 +22,13 @@
 //! resolved against the whole state. The hostile fragments cover each
 //! way a coordinate can be known (a parameter, the actor, a literal, a
 //! definition's parameter passed a known argument, a value an earlier
-//! `bind` found, an element of a collection parameter a `for`, a
+//! `bind` found, a name a called condition's patterns or a `forall`'s
+//! source bind, an element of a collection parameter a `for`, a
 //! `forall` or a membership test ranges over) and each way it cannot (a
 //! key a `let` produces, a rebound parameter, a pattern beside a keyed
 //! one that fixes nothing, a read before the bind that would key it, a
 //! membership test behind a conjunct that can raise, a loop binding a
-//! `let` replaces).
+//! `let` replaces, a call whose body is an `or`).
 //!
 //! Generated states seldom let a `bind` match, so the dependent reads
 //! are also exercised over built states where every link of a chain
@@ -728,6 +729,93 @@ predicate Out(t: Subject)
 transformation t(out, item):
     let l = out
     require not (exists a: Alloc(a, l, item) and not Line(l))
+    admit Out(out)
+",
+    ),
+    // A key the patterns inside a called condition find keys the patterns
+    // after the call, through a call inside a call.
+    (
+        "key_out_of_a_call",
+        "program key_out_of_a_call
+predicate Cite(r: Subject, s: Subject, c: Subject)
+predicate Err(r: Subject, s: Subject, why: Subject)
+predicate Cur(s: Subject, c: Subject)
+predicate Out(t: Subject)
+define standing(r, s, c):
+    Cite(r, s, c) and not Err(r, s, _)
+define stale(r, s, c):
+    standing(r, s, c) and not Cur(s, c)
+transformation t(out, r):
+    require not stale(r, _, _)
+    admit Out(out)
+",
+    ),
+    (
+        "key_out_of_a_forall_source",
+        "program key_out_of_a_forall_source
+predicate Cite(r: Subject, s: Subject, c: Subject)
+predicate Cur(s: Subject, c: Subject)
+predicate Out(t: Subject)
+transformation t(out, r):
+    require (forall c in Cite(r, s, c): Cur(s, c))
+    admit Out(out)
+",
+    ),
+    (
+        "key_out_of_a_bound_call",
+        "program key_out_of_a_bound_call
+predicate Owner(k: Subject, who: Subject)
+predicate Cleared(who: Subject)
+predicate Out(k: Subject)
+define owns(k, who):
+    Owner(k, who)
+transformation t(k):
+    bind owns(k, who)
+    require Cleared(who)
+    admit Out(k)
+",
+    ),
+    (
+        "key_out_of_a_raising_call",
+        "program key_out_of_a_raising_call
+predicate Live(a: Subject, item: Subject, q: Decimal)
+predicate Mark(a: Subject)
+predicate Out(t: Subject)
+define live(a, item):
+    Live(a, item, q) and 1 / q > 0
+transformation t(out, item):
+    require not (live(a, item) and Mark(a))
+    admit Out(out)
+",
+    ),
+    // A call whose body is an `or` binds its names in either branch, so
+    // no one pattern keys them.
+    (
+        "call_with_an_or",
+        "program call_with_an_or
+predicate A(r: Subject, s: Subject)
+predicate B(r: Subject, s: Subject)
+predicate C(s: Subject)
+predicate Out(t: Subject)
+define either(r, s):
+    A(r, s) or B(r, s)
+transformation t(out, r):
+    require not (either(r, s) and not C(s))
+    admit Out(out)
+",
+    ),
+    // A call can raise, so a membership test after it keys nothing
+    // before it.
+    (
+        "member_after_a_call",
+        "program member_after_a_call
+predicate P(x: Subject)
+predicate R(x: Subject, q: Decimal)
+predicate Out(t: Subject)
+define big(x):
+    R(x, q) and 1 / q > 0
+transformation t(out, xs):
+    require not (P(x) and big(x) and x in xs)
     admit Out(out)
 ",
     ),
@@ -1862,6 +1950,89 @@ fn a_key_found_inside_a_proposition_stays_out_of_reads_it_could_change() {
     // A name a `let` binds is never known.
     let p = plan_of("let_named_like_a_binder");
     assert_eq!(p.reads[&"Line".into()], morpholog_core::ReadFilter::Whole);
+}
+
+/// What a called condition's patterns bind, and what a `forall`'s source
+/// binds, keys the reads after them.
+#[test]
+fn a_key_found_inside_a_call_or_a_forall_source_keys_the_reads_after_it() {
+    let by_r = [(0, param_of("r"))];
+    let cited = [
+        (0, field_of("Cite", 1, &by_r)),
+        (1, field_of("Cite", 2, &by_r)),
+    ];
+    let p = plan_of("key_out_of_a_call");
+    assert_eq!(p.reads[&"Cite".into()], keyed_by(&[&by_r]));
+    assert_eq!(p.reads[&"Cur".into()], keyed_by(&[&cited]));
+
+    let p = plan_of("key_out_of_a_forall_source");
+    assert_eq!(p.reads[&"Cur".into()], keyed_by(&[&cited]));
+
+    let p = plan_of("key_out_of_a_bound_call");
+    assert_eq!(
+        p.reads[&"Cleared".into()],
+        keyed_by(&[&[(0, field_of("Owner", 1, &[(0, param_of("k"))]))]])
+    );
+
+    let p = plan_of("key_out_of_a_raising_call");
+    assert_eq!(
+        p.reads[&"Mark".into()],
+        keyed_by(&[&[(0, field_of("Live", 0, &[(1, param_of("item"))]))]])
+    );
+}
+
+/// Where a call cannot say which row keys a name, or a key would reach
+/// back across it, the read stays whole.
+#[test]
+fn a_call_keys_nothing_it_cannot_follow() {
+    let p = plan_of("call_with_an_or");
+    assert_eq!(p.reads[&"C".into()], morpholog_core::ReadFilter::Whole);
+    let p = plan_of("member_after_a_call");
+    assert_eq!(p.reads[&"P".into()], morpholog_core::ReadFilter::Whole);
+}
+
+/// Two revisions each cite one claim. Checking the first loads only its
+/// citation's current claim, and decides as the full state does: current
+/// stages, superseded refuses.
+#[test]
+fn a_key_out_of_a_call_reads_only_the_rows_it_reaches() {
+    use morpholog_test_support::{claim_instance, subj};
+    let full = |current: &str| {
+        vec![
+            claim_instance("Cite", &[subj("r1"), subj("s1"), subj("c1")]),
+            claim_instance("Cite", &[subj("r2"), subj("s2"), subj("c2")]),
+            claim_instance("Cur", &[subj("s1"), subj(current)]),
+            claim_instance("Cur", &[subj("s2"), subj("c2")]),
+        ]
+    };
+    for fragment in ["key_out_of_a_call", "key_out_of_a_forall_source"] {
+        let (shown, projected) = stage_over(fragment, vec![subj("o"), subj("r1")], full("c1"));
+        assert!(shown.starts_with("staged:"), "{fragment}: {shown}");
+        assert_eq!(projected.claims_for("Cite").count(), 1, "{fragment}");
+        assert_eq!(projected.claims_for("Cur").count(), 1, "{fragment}");
+        let (shown, _) = stage_over(fragment, vec![subj("o"), subj("r1")], full("c0"));
+        assert!(shown.starts_with("rejected:"), "{fragment}: {shown}");
+    }
+}
+
+/// A zero quantity of the item raises inside the call, over the full
+/// state and the projection alike.
+#[test]
+fn a_raising_call_raises_alike_over_the_projection() {
+    use morpholog_test_support::{claim_instance, dec, subj};
+    let full = vec![
+        claim_instance("Live", &[subj("a1"), subj("i1"), dec(0)]),
+        claim_instance("Live", &[subj("a2"), subj("i2"), dec(5)]),
+        claim_instance("Mark", &[subj("a1")]),
+        claim_instance("Mark", &[subj("a2")]),
+    ];
+    let (shown, projected) = stage_over(
+        "key_out_of_a_raising_call",
+        vec![subj("o"), subj("i1")],
+        full,
+    );
+    assert!(shown.starts_with("error:"), "{shown}");
+    assert_eq!(projected.claims_for("Mark").count(), 1);
 }
 
 /// Two allocations of the item, each live, sum past the limit: the sum

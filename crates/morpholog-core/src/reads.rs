@@ -15,8 +15,10 @@
 //! matching row holds at that position. The kernel binds only rows of
 //! the snapshot, so a load keeping the rows equal to any such value
 //! holds every row a later pattern can match, and a chain is keyed as
-//! far as each link is keyed by the one before it. A variable ranging
-//! over a collection parameter, through a `for`, a `forall ... in`, or a
+//! far as each link is keyed by the one before it. Inside a rule, a
+//! keyed pattern keys the patterns beside it, a condition's call keys the
+//! conjuncts after it by what its body's patterns bind, and a `forall`'s
+//! source keys its body. A variable ranging over a collection parameter, through a `for`, a `forall ... in`, or a
 //! membership test beside a pattern in one conjunction, is known as one
 //! of that parameter's elements. A key a `let` produces is still unknown
 //! here and makes its reads whole.
@@ -541,11 +543,25 @@ impl Walker<'_> {
     /// pattern in the run makes the names it binds known to every conjunct
     /// after it and to the patterns just before it, never across a
     /// membership test, which can raise (`In expects a collection`), and
-    /// never to itself.
-    fn members(&self, conjuncts: &[Prop], known: &Env) -> Vec<Env> {
+    /// never to itself. A call in the run makes what its body's patterns
+    /// key known to the conjuncts after it only: its body can raise, so
+    /// the run of membership tests stops there.
+    ///
+    /// Also returns what the run makes known, for a reader of the whole
+    /// conjunction.
+    fn members(
+        &self,
+        conjuncts: &[Prop],
+        known: &Env,
+        seen: &mut BTreeSet<DefinitionName>,
+    ) -> (Vec<Env>, Env) {
         let run = conjuncts
             .iter()
             .position(|c| !matches!(c, Prop::Claim { .. } | Prop::In(..)))
+            .unwrap_or(conjuncts.len());
+        let binders = conjuncts
+            .iter()
+            .position(|c| !matches!(c, Prop::Claim { .. } | Prop::In(..) | Prop::Defined { .. }))
             .unwrap_or(conjuncts.len());
         let mut env = known.clone();
         for conjunct in &conjuncts[..run] {
@@ -556,7 +572,16 @@ impl Walker<'_> {
         let mut envs = Vec::with_capacity(conjuncts.len());
         let mut at = 0;
         while at < conjuncts.len() {
-            let block = conjuncts[at..run.max(at)]
+            if at < binders
+                && let Prop::Defined { name, args } = &conjuncts[at]
+            {
+                envs.push(env.clone());
+                let made = self.call_binds(name, args, &env, seen);
+                env.extend(made);
+                at += 1;
+                continue;
+            }
+            let block = conjuncts[at..binders.max(at)]
                 .iter()
                 .take_while(|c| matches!(c, Prop::Claim { .. }))
                 .count();
@@ -592,23 +617,90 @@ impl Walker<'_> {
             }
             at += block;
         }
-        envs
+        (envs, env)
+    }
+
+    /// What holding `prop` makes known: the names its patterns bind, keyed
+    /// as [`Walker::members`] keys them. Records no reads.
+    fn binds(&self, prop: &Prop, known: &Env, seen: &mut BTreeSet<DefinitionName>) -> Env {
+        let mut env = known.clone();
+        match prop {
+            Prop::Claim { predicate, args } => {
+                self.fields(predicate, args, &mut env);
+            }
+            Prop::And(conjuncts) => env = self.members(conjuncts, known, seen).1,
+            Prop::Defined { name, args } => env.extend(self.call_binds(name, args, known, seen)),
+            Prop::Implies { .. }
+            | Prop::Exists { .. }
+            | Prop::Or(_)
+            | Prop::Pre(_)
+            | Prop::Not(_)
+            | Prop::Xor(..)
+            | Prop::Eq(..)
+            | Prop::Neq(..)
+            | Prop::Compare { .. }
+            | Prop::In(..)
+            | Prop::Forall { .. } => {}
+        }
+        env
+    }
+
+    /// The caller's names a condition's call binds, each known as its
+    /// body's patterns key the parameter it is passed for. Every value the
+    /// call binds is one some keyed row holds, so a read keyed by it holds
+    /// every row a later pattern can match. A condition that calls itself
+    /// does so from a branch of an `or`, which binds nothing here.
+    fn call_binds(
+        &self,
+        name: &DefinitionName,
+        args: &[Term],
+        known: &Env,
+        seen: &mut BTreeSet<DefinitionName>,
+    ) -> Vec<(Var, KnownTerm)> {
+        let definitions = self.definitions;
+        definitions.enter(name, seen, |def, seen| {
+            let Some(body) = def.body.as_prop() else {
+                return Vec::new();
+            };
+            let inner: Env = def
+                .parameters
+                .iter()
+                .zip(args)
+                .filter_map(|(param, arg)| known_term(arg, known).map(|term| (param.clone(), term)))
+                .collect();
+            let found = self.binds(body, &inner, seen);
+            def.parameters
+                .iter()
+                .zip(args)
+                .filter_map(|(param, arg)| {
+                    let Term::Var(name) = arg else { return None };
+                    if known.contains_key(name)
+                        || self.rebound.contains(name)
+                        || inner.contains_key(param)
+                    {
+                        return None;
+                    }
+                    found.get(param).map(|term| (name.clone(), term.clone()))
+                })
+                .collect()
+        })
     }
 
     /// What a statement makes known to the statements after it in its
     /// block: a `bind` of one claim pattern with a known coordinate fixes
     /// each variable it binds to that row's value at the variable's
-    /// position. A name already known, or bound as the body runs, is left
-    /// as it is.
+    /// position, and a `bind` of a condition's call what the call binds.
+    /// A name already known, or bound as the body runs, is left as it is.
     fn extend(&self, stmt: &Stmt, known: &mut Env) {
-        let Stmt::BindOne {
-            prop: Prop::Claim { predicate, args },
-            ..
-        } = stmt
-        else {
+        let Stmt::BindOne { prop, .. } = stmt else {
             return;
         };
-        self.fields(predicate, args, known);
+        if let Prop::Claim { predicate, args } = prop {
+            self.fields(predicate, args, known);
+        } else if let Prop::Defined { name, args } = prop {
+            let made = self.call_binds(name, args, known, &mut BTreeSet::new());
+            known.extend(made);
+        }
     }
 
     /// What a claim pattern with a known coordinate makes known: each
@@ -711,7 +803,8 @@ impl Walker<'_> {
                 }
             }
             Prop::And(props) => {
-                for (p, known) in props.iter().zip(self.members(props, known)) {
+                let (envs, _) = self.members(props, known, seen);
+                for (p, known) in props.iter().zip(envs) {
                     self.prop(p, &known, seen);
                 }
             }
@@ -738,6 +831,8 @@ impl Walker<'_> {
                 self.prop(source, known, seen);
                 let mut inner = known.clone();
                 inner.remove(binding);
+                // The body runs once for each binding the source finds.
+                let mut inner = self.binds(source, &inner, seen);
                 if let Prop::In(Term::Var(x), ValueExpr::Term(Term::Var(collection))) = &**source
                     && x == binding
                 {
