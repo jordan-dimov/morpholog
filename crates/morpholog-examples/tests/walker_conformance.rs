@@ -270,8 +270,9 @@ derived Allocated(item):
 ";
 
 /// A condition that calls itself, reached from a gate and a rule through
-/// a plain condition and from a derived domain directly: every walker
-/// must enter its body once, keep its footprint and come back out.
+/// a plain condition, from an antecedent directly and from a derived
+/// domain: every walker must enter its body once, keep its footprint and
+/// come back out.
 const RECURSIVE_DEFINITION: &str = "\
 program recursive_definition
 predicate Parent(part: Subject, parent: Subject)
@@ -284,6 +285,8 @@ define fits(item_part, line_part):
     item_part = line_part or descends_from(item_part, line_part)
 invariant fills_fit:
     Filled(line, part) and Line(line, line_part) implies fits(part, line_part)
+invariant no_part_descends_from_itself:
+    descends_from(part, ancestor) implies part != ancestor
 transformation link(part, parent):
     admit Parent(part, parent)
 transformation fill(line, part):

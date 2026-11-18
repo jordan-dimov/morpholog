@@ -1644,3 +1644,36 @@ transformation note(x, q):
         .unwrap();
     assert!(!strict.status.success(), "--strict promotes it");
 }
+
+#[test]
+fn check_passes_an_antecedent_that_calls_a_definition_calling_itself_through_an_or() {
+    // The governing-selection hint walks antecedents through definitions.
+    // It once forgot, at every `or`, which definitions it had entered, and
+    // overflowed its stack on this programme.
+    let tmp = temp_morph(
+        "program closure\n\
+         predicate Parent(l: Subject, p: Subject)\n\
+         predicate Above(l: Subject, a: Subject)\n\
+         define below(l, a):\n    Parent(l, a) or (Parent(l, m) and below(m, a))\n\
+         invariant tree_in_closure:\n    below(l, a) implies Above(l, a)\n\
+         transformation link(l, p):\n    admit Parent(l, p)\n    admit Above(l, p)\n",
+    );
+
+    let out = Command::new(bin())
+        .args(["check", "--strict"])
+        .arg(tmp.path())
+        .output()
+        .expect("morpholog check should run");
+    assert!(
+        out.status.success(),
+        "expected exit 0, got {:?}; stderr:\n{}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.stdout.is_empty() && out.stderr.is_empty(),
+        "expected a silent check; stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

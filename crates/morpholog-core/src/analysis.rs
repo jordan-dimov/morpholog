@@ -438,17 +438,20 @@ pub(crate) fn governing_selections(
     definitions: DefinitionTable<'_>,
 ) -> BTreeSet<PredicateName> {
     let mut out = BTreeSet::new();
-    selections_in_scope(prop, definitions, &mut out);
+    selections_in_scope(prop, definitions, &mut BTreeSet::new(), &mut out);
     out
 }
 
+/// A scope has its own evidence but shares `seen` with its caller, so a
+/// definition that calls itself through an `or` is entered once.
 fn selections_in_scope(
     prop: &Prop,
     definitions: DefinitionTable<'_>,
+    seen: &mut BTreeSet<DefinitionName>,
     out: &mut BTreeSet<PredicateName>,
 ) {
     let mut ev = SelectionEvidence::default();
-    gather_selection_evidence(prop, definitions, &mut BTreeSet::new(), &mut ev, out);
+    gather_selection_evidence(prop, definitions, seen, &mut ev, out);
     for (predicate, pvars) in &ev.claims {
         for (excluded, evars, strict) in &ev.excluders {
             if excluded != predicate {
@@ -521,11 +524,11 @@ fn gather_selection_evidence<'a>(
         // across branches into a pattern no branch contains.
         Prop::Or(props) => {
             for p in props {
-                selections_in_scope(p, definitions, out);
+                selections_in_scope(p, definitions, seen, out);
             }
         }
         // A positive `exists` is likewise a sub-scope of its own.
-        Prop::Exists { body, .. } => selections_in_scope(body, definitions, out),
+        Prop::Exists { body, .. } => selections_in_scope(body, definitions, seen, out),
         Prop::Implies { .. }
         | Prop::Xor(_, _)
         | Prop::Forall { .. }
