@@ -1,0 +1,343 @@
+-- The GB gas day, a nomination, and cash-out: one rulebook that decides
+-- what may happen and explains, when late evidence arrives, what changed.
+--
+-- A quick tour of the domain. Gas in Great Britain is traded and moved
+-- by the "gas day", which runs from 05:00 to 05:00 London time. In
+-- winter that is 05:00 UTC; in summer 04:00 UTC; and the days the clocks
+-- change last 23 or 25 hours. A system that fixes the day at 05:00 UTC
+-- misplaces an hour of every summer day.
+--
+-- A shipper tells the network, ahead of time, how much gas it will take
+-- out at its sites: a "nomination". For daily-metered sites it is due by
+-- 13:00 London time on the day before the gas day. What counts is when
+-- the network's own system received it, not when anyone later decided
+-- about it.
+--
+-- After the day, each shipper's imbalance (what it put in minus what it
+-- took out) is "cashed out". The price starts from the System Average
+-- Price (SAP): the average price of the day's balancing trades,
+-- weighted by quantity. A day with no trades takes the mean of the
+-- seven days before it, so quiet days lean on earlier ones, which may
+-- themselves have leaned on earlier ones. A short shipper buys its
+-- shortfall at the System Marginal Buy Price, SAP plus a small default
+-- margin, or National Gas's own highest buy price that day if that is
+-- higher. A long shipper sells its surplus at the Sell price, the mirror
+-- image.
+--
+-- The rules are the Uniform Network Code (UNC): TPD Sections C and F
+-- v6.27 of 14 September 2026, General Terms Section C v6.28 of 9 November
+-- 2026. Where the code is silent, the comment says so and names the
+-- reading this example takes.
+--
+-- Here is how Morpholog thinks about it. It stores *claims* it has
+-- agreed to admit, never "facts". An `invariant` is a rule no change may
+-- break; a `require` is a gate on one act, checked when someone acts and
+-- never again. The interesting part comes after the day: a trade nobody
+-- had reported turns up late. Morpholog does not rewrite the price or
+-- the statement that used it. It shows which prices no longer match the
+-- evidence, which statement needs review, and admits a correction beside
+-- the original, which still names what it used and stays lawful on the
+-- evidence of its time.
+
+program gas_day_cash_out
+
+-- Who may do what. One operator appoints the others, so every authority
+-- below is itself a claim on the record, with a name and a history.
+predicate Operator(operator: Subject)
+predicate CalendarPublisher(calendar: Subject, publisher: Subject)
+predicate ReceiptAuthority(boundary: Subject, receiver: Subject)
+predicate MayNominate(nominator: Subject, shipper: Subject)
+predicate MarketDataSource(source: Subject)
+predicate SettlementAgent(agent: Subject)
+
+-- Local days, as `morpholog generate local-days` writes them. Gas days
+-- are one calendar (`--at 05:00`); the 13:00 nomination deadlines are
+-- another (`--at 13:00`), one row per date. Each row names the zone
+-- data it was computed from. Morpholog does not compute a calendar: it
+-- keeps the publisher's rows and who vouched for them.
+predicate LocalDay(calendar: Subject, local_date: Date, starts_at: Timestamp, ends_at: Timestamp, tzdb_version: Subject, tzdb_digest: Subject)
+    unique by (calendar, local_date)
+    append only
+
+-- A message the network's system acknowledged, with the instant it did.
+-- Only that system's own receiver may admit one, so a late nomination
+-- cannot be made to look timely.
+predicate Received(message: Subject, boundary: Subject, received_at: Timestamp)
+    unique by (message)
+    append only
+predicate OutputNomination(message: Subject, shipper: Subject, gas_day: Date, qty_kwh: Decimal)
+    unique by (message)
+    append only
+
+-- The market's evidence: the day's balancing trades, National Gas's own
+-- buy and sell actions, and a statement that the day's actions are all
+-- on the record. "No action that day" is only known once that statement
+-- exists; before it, the action may simply not have arrived yet.
+predicate OcmTrade(trade: Subject, gas_day: Date, qty_kwh: Decimal, price_p_per_kwh: Decimal)
+    unique by (trade)
+predicate NgBuyAction(action: Subject, gas_day: Date, price_p_per_kwh: Decimal)
+    unique by (action)
+predicate NgSellAction(action: Subject, gas_day: Date, price_p_per_kwh: Decimal)
+    unique by (action)
+predicate ActionsComplete(gas_day: Date)
+-- The default margin, published once a year for the gas year ahead. A
+-- day before any published margin gets no statement: the gaps are
+-- intended, so the declaration says `partial`.
+predicate DefaultSmp(market: Subject, effective_from: Date, p_per_kwh: Decimal)
+    effective by (market) on (effective_from) partial
+
+-- Each SAP is a determination with an identity, and it names exactly
+-- the evidence it was computed from: the trades it used, or the seven
+-- earlier determinations a quiet day leaned on. The current one for a
+-- day can be replaced, but only by a new determination that names the
+-- one it replaced; nothing is edited in place.
+--
+-- It also names the precision it was kept to. The code states none, and
+-- a quiet day's mean of seven figures, each carried to every digit a
+-- decimal holds, adds up to more digits than one can hold. So each
+-- determination is rounded to a stated quantum, halves away from zero,
+-- under a named policy: the example's choice, not the code's.
+predicate SapPrecision(policy: Subject, quantum_p_per_kwh: Decimal)
+    unique by (policy)
+    append only
+predicate SapDetermination(version: Subject, gas_day: Date, sap_p_per_kwh: Decimal, precision: Subject)
+    unique by (version)
+    append only
+predicate SapUsedTrade(version: Subject, trade: Subject)
+    append only
+predicate SapUsedPrior(version: Subject, prior: Subject)
+    append only
+predicate CurrentSap(gas_day: Date, version: Subject)
+    current pointer by (gas_day)
+    superseded via SapSupersedes
+predicate SapSupersedes(new_version: Subject, prior_version: Subject)
+
+-- A shipper's imbalance for a day, in kWh: positive when long, negative
+-- when short. It has an identity, so a statement can name the one it used.
+predicate Imbalance(imbalance: Subject, shipper: Subject, gas_day: Date, imbalance_kwh: Decimal)
+    unique by (imbalance)
+    unique by (shipper, gas_day)
+
+-- How a price becomes a charge. The code gives the price formula but no
+-- precision to charge at, and a price with many decimals times a large
+-- volume is more digits than an exact decimal holds. So the charge uses
+-- the price rounded to a stated quantum, halves away from zero. This is
+-- the example's own policy, named and versioned, not the code's.
+predicate ChargingPolicy(policy: Subject, quantum_p_per_kwh: Decimal)
+    unique by (policy)
+    append only
+
+-- A cash-out statement names the SAP determination and the imbalance it
+-- used, the prices it computed, and the policy and price it charged at.
+-- The money is one signed figure: positive when National Gas pays the
+-- shipper, negative when the shipper pays. A price can be negative, so
+-- the sign cannot be read off the imbalance alone. It is in pence and not
+-- rounded to whole pence: no monetary rounding is stated either, so it is
+-- a calculated cash flow, not an amount payable. A correction is a new
+-- statement that names the one it corrects; the original stays.
+predicate Statement(statement: Subject, shipper: Subject, gas_day: Date, sap_version: Subject, imbalance: Subject, smp_buy: Decimal, smp_sell: Decimal, policy: Subject, charging_price: Decimal, cash_flow_to_shipper_pence: Decimal)
+    unique by (statement)
+    append only
+predicate CurrentStatement(shipper: Subject, gas_day: Date, statement: Subject)
+    current pointer by (shipper, gas_day)
+    superseded via StatementCorrects
+predicate StatementCorrects(new_statement: Subject, prior_statement: Subject)
+predicate NeedsReview(statement: Subject)
+
+
+-- A determination is stale when the evidence now on the record differs
+-- from what it names: a trade for its day it did not use (a late trade),
+-- a trade it used that is no longer held (withdrawn or corrected), or an
+-- earlier determination it leaned on that is no longer that day's
+-- current one.
+define directly_stale(v):
+    (SapDetermination(v, day, _, _) and OcmTrade(t, day, _, _) and not SapUsedTrade(v, t))
+    or (SapUsedTrade(v, t) and not OcmTrade(t, _, _, _))
+    or (SapUsedPrior(v, p) and SapDetermination(p, d, _, _) and not CurrentSap(d, p))
+
+-- What a quiet day's SAP leaned on, however far back: its seven, their
+-- seven, and so on. The links form a graph, and this follows every
+-- branch of it.
+define depends_on(v, prior):
+    SapUsedPrior(v, prior)
+    or (SapUsedPrior(v, between) and depends_on(between, prior))
+
+define stale(v):
+    directly_stale(v) or (depends_on(v, w) and directly_stale(w))
+
+
+-- Set-up. The first operator appoints itself once; the operator then
+-- names who publishes each calendar, which system's receiver vouches for
+-- receipts, who may nominate for whom, where market data comes from,
+-- and who determines prices and issues statements.
+transformation appoint_operator(operator):
+    require no_operator_yet: not Operator(_)
+    admit Operator(operator)
+
+transformation appoint_calendar_publisher(calendar, publisher):
+    require operator: Operator(actor)
+    admit CalendarPublisher(calendar, publisher)
+
+transformation appoint_receipt_authority(boundary, receiver):
+    require operator: Operator(actor)
+    admit ReceiptAuthority(boundary, receiver)
+
+transformation grant_nomination(nominator, shipper):
+    require operator: Operator(actor)
+    admit MayNominate(nominator, shipper)
+
+transformation appoint_market_data_source(source):
+    require operator: Operator(actor)
+    admit MarketDataSource(source)
+
+transformation appoint_settlement_agent(agent):
+    require operator: Operator(actor)
+    admit SettlementAgent(agent)
+
+transformation adopt_sap_precision(policy, quantum_p_per_kwh: Decimal):
+    require operator: Operator(actor)
+    require positive_quantum: 0 < quantum_p_per_kwh
+    admit SapPrecision(policy, quantum_p_per_kwh)
+
+transformation adopt_charging_policy(policy, quantum_p_per_kwh: Decimal):
+    require operator: Operator(actor)
+    require positive_quantum: 0 < quantum_p_per_kwh
+    admit ChargingPolicy(policy, quantum_p_per_kwh)
+
+-- One row of a calendar, exactly as the generator wrote it.
+transformation publish_local_day(calendar, local_date: Date, starts_at: Timestamp, ends_at: Timestamp, tzdb_version, tzdb_digest):
+    require publisher: CalendarPublisher(calendar, actor)
+    admit LocalDay(calendar, local_date, starts_at, ends_at, tzdb_version, tzdb_digest)
+
+
+-- The network's system acknowledges a message. Only its own receiver
+-- may say so: a shipper cannot admit a receipt for itself.
+transformation receive(message, boundary, received_at: Timestamp):
+    require receiver: ReceiptAuthority(boundary, actor)
+    admit Received(message, boundary, received_at)
+
+-- A daily-metered output nomination (TPD C1.2, C2.3.1): due by 13:00 on
+-- the day before the gas day. The deadline is read from the published
+-- 13:00 row for that date, never typed in by whoever nominates, and
+-- lateness is judged on the receipt from the network's own system,
+-- Gemini, not on when this act runs or on a receipt from anywhere else.
+transformation nominate_output(message, shipper, gas_day: Date, qty_kwh: Decimal):
+    require may_nominate: MayNominate(actor, shipper)
+    require gas_day_published: LocalDay(#gas_day, gas_day, _, _, _, _)
+    require received_by_the_network: Received(message, #gemini, _)
+    bind Received(message, #gemini, received_at)
+    let preceding_day = gas_day - span(P1D)
+    bind LocalDay(#dm_output_deadline, preceding_day, due, _, _, _)
+    require in_time: received_at strictly_before due
+    admit OutputNomination(message, shipper, gas_day, qty_kwh)
+
+
+-- Market data, from its appointed source only.
+transformation report_trade(trade, gas_day: Date, qty_kwh: Decimal, price_p_per_kwh: Decimal):
+    require source: MarketDataSource(actor)
+    require positive_quantity: 0 < qty_kwh
+    admit OcmTrade(trade, gas_day, qty_kwh, price_p_per_kwh)
+
+transformation report_buy_action(action, gas_day: Date, price_p_per_kwh: Decimal):
+    require source: MarketDataSource(actor)
+    admit NgBuyAction(action, gas_day, price_p_per_kwh)
+
+transformation report_sell_action(action, gas_day: Date, price_p_per_kwh: Decimal):
+    require source: MarketDataSource(actor)
+    admit NgSellAction(action, gas_day, price_p_per_kwh)
+
+transformation report_actions_complete(gas_day: Date):
+    require source: MarketDataSource(actor)
+    admit ActionsComplete(gas_day)
+
+transformation publish_default_smp(market, effective_from: Date, p_per_kwh: Decimal):
+    require source: MarketDataSource(actor)
+    admit DefaultSmp(market, effective_from, p_per_kwh)
+
+transformation record_imbalance(imbalance, shipper, gas_day: Date, imbalance_kwh: Decimal):
+    require agent: SettlementAgent(actor)
+    admit Imbalance(imbalance, shipper, gas_day, imbalance_kwh)
+
+
+-- SAP for a day with trades (F1.2.1(c)): the sum of each trade's
+-- quantity times its price, over the sum of the quantities. The act takes
+-- no price: it computes the figure from the trades on the record and
+-- names every one it used, kept to the precision policy it is given. A
+-- day's first determination needs no predecessor; a new one may replace
+-- the current one only when that one has gone stale.
+transformation determine_sap(gas_day: Date, precision):
+    require agent: SettlementAgent(actor)
+    require traded: OcmTrade(gas_day: gas_day, ..)
+    require first_or_stale: not CurrentSap(gas_day, _) or (CurrentSap(gas_day, current) and stale(current))
+    bind SapPrecision(precision, quantum)
+    let sap = round(sum(q * p | OcmTrade(_, gas_day, q, p)) / sum(q | OcmTrade(_, gas_day, q, _)), quantum)
+    let version = new Subject()
+    admit SapDetermination(version, gas_day, sap, precision)
+    for OcmTrade(trade, gas_day, _, _):
+        admit SapUsedTrade(version, trade)
+    for CurrentSap(gas_day, prior):
+        retract CurrentSap(gas_day, prior)
+        admit SapSupersedes(version, prior)
+    admit CurrentSap(gas_day, version)
+
+-- SAP for a day with no trades (F1.2.2): the mean of the current SAP of
+-- each of the seven days before it, whichever rule determined them. It
+-- names all seven, and is kept to the precision policy it is given. It
+-- may not lean on a day whose own figure is already stale: that day is
+-- re-determined first, or the new figure would be stale on arrival.
+transformation determine_fallback_sap(gas_day: Date, precision):
+    require agent: SettlementAgent(actor)
+    require no_trades: not OcmTrade(gas_day: gas_day, ..)
+    require first_or_stale: not CurrentSap(gas_day, _) or (CurrentSap(gas_day, current) and stale(current))
+    let start = gas_day - span(P7D)
+    require seven_preceding_days: sum(1 | CurrentSap(d, _) and start on_or_before d and d before gas_day) = 7
+    require inputs_current: not (CurrentSap(d, v) and start on_or_before d and d before gas_day and stale(v))
+    bind SapPrecision(precision, quantum)
+    let sap = round(sum(p | CurrentSap(d, v) and SapDetermination(v, d, p, _) and start on_or_before d and d before gas_day) / 7, quantum)
+    let version = new Subject()
+    admit SapDetermination(version, gas_day, sap, precision)
+    for CurrentSap(d, v):
+        if start on_or_before d and d before gas_day:
+            admit SapUsedPrior(version, v)
+    for CurrentSap(gas_day, prior):
+        retract CurrentSap(gas_day, prior)
+        admit SapSupersedes(version, prior)
+    admit CurrentSap(gas_day, version)
+
+
+-- A cash-out statement (F1.2.1(a), (b); F2.3.1, F2.3.3). SMP Buy is the
+-- greater of SAP plus the default margin and National Gas's highest buy
+-- price that day; SMP Sell the lesser of SAP minus the margin and its
+-- lowest sell price. The code does not say what the second price is on a
+-- day National Gas took no action. This example reads it as absent, and
+-- only once the day's actions are known to be complete. A long shipper
+-- is paid its surplus at the Sell price, a short one pays its shortfall
+-- at the Buy price, each at the charging policy's price. A statement may
+-- not use a SAP the record already knows is stale.
+transformation issue_statement(shipper, gas_day: Date, policy):
+    require agent: SettlementAgent(actor)
+    require actions_complete: ActionsComplete(gas_day)
+    require first_or_stale: not CurrentStatement(shipper, gas_day, _) or (CurrentStatement(shipper, gas_day, current) and Statement(statement: current, sap_version: used, ..) and stale(used))
+    bind CurrentSap(gas_day, version)
+    require sap_not_stale: not stale(version)
+    bind SapDetermination(version, gas_day, sap, _)
+    bind default_smp_in_force_on(#nbp, gas_day, margin)
+    bind Imbalance(imbalance_id, shipper, gas_day, imbalance)
+    bind ChargingPolicy(policy, quantum)
+    let smp_buy = if(NgBuyAction(_, gas_day, _), max(sap + margin, max(b | NgBuyAction(_, gas_day, b))), sap + margin)
+    let smp_sell = if(NgSellAction(_, gas_day, _), min(sap - margin, min(s | NgSellAction(_, gas_day, s))), sap - margin)
+    let charging_price = if(0 < imbalance, round(smp_sell, quantum), round(smp_buy, quantum))
+    let cash_flow = imbalance * charging_price
+    let statement = new Subject()
+    admit Statement(statement, shipper, gas_day, version, imbalance_id, smp_buy, smp_sell, policy, charging_price, cash_flow)
+    for CurrentStatement(shipper, gas_day, prior):
+        retract CurrentStatement(shipper, gas_day, prior)
+        admit StatementCorrects(statement, prior)
+    admit CurrentStatement(shipper, gas_day, statement)
+
+
+-- Which current statements need review: those whose SAP no longer
+-- matches the evidence, directly or through the days it leaned on. It is
+-- read, never stored, so it can never fall out of step with the record.
+derived NeedsReview(statement):
+    over CurrentStatement(_, _, statement) and Statement(statement: statement, sap_version: used, ..) and stale(used)

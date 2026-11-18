@@ -15,6 +15,7 @@ want to write in a `.morph` file.
 | Accept a batch only if it is complete, not just correct line by line | [Margin call run](14_margin_call_run/) |
 | Check authority at the moment someone acts, and withdraw it later | [Trade lifecycle](10_trade_lifecycle/), [Approval controls](04_approval_controls/) |
 | Correct a figure without rewriting decisions made on the old one | [Verified revenue](02_verified_revenue/), [Trade lifecycle](10_trade_lifecycle/) |
+| Find which decisions late evidence affects, and correct them beside the originals | [Gas day cash-out](27_gas_day_cash_out/) |
 | Say a recorded line was a mistake, on a record that never forgets | [Order blotter](24_order_blotter/) |
 | Hold a running total under a limit | [Insurance claim settlement](05_insurance_claim_settlement/), [Borrowing base](11_borrowing_base/) |
 | Show what the record said at a past moment | [Double-entry ledger](03_double_entry_ledger/), [Trade lifecycle](10_trade_lifecycle/) |
@@ -41,6 +42,7 @@ want to write in a `.morph` file.
 - [Metered billing](15_metered_billing/) - a bill correct to the penny, every line recomputed and rounded the agreed way.
 - [Covenant reporting](17_covenant_reporting/) - a loan's reporting calendar, three calendar months at a time, with overdue notices that must count the days correctly.
 - [Laytime and demurrage](12_laytime_demurrage/) - shipping's argument about minutes: exact times, computed deadlines, tonnes of cargo and dollars of delay.
+- [Gas day cash-out](27_gas_day_cash_out/) - the GB gas day from 05:00 London time, a nomination judged on when the network received it, and a cash-out price that a late trade makes stale, with the statement that used it flagged and corrected beside the original.
 - [Order blotter](24_order_blotter/) - a cancel recorded by mistake on an append-only blotter: marked in error by an appointed corrector, never removed, and the fill it blocked admitted afterwards.
 
 **Evidence, authority and regulation**
@@ -78,6 +80,9 @@ one act is a margin-call run.
 | find the version of a rate or term in force on a date | [10_trade_lifecycle](10_trade_lifecycle/) | `effective by (keys) on (date)` |
 | promise that a dated record always exists where a rule needs one | [10_trade_lifecycle](10_trade_lifecycle/) | `total over P` on the invariant that guarantees it |
 | correct a figure without rewriting what was decided on the old one | [02_verified_revenue](02_verified_revenue/) | `current pointer by` plus `superseded via` |
+| flag every figure that leaned on evidence which has since changed, however far back | [27_gas_day_cash_out](27_gas_day_cash_out/) | a two-parameter `define` that calls itself, read by a `derived` view |
+| judge a deadline by when the outside system received a message, not when anyone acts | [27_gas_day_cash_out](27_gas_day_cash_out/) | a receipt only its boundary's receiver may admit, compared with a published deadline row |
+| use a day that starts at a local hour, such as a gas day from 05:00 London | [27_gas_day_cash_out](27_gas_day_cash_out/) | `generate local-days --at 05:00`, its rows admitted as claims |
 | stop a record ever being retracted | [04_approval_controls](04_approval_controls/) | `append only` |
 | require that the person acting holds the authority | [04_approval_controls](04_approval_controls/) | `actor` in a `require` |
 | name a gate, so a refusal says which rule said no | [05_insurance_claim_settlement](05_insurance_claim_settlement/) | `require some_name: ...` |
