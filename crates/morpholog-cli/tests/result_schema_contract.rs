@@ -2601,6 +2601,13 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         &to_value(&CheckpointOutcome::NoNewRows(sample_checkpoint())),
     );
     assert_golden(
+        "preflight_error_not_initialised.json",
+        &to_value(&morpholog_cli::envelopes::PreflightError::new(
+            morpholog_cli::envelopes::PreflightCode::NotInitialised,
+            morpholog_postgres::PgError::SchemaMissing.to_string(),
+        )),
+    );
+    assert_golden(
         "checkpoint_refusal_not_covered.json",
         &to_value(&morpholog_cli::envelopes::CheckpointRefusal::not_covered(
             uuid::Uuid::parse_str("01990000-0000-7000-8000-000000000001").unwrap(),
@@ -3654,6 +3661,7 @@ fn every_golden_validates_against_its_defs_entry() {
         ("checkpoint_created_signed.json", "checkpoint_outcome"),
         ("checkpoint_no_new_rows.json", "checkpoint_outcome"),
         ("checkpoint_refusal_not_covered.json", "checkpoint_refusal"),
+        ("preflight_error_not_initialised.json", "preflight_error"),
         ("checkpoint_created_witnessed.json", "checkpoint_outcome"),
         ("checkpoint_witnessed.json", "checkpoint"),
         ("verify_report_witnessed.json", "verify_report"),
@@ -3947,6 +3955,34 @@ fn every_session_error_code_is_in_the_pinned_enum() {
         published.len(),
         ErrorCode::ALL.len(),
         "result.json publishes codes the binary cannot emit: {published:?}"
+    );
+}
+
+/// `preflight_code` publishes exactly the codes the binary can print
+/// before a report, so a deploy probe matches a code, never prose.
+#[test]
+fn every_preflight_code_is_published_and_no_other() {
+    use morpholog_cli::envelopes::PreflightCode;
+    let schema = result_schema();
+    let published: Vec<String> = schema["$defs"]["preflight_code"]["enum"]
+        .as_array()
+        .expect("the code enum is an array")
+        .iter()
+        .map(|v| v.as_str().expect("codes are strings").to_string())
+        .collect();
+    let emitted: Vec<String> = PreflightCode::ALL
+        .iter()
+        .map(|code| {
+            serde_json::to_value(code)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(
+        published, emitted,
+        "preflight_code must list exactly what the binary emits"
     );
 }
 

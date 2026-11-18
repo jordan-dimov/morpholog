@@ -5,6 +5,7 @@
 //! arm in `main`. Helpers shared across handlers live in this file.
 
 use anyhow::{Context, anyhow};
+use morpholog_cli::envelopes::{PreflightCode, PreflightError};
 use morpholog_core::{
     PreparedProgram, Program, Transformation, TransformationName, ValidatedProgram, ValidationError,
 };
@@ -224,9 +225,7 @@ pub(crate) async fn connect_unchecked(url: &str) -> anyhow::Result<PgPool> {
     // `postgres:///mydb` means "the OS user" to every other Postgres
     // tool; sqlx 0.9 alone reads it as `anonymous`.
     let url = morpholog_postgres::with_connection_defaults(url);
-    PgPool::connect(&url)
-        .await
-        .context("failed to connect to PostgreSQL")
+    PgPool::connect(&url).await.map_err(connect_failed)
 }
 
 /// `connect`, capped at one connection, for sessions. A lockstep session
@@ -237,9 +236,70 @@ pub(crate) async fn connect_single(url: &str) -> anyhow::Result<PgPool> {
     let url = morpholog_postgres::with_connection_defaults(url);
     let pool = morpholog_postgres::single_connection_pool(&url)
         .await
-        .context("failed to connect to PostgreSQL")?;
+        .map_err(connect_failed)?;
     morpholog_postgres::require_current_schema(&pool).await?;
     Ok(pool)
+}
+
+/// The connection itself failed, before any query. Its own type, so a
+/// command can tell it from every later failure without reading prose.
+#[derive(Debug)]
+pub(crate) struct ConnectFailed(Box<dyn std::error::Error + Send + Sync>);
+
+impl std::fmt::Display for ConnectFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("failed to connect to PostgreSQL")
+    }
+}
+
+impl std::error::Error for ConnectFailed {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.0)
+    }
+}
+
+pub(crate) fn connect_failed(
+    err: impl Into<Box<dyn std::error::Error + Send + Sync>>,
+) -> anyhow::Error {
+    anyhow::Error::new(ConnectFailed(err.into()))
+}
+
+/// The published code for a failure met while connecting and asking
+/// whether this binary serves the database. Call it only on an error from
+/// that step: a later failure has no code, whatever its type.
+pub(crate) fn preflight_code(err: &anyhow::Error) -> Option<PreflightCode> {
+    use morpholog_postgres::PgError;
+    if err.is::<ConnectFailed>() {
+        return Some(PreflightCode::ConnectFailed);
+    }
+    match err.downcast_ref::<PgError>()? {
+        PgError::SchemaMissing => Some(PreflightCode::NotInitialised),
+        PgError::SchemaBelowBaseline { .. } => Some(PreflightCode::SchemaBelowBaseline),
+        PgError::SchemaAhead { .. } => Some(PreflightCode::SchemaAhead),
+        PgError::SchemaBehind { .. } => Some(PreflightCode::SchemaBehind),
+        PgError::MigrationRecordAltered { .. } => Some(PreflightCode::SchemaRecordAltered),
+        _ => None,
+    }
+}
+
+/// Print the coded `preflight_error` for a failure of the preflight step,
+/// when the command speaks JSON and the failure has a code, and hand the
+/// error back for `main` to print as prose and exit 1.
+pub(crate) fn preflight_failed(json: bool, err: anyhow::Error) -> anyhow::Error {
+    if json && let Some(code) = preflight_code(&err) {
+        if let Err(print) = print_json(&PreflightError::new(code, format!("{err:#}"))) {
+            return print;
+        }
+    }
+    err
+}
+
+/// Connect, and ask whether this binary serves the database, reporting a
+/// failure of either as [`preflight_failed`] does.
+pub(crate) async fn connect_or_report(url: &str, json: bool) -> anyhow::Result<PgPool> {
+    connect(url)
+        .await
+        .map_err(|err| preflight_failed(json, err))
 }
 
 /// The read-side tail every inspect surface shares: the structured form

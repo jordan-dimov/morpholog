@@ -282,6 +282,17 @@ Two programmes deployed against one database share rows for any same-named predi
 
 It is a deployment preflight, not a guard on running processes. It judges the claims current when it runs: a claim retracted earlier is not judged, a writer can change the claims afterwards, and a process already running is not stopped. The URL is never read from `DATABASE_URL`, so a plain `check` stays offline. The cost is one scan of the claims table, grouped in the database, with one row back per distinct shape. Findings are ordinary `check --json` diagnostics, and the generated client's `check(with_database=True)` passes the client's own URL.
 
+When the check cannot reach the database, or this binary cannot serve it, `check --json` prints a `preflight_error` on stdout instead of its report, and exits 1. `provision indexes --json` and `migrate` do the same. Its `code` says why:
+
+- `connect_failed`: no connection;
+- `not_initialised`: no `morpholog` schema, so run `init`;
+- `schema_behind`: migrations pending, so run `migrate`;
+- `schema_ahead`: a newer binary migrated it, so run that binary;
+- `schema_below_baseline`: a release before the baseline made it, so migrate it with that release first;
+- `schema_record_altered`: the migration record holds a later version without the baseline, which no release writes, so investigate it rather than migrate.
+
+The prose stays in `error` and on stderr. Nothing durable happened. `migrate` never prints `schema_behind`, since pending migrations are what it applies, and `migrate --check` reports a database behind, ahead or below the baseline in its own report. A failure after this first step has no code. The generated client raises `MorphologRequestError` with the code.
+
 ### `morpholog init`
 
 Provisions the `morpholog` schema (claims, audit, outbox) in an existing database, from the canonical schema **embedded in the binary** - a binary-only deployment provisions exactly the schema its build expects, with nothing to vendor and nothing to drift. Day-zero only: if the schema already exists it refuses (exit non-zero, the remedy named), or reports `{"status": "already-initialised"}` and exits zero under `--skip-if-exists` - the flag for deployment entrypoints that may re-run. It never drops and never migrates; schema evolution is deliberately out of this command's scope.
@@ -706,7 +717,7 @@ A copy shares three things with its source:
 
 - **The audit prefix**, with its transition ids and checkpoints. A copy is a fork of the record. That is fine for a test, and never a second live deployment.
 - **The least-privilege roles.** Roles belong to the cluster, so `init` and `migrate` on a copy warn that its roles also reach the source, as they do for a rehearsal copy.
-- **Pending outbox intents**, with the same idempotency keys. Run a worker against one copy at most.
+- **Pending outbox intents**, with the same idempotency keys. Do not deliver them for real from a test copy: use a fake deliverer, or no worker. Workers on several copies would repeat the same external actions.
 
 Advisory locks are per database, so copies never wait on each other.
 

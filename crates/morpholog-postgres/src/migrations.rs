@@ -205,12 +205,7 @@ async fn ensure_schema_present(pool: &PgPool) -> Result<(), PgError> {
         .await
         .map_err(classify_checked_query)?;
     if exists.is_none() {
-        return Err(PgError::InvalidState(
-            "this database has no `morpholog` schema, so there is nothing to migrate. \
-             Run `morpholog init` to provision it - a fresh database is created at the \
-             head and needs no migrations."
-                .to_string(),
-        ));
+        return Err(PgError::SchemaMissing);
     }
     Ok(())
 }
@@ -258,12 +253,10 @@ pub async fn migration_status(pool: &PgPool) -> Result<MigrationReport, PgError>
         // No release records a later migration without the baseline, so
         // no release's `migrate` is the remedy.
         if let Some(newest) = recorded.filter(|v| *v > BASELINE_VERSION) {
-            return Err(PgError::InvalidState(format!(
-                "this database records migration {newest} but not migration \
-                 {BASELINE_VERSION}, which every release since v{BASELINE_RELEASE} records; \
-                 its migration record was changed outside `morpholog migrate`, and no \
-                 release can be trusted to migrate it"
-            )));
+            return Err(PgError::MigrationRecordAltered {
+                newest,
+                baseline: BASELINE_VERSION,
+            });
         }
         return Err(PgError::SchemaBelowBaseline {
             recorded,

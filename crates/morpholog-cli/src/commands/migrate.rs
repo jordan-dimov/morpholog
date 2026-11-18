@@ -13,7 +13,11 @@ use morpholog_postgres::{
 };
 
 use crate::MigrateArgs;
-use crate::commands::{AlreadyReported, print_json, warn_if_open, warn_if_roles_shared};
+use crate::commands::{
+    AlreadyReported, connect_failed, preflight_code, preflight_failed, print_json, warn_if_open,
+    warn_if_roles_shared,
+};
+use morpholog_cli::envelopes::PreflightCode;
 
 /// The migration that prepares in steps before its own transaction.
 const STAGED_VERSION: i32 = 27;
@@ -23,14 +27,16 @@ pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
     // own second one.
     let pool = single_connection_pool(&with_connection_defaults(&args.db.database_url))
         .await
-        .context("failed to connect to PostgreSQL")?;
+        .map_err(|err| preflight_failed(true, connect_failed(err)))?;
 
     let mut before = match migration_status(&pool).await {
         // Only `--check` reports this state; `migrate` has nothing to apply.
         Err(PgError::SchemaBelowBaseline { recorded, .. }) if args.check => {
             MigrationReport::below_baseline(recorded)
         }
-        status => status.context("reading the database's migration state failed")?,
+        status => status
+            .context("reading the database's migration state failed")
+            .map_err(|err| preflight_failed(true, err))?,
     };
     // The staged migration's cost and refusals, asked only when it is
     // pending: the preflight scans the claims table.
@@ -65,7 +71,13 @@ pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
     };
     let report = apply_migrations_with(&pool, mode, &LockPolicy::default())
         .await
-        .context("applying migrations failed")?;
+        .context("applying migrations failed")
+        .map_err(|err| match preflight_code(&err) {
+            // Every coded failure here is met before the first step, except a
+            // query finding the schema behind, which can follow a committed one.
+            Some(PreflightCode::SchemaBehind) | None => err,
+            Some(_) => preflight_failed(true, err),
+        })?;
     // Also with nothing to apply: a restore can land a current database
     // whose recorded roles already serve another.
     if let Some(roles) = deployment_roles(&pool).await? {

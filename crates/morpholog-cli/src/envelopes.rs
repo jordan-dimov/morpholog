@@ -254,6 +254,51 @@ impl CheckpointRefusal {
     }
 }
 
+/// Why `check --database-url`, `migrate` or `provision indexes` could not
+/// produce its report: what it met before its first query of the
+/// deployment. Nothing durable happened. `ALL` lets a test hold the
+/// published `preflight_code` list to what the binary can emit.
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum PreflightCode {
+    ConnectFailed,
+    NotInitialised,
+    SchemaBelowBaseline,
+    SchemaAhead,
+    SchemaBehind,
+    SchemaRecordAltered,
+}
+
+impl PreflightCode {
+    pub const ALL: &'static [PreflightCode] = &[
+        PreflightCode::ConnectFailed,
+        PreflightCode::NotInitialised,
+        PreflightCode::SchemaBelowBaseline,
+        PreflightCode::SchemaAhead,
+        PreflightCode::SchemaBehind,
+        PreflightCode::SchemaRecordAltered,
+    ];
+}
+
+/// The object those commands print on stdout, under JSON, in place of the
+/// report they could not produce. The prose goes to stderr as well.
+#[derive(Serialize)]
+pub struct PreflightError {
+    pub code: PreflightCode,
+    pub error: String,
+    pub status: &'static str,
+}
+
+impl PreflightError {
+    pub fn new(code: PreflightCode, error: String) -> Self {
+        Self {
+            code,
+            error,
+            status: "error",
+        }
+    }
+}
+
 /// The closed set of per-row failure codes a batch or session can return.
 /// `serialization_failure` and `deadlock_detected` are safe to re-submit;
 /// the rest describe the row itself. Operational failures abort the run instead.

@@ -1007,6 +1007,24 @@ class AdapterDiscrimination(unittest.TestCase):
         self.assertTrue(caught.exception.retriable)
         self.assertNotIsInstance(caught.exception, MorphologRequestError)
 
+    def test_a_deployment_command_with_no_report_raises_its_code(self):
+        self._mode("stdout_then_exit")
+        for var in ("STUB_STDOUT", "STUB_EXIT"):
+            self.addCleanup(os.environ.pop, var, None)
+        os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "preflight_error_not_initialised.json").read_text()
+        os.environ["STUB_EXIT"] = "1"
+        calls = {
+            "migrate": lambda: self.client.migrate(),
+            "migrate check": lambda: self.client.migrate(check=True),
+            "provision_indexes": lambda: self.client.provision_indexes(check=True),
+            "check": lambda: self.client.check(with_database=True),
+        }
+        for name, call in calls.items():
+            with self.subTest(name), self.assertRaises(MorphologRequestError) as caught:
+                call()
+            self.assertEqual(caught.exception.code, "not_initialised")
+            self.assertFalse(caught.exception.retriable)
+
     def _witness_failure(self, stdout: object) -> None:
         self._mode("stdout_then_exit")
         for var in ("STUB_STDOUT", "STUB_EXIT", "STUB_STDERR"):

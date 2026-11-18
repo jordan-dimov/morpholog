@@ -1899,6 +1899,28 @@
         "tree_size": { "type": "integer", "minimum": 0 }
       }
     },
+    "preflight_code": {
+      "description": "Why a report could not be produced. connect_failed: no connection. not_initialised: no morpholog schema. schema_below_baseline: made by a release before the baseline; migrate it with that release first. schema_ahead: migrated by a newer binary. schema_behind: migrations pending; run migrate. schema_record_altered: the migration record holds a later version without the baseline, which no release writes; investigate it rather than migrate.",
+      "enum": [
+        "connect_failed",
+        "not_initialised",
+        "schema_below_baseline",
+        "schema_ahead",
+        "schema_behind",
+        "schema_record_altered"
+      ]
+    },
+    "preflight_error": {
+      "description": "Printed on stdout in place of the report by check --json --database-url, provision indexes --json and migrate, when the command meets one of these before its first query of the deployment; it exits 1, and the prose goes to stderr too. Nothing durable happened. migrate never prints schema_behind, since pending migrations are what it applies, and migrate --check reports a database behind, ahead or below the baseline in its own report instead. A failure after this step has no code.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "code", "error"],
+      "properties": {
+        "status": { "const": "error" },
+        "code": { "$ref": "#/$defs/preflight_code" },
+        "error": { "type": "string" }
+      }
+    },
     "verify_outcome": {
       "oneOf": [
         {

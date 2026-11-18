@@ -1,0 +1,5 @@
+{
+  "code": "not_initialised",
+  "error": "this database has no `morpholog` schema. Run `morpholog init` to provision it - a fresh database is created at the head and needs no migrations.",
+  "status": "error"
+}

@@ -5491,36 +5491,168 @@ async fn every_command_refuses_a_schema_behind_or_ahead_of_the_binary() {
     assert!(status.success(), "{stderr}");
 }
 
-/// `migrate --check` reports every schema state it recognises. A database
-/// with no `morpholog` schema is not one: it fails with no report.
+/// A database-backed report that cannot be produced says why by a code:
+/// `check --json`, `provision indexes --json` and `migrate` print one
+/// `preflight_error` on stdout, keep the prose on stderr, and exit 1.
+/// `migrate --check` still reports the states it can inspect. Each case is
+/// a copy of one initialised database with its migration record changed.
 #[tokio::test(flavor = "current_thread")]
-async fn migrate_check_reports_nothing_about_an_unprovisioned_database() {
+async fn a_failure_before_the_report_is_coded() {
     let base = morpholog_postgres::with_connection_defaults(&database_url());
-    let name = format!("morpholog_cli_unprovisioned_{}", std::process::id());
     let admin = PgPool::connect(&common::with_database(&base, "postgres"))
         .await
         .unwrap();
-    let drop = format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)");
-    for sql in [drop.clone(), format!("CREATE DATABASE {name}")] {
-        sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
-            .execute(&admin)
+    let prefix = format!("morpholog_cli_preflight_{}", std::process::id());
+    let sql = |text: String| {
+        let admin = admin.clone();
+        async move {
+            sqlx::raw_sql(sqlx::AssertSqlSafe(text))
+                .execute(&admin)
+                .await
+                .unwrap();
+        }
+    };
+    let fresh = |name: &str| format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)");
+    let seed = format!("{prefix}_seed");
+    sql(fresh(&seed)).await;
+    sql(format!("CREATE DATABASE {seed}")).await;
+    let ledger = ledger_morph();
+    let commands = |url: &str| -> Vec<(&'static str, Vec<String>)> {
+        let owned = |parts: &[&str]| parts.iter().map(|p| (*p).to_string()).collect();
+        vec![
+            (
+                "check",
+                owned(&["check", "--json", &ledger, "--database-url", url]),
+            ),
+            (
+                "provision",
+                owned(&[
+                    "provision",
+                    "indexes",
+                    "--check",
+                    "--json",
+                    &ledger,
+                    "--database-url",
+                    url,
+                ]),
+            ),
+            (
+                "migrate --check",
+                owned(&["migrate", "--check", "--database-url", url]),
+            ),
+            ("migrate", owned(&["migrate", "--database-url", url])),
+        ]
+    };
+    let run = |args: &[String]| {
+        let output = Command::new(common::bin()).args(args).output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        (output.status.code(), stdout, stderr)
+    };
+    let coded = |what: &str, args: &[String], code: &str| {
+        let (status, stdout, stderr) = run(args);
+        assert_eq!(status, Some(1), "{what}: {stderr}");
+        let error: Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("{what}: stdout is not one object ({e}): {stdout}"));
+        assert_eq!(error["status"], "error", "{what}: {stdout}");
+        assert_eq!(error["code"], code, "{what}: {stdout}");
+        assert!(
+            stderr.contains(error["error"].as_str().unwrap().split(": ").last().unwrap()),
+            "{what}: the prose stays on stderr: {stderr}"
+        );
+    };
+    let reported = |what: &str, args: &[String]| -> Value {
+        let (_, stdout, stderr) = run(args);
+        let report: Value =
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("{what}: {e}: {stderr}"));
+        assert_ne!(report["status"], "error", "{what} still reports: {stdout}");
+        report
+    };
+
+    // No connection: a socket nothing listens on.
+    for (what, args) in commands("postgres:///nothing?port=1") {
+        coded(what, &args, "connect_failed");
+    }
+    // No `morpholog` schema.
+    for (what, args) in commands(&common::with_database(&base, &seed)) {
+        coded(what, &args, "not_initialised");
+    }
+    let (status, _, stderr) = run(&[
+        "init".to_string(),
+        "--database-url".to_string(),
+        common::with_database(&base, &seed),
+    ]);
+    assert_eq!(status, Some(0), "{stderr}");
+
+    let cases = [
+        (
+            "behind",
+            "DELETE FROM morpholog.schema_migrations WHERE version = (SELECT max(version) FROM morpholog.schema_migrations)",
+        ),
+        (
+            "ahead",
+            "INSERT INTO morpholog.schema_migrations (version, name) VALUES (9999, 'from_a_newer_binary')",
+        ),
+        // A later migration recorded without the baseline: no release writes that.
+        (
+            "altered",
+            "DELETE FROM morpholog.schema_migrations WHERE version = 23",
+        ),
+        // Only what a release before the baseline recorded.
+        (
+            "below",
+            "DELETE FROM morpholog.schema_migrations WHERE version >= 23",
+        ),
+    ];
+    for (case, change) in cases {
+        let name = format!("{prefix}_{case}");
+        sql(fresh(&name)).await;
+        sql(format!("CREATE DATABASE {name} TEMPLATE {seed}")).await;
+        let pool = PgPool::connect(&common::with_database(&base, &name))
             .await
             .unwrap();
+        sqlx::raw_sql(sqlx::AssertSqlSafe(change.to_string()))
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        let url = common::with_database(&base, &name);
+        for (what, args) in commands(&url) {
+            let what = format!("{what} on a database {case}");
+            match (
+                case,
+                what.starts_with("migrate --check"),
+                what.starts_with("migrate "),
+            ) {
+                // Migrations pending are what `migrate` is for.
+                ("behind", true, _) => {
+                    assert!(
+                        !reported(&what, &args)["pending"]
+                            .as_array()
+                            .unwrap()
+                            .is_empty()
+                    );
+                }
+                ("behind", false, true) => {}
+                ("behind", ..) => coded(&what, &args, "schema_behind"),
+                ("ahead", true, _) => {
+                    assert_eq!(
+                        reported(&what, &args)["unknown"].as_array().unwrap().len(),
+                        1
+                    );
+                }
+                ("ahead", ..) => coded(&what, &args, "schema_ahead"),
+                ("altered", ..) => coded(&what, &args, "schema_record_altered"),
+                ("below", true, _) => {
+                    assert_eq!(reported(&what, &args)["below_baseline"]["baseline"], 23);
+                }
+                ("below", ..) => coded(&what, &args, "schema_below_baseline"),
+                _ => unreachable!(),
+            }
+        }
+        sql(fresh(&name)).await;
     }
-    let output = Command::new(common::bin())
-        .args(["migrate", "--check", "--database-url"])
-        .arg(common::with_database(&base, &name))
-        .output()
-        .unwrap();
-    sqlx::raw_sql(sqlx::AssertSqlSafe(drop))
-        .execute(&admin)
-        .await
-        .unwrap();
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(output.status.code(), Some(1), "{stderr}");
-    assert!(output.stdout.is_empty(), "{stderr}");
-    assert!(stderr.contains("no `morpholog` schema"), "{stderr}");
+    sql(fresh(&seed)).await;
 }
 
 /// The hash `morpholog hash` reports for a programme file.
