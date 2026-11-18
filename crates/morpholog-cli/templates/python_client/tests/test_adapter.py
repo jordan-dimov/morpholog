@@ -217,6 +217,27 @@ class AdapterDiscrimination(unittest.TestCase):
         floor = reports[0].least_privilege
         self.assertEqual((floor.writer_role, floor.reader_role), ("acme_writer", "acme_reader"))
 
+    def test_init_can_close_the_deployment(self):
+        # Closing was reachable only from the CLI, so a host on the
+        # generated client could not close its own deployment. The flags
+        # pass straight through; the binary checks the pairing and the login.
+        self._mode("record_argv_stdout")
+        os.environ["STUB_STDOUT"] = json.dumps({"status": "initialised", "schema": "morpholog"})
+        self.addCleanup(os.environ.pop, "STUB_STDOUT", None)
+        with recording_argv() as argv_after:
+            argv = argv_after(
+                lambda: self.client.init(
+                    skip_if_exists=True, root_actor="root", root_login="host_login", confirm=True
+                )
+            )
+            self.assertEqual(argv[argv.index("--root-actor") + 1], "root")
+            self.assertEqual(argv[argv.index("--root-login") + 1], "host_login")
+            self.assertIn("--confirm", argv)
+
+            argv = argv_after(lambda: self.client.init())
+            for flag in ("--root-actor", "--root-login", "--confirm"):
+                self.assertNotIn(flag, argv)
+
     def test_provisioning_names_every_programme_and_asks_for_the_envelope(self):
         self._mode("record_argv_stdout")
         os.environ["STUB_STDOUT"] = (GOLDEN_DIR / "provision_report_pruned.json").read_text()
