@@ -499,6 +499,65 @@ What is deliberately left open, pending the worked example that forces the shape
 
 This is the artefact client generation consumes: the generated Python client's envelope models derive from the same pinned document, and a contract-test suite in the binary's own repository holds the document, the binary's real serialization, and the generated models to one set of golden envelopes. The `trace` array's items are pinned too (`trace_entry`, a kind-discriminated union over every statement step and the invariant check, with `require_outcome` / `bind_one_outcome` / `for_iteration` beneath it); a `bind`'s bindings use the same `witness_binding` shape a refusal's witness does, because it is the same idea.
 
+### Calling the binary without the client
+
+The generated client is the usual way in. Without it, from any language, the
+contract is a subprocess call and the envelope on stdout. In Python:
+
+```python
+import json
+import subprocess
+
+class OutcomeUnknown(Exception):
+    """It may have committed: read the record before trying again."""
+
+# The codes that mean nothing was recorded (the generated client ships
+# this list as NOTHING_RECORDED_CODES). Any other code - a newer one
+# included - says nothing, so it is unknown.
+NOTHING_RECORDED = {
+    "actor_assertion_unauthorised", "deadlock_detected", "duplicate_intent",
+    "invalid_arguments", "invalid_request", "kernel_error", "not_committed",
+    "serialization_failure", "unknown_transformation",
+}
+
+def propose(transformation: str, actor: str, args: dict) -> dict:
+    result = subprocess.run(
+        ["morpholog", "propose", "revenue.morph", transformation,
+         "--actor", actor, "--args-named", json.dumps(args)],
+        capture_output=True, text=True,
+    )
+    try:
+        receipt = json.loads(result.stdout)
+    except ValueError:
+        raise OutcomeUnknown(result.stderr)       # no statement at all
+    if receipt.get("status") in ("committed", "rejected"):
+        return receipt                            # a decided outcome, either way
+    if receipt.get("status") == "error" and receipt.get("code") in NOTHING_RECORDED:
+        raise RuntimeError(receipt["error"])      # the binary says nothing was committed
+    raise OutcomeUnknown(result.stderr)
+
+receipt = propose("report_revenue", "verifier_anna", {
+    "asset": "battery_07", "period": "q1_2026",
+    "amount": "1000", "figure_id": "f1",
+})
+if receipt["status"] == "rejected":
+    rule = receipt.get("rule")          # absent for an unnamed gate
+    witness = receipt.get("witness")    # absent when nothing was bound
+    compared = receipt.get("compared")  # absent unless a comparison failed
+    ...  # receipt["reason"] is always there; with --explain-on-reject the
+         # receipt carries the missing-evidence account too
+```
+
+A business refusal is data, not an exception, so the call does not pass
+`check=True`: a refusal exits non-zero but still writes its receipt to stdout.
+What counts as an answer is the rule that matters. A committed or rejected
+receipt is one. So is an error whose `code` says nothing was committed; the
+generated client ships that list as `NOTHING_RECORDED_CODES`, and a test holds
+this copy to it. Anything else (nothing on stdout, output that does not parse, a
+killed process) may have happened after the commit was sent, so it means "go and
+look", never "nothing changed". [`../examples/etrm_embedder/`](../examples/etrm_embedder/)
+drives a commodity-trade lifecycle end to end this way.
+
 ## A consumed surface is a pinned envelope (bridges are silent landmines)
 
 The drift check is regenerate-and-diff: regenerate the client (and the SQL views), diff the bytes, and a changed envelope shows up as a changed file. That check is only as wide as the surfaces it covers. A surface an embedder reaches by hand-writing its own subprocess call and parsing the raw JSON - a *bridge* - sits outside it. The envelope can be restructured under a version bump and nothing reddens: not the embedder, not the generated client (its bytes never moved), not Morpholog's own golden set. The break surfaces as a parse failure in production, at the worst possible moment. "The client is byte-stable across the upgrade" then proves only the *generated* surface safe while a bridged one quietly broke.
