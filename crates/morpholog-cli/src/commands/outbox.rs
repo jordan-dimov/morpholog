@@ -15,9 +15,9 @@
 //! print `{"status": "applied"}`, or `{"status": "lease_lost"}` when the
 //! worker no longer holds the lease.
 //!
-//! No compensation here: a deployment that needs it uses the in-process
-//! worker, which carries `CompensationSpec`. CLI users mark a row `failed`
-//! and stop.
+//! No compensation here: CLI users mark a row `failed` and stop. A
+//! deployment that compensates calls `process_one_outbox_row` with a
+//! `CompensationSpec` itself.
 
 use anyhow::{Context, anyhow};
 use jiff::Timestamp;

@@ -22,7 +22,7 @@ use morpholog_examples::{
 };
 use morpholog_postgres::{
     PgProposalOutcome, PgTracedOutcome, compute_idempotency_key, list_audit_rows, list_claims,
-    list_derived, list_pending_outbox, load_scoped_state,
+    list_derived, list_pending_outbox, load_explanation_state,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -2271,11 +2271,11 @@ async fn insurance_claim_settlement_full_chain_through_pg() {
     );
 }
 
-/// `load_scoped_state`, the pre-state load behind `explain`, uses the same
-/// predicate scope as `propose_against_pg`, so an explanation sees exactly
-/// the state a real proposal would.
+/// `load_explanation_state`, the pre-state load behind `explain`, uses the
+/// same predicate scope as `propose_against_pg`, so an explanation sees
+/// exactly the state a real proposal would.
 #[tokio::test]
-async fn load_scoped_state_loads_only_in_scope_predicates() {
+async fn load_explanation_state_loads_only_in_scope_predicates() {
     let pool = test_pool().await;
     reset_db(&pool).await;
 
@@ -2290,13 +2290,13 @@ async fn load_scoped_state_loads_only_in_scope_predicates() {
     )
     .await;
 
-    let state = load_scoped_state(
+    let (state, _) = load_explanation_state(
         &pool,
         common::pg_program(settlement_netting::program()).prepared(),
         &settlement_netting::create_net_settlement().name,
     )
     .await
-    .expect("load_scoped_state should not error")
+    .expect("load_explanation_state should not error")
     .expect("the programme declares the transformation");
 
     assert!(

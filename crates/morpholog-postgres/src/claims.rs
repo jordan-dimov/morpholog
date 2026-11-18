@@ -290,35 +290,21 @@ pub async fn read_claims_where(
     )
 }
 
-/// Load the current pre-state a transformation would see: the read-only
-/// counterpart of the load inside [`crate::propose_against_pg`]. Only the
-/// predicates the body reads and the invariants reference are fetched;
-/// nothing else can affect the verdict.
+/// Load the current pre-state a transformation would see, and the
+/// decision time an explanation of it uses: the read-only counterpart of
+/// the load inside [`crate::propose_against_pg`]. Only the predicates the
+/// body reads and the invariants reference are fetched; nothing else can
+/// affect the verdict.
 ///
-/// A plain pooled read, not a SERIALIZABLE transaction: `explain` shows
-/// what would happen and commits nothing, so a point-in-time snapshot is
-/// enough.
+/// One read-only REPEATABLE READ transaction, not a SERIALIZABLE one:
+/// `explain` shows what would happen and commits nothing. The decision
+/// time is that transaction's start, as a proposal uses its own. It is an
+/// input to the explanation, not a promise about a later proposal, which
+/// starts its own transaction and may decide differently.
 ///
 /// The transformation is `prepared`'s own, by name, so the scope always
 /// comes from the same programme's rules. `Ok(None)` when no
 /// transformation has that name.
-pub async fn load_scoped_state(
-    pool: &PgPool,
-    prepared: &PreparedProgram,
-    name: &TransformationName,
-) -> Result<Option<State>, PgError> {
-    let Some(scope) = explanation_scope(prepared, name) else {
-        return Ok(None);
-    };
-    let claims = list_claims_for_predicates(pool, &scope).await?;
-    Ok(Some(State::from_claims(claims)))
-}
-
-/// [`load_scoped_state`] with the decision time an explanation of it
-/// uses: the start of the read transaction the state is read in, as a
-/// proposal uses its own transaction's start. It is an input to that
-/// explanation, not a promise about a later proposal, which starts its
-/// own transaction and may decide differently.
 pub async fn load_explanation_state(
     pool: &PgPool,
     prepared: &PreparedProgram,
