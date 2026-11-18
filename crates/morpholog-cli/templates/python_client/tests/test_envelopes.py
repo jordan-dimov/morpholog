@@ -262,10 +262,10 @@ class RunOutcomes(unittest.TestCase):
         with self.assertRaisesRegex(envelopes.EnvelopeError, "names no parameter"):
             envelopes.BatchReceipt.from_json(row)
 
-    def test_the_developer_intro_recipe_lists_the_same_codes(self):
-        # The hand-written recipe in the developer introduction carries its
-        # own copy of the list; it must not drift from the client's.
-        intro = (GOLDEN_DIR.parents[4] / "docs" / "developer-intro.md").read_text()
+    def test_the_hand_written_recipe_lists_the_same_codes(self):
+        # The subprocess recipe in the embedder guide carries its own copy
+        # of the list; it must not drift from the client's.
+        intro = (GOLDEN_DIR.parents[4] / "docs" / "embedder-integration.md").read_text()
         start = intro.index("NOTHING_RECORDED = {")
         literal = intro[start + len("NOTHING_RECORDED = ") : intro.index("}", start) + 1]
         self.assertEqual(eval(literal), set(envelopes.NOTHING_RECORDED_CODES))
