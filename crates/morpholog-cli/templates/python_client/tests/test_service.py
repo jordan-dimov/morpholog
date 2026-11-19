@@ -157,6 +157,7 @@ class TheWire(ServiceHarness):
         service = self.serve(transcript)
         with Session.connect(service.path, timeout=10.0) as s:
             self.assertEqual(s.model_hash, READY["model_hash"])
+            self.assertIsNone(s.process, "a service session has no child")
             one = s.propose("open_account", "teller", OPEN)
             two = s.propose("post_balance", "teller", {"account": "acct_1", "figure": "100"})
         self.assertIsInstance(one, envelopes.Committed)

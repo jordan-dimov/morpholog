@@ -1423,7 +1423,10 @@ action, so read the record first. A `commit_outcome_unknown` receipt
 raises the same error for the same reason, but does NOT poison: the
 response arrived, so the wire is in step, and what is unknown is the
 database's side. Retries stay the caller's in every case: the runtime never retries
-a proposal on its own.
+a proposal on its own. To test that your code never retries an unknown
+outcome, kill `session.process` (the child's `Popen`; `None` for a
+`connect_service` session) while a `propose` waits: the call raises
+`MorphologOutcomeUnknown`.
 
 **Attestation is the batch's, documented.** Every commit still
 records `authenticated_by` from its own connection's `session_user`

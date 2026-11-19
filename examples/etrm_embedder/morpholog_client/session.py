@@ -443,6 +443,15 @@ class Session:
             expected_version,
         )
 
+    @property
+    def process(self) -> subprocess.Popen[str] | None:
+        """The ``morpholog session`` child this session spawned, or
+        ``None`` for a connection to ``morpholog serve``. It is for a test
+        that proves an unknown outcome is never retried: kill it while a
+        ``propose`` waits, and the call raises ``MorphologOutcomeUnknown``,
+        never a plain error."""
+        return self._transport.process if isinstance(self._transport, _Child) else None
+
     @classmethod
     def connect(
         cls,
