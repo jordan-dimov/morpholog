@@ -160,8 +160,27 @@ transformation note(line, amount):
     admit Note(line, amount)
 ";
 
+/// InvenTree's roles (#874): a domain that calls a condition whose body
+/// is an `or`, read with every key the call binds and with fewer.
+const ROLES: &str = "program roles
+predicate UserAccount(user: Subject, active: Bool, superuser: Bool)
+predicate Member(user: Subject, group: Subject)
+predicate RoleGrant(group: Subject, role: Subject, perm: Subject)
+predicate RolePerm(role: Subject, perm: Subject)
+predicate UserRole(user: Subject, role: Subject, perm: Subject)
+predicate RoleHolder(user: Subject)
+define has_role(user, role, perm):
+    (UserAccount(user, true, true) and RolePerm(role, perm)) or (Member(user, g) and RoleGrant(g, role, perm))
+derived UserRole(user, role, perm):
+    over has_role(user, role, perm)
+derived RoleHolder(user):
+    over has_role(user, role, perm)
+transformation join(user, group):
+    admit Member(user, group)
+";
+
 fn programs() -> Vec<Program> {
-    let mut out: Vec<Program> = [SPIKE, EDGES, ORDERS, MEMBERS, CHOICES]
+    let mut out: Vec<Program> = [SPIKE, EDGES, ORDERS, MEMBERS, CHOICES, ROLES]
         .iter()
         .map(|s| morpholog_surface::parse_program(s).expect("fragment parses"))
         .collect();
@@ -345,7 +364,7 @@ async fn live_views_compute_the_kernels_rows_over_generated_states() {
             live.push(program.name.to_string());
         }
     }
-    for fragment in ["edge_shapes", "members", "choices"] {
+    for fragment in ["edge_shapes", "members", "choices", "roles"] {
         assert!(
             live.iter().any(|n| n == fragment),
             "{fragment} renders live and is compared: {live:?}"
@@ -695,4 +714,42 @@ async fn a_choice_raises_only_in_its_test_or_its_chosen_branch() {
     assert_eq!(agree(&pool, &v, &state, "choices test raises").await, 5);
     let rows = live_rows(&pool, &v, "Guarded").await;
     assert_eq!(rows[0].1.as_deref(), Some("sum_kind"), "{rows:?}");
+}
+
+/// A user holds a grant through either branch of the condition, and one
+/// through both: the view keeps each (user, role, perm) once, as the
+/// kernel does, and an inactive superuser or a group with no grant holds
+/// nothing.
+#[tokio::test]
+async fn a_domain_over_an_or_condition_keeps_each_key_once() {
+    let pool = test_pool().await;
+    let program = morpholog_surface::parse_program(ROLES).unwrap();
+    let validated = program.validated().unwrap();
+    let t = morpholog_test_support::bool_;
+    let state = State::from_claims(vec![
+        claim_instance("UserAccount", &[subj("admin"), t(true), t(true)]),
+        claim_instance("UserAccount", &[subj("retired"), t(false), t(true)]),
+        claim_instance("UserAccount", &[subj("both"), t(true), t(true)]),
+        claim_instance("RolePerm", &[subj("part"), subj("view")]),
+        claim_instance("RolePerm", &[subj("part"), subj("change")]),
+        claim_instance("Member", &[subj("clerk"), subj("staff")]),
+        claim_instance("Member", &[subj("both"), subj("staff")]),
+        claim_instance("Member", &[subj("idle"), subj("empty")]),
+        claim_instance("RoleGrant", &[subj("staff"), subj("part"), subj("view")]),
+    ]);
+    let rows = validated
+        .enumerate_derived("UserRole", &state)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rows.len(),
+        5,
+        "admin twice, both twice, clerk once: {rows:?}"
+    );
+    let holders = validated
+        .enumerate_derived("RoleHolder", &state)
+        .unwrap()
+        .unwrap();
+    assert_eq!(holders.len(), 3, "{holders:?}");
+    assert_eq!(agree(&pool, &validated, &state, "roles built").await, 2);
 }
