@@ -478,34 +478,32 @@ pub fn render_views(
     // refusal names the claim. Collected with the sweep's, so the author
     // sees every finding at once and nothing is written.
     let mut live: BTreeMap<&str, String> = BTreeMap::new();
-    {
-        let decls: BTreeMap<&str, &PredicateDecl> = program
-            .predicates
-            .iter()
-            .map(|p| (p.name.as_str(), p))
-            .collect();
-        let defs: BTreeMap<&str, &Definition> = program
-            .definitions
-            .iter()
-            .map(|d| (d.name.as_str(), d))
-            .collect();
-        for claim in &program.derived_claims {
-            if sources[claim.predicate.as_str()] != DerivedSource::Live {
-                continue;
+    let decls: BTreeMap<&str, &PredicateDecl> = program
+        .predicates
+        .iter()
+        .map(|p| (p.name.as_str(), p))
+        .collect();
+    let defs: BTreeMap<&str, &Definition> = program
+        .definitions
+        .iter()
+        .map(|d| (d.name.as_str(), d))
+        .collect();
+    for claim in &program.derived_claims {
+        if sources[claim.predicate.as_str()] != DerivedSource::Live {
+            continue;
+        }
+        // A validated programme declares every derived head.
+        let Some(head) = decls.get(claim.predicate.as_str()) else {
+            continue;
+        };
+        match compile_derived(claim, head, &decls, &defs, model_hash) {
+            Ok(body) => {
+                live.insert(claim.predicate.as_str(), body.select);
             }
-            // A validated programme declares every derived head.
-            let Some(head) = decls.get(claim.predicate.as_str()) else {
-                continue;
-            };
-            match compile_derived(claim, head, &decls, &defs, model_hash) {
-                Ok(body) => {
-                    live.insert(claim.predicate.as_str(), body.select);
-                }
-                Err(reason) => refusals.push(ViewRefusal::Live {
-                    derived: claim.predicate.to_string(),
-                    reason: reason.to_string(),
-                }),
-            }
+            Err(reason) => refusals.push(ViewRefusal::Live {
+                derived: claim.predicate.to_string(),
+                reason: reason.to_string(),
+            }),
         }
     }
     if !refusals.is_empty() {
