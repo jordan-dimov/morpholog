@@ -772,7 +772,7 @@ Where the kernel could not compute a row (a sum past the decimal range, a value 
 
 A value's `if(...)` is a `CASE`. As in the kernel, the test is always computed and then only the chosen branch, so a branch that is not chosen never names a failure. A value declared `Bool` is a `boolean` column and one declared `Subject` a `text` column; each is a literal, a key, or an `if(...)` choosing between them.
 
-**A figure several derived claims need is a value definition they all call.** A derived claim cannot read another derived claim, so the way to share a figure is not to compute it in one and read it from the other: name it once, `define completed_of(part) = (sum(q | Build(b, part) and Output(b, q)))`, and call `completed_of(part)` in each derived claim's `value` line. The kernel and a live view compute it the same way, so every derived claim that calls it renders live when the body does, and the figure is spelt once.
+**A figure several derived claims need is a value definition they all call.** A derived claim cannot read another derived claim, so the way to share a figure is not to compute it in one and read it from the other: name it once, `define completed_of(part) = (sum(q | Build(b, part) and Output(b, q)))`, and call `completed_of(part)` in each derived claim's `value` line. The kernel and a live view compute it the same way, so the figure is spelt once, and a derived claim that calls it renders live when the figure's body and the claim's own domain and values do.
 
 ### History views (`--history`)
 
