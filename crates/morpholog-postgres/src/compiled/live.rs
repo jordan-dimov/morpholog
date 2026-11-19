@@ -12,12 +12,13 @@
 //! invariant does.
 
 use morpholog_core::{
-    DerivedClaim, PredicateArgKind, PredicateDecl, PredicateName, Term, Value, ValueExpr,
+    DerivedClaim, ExtremumOp, PredicateArgKind, PredicateDecl, PredicateName, Prop, Term, Value,
+    ValueExpr,
 };
 
 use super::{
-    Bound, CompileReason, Ctx, Env, ErrorReport, Pending, from_list, lift, nested_scope,
-    quote_literal, render_prop, seek_sql, value_sql,
+    Bound, CompileReason, Ctx, Env, ErrorReport, Pending, decimal_sql, from_list, lift,
+    nested_scope, outside_consequent, quote_literal, render_prop, seek_sql, value_sql,
 };
 use crate::sql_views::column_sql_at;
 
@@ -284,6 +285,9 @@ fn decimal_value(
     ctx: &mut Ctx<'_>,
     laterals: &mut Vec<String>,
 ) -> Result<LiveValue, CompileReason> {
+    if let ValueExpr::Extremum { op, value, body } = expr {
+        return extremum_value(*op, value, body, env, ctx, laterals);
+    }
     let start = ctx.pending.len();
     let operand = value_sql(expr, env, ctx)?;
     let Some((amount, _unit)) = operand.dd else {
@@ -312,6 +316,91 @@ fn decimal_value(
     }
     Ok(LiveValue {
         sql: format!("({amount})::numeric"),
+        failures,
+    })
+}
+
+/// `max(x | body)` or `min(x | body)` as a whole value line, or a branch
+/// of one: the extremum of a decimal position over the body's matches, as
+/// a LATERAL aggregate. The kernel raises where the body does, where a
+/// target is of another kind, and where nothing matches, in that order,
+/// and the row names each. Inside arithmetic it stays refused.
+fn extremum_value(
+    op: ExtremumOp,
+    value: &Term,
+    body: &Prop,
+    env: &Env,
+    ctx: &mut Ctx<'_>,
+    laterals: &mut Vec<String>,
+) -> Result<LiveValue, CompileReason> {
+    let queued = ctx.pending.len();
+    let r = outside_consequent(ctx, |ctx| render_prop(body, env.clone(), ctx))?;
+    if ctx.pending.len() != queued {
+        return Err(CompileReason::UnvalidatedShape {
+            detail: "an extremum body leaving a value unclosed".to_string(),
+        });
+    }
+    if r.from.is_empty() {
+        return Err(CompileReason::UnvalidatedShape {
+            detail: "an extremum body binding no claims".to_string(),
+        });
+    }
+    let lifted = lift(&r.probes);
+    if !lifted.laterals.is_empty() {
+        return Err(CompileReason::UnvalidatedShape {
+            detail: "an extremum body raising before it binds a claim".to_string(),
+        });
+    }
+    let (target, kind_test) = match value {
+        Term::Var(v) => {
+            let Some(Bound::Col(col)) = r.env.get(v) else {
+                return Err(CompileReason::UnvalidatedShape {
+                    detail: format!("extremum target unbound: {v}"),
+                });
+            };
+            if col.kind != PredicateArgKind::Decimal {
+                return Err(CompileReason::ArgumentKind {
+                    kind: col.kind.clone(),
+                });
+            }
+            (
+                decimal_sql(col),
+                format!(
+                    "bool_or(({}.arguments -> {} ->> 'type') IS DISTINCT FROM 'decimal')",
+                    col.alias, col.position
+                ),
+            )
+        }
+        Term::Literal(Value::Decimal(d)) => (
+            format!("{}::numeric", quote_literal(&d.to_string())),
+            "false".to_string(),
+        ),
+        Term::Literal(_) | Term::Actor | Term::DecidedAt | Term::Wildcard => {
+            return Err(CompileReason::Construct {
+                construct: "extremum of a target that is not a decimal",
+            });
+        }
+    };
+    let alias = format!("l{}", ctx.counter);
+    ctx.counter += 1;
+    let aggregate = match op {
+        ExtremumOp::Max => "max",
+        ExtremumOp::Min => "min",
+    };
+    laterals.push(format!(
+        "LATERAL (SELECT {aggregate}({target}) AS m, count(*) AS n, COALESCE({kind_test}, false) AS f FROM {} WHERE {}) {alias}",
+        from_list(&r),
+        r.conjunction()
+    ));
+    let mut failures: Vec<(String, &'static str)> = lifted
+        .probes
+        .into_iter()
+        .map(|probe| (probe.condition, class_of(&probe.report)))
+        .collect();
+    failures.push((format!("{alias}.f"), "extremum_kind"));
+    failures.push((format!("{alias}.n = 0"), "extremum_empty"));
+    Ok(LiveValue {
+        sql: format!("({alias}.m)::numeric"),
         failures,
     })
 }
