@@ -2515,7 +2515,7 @@ mod memo;
 mod recursion;
 
 pub(crate) use memo::Memo;
-#[doc(hidden)]
+#[cfg(feature = "memo-differential")]
 pub use memo::set_memo;
 #[cfg(test)]
 mod tests;

@@ -12,6 +12,7 @@ morpholog-surface = { path = "../morpholog-surface" }
 
 [dev-dependencies]
 jiff = { workspace = true }
+morpholog-core = { path = "../morpholog-core", features = ["memo-differential"] }
 morpholog-test-support = { path = "../morpholog-test-support" }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

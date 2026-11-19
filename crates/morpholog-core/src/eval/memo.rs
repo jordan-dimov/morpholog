@@ -16,7 +16,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::fold::{Node, walk_value};
 use crate::ir::{Term, Unit, ValueExpr, Var};
@@ -24,19 +23,25 @@ use crate::state::EvalValue;
 
 use super::{EvalContext, EvalError};
 
-static OFF: AtomicBool = AtomicBool::new(false);
+#[cfg(feature = "memo-differential")]
+static OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// For a differential test only: evaluations started after
-/// `set_memo(false)` run without a memo until `set_memo(true)`. The memo
-/// changes no result, and this is how a test shows it. Process-wide, so
-/// such a test runs alone in its binary.
-#[doc(hidden)]
+/// For the memo differential only, built with `memo-differential`:
+/// evaluations started after `set_memo(false)` run without a memo until
+/// `set_memo(true)`. Process-wide, so that test runs alone in its binary.
+#[cfg(feature = "memo-differential")]
 pub fn set_memo(on: bool) {
-    OFF.store(!on, Ordering::SeqCst);
+    OFF.store(!on, std::sync::atomic::Ordering::SeqCst);
 }
 
+#[cfg(feature = "memo-differential")]
 pub(crate) fn memo_on() -> bool {
-    !OFF.load(Ordering::SeqCst)
+    !OFF.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[cfg(not(feature = "memo-differential"))]
+pub(crate) fn memo_on() -> bool {
+    true
 }
 
 /// Created where one evaluation starts and dropped where it ends: a
