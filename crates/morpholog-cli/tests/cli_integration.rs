@@ -3853,6 +3853,60 @@ async fn batch_rows_are_independent_and_every_row_gets_a_receipt() {
     assert_eq!(logged[0]["actor"]["value"], "jordan");
 }
 
+// A row with a field the batch does not read is refused before it is
+// proposed. The row-level `explain_on_reject` a session request takes is
+// the sharpest case: ignored, it would look honoured. Here the row would
+// be rejected if proposed, so an empty rejection log shows it never was.
+#[tokio::test]
+async fn a_batch_row_with_an_unknown_field_is_refused_before_it_is_proposed() {
+    reset_db().await;
+    let mut into_closed = serde_json::from_str::<Value>(&ledger_row(
+        "post_simple_entry",
+        "jordan",
+        serde_json::json!({
+            "entry_id": "b1", "posting_date": "d1", "period": "p1",
+            "debit_account": "cash", "credit_account": "rev", "amount": "50"
+        }),
+    ))
+    .unwrap();
+    into_closed["explain_on_reject"] = Value::Bool(true);
+    let rows = [
+        ledger_row("close_period", "maria", serde_json::json!({"period": "p1"})),
+        into_closed.to_string(),
+        ledger_row(
+            "post_simple_entry",
+            "nina",
+            serde_json::json!({
+                "entry_id": "b2", "posting_date": "d2", "period": "p2",
+                "debit_account": "cash", "credit_account": "rev", "amount": "75"
+            }),
+        ),
+    ]
+    .join("\n");
+
+    let (status, receipts, stderr) = run_batch(&rows, &[]);
+    assert!(status.success(), "{stderr}");
+    let statuses: Vec<&str> = receipts
+        .iter()
+        .map(|r| r["status"].as_str().expect("status"))
+        .collect();
+    assert_eq!(statuses, vec!["committed", "error", "committed"]);
+    assert_eq!(receipts[1]["row"], 2, "{}", receipts[1]);
+    assert_eq!(receipts[1]["code"], "invalid_request", "{}", receipts[1]);
+    assert!(
+        receipts[1]["error"]
+            .as_str()
+            .unwrap()
+            .contains("explain_on_reject"),
+        "the refusal names the field: {}",
+        receipts[1]
+    );
+    let (status, stdout, _stderr) = run_cli(&["inspect", "rejections"]);
+    assert!(status.success());
+    let logged: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(logged, serde_json::json!([]), "never proposed: {stdout}");
+}
+
 // --explain-on-reject composes per row: the rejected row's receipt
 // carries the same structured explanation `explain --json` produces.
 #[tokio::test]
