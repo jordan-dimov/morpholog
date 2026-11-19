@@ -28,7 +28,8 @@
 //! key a `let` produces, a rebound parameter, a pattern beside a keyed
 //! one that fixes nothing, a read before the bind that would key it, a
 //! membership test behind a conjunct that can raise, a loop binding a
-//! `let` replaces, a call whose body is an `or`).
+//! `let` replaces, a call whose body is an `or`, calls nesting a key
+//! deeper than the loader may send).
 //!
 //! Generated states seldom let a `bind` match, so the dependent reads
 //! are also exercised over built states where every link of a chain
@@ -817,6 +818,31 @@ define big(x):
 transformation t(out, xs):
     require not (P(x) and big(x) and x in xs)
     admit Out(out)
+",
+    ),
+    // Each call reaches its result through four calls a level down, so
+    // `y`'s key would be 1,365 steps of `P` long: a subquery each, more
+    // than PostgreSQL parses in one statement.
+    (
+        "calls_nesting_deep",
+        "program calls_nesting_deep
+predicate P(x: Subject, y: Subject)
+predicate Out(y: Subject)
+define d0(x, y):
+    P(x, a) and d1(a, b) and d1(b, c) and d1(c, d) and d1(d, y)
+define d1(x, y):
+    P(x, a) and d2(a, b) and d2(b, c) and d2(c, d) and d2(d, y)
+define d2(x, y):
+    P(x, a) and d3(a, b) and d3(b, c) and d3(c, d) and d3(d, y)
+define d3(x, y):
+    P(x, a) and d4(a, b) and d4(b, c) and d4(c, d) and d4(d, y)
+define d4(x, y):
+    P(x, a) and d5(a, b) and d5(b, c) and d5(c, d) and d5(d, y)
+define d5(x, y):
+    P(x, y)
+transformation t(x):
+    bind d0(x, y)
+    admit Out(y)
 ",
     ),
 ];
@@ -1989,6 +2015,15 @@ fn a_call_keys_nothing_it_cannot_follow() {
     assert_eq!(p.reads[&"C".into()], morpholog_core::ReadFilter::Whole);
     let p = plan_of("member_after_a_call");
     assert_eq!(p.reads[&"P".into()], morpholog_core::ReadFilter::Whole);
+}
+
+/// A key the loader could not send reads whole: the deep calls' `P`, and
+/// the `Out` that `y` would key.
+#[test]
+fn a_key_nested_too_deep_reads_whole() {
+    let p = plan_of("calls_nesting_deep");
+    assert_eq!(p.reads[&"P".into()], morpholog_core::ReadFilter::Whole);
+    assert_eq!(p.admits[&"Out".into()], morpholog_core::ReadFilter::Whole);
 }
 
 /// Two revisions each cite one claim. Checking the first loads only its

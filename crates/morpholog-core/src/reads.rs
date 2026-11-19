@@ -103,6 +103,13 @@ pub enum Key {
 /// from PostgreSQL's limit on bound parameters, one per element.
 pub const MAX_ELEMENT_KEYS: usize = 1_000;
 
+/// The most subqueries one key may nest in the load's statement; a name
+/// a deeper key would find stays unknown, and what it keys reads whole.
+/// Calls that each call the next more than once nest keys exponentially
+/// deep, and PostgreSQL's parser gives up a few hundred deep. Every
+/// programme measured stays under twenty.
+const MAX_KEY_SUBQUERIES: usize = 64;
+
 impl Key {
     /// Whether any predicate the key reads through is one of `these`.
     pub fn reads_any(&self, these: &BTreeSet<PredicateName>) -> bool {
@@ -555,16 +562,19 @@ impl Walker<'_> {
         known: &Env,
         seen: &mut BTreeSet<DefinitionName>,
     ) -> (Vec<Env>, Env) {
-        let run = conjuncts
+        // Two limits: what may be keyed backwards stops at the first call,
+        // whose body can raise; what may be keyed forwards runs on through
+        // calls, since a call binds as a pattern does.
+        let backward_limit = conjuncts
             .iter()
             .position(|c| !matches!(c, Prop::Claim { .. } | Prop::In(..)))
             .unwrap_or(conjuncts.len());
-        let binders = conjuncts
+        let forward_limit = conjuncts
             .iter()
             .position(|c| !matches!(c, Prop::Claim { .. } | Prop::In(..) | Prop::Defined { .. }))
             .unwrap_or(conjuncts.len());
         let mut env = known.clone();
-        for conjunct in &conjuncts[..run] {
+        for conjunct in &conjuncts[..backward_limit] {
             if let Prop::In(Term::Var(x), ValueExpr::Term(Term::Var(source))) = conjunct {
                 self.element(x, source, &mut env);
             }
@@ -572,7 +582,7 @@ impl Walker<'_> {
         let mut envs = Vec::with_capacity(conjuncts.len());
         let mut at = 0;
         while at < conjuncts.len() {
-            if at < binders
+            if at < forward_limit
                 && let Prop::Defined { name, args } = &conjuncts[at]
             {
                 envs.push(env.clone());
@@ -581,7 +591,7 @@ impl Walker<'_> {
                 at += 1;
                 continue;
             }
-            let block = conjuncts[at..binders.max(at)]
+            let block = conjuncts[at..forward_limit.max(at)]
                 .iter()
                 .take_while(|c| matches!(c, Prop::Claim { .. }))
                 .count();
@@ -712,6 +722,9 @@ impl Walker<'_> {
         if of.is_empty() {
             return made;
         }
+        if 1 + of.iter().map(|(_, t)| subqueries(t)).sum::<usize>() > MAX_KEY_SUBQUERIES {
+            return made;
+        }
         for (position, term) in args.iter().enumerate() {
             if let Term::Var(name) = term
                 && !known.contains_key(name)
@@ -832,7 +845,7 @@ impl Walker<'_> {
                 let mut inner = known.clone();
                 inner.remove(binding);
                 // The body runs once for each binding the source finds.
-                let mut inner = self.binds(source, &inner, seen);
+                inner = self.binds(source, &inner, seen);
                 if let Prop::In(Term::Var(x), ValueExpr::Term(Term::Var(collection))) = &**source
                     && x == binding
                 {
@@ -936,6 +949,18 @@ fn known_term(term: &Term, known: &Env) -> Option<KnownTerm> {
         Term::Actor => Some(KnownTerm::Actor),
         Term::Var(v) => known.get(v).cloned(),
         Term::Wildcard | Term::DecidedAt => None,
+    }
+}
+
+/// The subqueries a key nests in the load's statement.
+fn subqueries(term: &KnownTerm) -> usize {
+    match term {
+        KnownTerm::Field { of, .. } => 1 + of.iter().map(|(_, t)| subqueries(t)).sum::<usize>(),
+        KnownTerm::Reached { seed, .. } => 1 + subqueries(seed),
+        KnownTerm::Literal(_)
+        | KnownTerm::Actor
+        | KnownTerm::Parameter(_)
+        | KnownTerm::Element(_) => 0,
     }
 }
 
