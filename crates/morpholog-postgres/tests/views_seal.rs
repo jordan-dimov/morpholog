@@ -32,6 +32,7 @@ async fn apply_views(pool: &PgPool) {
         SCHEMA,
         &canonical_hash(&program),
         morpholog_postgres::DerivedSource::Cache,
+        &Default::default(),
         false,
     )
     .unwrap();
@@ -215,6 +216,7 @@ async fn a_history_view_outlives_the_script_that_stops_asking_for_it() {
             SCHEMA,
             &canonical_hash(&program),
             morpholog_postgres::DerivedSource::Cache,
+            &Default::default(),
             history,
         )
         .unwrap()

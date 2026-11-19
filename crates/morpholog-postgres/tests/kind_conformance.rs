@@ -189,6 +189,7 @@ async fn every_declarable_kind_renders_a_view_column_that_reads_back_its_values(
         "morpholog_views",
         SENTINEL_HASH,
         morpholog_postgres::DerivedSource::Cache,
+        &Default::default(),
         false,
     )
     .unwrap();

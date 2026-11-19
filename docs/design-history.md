@@ -1549,3 +1549,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** an embedder's derived claim (#871). One `value` line was written before the others, so every row came back shifted by a column. The name on each line said which column it meant, and nothing checked it: the kernel, the live view and every test agreed on the wrong rows.
 
 **Landed:** values still fill the columns in order, and `check` refuses a `value` whose name is not the column at its place, naming the column expected there. No programme measured had a name out of place.
+
+### Live or cache per derived claim
+
+**Forced by:** a power-trading embedder (#865). One of its five derived claims renders live, and the renderer refuses the other four, so `--derived live` refused the run and every view stayed on the cache. The guide already named the cache as the answer for a claim an operator wants cheap at a stated freshness, a choice that differs per claim.
+
+**Landed:** `--derived-source <Derived>=live|cache` chooses one claim's source over the `--derived` default. A claim chosen live that cannot render still refuses the run by name; nothing falls back to the cache. The description already carried `source` per view, so no envelope moved. `refresh derived` still computes every claim, since it takes a programme, not a deployment: a live claim the kernel cannot compute fails it, and the cached claims keep their last generation.

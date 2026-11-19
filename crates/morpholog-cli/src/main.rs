@@ -500,6 +500,23 @@ pub(crate) enum DerivedSourceArg {
     Live,
 }
 
+/// `<Derived>=live|cache`: one derived claim's source.
+fn parse_derived_source(text: &str) -> Result<(String, DerivedSourceArg), String> {
+    let (name, source) = text
+        .split_once('=')
+        .ok_or_else(|| format!("expected <Derived>=live|cache, got `{text}`"))?;
+    let source = match source {
+        "live" => DerivedSourceArg::Live,
+        "cache" => DerivedSourceArg::Cache,
+        other => {
+            return Err(format!(
+                "expected `live` or `cache` after `=`, got `{other}`"
+            ));
+        }
+    };
+    Ok((name.to_string(), source))
+}
+
 /// Arguments for `generate views`.
 #[derive(clap::Args, Debug)]
 pub(crate) struct GenerateViewsArgs {
@@ -519,10 +536,15 @@ pub(crate) struct GenerateViewsArgs {
     /// Where a derived predicate's view reads from: `cache`, the
     /// `morpholog_read` cache that `refresh derived` fills (the default,
     /// unchanged), or `live`, the claims themselves, computed from the
-    /// derived claim's definition at read time. Under `live` a definition
-    /// the renderer cannot express refuses the run by name.
+    /// derived claim's definition at read time. A claim read live whose
+    /// definition the renderer cannot express refuses the run by name.
     #[arg(long, value_enum, default_value_t = DerivedSourceArg::Cache)]
     pub(crate) derived: DerivedSourceArg,
+
+    /// One derived claim's source, over `--derived`: `<Derived>=live` or
+    /// `<Derived>=cache`. Repeatable, once per claim.
+    #[arg(long = "derived-source", value_name = "DERIVED=SOURCE", value_parser = parse_derived_source)]
+    pub(crate) derived_sources: Vec<(String, DerivedSourceArg)>,
 
     /// Also generate, for each base predicate, a `<view>_history` view:
     /// a row for every operation the audit log records on the

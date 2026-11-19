@@ -1216,6 +1216,8 @@ pub morpholog_postgres::ViewRefusal::InvalidSchema::schema: alloc::string::Strin
 pub morpholog_postgres::ViewRefusal::Live
 pub morpholog_postgres::ViewRefusal::Live::derived: alloc::string::String
 pub morpholog_postgres::ViewRefusal::Live::reason: alloc::string::String
+pub morpholog_postgres::ViewRefusal::NotDerived
+pub morpholog_postgres::ViewRefusal::NotDerived::name: alloc::string::String
 pub morpholog_postgres::ViewRefusal::ReservedPrefix
 pub morpholog_postgres::ViewRefusal::ReservedPrefix::name: alloc::string::String
 pub morpholog_postgres::ViewRefusal::ReservedPrefix::owner: alloc::string::String
@@ -3205,7 +3207,7 @@ pub fn morpholog_postgres::rehearse_recorded(&morpholog_core::prepared::Prepared
 pub async fn morpholog_postgres::release_outbox_claim(&sqlx_postgres::PgPool, uuid::Uuid, &str) -> core::result::Result<morpholog_postgres::OutboxUpdate, morpholog_postgres::PgError>
 pub fn morpholog_postgres::render_public_key(&ed25519_dalek::verifying::VerifyingKey) -> alloc::string::String
 pub fn morpholog_postgres::render_signature(&ed25519::Signature) -> alloc::string::String
-pub fn morpholog_postgres::render_views(&morpholog_core::validate::ValidatedProgram<'_>, &str, &str, morpholog_postgres::DerivedSource, bool) -> core::result::Result<morpholog_postgres::RenderedViews, alloc::vec::Vec<morpholog_postgres::ViewRefusal>>
+pub fn morpholog_postgres::render_views(&morpholog_core::validate::ValidatedProgram<'_>, &str, &str, morpholog_postgres::DerivedSource, &alloc::collections::btree::map::BTreeMap<alloc::string::String, morpholog_postgres::DerivedSource>, bool) -> core::result::Result<morpholog_postgres::RenderedViews, alloc::vec::Vec<morpholog_postgres::ViewRefusal>>
 pub fn morpholog_postgres::reproduce(&morpholog_core::validate::ValidatedProgram<'_>, &morpholog_postgres::ParsedReceipt, &morpholog_postgres::EvidencePack) -> (morpholog_postgres::CheckpointMatch, morpholog_postgres::Evaluation)
 pub async fn morpholog_postgres::require_can_provision_least_privilege(&sqlx_postgres::PgPool, &morpholog_postgres::DeploymentRoles) -> core::result::Result<(), morpholog_postgres::PgError>
 pub async fn morpholog_postgres::require_current_schema(&sqlx_postgres::PgPool) -> core::result::Result<(), morpholog_postgres::PgError>
