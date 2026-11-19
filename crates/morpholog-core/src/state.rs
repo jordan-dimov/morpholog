@@ -890,6 +890,14 @@ impl<'a> From<&'a Candidate<'a>> for StateRef<'a> {
 }
 
 impl<'a> StateRef<'a> {
+    /// Which state this is, for telling two apart within one evaluation.
+    pub(crate) fn address(self) -> usize {
+        match self {
+            StateRef::Owned(state) => std::ptr::from_ref(state).addr(),
+            StateRef::Candidate(c) => std::ptr::from_ref(c).addr(),
+        }
+    }
+
     pub(crate) fn claims_for_name(self, predicate: &PredicateName) -> NamedClaims<'a> {
         match self {
             StateRef::Owned(state) => state.claims_for_name(predicate),

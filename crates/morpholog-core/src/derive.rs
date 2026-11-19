@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::definitions::DefinitionTable;
 
-use crate::eval::{EvalContext, EvalError, Failure, eval_value, find_failure, find_matches};
+use crate::eval::{EvalContext, EvalError, Failure, Memo, eval_value, find_failure, find_matches};
 use crate::ir::{Definition, DerivedClaim, Invariant, Prop, Var};
 use crate::propose::WitnessBinding;
 use crate::state::{Bindings, Bound, ClaimInstance, EvalValue, EvalValueOrd, State, StateRef};
@@ -289,13 +289,15 @@ fn in_invariant_context<T>(
     body: impl FnOnce(&EvalContext<'_>) -> Result<T, EvalError>,
 ) -> Result<T, EvalError> {
     let bindings = Bindings::new();
+    let memo = Memo::default();
     let ctx = EvalContext::over(
         state,
         pre_state,
         &bindings,
         None,
         DefinitionTable::new(definitions),
-    );
+    )
+    .with_memo(&memo);
     body(&ctx)
 }
 
@@ -317,7 +319,10 @@ pub(crate) fn enumerate_derived(
     // `actor` is `UnboundActor` and `pre(...)` is `PreStateUnavailable`.
     let empty_bindings = Bindings::new();
     let index = DefinitionTable::new(definitions);
-    let domain_ctx = EvalContext::new(state, None, &empty_bindings, None, index);
+    // One memo for the domain and every row: a figure that does not
+    // depend on the key is computed once.
+    let memo = Memo::default();
+    let domain_ctx = EvalContext::new(state, None, &empty_bindings, None, index).with_memo(&memo);
     let raw_bindings = find_matches(&derived.domain, &domain_ctx)?;
 
     let mut key_tuples: BTreeSet<Vec<EvalValueOrd>> = BTreeSet::new();
@@ -342,7 +347,7 @@ pub(crate) fn enumerate_derived(
             per_key.insert(key.clone(), Bound::from(v.0.clone()));
         }
         let mut args: Vec<EvalValue> = tuple.iter().map(|w| w.0.clone()).collect();
-        let value_ctx = EvalContext::new(state, None, &per_key, None, index);
+        let value_ctx = EvalContext::new(state, None, &per_key, None, index).with_memo(&memo);
         for value_def in &derived.values {
             let v = eval_value(&value_def.expr, &value_ctx)?;
             if v.contains_calendar_span() {

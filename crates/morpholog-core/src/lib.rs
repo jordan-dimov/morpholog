@@ -95,6 +95,8 @@ pub use disciplines::{
     InForceSignature, in_force_define_name, in_force_signature, lower_discipline_definitions,
     lower_disciplines,
 };
+#[doc(hidden)]
+pub use eval::set_memo;
 pub use eval::{EvalError, RenderedClaim, eval_value_over, ordered_compare_error};
 pub use explain::{
     ErrorRejection, Explanation, GateKind, GateRejection, InvariantRejection, MissingClaim,
