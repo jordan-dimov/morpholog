@@ -371,64 +371,29 @@ impl ReadPlan {
     }
 }
 
-/// Names a body binds as it runs: unknown before it does.
+/// Names a body binds as it runs: unknown before it does. A `for x in`
+/// loop's own variable counts; [`let_names`] leaves it out.
 fn rebound_names(stmt: &Stmt, out: &mut BTreeSet<Var>) {
-    match stmt {
-        Stmt::Let { name, .. } | Stmt::LetNewSubject { name } => {
+    crate::fold::walk_stmt(stmt, &mut |node| {
+        if let crate::fold::Node::Stmt(
+            Stmt::Let { name, .. } | Stmt::LetNewSubject { name } | Stmt::For { binding: name, .. },
+        ) = node
+        {
             out.insert(name.clone());
         }
-        Stmt::For { binding, body, .. } => {
-            out.insert(binding.clone());
-            for inner in body {
-                rebound_names(inner, out);
-            }
-        }
-        Stmt::ForEach { body, .. } => {
-            for inner in body {
-                rebound_names(inner, out);
-            }
-        }
-        Stmt::If {
-            then, otherwise, ..
-        } => {
-            for inner in then.iter().chain(otherwise) {
-                rebound_names(inner, out);
-            }
-        }
-        Stmt::Require { .. }
-        | Stmt::BindOne { .. }
-        | Stmt::Assert(_)
-        | Stmt::Retract { .. }
-        | Stmt::Emit(_) => {}
-    }
+    });
 }
 
 /// Names a `let` or a `new Subject()` binds, anywhere in the body: a
 /// loop binding so named is replaced as the body runs, so it is never
 /// known as an element.
 fn let_names(stmt: &Stmt, out: &mut BTreeSet<Var>) {
-    match stmt {
-        Stmt::Let { name, .. } | Stmt::LetNewSubject { name } => {
+    crate::fold::walk_stmt(stmt, &mut |node| {
+        if let crate::fold::Node::Stmt(Stmt::Let { name, .. } | Stmt::LetNewSubject { name }) = node
+        {
             out.insert(name.clone());
         }
-        Stmt::For { body, .. } | Stmt::ForEach { body, .. } => {
-            for inner in body {
-                let_names(inner, out);
-            }
-        }
-        Stmt::If {
-            then, otherwise, ..
-        } => {
-            for inner in then.iter().chain(otherwise) {
-                let_names(inner, out);
-            }
-        }
-        Stmt::Require { .. }
-        | Stmt::BindOne { .. }
-        | Stmt::Assert(_)
-        | Stmt::Retract { .. }
-        | Stmt::Emit(_) => {}
-    }
+    });
 }
 
 /// The variables known at a point, and what they are known as.

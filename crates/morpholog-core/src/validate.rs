@@ -1477,42 +1477,24 @@ fn collect_discipline_errors(p: &Program) -> Vec<ValidationError> {
     errors
 }
 
-/// Recursive worker for the append-only retract ban: a `retract` of a
-/// protected predicate anywhere in a body, including nested `for`s.
+/// The append-only retract ban: a `retract` of a protected predicate
+/// anywhere in a body, under a `for` or an `if` too.
 fn collect_retract_bans(
     stmt: &Stmt,
     append_only: &std::collections::BTreeSet<crate::ir::PredicateName>,
     context: &ValidationContext,
     errors: &mut Vec<ValidationError>,
 ) {
-    match stmt {
-        Stmt::Retract { predicate, .. } => {
-            if append_only.contains(predicate) {
-                errors.push(ValidationError::RetractsAppendOnly {
-                    predicate: predicate.to_string(),
-                    context: context.clone(),
-                });
-            }
+    crate::fold::walk_stmt(stmt, &mut |node| {
+        if let crate::fold::Node::Stmt(Stmt::Retract { predicate, .. }) = node
+            && append_only.contains(predicate)
+        {
+            errors.push(ValidationError::RetractsAppendOnly {
+                predicate: predicate.to_string(),
+                context: context.clone(),
+            });
         }
-        Stmt::For { body, .. } | Stmt::ForEach { body, .. } => {
-            for inner in body {
-                collect_retract_bans(inner, append_only, context, errors);
-            }
-        }
-        Stmt::If {
-            then, otherwise, ..
-        } => {
-            for inner in then.iter().chain(otherwise) {
-                collect_retract_bans(inner, append_only, context, errors);
-            }
-        }
-        Stmt::Require { .. }
-        | Stmt::BindOne { .. }
-        | Stmt::Let { .. }
-        | Stmt::LetNewSubject { .. }
-        | Stmt::Assert(_)
-        | Stmt::Emit(_) => {}
-    }
+    });
 }
 
 #[cfg(test)]
