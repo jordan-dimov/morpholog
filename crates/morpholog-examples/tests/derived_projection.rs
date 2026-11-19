@@ -12,6 +12,9 @@
 //! - `positional_lookup_extracts_the_first_wildcard_only`: `value P(_, x, _)`
 //!   extracts the FIRST wildcard. Only a named lookup can skip an earlier
 //!   coordinate to read a later one.
+//!
+//! - `values_fill_the_columns_they_name`: values in column order land in
+//!   the columns their names declare (`check` refuses any other order).
 
 use morpholog_core::{State, ir_builder as b};
 use morpholog_test_support::enumerate_derived;
@@ -195,5 +198,31 @@ fn a_kind_learned_inside_a_value_expression_still_reaches_the_output_check() {
             morpholog_core::ValidationError::ArgKindMismatch { position: 0, .. }
         )),
         "expected an output-key kind mismatch at position 0; got {errs:?}"
+    );
+}
+
+#[test]
+fn values_fill_the_columns_they_name() {
+    let program = morpholog_surface::parse_program(
+        "program order
+predicate Thing(thing: Subject, size: Decimal)
+    unique by (thing)
+predicate Figures(thing: Subject, small: Decimal, large: Decimal)
+derived Figures(thing):
+    over Thing(thing: thing, ..)
+    value small = sum(q | Thing(thing, q))
+    value large = sum(q | Thing(thing, q)) * 100
+transformation make(size):
+    admit Thing(new Subject(), size)
+",
+    )
+    .expect("the programme parses");
+    let state = State::from_claims(vec![claim_instance("Thing", &[subj("t1"), dec(5)])]);
+    let rows = enumerate_derived(&program, &program.derived_claims[0], &state)
+        .expect("enumerate should succeed");
+    assert_eq!(
+        rows,
+        vec![claim_instance("Figures", &[subj("t1"), dec(5), dec(500)])],
+        "small is 5 and large is 500"
     );
 }

@@ -1739,6 +1739,11 @@ pub morpholog_core::ValidationError::DerivedInRule::predicate: alloc::string::St
 pub morpholog_core::ValidationError::DerivedValueNotAKey
 pub morpholog_core::ValidationError::DerivedValueNotAKey::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::DerivedValueNotAKey::variable: alloc::string::String
+pub morpholog_core::ValidationError::DerivedValueOutOfPlace
+pub morpholog_core::ValidationError::DerivedValueOutOfPlace::column: alloc::string::String
+pub morpholog_core::ValidationError::DerivedValueOutOfPlace::context: morpholog_core::ValidationContext
+pub morpholog_core::ValidationError::DerivedValueOutOfPlace::predicate: alloc::string::String
+pub morpholog_core::ValidationError::DerivedValueOutOfPlace::value: alloc::string::String
 pub morpholog_core::ValidationError::DigestArgumentKind
 pub morpholog_core::ValidationError::DigestArgumentKind::context: morpholog_core::ValidationContext
 pub morpholog_core::ValidationError::DigestArgumentKind::kind: morpholog_core::PredicateArgKind

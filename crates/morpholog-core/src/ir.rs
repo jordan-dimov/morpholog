@@ -1342,9 +1342,10 @@ pub struct DerivedClaim {
     pub domain: Prop,
 }
 
-/// One computed value in a [`DerivedClaim`]. `name` is descriptive
-/// only: the output [`crate::ClaimInstance`] is positional, keys then
-/// values in declaration order. `expr` runs once per distinct key tuple.
+/// One computed value in a [`DerivedClaim`]. The output
+/// [`crate::ClaimInstance`] is positional, keys then values in
+/// declaration order, and `name` is the column this value's place fills:
+/// `check` refuses another. `expr` runs once per distinct key tuple.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DerivedValue {
     pub name: String,
