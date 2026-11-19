@@ -51,7 +51,10 @@ pub(crate) fn compile_derived(
 ) -> Result<LiveDerived, CompileReason> {
     let mut ctx = Ctx::fresh(decls, defs);
     ctx.binding_calls = true;
-    let domain = nested_scope(render_prop(&derived.domain, Env::new(), &mut ctx)?)?;
+    ctx.in_domain = true;
+    let domain = render_prop(&derived.domain, Env::new(), &mut ctx);
+    ctx.in_domain = false;
+    let domain = nested_scope(domain?)?;
     if domain.has_errors() {
         return Err(CompileReason::ComparisonShape {
             detail: "a derived domain that can raise",

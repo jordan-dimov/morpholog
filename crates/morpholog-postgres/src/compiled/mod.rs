@@ -1923,6 +1923,7 @@ impl<'a> Ctx<'a> {
             in_sum: false,
             in_consequent: false,
             binding_calls: false,
+            in_domain: false,
             in_truth_call: false,
             counter: 0,
             required: BTreeSet::new(),
@@ -1952,6 +1953,11 @@ struct Ctx<'a> {
     /// which reports no witness; an invariant's diagnosis reads claim
     /// aliases, so there it stays refused.
     binding_calls: bool,
+    /// Rendering a live derived view's domain, whose matches the view
+    /// keeps once per distinct key: a call there that binds, with an
+    /// `or` body, renders as the distinct projection of its branches, as
+    /// under a sum.
+    in_domain: bool,
     /// Rendering the body of a fully bound call under a sum, which the
     /// sum reads as a truth test: whether the body holds, never how many
     /// ways. An `or` there is a truth test too, and a sum may close a
@@ -3065,6 +3071,15 @@ fn render_defined(
     }
     let (def, frame) = call_frame(name, args, &env, ctx)?;
     let body = condition_body(def)?;
+    if ctx.in_domain
+        && ctx.binding_calls
+        && matches!(body, Prop::Or(_))
+        && args
+            .iter()
+            .any(|arg| matches!(arg, Term::Var(x) if !env.contains_key(x)))
+    {
+        return render_binding_call(name, args, env, ctx);
+    }
     let truth = render_prop(body, frame.clone(), ctx)?;
     let mut env = env;
     let mut where_ = truth.where_.clone();

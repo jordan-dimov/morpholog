@@ -1555,3 +1555,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** a power-trading embedder (#865). One of its five derived claims renders live, and the renderer refuses the other four, so `--derived live` refused the run and every view stayed on the cache. The guide already named the cache as the answer for a claim an operator wants cheap at a stated freshness, a choice that differs per claim.
 
 **Landed:** `--derived-source <Derived>=live|cache` chooses one claim's source over the `--derived` default. A claim chosen live that cannot render still refuses the run by name; nothing falls back to the cache. The description already carried `source` per view, so no envelope moved. `refresh derived` still computes every claim, since it takes a programme, not a deployment: a live claim the kernel cannot compute fails it, and the cached claims keep their last generation.
+
+### A live view over a condition with an `or`
+
+**Forced by:** the InvenTree fork (#874). Its frontend asks which roles the signed-in user holds; 48 `explain` calls per request took 3.8 s. One derived read over the permission condition fixed it, but the live renderer refused the condition, whose body is an `or` (a superuser, or a group grant), so the rule was spelt a second time as sums.
+
+**Landed:** a call in a live view's domain that binds a name and whose body is an `or` renders as the distinct projection of its branches, the shape a binding call under a sum already had: their `UNION ALL` is the kernel's concatenation of matches, `DISTINCT ON` the arguments its deduplication. The gates and the view now read one condition. An `or` written directly in a domain stays refused. Proof: the derived differential with a roles fragment over generated states, and a built state where one grant is held both ways and kept once.
