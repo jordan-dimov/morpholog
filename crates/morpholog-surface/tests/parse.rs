@@ -458,6 +458,71 @@ fn a_reserved_word_used_as_a_name_is_named_as_reserved() {
     );
 }
 
+/// A computed value where a statement takes a term names the rule and the fix, for each verb
+/// whose arguments are terms; a missing closing parenthesis there says nothing of the kind.
+#[test]
+fn a_computed_statement_argument_names_the_let_fix() {
+    let head = "program demo\npredicate Pos(book: Subject, qty: Decimal)\n\
+                intent Notify(book: Subject, qty: Decimal)\n\
+                transformation t(book, a: Decimal):\n    ";
+    for (statement, verb) in [
+        ("admit Pos(book, a + 1)", "admit"),
+        ("emit Notify(book, a * 2)", "emit"),
+        ("bind Pos(book, a - 1)", "bind"),
+        ("retract Pos(book, a / 2)", "retract"),
+    ] {
+        let errors = parse_program(&format!("{head}{statement}\n")).expect_err(statement);
+        assert!(
+            errors.iter().any(|d| d.message.contains(&format!(
+                "an argument of `{verb}` is a name, a literal or a parameter, not a computed \
+                 value: compute it with `let` first, then `{verb}` the name"
+            ))),
+            "{statement}: {errors:?}"
+        );
+    }
+    let errors =
+        parse_program(&format!("{head}admit Pos(book, a\n")).expect_err("an unclosed admit");
+    assert!(
+        errors.iter().all(|d| !d.message.contains("computed value")),
+        "{errors:?}"
+    );
+}
+
+/// A definition's `let` value without parentheses says the parentheses are the grammar, and
+/// never that the word after `=` is reserved. An error inside the parentheses says nothing
+/// of them.
+#[test]
+fn a_definition_let_without_parentheses_names_them() {
+    let inside = parse_program(
+        "program demo\npredicate Pos(book: Subject, qty: Decimal)\n\
+         define too_big(book, cap):\n    let total = (cap + )\n    total > cap\n",
+    )
+    .expect_err("an operand is missing");
+    assert!(
+        inside
+            .iter()
+            .all(|d| !d.message.contains("goes in parentheses")),
+        "{inside:?}"
+    );
+    for value in ["sum(q | Pos(book: book, qty: q))", "a + cap"] {
+        let source = format!(
+            "program demo\npredicate Pos(book: Subject, qty: Decimal)\n\
+             define too_big(book, cap):\n    let total = {value}\n    total > cap\n"
+        );
+        let errors = parse_program(&source).expect_err(value);
+        assert!(
+            errors.iter().any(|d| d
+                .message
+                .contains("a definition's `let` value goes in parentheses")),
+            "{value}: {errors:?}"
+        );
+        assert!(
+            errors.iter().all(|d| !d.message.contains("reserved word")),
+            "{value}: {errors:?}"
+        );
+    }
+}
+
 // ============================================================
 // Transformation declarations + gate statements
 // ============================================================

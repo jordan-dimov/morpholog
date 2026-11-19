@@ -496,7 +496,12 @@ where
     let let_line = just(Token::KwLet)
         .ignore_then(ident)
         .then_ignore(just(Token::Eq))
-        .then(value_expr_parser(table).delimited_by(just(Token::LParen), just(Token::RParen)))
+        .then(
+            value_expr_parser(table)
+                .delimited_by(just(Token::LParen), just(Token::RParen))
+                .labelled(super::LET_VALUE)
+                .as_context(),
+        )
         .map_with(|(name, value), e| {
             let span: SimpleSpan = e.span();
             super::lets::LetBinding {
