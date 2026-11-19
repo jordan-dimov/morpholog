@@ -772,6 +772,8 @@ Where the kernel could not compute a row (a sum past the decimal range, a value 
 
 A value's `if(...)` is a `CASE`. As in the kernel, the test is always computed and then only the chosen branch, so a branch that is not chosen never names a failure. A value declared `Bool` is a `boolean` column and one declared `Subject` a `text` column; each is a literal, a key, or an `if(...)` choosing between them.
 
+**A figure several derived claims need is a value definition they all call.** A derived claim cannot read another derived claim, so the way to share a figure is not to compute it in one and read it from the other: name it once, `define completed_of(part) = (sum(q | Build(b, part) and Output(b, q)))`, and call `completed_of(part)` in each derived claim's `value` line. The kernel and a live view compute it the same way, so the figure is spelt once, and a derived claim that calls it renders live when the figure's body and the claim's own domain and values do.
+
 ### History views (`--history`)
 
 ```sh
@@ -1117,6 +1119,20 @@ header's `# version` line is what every row carries. A directory
 without that header stops the run: the version is part of the claim,
 so no claim is written without it. It is the source's own statement of
 what it holds, not a proof that each file belongs to that release.
+
+**The local date of an instant is the day whose bounds hold it.** An act that records which day something happened, where the moment is `decided_at`, finds that day among the published `LocalDay` claims instead of converting the instant, since the zone is the business's and the kernel does not guess it. A condition states the bounds test, and a `bind` finds the day:
+
+```morph
+define day_holding(calendar, day, at):
+    LocalDay(calendar, day, starts_at, ends_at, _) and starts_at at_or_before at and at strictly_before ends_at
+
+transformation create_part(part, calendar):
+    let now = decided_at
+    bind day_holding(calendar, day, now)
+    admit PartCreated(part, day)
+```
+
+The act is refused when no published day holds the instant, so a calendar that runs out stops the act rather than dating it wrongly.
 
 ## Concurrent proposals and retries
 
