@@ -1567,3 +1567,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** the InvenTree fork (#878). The highest serial number in a part's variant tree is a `max` over a set, which the live renderer refused, so the figure lived in six lines of SQL in the host's adapter, outside the programme. Two endpoints read it, called by 48 of the fork's 201 browser tests.
 
 **Landed:** `max(x | body)` and `min(x | body)` over a decimal position render in a live view as a whole value line or a branch of an `if(...)`: a LATERAL aggregate over the body, with a count. As in the kernel, a body that raises, a value of another kind and an empty body each fail the row, named `extremum_kind` and `extremum_empty` beside the existing classes; under an `if(...)` whose test is false the branch is never computed, so `if(sum(1 | body) > 0, max(x | body), 0)` says what "none" means. Inside arithmetic, in an invariant's compiled check, or over another kind, it stays refused. Proof: the derived differential with an extrema fragment, and a built state with a tie, a join, an empty body and a value of another kind.
+
+### A preview names the parameters a refusing gate reads
+
+**Forced by:** a power-trading embedder (#861). Its import workbench previews every row through `explain` before proposing any, and would mark the columns a refusing gate reads. Only a real proposal carried `related_parameters`, so only a real proposal could mark them.
+
+**Landed:** an explanation's gate verdict carries `related_parameters`, from the walk a refusal uses: possibly empty for a named gate, absent for an unnamed one. The verdict's variant is the origin, so an invariant that shares the gate's name has no such field to fill. `explain`, the session's `explain` and the explanation inside `--explain-on-reject` all get it from the kernel; decisions, audit rows and `inspect rejections` are unchanged.
