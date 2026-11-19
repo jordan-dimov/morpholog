@@ -89,7 +89,12 @@ where
         // bind [<name>:] <claim_pattern>
         let bind_stmt = just(Token::KwBind)
             .ignore_then(rule_name)
-            .then(claim_pattern.clone())
+            .then(
+                claim_pattern
+                    .clone()
+                    .labelled(super::TERM_ARGUMENTS[2].0)
+                    .as_context(),
+            )
             .validate(move |(name, (predicate, args)), e, emitter| {
                 let args = resolve_pattern(
                     &predicate,
@@ -112,7 +117,12 @@ where
         //
         // Wildcards are refused here, with a span, since the kernel would refuse them anyway.
         let admit_stmt = just(Token::KwAdmit)
-            .ignore_then(constructive_pattern.clone())
+            .ignore_then(
+                constructive_pattern
+                    .clone()
+                    .labelled(super::TERM_ARGUMENTS[0].0)
+                    .as_context(),
+            )
             .validate(move |(predicate, args), e, emitter| {
                 let span: SimpleSpan = e.span();
                 // `..` leaves fields unfilled, the same mistake as a wildcard. Refuse it by name
@@ -149,7 +159,12 @@ where
         //
         // Wildcards are allowed: `retract Foo(x, _)` retracts every `Foo` whose first arg is `x`.
         let retract_stmt = just(Token::KwRetract)
-            .ignore_then(claim_pattern.clone())
+            .ignore_then(
+                claim_pattern
+                    .clone()
+                    .labelled(super::TERM_ARGUMENTS[3].0)
+                    .as_context(),
+            )
             .validate(move |(predicate, args), e, emitter| {
                 let args = resolve_pattern(
                     &predicate,
@@ -169,7 +184,11 @@ where
         //
         // Intents look like claims but are not. Wildcards and `..` are refused as in `admit`.
         let emit_stmt = just(Token::KwEmit)
-            .ignore_then(constructive_pattern)
+            .ignore_then(
+                constructive_pattern
+                    .labelled(super::TERM_ARGUMENTS[1].0)
+                    .as_context(),
+            )
             .validate(move |(name, args), e, emitter| {
                 let span: SimpleSpan = e.span();
                 let rest_refused = matches!(&args, PatternArgs::Named { rest: true, .. });

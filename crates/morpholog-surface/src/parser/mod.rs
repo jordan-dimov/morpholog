@@ -62,14 +62,39 @@ fn lex_error_diagnostics(errs: Vec<Rich<'_, char>>) -> Vec<Diagnostic> {
         .collect()
 }
 
+/// The context a definition's `let` value is parsed under, so an error there can say the
+/// parentheses are the grammar.
+pub(super) const LET_VALUE: &str = "a parenthesised `let` value";
+
+/// The contexts of the statements whose arguments are terms, each with its verb, so an
+/// expression there can be told to become a `let` first.
+pub(super) const TERM_ARGUMENTS: [(&str, &str); 4] = [
+    ("an `admit` claim", "admit"),
+    ("an `emit` intent", "emit"),
+    ("a `bind` pattern", "bind"),
+    ("a `retract` pattern", "retract"),
+];
+
 /// Map parser failures to diagnostics, like [`lex_error_diagnostics`]. A stray `Indent` also
 /// gets the fix spelled out, since "found 'indent'" alone does not suggest it, and so does a
-/// reserved word where something else was expected, since it is usually meant as a name.
+/// reserved word where something else was expected, since it is usually meant as a name. An
+/// error inside a statement's term arguments, or a definition's `let` value, names the rule.
 fn parse_error_diagnostics(errs: Vec<Rich<'_, Token>>) -> Vec<Diagnostic> {
     errs.into_iter()
         .map(|e| {
             let span = e.span();
             let mut message = format!("parse error: {}", e.reason());
+            // A labelled parser that fails on its first token names its label as expected;
+            // one that fails further in carries it as context.
+            let labels: Vec<&str> = e
+                .contexts()
+                .map(|(pattern, _)| pattern)
+                .chain(e.expected())
+                .filter_map(|pattern| match pattern {
+                    chumsky::error::RichPattern::Label(label) => Some(label.as_ref()),
+                    _ => None,
+                })
+                .collect();
             if matches!(e.found(), Some(Token::Indent)) {
                 message.push_str(
                     "; continuation lines of one expression stay at the same column - \
@@ -77,9 +102,35 @@ fn parse_error_diagnostics(errs: Vec<Rich<'_, Token>>) -> Vec<Diagnostic> {
                      make layout stop mattering until they close",
                 );
             }
-            if let Some(word) = e.found().and_then(Token::reserved_word) {
+            if labels.contains(&LET_VALUE) {
+                message.push_str(
+                    "; a definition's `let` value goes in parentheses: \
+                     `let total = (sum(q | Pos(book, q)))`",
+                );
+            } else if let Some(word) = e.found().and_then(Token::reserved_word) {
                 message.push_str(&format!(
                     "; `{word}` is a reserved word, so if it was meant as a name, choose another"
+                ));
+            }
+            let computed = matches!(
+                e.found(),
+                Some(
+                    Token::Plus
+                        | Token::Minus
+                        | Token::Star
+                        | Token::Slash
+                        | Token::Percent
+                        | Token::LParen
+                )
+            );
+            if computed
+                && let Some((_, verb)) = TERM_ARGUMENTS
+                    .iter()
+                    .find(|(label, _)| labels.contains(label))
+            {
+                message.push_str(&format!(
+                    "; an argument of `{verb}` is a name, a literal or a parameter, not a \
+                     computed value: compute it with `let` first, then `{verb}` the name"
                 ));
             }
             Diagnostic::error(message, span.start()..span.end())
