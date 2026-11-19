@@ -188,6 +188,9 @@ predicate Serial(part: Subject, n: Decimal)
 predicate Highest(part: Subject, highest: Decimal)
 predicate Lowest(part: Subject, lowest: Decimal)
 predicate TreeHighest(part: Subject, highest: Decimal)
+predicate Lot(lot: Subject, part: Subject, n: Decimal)
+predicate LotFloor(lot: Subject, floor: Decimal)
+predicate LotHighest(part: Subject, highest: Decimal)
 derived Highest(part):
     over Part(part: part)
     value highest = if(sum(1 | Serial(part, n)) > 0, max(n | Serial(part, n)), 0)
@@ -197,6 +200,9 @@ derived Lowest(part):
 derived TreeHighest(part):
     over Part(part: part)
     value highest = if(sum(1 | VariantOf(v, part) and Serial(v, n)) > 0, max(n | VariantOf(v, part) and Serial(v, n)), 0)
+derived LotHighest(part):
+    over Part(part: part)
+    value highest = max(n | Lot(l, part, n) and LotFloor(l, f) and n > f)
 transformation add(part):
     admit Part(part)
 transformation serial(part, n):
@@ -800,7 +806,7 @@ async fn an_extremum_is_the_kernels_or_names_why_not() {
         claim_instance("VariantOf", &[subj("w"), subj("tree")]),
         claim_instance("Serial", &[subj("tree"), dec(2)]),
     ]);
-    assert_eq!(agree(&pool, &validated, &state, "extrema built").await, 3);
+    assert_eq!(agree(&pool, &validated, &state, "extrema built").await, 4);
     let row = |rows: &[(Vec<String>, Option<String>)], key: &str| {
         rows.iter()
             .find(|(cells, _)| cells[0] == key)
@@ -821,7 +827,7 @@ async fn an_extremum_is_the_kernels_or_names_why_not() {
     // A part with no serial: zero where guarded, `extremum_empty` where not.
     let state = State::from_claims(vec![claim_instance("Part", &[subj("bare")])]);
     assert!(validated.enumerate_derived("Lowest", &state).is_err());
-    assert_eq!(agree(&pool, &validated, &state, "extrema empty").await, 3);
+    assert_eq!(agree(&pool, &validated, &state, "extrema empty").await, 4);
     let lowest = live_rows(&pool, &validated, "Lowest").await;
     assert_eq!(lowest[0].1.as_deref(), Some("extremum_empty"), "{lowest:?}");
     let highest = live_rows(&pool, &validated, "Highest").await;
@@ -838,7 +844,90 @@ async fn an_extremum_is_the_kernels_or_names_why_not() {
         claim_instance("Serial", &[subj("odd"), subj("not_a_number")]),
     ]);
     assert!(validated.enumerate_derived("Lowest", &state).is_err());
-    assert_eq!(agree(&pool, &validated, &state, "extrema kind").await, 3);
+    assert_eq!(agree(&pool, &validated, &state, "extrema kind").await, 4);
     let lowest = live_rows(&pool, &validated, "Lowest").await;
     assert_eq!(lowest[0].1.as_deref(), Some("extremum_kind"), "{lowest:?}");
+}
+
+/// Two lots of one part whose figures are equal but spelled `7` and
+/// `7.0`. The kernel keeps the spelling it matches first, so the state's
+/// order picks it, and PostgreSQL's `max` keeps the one it scans last.
+/// Scale is representation, not value: the view promises the kernel's
+/// value, written as one of the tied figures.
+#[tokio::test]
+async fn a_tie_between_spellings_gives_the_kernels_value() {
+    let pool = test_pool().await;
+    let program = morpholog_surface::parse_program(EXTREMA).unwrap();
+    let validated = program.validated().unwrap();
+    let ordered = vec![
+        claim_instance("Part", &[subj("w")]),
+        claim_instance("Lot", &[subj("l1"), subj("w"), dec(7)]),
+        claim_instance(
+            "Lot",
+            &[
+                subj("l2"),
+                subj("w"),
+                morpholog_test_support::dec_str("7.0"),
+            ],
+        ),
+        claim_instance("LotFloor", &[subj("l1"), dec(0)]),
+        claim_instance("LotFloor", &[subj("l2"), dec(0)]),
+    ];
+    let mut reversed = ordered.clone();
+    reversed.swap(1, 2);
+    for (label, claims) in [("ordered", ordered), ("reversed", reversed)] {
+        let state = State::from_claims(claims);
+        assert_eq!(agree(&pool, &validated, &state, label).await, 4);
+        let kernel = validated
+            .enumerate_derived("LotHighest", &state)
+            .unwrap()
+            .unwrap();
+        let EvalValue::Decimal(kernel) = kernel[0].args[1] else {
+            panic!("{label}: {kernel:?}");
+        };
+        // Safe: the schema name is this test's constant.
+        let live: String = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT highest::text FROM {SCHEMA}.lot_highest"
+        )))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(["7", "7.0"].contains(&live.as_str()), "{label}: {live}");
+        assert_eq!(
+            live.parse::<rust_decimal::Decimal>().unwrap(),
+            kernel,
+            "{label}"
+        );
+    }
+}
+
+/// A lot whose floor holds a value of another kind: the kernel cannot
+/// compare it, so it raises for the part even though another lot clears
+/// its floor. The view names the failure, `scope` as in a sum's body,
+/// instead of giving that lot's figure as the maximum.
+#[tokio::test]
+async fn a_raising_body_fails_the_extremum_rather_than_skipping_a_candidate() {
+    let pool = test_pool().await;
+    let program = morpholog_surface::parse_program(EXTREMA).unwrap();
+    let validated = program.validated().unwrap();
+    let state = State::from_claims(vec![
+        claim_instance("Part", &[subj("p")]),
+        claim_instance("Lot", &[subj("l1"), subj("p"), dec(9)]),
+        claim_instance("LotFloor", &[subj("l1"), dec(1)]),
+        claim_instance("Lot", &[subj("l2"), subj("p"), dec(5)]),
+        claim_instance("LotFloor", &[subj("l2"), subj("not_a_number")]),
+    ]);
+    assert!(validated.enumerate_derived("LotHighest", &state).is_err());
+    assert_eq!(
+        agree(&pool, &validated, &state, "extrema raising body").await,
+        4
+    );
+    let rows = live_rows(&pool, &validated, "LotHighest").await;
+    assert_eq!(
+        rows,
+        vec![(
+            vec!["p".to_string(), "NULL".to_string()],
+            Some("scope".to_string())
+        )]
+    );
 }
