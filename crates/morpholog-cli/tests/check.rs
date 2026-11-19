@@ -499,6 +499,60 @@ fn check_kind_mismatch_reports_predicate_arg_kind_diagnostic() {
     );
 }
 
+/// A derived claim's values in two orders: the predicate's, and swapped.
+fn figures(first: &str, second: &str) -> NamedTempFile {
+    let value = |name: &str| match name {
+        "small" => "value small = sum(q | Thing(thing, q))",
+        _ => "value large = sum(q | Thing(thing, q)) * 100",
+    };
+    temp_morph(&format!(
+        "program order\n\
+         predicate Thing(thing: Subject, size: Decimal)\n    unique by (thing)\n\
+         predicate Figures(thing: Subject, small: Decimal, large: Decimal)\n\
+         derived Figures(thing):\n    over Thing(thing: thing, ..)\n    {}\n    {}\n\
+         transformation make(size):\n    admit Thing(new Subject(), size)\n",
+        value(first),
+        value(second)
+    ))
+}
+
+#[test]
+fn check_refuses_a_derived_value_out_of_its_column_s_place() {
+    // Values fill the columns in order. Swapped, `large` would fill
+    // `small`, and the name on the line would say otherwise.
+    let tmp = figures("large", "small");
+    let out = Command::new(bin())
+        .arg("check")
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(
+            "value `large` of derived claim `Figures` stands where `Figures` declares `small`"
+        ) && stderr.contains(
+            "value `small` of derived claim `Figures` stands where `Figures` declares `large`"
+        ),
+        "expected both values refused, each naming its column; got:\n{stderr}"
+    );
+}
+
+#[test]
+fn check_passes_derived_values_in_column_order() {
+    let tmp = figures("small", "large");
+    let out = Command::new(bin())
+        .args(["check", "--strict"])
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "expected a clean check; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 #[test]
 fn check_date_le_with_decimal_literal_reports_operand_kind_diagnostic() {
     // A decimal on either side of the date comparator `on_or_before`: the

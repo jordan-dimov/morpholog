@@ -552,6 +552,21 @@ pub enum ValidationError {
         variable: String,
         context: ValidationContext,
     },
+    /// A derived claim's `value` clause names another column than the one
+    /// its place fills. Values fill the columns in order, so the name
+    /// would otherwise be a claim nothing checks, and the value would land
+    /// in another column.
+    #[error(
+        "value `{value}` of {context} stands where `{predicate}` declares `{column}`: \
+         values fill the columns in order, so write them in the order `{predicate}` \
+         declares them"
+    )]
+    DerivedValueOutOfPlace {
+        value: String,
+        predicate: String,
+        column: String,
+        context: ValidationContext,
+    },
     /// A definition shares a name with a predicate. In a rule body,
     /// `name(args)` must resolve to exactly one of them; otherwise adding
     /// a definition could silently change what existing text means.

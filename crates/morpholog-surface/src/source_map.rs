@@ -76,6 +76,7 @@ impl SourceMap {
             | ValidationError::WildcardAsValue { context }
             | ValidationError::InvalidValueExtraction { context, .. }
             | ValidationError::DerivedValueNotAKey { context, .. }
+            | ValidationError::DerivedValueOutOfPlace { context, .. }
             | ValidationError::SumSeedNotFaithful { context, .. }
             | ValidationError::InvariantVersionNotOne { context, .. }
             | ValidationError::DerivedInRule { context, .. }

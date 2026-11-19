@@ -1543,3 +1543,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** a governance register (#867). It moved its approval gate onto one shared condition that calls another, so the gate and a derived read state staleness once (#807). The composed condition read every current claim, where the same rule written out in place read only the cited ones. Its earlier spelling, a `forall` over the citations, read them all too.
 
 **Landed:** a condition's call among a conjunction's leading conjuncts makes known, to the conjuncts after it, the names its body's patterns key, and a `bind` of a call does the same for the statements after it. A `forall`'s source keys its body, which the kernel runs once for each binding the source finds. Keys flow forward only, since a call's body can raise, and a call whose body is an `or` keys nothing. Calls that each call the next several times then built keys exponentially long, which took seconds to plan and overflowed the loader's stack, so a key nesting more than 64 lookups reads whole; no programme measured nests more than 18. The register's plan went from 4 whole reads to 1; the gallery's did not move. Proof: the scope differential with a fragment for each crossing and each exception, and built states where the narrowed load is smaller and decides alike, a raising call included.
+
+### A derived value stands in its column's place
+
+**Forced by:** an embedder's derived claim (#871). One `value` line was written before the others, so every row came back shifted by a column. The name on each line said which column it meant, and nothing checked it: the kernel, the live view and every test agreed on the wrong rows.
+
+**Landed:** values still fill the columns in order, and `check` refuses a `value` whose name is not the column at its place, naming the column expected there. No programme measured had a name out of place.

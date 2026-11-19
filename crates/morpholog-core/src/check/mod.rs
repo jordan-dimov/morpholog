@@ -836,6 +836,21 @@ pub(crate) fn check_program(program: &Program) -> Checked {
                 context,
             });
         }
+        for (value, column) in derived
+            .values
+            .iter()
+            .zip(&decl.args[derived.keys.len().min(decl.args.len())..])
+        {
+            if value.name != column.name {
+                let context = cx.context.clone();
+                cx.errors.push(ValidationError::DerivedValueOutOfPlace {
+                    value: value.name.clone(),
+                    predicate: derived.predicate.to_string(),
+                    column: column.name.clone(),
+                    context,
+                });
+            }
+        }
         let n = output_arity.min(decl.args.len());
         for position in 0..n {
             let actual = if position < derived.keys.len() {
