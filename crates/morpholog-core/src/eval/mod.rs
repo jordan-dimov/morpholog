@@ -1408,7 +1408,8 @@ pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalVal
         ValueExpr::Extremum { op, value, body } => {
             // Every candidate is compared against the running best, and
             // mixing kinds is an error, so match order cannot pick the
-            // winner.
+            // value. Between equal figures of different scales it picks
+            // the spelling: the first one matched is kept.
             let matches = find_matches(body, ctx)?;
             let mut best: Option<EvalValue> = None;
             for m in matches {
