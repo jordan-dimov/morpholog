@@ -1579,3 +1579,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** a code audit (#855). Every other way to send an act refused an unknown field, but a `--batch` row dropped one silently. A row-level `explain_on_reject`, which a session request honours, was ignored without a word.
 
 **Landed:** a batch row with any field besides `transformation`, `actor`, `args` and `args_named` gets an `invalid_request` receipt naming the field, before anything is proposed for it, and the rows around it still run. Every embedder checked sent only those fields.
+
+### A named figure is computed once
+
+**Forced by:** a power-trading embedder (#864). It named intermediate figures with `let` inside a definition and used each several times. A body `let` is substituted before the IR exists, so every use was its own copy, computed again: one dry-run capture went from 49.8 s to 193.5 s.
+
+**Landed:** within one evaluation (a gate statement, an invariant's judgement, a derived claim's rows), a `sum` or `max`/`min` keeps its result, keyed by the node's structure, the values of the variables it names as written, and the state it reads; the memo is absent inside a recursive condition's fixpoint. Substitution stays the semantics and no decision moves: the gallery gives the same explanations, traces and derived rows with the memo on and off. On a one-year capture over 100 trades, a figure used three times went from 2.15 s to 0.77 s, and three distinct figures stayed at 2.1 s.

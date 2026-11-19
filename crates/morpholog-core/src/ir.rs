@@ -154,7 +154,7 @@ opaque_id! {
 /// has no values to take a kind from, so the kind comes from the summed
 /// variable's declaration, resolved at lowering. Decimal is the default
 /// wherever no declaration decides.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum SumSeed {
     #[default]
     Decimal,
@@ -212,7 +212,7 @@ pub enum InvariantOrigin {
 /// Used in invariant bodies, `require` / `bind`, derived-claim domains,
 /// and quantifiers. Where it relates values (`Eq`, `Neq`, `Compare`), its
 /// operands are [`ValueExpr`]s.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Prop {
     Claim {
         predicate: PredicateName,
@@ -294,7 +294,7 @@ pub enum Prop {
 /// Appears only nested: as a comparison operand, a `let` value, a `for`
 /// collection, or a derived-claim value. Forms that range over state
 /// (`Sum`, `Extremum`) take a [`Prop`] body.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ValueExpr {
     Term(Term),
     /// Binary arithmetic: `left <op> right`. Operand kinds follow the rule
@@ -403,7 +403,7 @@ impl From<Term> for ValueExpr {
 
 /// A comparison operator, independent of operand domain. Carried by
 /// [`Prop::Compare`] together with an [`OrderedDomain`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CompareOp {
     Le,
     Lt,
@@ -416,7 +416,7 @@ pub enum CompareOp {
 /// Distinct from [`Builtin::Min`] / [`Builtin::Max`], which compare two
 /// values. This picks from the set a body defines, ranging over state.
 /// The surface tells them apart by the `|` that introduces a body.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExtremumOp {
     Max,
     Min,
@@ -563,7 +563,7 @@ impl Builtin {
 
 /// A binary infix arithmetic operator, carried by [`ValueExpr::Arith`].
 /// Operators written as calls (`min`, `max`) are [`Builtin`]s.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ArithOp {
     Add,
     Sub,
@@ -586,7 +586,7 @@ impl std::fmt::Display for ArithOp {
 /// from operand kinds: the surface picks it by token (`<` decimal,
 /// `before` date, `strictly_before` timestamp, `shorter_than` duration),
 /// and each domain checks its own operands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OrderedDomain {
     Decimal,
     Date,
@@ -710,7 +710,7 @@ pub(crate) fn arith_result_kind(
 /// `EvalError::UnboundActor` and `EvalError::UnboundDecisionTime`,
 /// because an invariant judges the state, not who proposed a change or
 /// when.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Term {
     Var(Var),
     Wildcard,
@@ -784,7 +784,7 @@ impl std::fmt::Display for LiteralDecimal {
 /// has no collections. A literal is a valid value; whether
 /// it has a surface spelling is the formatter's concern, and every
 /// value parsed from source does.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Value {
     /// An exact decimal within the precision the type holds (a text past
     /// it is refused at parse), identity by coefficient and scale.

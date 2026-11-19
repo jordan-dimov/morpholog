@@ -261,6 +261,10 @@ pub(crate) struct EvalContext<'a> {
     /// The answer tables of the recursive condition whose body is being
     /// evaluated, if one is.
     tables: Option<&'a recursion::Tables>,
+    /// This evaluation's computed aggregates, when it keeps them. Absent
+    /// for the whole of a recursive condition's fixpoint, where a body's
+    /// answer grows between rounds.
+    memo: Option<&'a Memo>,
 }
 
 type SumResults<'a> = std::collections::HashMap<*const ValueExpr, &'a Result<EvalValue, EvalError>>;
@@ -299,6 +303,15 @@ impl<'a> EvalContext<'a> {
             definitions,
             sums: None,
             tables: None,
+            memo: None,
+        }
+    }
+
+    /// Keep this evaluation's aggregates in `memo`.
+    pub(crate) fn with_memo(self, memo: &'a Memo) -> Self {
+        Self {
+            memo: memo::memo_on().then_some(memo),
+            ..self
         }
     }
 
@@ -332,6 +345,7 @@ impl<'a> EvalContext<'a> {
             definitions: self.definitions,
             sums: None,
             tables: None,
+            memo: self.memo,
         }
     }
 }
@@ -1194,6 +1208,19 @@ pub(crate) fn find_in_matches(
 }
 
 pub(crate) fn eval_value(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalValue, EvalError> {
+    match (e, ctx.memo) {
+        (ValueExpr::Sum { .. } | ValueExpr::Extremum { .. }, Some(memo))
+            if ctx
+                .sums
+                .is_none_or(|sums| !sums.contains_key(&std::ptr::from_ref(e))) =>
+        {
+            memo.get_or_compute(e, ctx, || eval_value_computed(e, ctx))
+        }
+        _ => eval_value_computed(e, ctx),
+    }
+}
+
+fn eval_value_computed(e: &ValueExpr, ctx: &EvalContext<'_>) -> Result<EvalValue, EvalError> {
     match e {
         ValueExpr::Term(t) => resolve_term(t, ctx.bindings, ctx.transition),
         // Every builtin is strict: arguments evaluate left to right,
@@ -2484,6 +2511,11 @@ fn compare_ordered(
     })
 }
 
+mod memo;
 mod recursion;
+
+pub(crate) use memo::Memo;
+#[cfg(feature = "memo-differential")]
+pub use memo::set_memo;
 #[cfg(test)]
 mod tests;

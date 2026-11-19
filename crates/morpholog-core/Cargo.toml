@@ -21,6 +21,9 @@ sha2 = { workspace = true }
 # counters at the state's clone and rebuild, and the decision apart from
 # the candidate state. An ordinary build has neither.
 measure = []
+# The switch the memo differential turns the evaluation memo off with,
+# for that test alone. An ordinary build always keeps the memo.
+memo-differential = []
 
 [dev-dependencies]
 morpholog-test-support = { path = "../morpholog-test-support" }

@@ -486,6 +486,8 @@ impl core::fmt::Debug for morpholog_core::ArithOp
 pub fn morpholog_core::ArithOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for morpholog_core::ArithOp
 pub fn morpholog_core::ArithOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for morpholog_core::ArithOp
+pub fn morpholog_core::ArithOp::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::Copy for morpholog_core::ArithOp
 impl core::marker::StructuralPartialEq for morpholog_core::ArithOp
 impl core::marker::Freeze for morpholog_core::ArithOp
@@ -605,6 +607,8 @@ impl core::cmp::PartialEq for morpholog_core::CompareOp
 pub fn morpholog_core::CompareOp::eq(&self, &morpholog_core::CompareOp) -> bool
 impl core::fmt::Debug for morpholog_core::CompareOp
 pub fn morpholog_core::CompareOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for morpholog_core::CompareOp
+pub fn morpholog_core::CompareOp::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::Copy for morpholog_core::CompareOp
 impl core::marker::StructuralPartialEq for morpholog_core::CompareOp
 impl core::marker::Freeze for morpholog_core::CompareOp
@@ -853,6 +857,8 @@ impl core::cmp::PartialEq for morpholog_core::ExtremumOp
 pub fn morpholog_core::ExtremumOp::eq(&self, &morpholog_core::ExtremumOp) -> bool
 impl core::fmt::Debug for morpholog_core::ExtremumOp
 pub fn morpholog_core::ExtremumOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for morpholog_core::ExtremumOp
+pub fn morpholog_core::ExtremumOp::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::Copy for morpholog_core::ExtremumOp
 impl core::marker::StructuralPartialEq for morpholog_core::ExtremumOp
 impl core::marker::Freeze for morpholog_core::ExtremumOp
@@ -1071,6 +1077,8 @@ impl core::cmp::PartialEq for morpholog_core::OrderedDomain
 pub fn morpholog_core::OrderedDomain::eq(&self, &morpholog_core::OrderedDomain) -> bool
 impl core::fmt::Debug for morpholog_core::OrderedDomain
 pub fn morpholog_core::OrderedDomain::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for morpholog_core::OrderedDomain
+pub fn morpholog_core::OrderedDomain::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::Copy for morpholog_core::OrderedDomain
 impl core::marker::StructuralPartialEq for morpholog_core::OrderedDomain
 impl core::marker::Freeze for morpholog_core::OrderedDomain
@@ -1209,6 +1217,8 @@ impl core::cmp::PartialEq for morpholog_core::Prop
 pub fn morpholog_core::Prop::eq(&self, &morpholog_core::Prop) -> bool
 impl core::fmt::Debug for morpholog_core::Prop
 pub fn morpholog_core::Prop::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for morpholog_core::Prop
+pub fn morpholog_core::Prop::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::StructuralPartialEq for morpholog_core::Prop
 impl core::marker::Freeze for morpholog_core::Prop
 impl core::marker::Send for morpholog_core::Prop
@@ -1507,6 +1517,8 @@ impl core::fmt::Debug for morpholog_core::SumSeed
 pub fn morpholog_core::SumSeed::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for morpholog_core::SumSeed
 pub fn morpholog_core::SumSeed::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for morpholog_core::SumSeed
+pub fn morpholog_core::SumSeed::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::StructuralPartialEq for morpholog_core::SumSeed
 impl core::marker::Freeze for morpholog_core::SumSeed
 impl core::marker::Send for morpholog_core::SumSeed
@@ -1531,6 +1543,8 @@ impl core::convert::From<morpholog_core::Term> for morpholog_core::ValueExpr
 pub fn morpholog_core::ValueExpr::from(morpholog_core::Term) -> Self
 impl core::fmt::Debug for morpholog_core::Term
 pub fn morpholog_core::Term::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for morpholog_core::Term
+pub fn morpholog_core::Term::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::StructuralPartialEq for morpholog_core::Term
 impl core::marker::Freeze for morpholog_core::Term
 impl core::marker::Send for morpholog_core::Term
@@ -1923,6 +1937,8 @@ impl core::convert::From<&morpholog_core::Value> for morpholog_core::EvalValue
 pub fn morpholog_core::EvalValue::from(&morpholog_core::Value) -> Self
 impl core::fmt::Debug for morpholog_core::Value
 pub fn morpholog_core::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for morpholog_core::Value
+pub fn morpholog_core::Value::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::StructuralPartialEq for morpholog_core::Value
 impl core::marker::Freeze for morpholog_core::Value
 impl core::marker::Send for morpholog_core::Value
@@ -1970,6 +1986,8 @@ impl core::convert::From<morpholog_core::Term> for morpholog_core::ValueExpr
 pub fn morpholog_core::ValueExpr::from(morpholog_core::Term) -> Self
 impl core::fmt::Debug for morpholog_core::ValueExpr
 pub fn morpholog_core::ValueExpr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for morpholog_core::ValueExpr
+pub fn morpholog_core::ValueExpr::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::StructuralPartialEq for morpholog_core::ValueExpr
 impl core::marker::Freeze for morpholog_core::ValueExpr
 impl core::marker::Send for morpholog_core::ValueExpr
@@ -3965,6 +3983,7 @@ pub fn morpholog_core::render_controls(&morpholog_core::ControlMatrix) -> alloc:
 pub fn morpholog_core::render_coverage(&morpholog_core::CoverageReport) -> alloc::string::String
 pub fn morpholog_core::render_guarantees(&str, &[morpholog_core::Guarantee]) -> alloc::string::String
 pub fn morpholog_core::resolve_defined_calls(&mut morpholog_core::Program)
+pub fn morpholog_core::set_memo(bool)
 pub fn morpholog_core::shared_writer_lints(&morpholog_core::Program, &morpholog_core::Program) -> alloc::vec::Vec<morpholog_core::Lint>
 pub fn morpholog_core::transformation_arg_schema(&morpholog_core::ValidatedProgram<'_>, &morpholog_core::TransformationName) -> core::result::Result<serde_json::value::Value, morpholog_core::analysis::AnalysisError>
 pub fn morpholog_core::transformation_param_kinds(&morpholog_core::ValidatedProgram<'_>, &morpholog_core::TransformationName) -> core::result::Result<alloc::vec::Vec<(morpholog_core::Var, morpholog_core::analysis::ParamKind)>, morpholog_core::analysis::AnalysisError>

@@ -177,6 +177,7 @@ pub(crate) fn solve(
         };
         let body_ctx = EvalContext {
             tables: Some(&tables),
+            memo: None,
             ..ctx.enter_definition(&question_frame)
         };
         let matches = find_matches(body, &body_ctx)?;
