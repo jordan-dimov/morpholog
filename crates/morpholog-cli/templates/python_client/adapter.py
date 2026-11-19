@@ -842,6 +842,82 @@ class Morpholog:
         except Exception as exc:
             raise unknown(f"an outcome this client does not understand ({exc})") from None
 
+    # ------------------------------------------------------------
+    # Calendar generators: rows to admit, admitting nothing themselves.
+    # ------------------------------------------------------------
+
+    def local_days(
+        self,
+        transformation: str,
+        actor: str,
+        *,
+        first: str,
+        until: str,
+        zone: str,
+        at: str | None = None,
+        skipped: str | None = None,
+        repeated: str | None = None,
+        zoneinfo: str | None = None,
+        fixed: dict[str, object] | None = None,
+    ) -> list[dict[str, object]]:
+        """The rows `generate local-days` prints, one per date from
+        ``first`` to ``until`` inclusive (``YYYY-MM-DD``), ready for
+        ``transact`` or ``propose_batch``. The binary reads the zone, the
+        tzdb release and the clock changes, and decodes every row as
+        ``propose`` would before printing any. ``at``, ``skipped``,
+        ``repeated`` and ``zoneinfo`` are its flags of those names;
+        ``fixed`` fills the transformation's other parameters, as
+        ``--arg``, in the named codec's values (``to_args_named`` gives
+        them): a string as written, a bool or a collection as JSON. A
+        refusal raises ``MorphologError`` with the binary's
+        reason, and nothing is returned."""
+        return self._generate(
+            [
+                "generate", "local-days", self.file, transformation,
+                "--actor", actor, "--from", first, "--until", until, "--zone", zone,
+                *self._opt("--at", at),
+                *self._opt("--skipped", skipped),
+                *self._opt("--repeated", repeated),
+                *self._opt("--zoneinfo", zoneinfo),
+            ],
+            fixed,
+        )
+
+    def business_days(
+        self,
+        transformation: str,
+        actor: str,
+        *,
+        first: str,
+        until: str,
+        holidays: str,
+        fixed: dict[str, object] | None = None,
+    ) -> list[dict[str, object]]:
+        """The rows `generate business-days` prints: Monday to Friday
+        from ``first`` to ``until``, less the dates the holiday list at
+        ``holidays`` names. As ``local_days`` otherwise."""
+        return self._generate(
+            [
+                "generate", "business-days", self.file, transformation,
+                "--actor", actor, "--from", first, "--until", until,
+                "--holidays", holidays,
+            ],
+            fixed,
+        )
+
+    def _generate(
+        self, args: list[str], fixed: dict[str, object] | None
+    ) -> list[dict[str, object]]:
+        pairs = [
+            f"{name}={value if isinstance(value, str) else json.dumps(value)}"
+            for name, value in (fixed or {}).items()
+        ]
+        args += self._repeat("--arg", pairs)
+        proc = self._run(args, timeout=self.timeout)
+        if proc.returncode != 0:
+            raise MorphologError(f"`{_redact_argv(args)}`:\n{self._redact_stderr(proc.stderr)}")
+        return [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
+
     def explain(
         self, transformation: str, actor: str, args_named: dict[str, object]
     ) -> envelopes.Explanation:
