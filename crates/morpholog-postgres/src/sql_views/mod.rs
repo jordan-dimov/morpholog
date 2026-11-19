@@ -65,8 +65,8 @@ pub const VIEW_SURFACE_FORMAT: u32 = 4;
 
 /// Where a derived predicate's view reads from: the `morpholog_read`
 /// cache `refresh derived` fills, or the claims themselves, computed at
-/// read time from the derived claim's definition. One choice for the
-/// whole surface: under `Live` a definition the renderer cannot express
+/// read time from the derived claim's definition. Chosen per claim; a
+/// claim chosen `Live` whose definition the renderer cannot express
 /// refuses the run by name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DerivedSource {
@@ -159,9 +159,11 @@ pub enum ViewRefusal {
     /// The `--schema` value is not a safe unquoted identifier, or is
     /// over-long.
     InvalidSchema { schema: String },
-    /// Under `DerivedSource::Live`, a derived claim's definition the
-    /// renderer cannot express, with the renderer's reason.
+    /// A derived claim chosen live whose definition the renderer cannot
+    /// express, with the renderer's reason.
     Live { derived: String, reason: String },
+    /// A source chosen for a name the programme does not derive.
+    NotDerived { name: String },
 }
 
 impl std::fmt::Display for ViewRefusal {
@@ -196,7 +198,12 @@ impl std::fmt::Display for ViewRefusal {
             ),
             ViewRefusal::Live { derived, reason } => write!(
                 f,
-                "derived `{derived}` cannot be read live: {reason}; keep `--derived cache` or respell it"
+                "derived `{derived}` cannot be read live: {reason}; read it from the cache \
+                 (`--derived-source {derived}=cache`) or respell it"
+            ),
+            ViewRefusal::NotDerived { name } => write!(
+                f,
+                "`--derived-source` names `{name}`, which this programme does not derive"
             ),
         }
     }
@@ -423,14 +430,16 @@ impl ViewKind {
 /// Render the atomic `CREATE VIEW` script for `program` into `schema`: one
 /// typed view per base predicate, one per derived predicate, with
 /// `history` one more per base predicate over the operations the audit
-/// log records on it, and the `_morpholog_catalog` inventory. Pure: identical inputs give
-/// byte-identical output. On any refusal, returns every finding and
-/// renders nothing.
+/// log records on it, and the `_morpholog_catalog` inventory. A derived
+/// view reads from `derived_source`, unless `overrides` names its
+/// predicate. Pure: identical inputs give byte-identical output. On any
+/// refusal, returns every finding and renders nothing.
 pub fn render_views(
     program: &ValidatedProgram<'_>,
     schema: &str,
     model_hash: &str,
     derived_source: DerivedSource,
+    overrides: &BTreeMap<String, DerivedSource>,
     history: bool,
 ) -> Result<RenderedViews, Vec<ViewRefusal>> {
     let program = program.as_program();
@@ -455,36 +464,46 @@ pub fn render_views(
 
     let with_history: &[&PredicateDecl] = if history { &base } else { &[] };
     let mut refusals = sweep(schema, &base, &derived, with_history);
+    for name in overrides.keys() {
+        if !derived_heads.contains(name.as_str()) {
+            refusals.push(ViewRefusal::NotDerived { name: name.clone() });
+        }
+    }
+    let sources: BTreeMap<&str, DerivedSource> = derived_heads
+        .iter()
+        .map(|&name| (name, overrides.get(name).copied().unwrap_or(derived_source)))
+        .collect();
 
-    // Under `Live`, each derived claim's body as the renderer expresses
-    // it; a refusal names the claim. Collected with the sweep's, so the
-    // author sees every finding at once and nothing is written.
+    // Each derived claim chosen live, as the renderer expresses it; a
+    // refusal names the claim. Collected with the sweep's, so the author
+    // sees every finding at once and nothing is written.
     let mut live: BTreeMap<&str, String> = BTreeMap::new();
-    if derived_source == DerivedSource::Live {
-        let decls: BTreeMap<&str, &PredicateDecl> = program
-            .predicates
-            .iter()
-            .map(|p| (p.name.as_str(), p))
-            .collect();
-        let defs: BTreeMap<&str, &Definition> = program
-            .definitions
-            .iter()
-            .map(|d| (d.name.as_str(), d))
-            .collect();
-        for claim in &program.derived_claims {
-            // A validated programme declares every derived head.
-            let Some(head) = decls.get(claim.predicate.as_str()) else {
-                continue;
-            };
-            match compile_derived(claim, head, &decls, &defs, model_hash) {
-                Ok(body) => {
-                    live.insert(claim.predicate.as_str(), body.select);
-                }
-                Err(reason) => refusals.push(ViewRefusal::Live {
-                    derived: claim.predicate.to_string(),
-                    reason: reason.to_string(),
-                }),
+    let decls: BTreeMap<&str, &PredicateDecl> = program
+        .predicates
+        .iter()
+        .map(|p| (p.name.as_str(), p))
+        .collect();
+    let defs: BTreeMap<&str, &Definition> = program
+        .definitions
+        .iter()
+        .map(|d| (d.name.as_str(), d))
+        .collect();
+    for claim in &program.derived_claims {
+        if sources[claim.predicate.as_str()] != DerivedSource::Live {
+            continue;
+        }
+        // A validated programme declares every derived head.
+        let Some(head) = decls.get(claim.predicate.as_str()) else {
+            continue;
+        };
+        match compile_derived(claim, head, &decls, &defs, model_hash) {
+            Ok(body) => {
+                live.insert(claim.predicate.as_str(), body.select);
             }
+            Err(reason) => refusals.push(ViewRefusal::Live {
+                derived: claim.predicate.to_string(),
+                reason: reason.to_string(),
+            }),
         }
     }
     if !refusals.is_empty() {
@@ -510,7 +529,7 @@ pub fn render_views(
         &derived,
         with_history,
         &derived_keys,
-        derived_source,
+        &sources,
         &live,
     );
     Ok(RenderedViews {
@@ -617,7 +636,7 @@ fn render(
     derived: &[&PredicateDecl],
     history: &[&PredicateDecl],
     derived_keys: &BTreeMap<&str, Vec<String>>,
-    derived_source: DerivedSource,
+    sources: &BTreeMap<&str, DerivedSource>,
     live: &BTreeMap<&str, String>,
 ) -> (String, Vec<ViewDescription>) {
     let mut out = String::new();
@@ -683,7 +702,7 @@ fn render(
                 identity,
             ),
         };
-        description.source = Some(derived_source.label().to_string());
+        description.source = Some(sources[predicate.name.as_str()].label().to_string());
         views.push(description);
     }
 

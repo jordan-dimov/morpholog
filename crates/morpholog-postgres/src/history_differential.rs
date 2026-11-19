@@ -42,6 +42,7 @@ async fn apply(pool: &PgPool, validated: &ValidatedProgram<'_>) -> Option<Vec<Vi
         SCHEMA,
         &format!("sha256:{}", "0".repeat(64)),
         DerivedSource::Cache,
+        &Default::default(),
         true,
     )
     .ok()?;

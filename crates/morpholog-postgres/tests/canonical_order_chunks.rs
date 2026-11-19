@@ -406,6 +406,7 @@ async fn a_history_view_begins_at_the_baseline() {
         "baseline_history",
         &format!("sha256:{}", "0".repeat(64)),
         morpholog_postgres::DerivedSource::Cache,
+        &Default::default(),
         true,
     )
     .unwrap();

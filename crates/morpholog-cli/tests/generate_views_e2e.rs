@@ -441,11 +441,148 @@ fn derived_live_refuses_a_definition_outside_the_fragment_by_name() {
     assert!(!result.status.success());
     let stderr = String::from_utf8(result.stderr).unwrap();
     assert!(
-        stderr.contains("derived `TermsTimeline` cannot be read live: `value lookup` is outside the compiled fragment; keep `--derived cache` or respell it"),
+        stderr.contains("derived `TermsTimeline` cannot be read live: `value lookup` is outside the compiled fragment; read it from the cache (`--derived-source TermsTimeline=cache`) or respell it"),
         "{stderr}"
     );
     assert!(stderr.contains("nothing was written"));
     assert!(!out.exists());
+}
+
+/// `LIVE_FIXTURE` plus a derived claim the live renderer refuses: a
+/// value lookup.
+const MIXED_FIXTURE: &str = "program mixed_fixture
+predicate Part(part: Subject)
+predicate StockItem(item: Subject, part: Subject, quantity: Decimal)
+predicate SalesAllocation(allocation: Subject, item: Subject, quantity: Decimal)
+predicate Reorder(part: Subject, level: Decimal)
+predicate PartAllocated(part: Subject, quantity: Decimal)
+predicate PartReorder(part: Subject, level: Decimal)
+derived PartAllocated(part):
+    over Part(part: part)
+    value quantity = sum(q | SalesAllocation(_, i, q) and StockItem(i, part, _))
+derived PartReorder(part):
+    over Part(part: part)
+    value level = value Reorder(part, _) default 0
+transformation allocate(allocation, item, quantity):
+    admit SalesAllocation(allocation, item, quantity)
+";
+
+/// Generate the mixed fixture with `args`: the status, stdout, stderr,
+/// and each derived view's source as described.
+fn generate_mixed(args: &[&str]) -> (bool, String, String, Vec<(String, String)>) {
+    let (dir, file) = refusal_fixture(MIXED_FIXTURE);
+    let described = dir.path().join("views.json");
+    let out = Command::new(bin())
+        .args(["generate", "views", file.to_str().unwrap(), "--describe"])
+        .arg(&described)
+        .args(args)
+        .output()
+        .unwrap();
+    let sources = std::fs::read(&described)
+        .ok()
+        .map(|bytes| {
+            let surface: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            surface["views"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|v| v["kind"] == "derived")
+                .map(|v| {
+                    (
+                        v["predicate"].as_str().unwrap().to_string(),
+                        v["source"].as_str().unwrap().to_string(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    (
+        out.status.success(),
+        String::from_utf8(out.stdout).unwrap(),
+        String::from_utf8(out.stderr).unwrap(),
+        sources,
+    )
+}
+
+/// One claim live and one cached, spelt from either default: the same
+/// script byte for byte, each view reading from its own source and
+/// described so, and the summary giving the split.
+#[test]
+fn derived_source_chooses_live_or_cache_per_claim() {
+    let (ok, from_cache, stderr, sources) =
+        generate_mixed(&["--derived-source", "PartAllocated=live"]);
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        sources,
+        [
+            ("PartAllocated".to_string(), "live".to_string()),
+            ("PartReorder".to_string(), "cache".to_string()),
+        ]
+    );
+    assert!(stderr.contains("2 derived (1 live, 1 cached)"), "{stderr}");
+    let view = |sql: &str, name: &str| {
+        let start = sql
+            .find(&format!(
+                "CREATE OR REPLACE VIEW \"morpholog_views\".\"{name}\""
+            ))
+            .unwrap();
+        let end = sql[start..].find(";\n").unwrap();
+        sql[start..start + end].to_string()
+    };
+    let allocated = view(&from_cache, "part_allocated");
+    assert!(allocated.contains("SELECT DISTINCT ON (") && !allocated.contains("morpholog_read."));
+    assert!(view(&from_cache, "part_reorder").contains("morpholog_read.derived_claims"));
+
+    let (ok, from_live, stderr, _) =
+        generate_mixed(&["--derived", "live", "--derived-source", "PartReorder=cache"]);
+    assert!(ok, "{stderr}");
+    assert_eq!(from_live, from_cache);
+}
+
+/// A name the programme does not derive, or a claim named twice, is
+/// refused by name and nothing is written.
+#[test]
+fn derived_source_refuses_a_name_it_cannot_place() {
+    for (args, expected) in [
+        (
+            &["--derived-source", "Part=live"][..],
+            "`--derived-source` names `Part`, which this programme does not derive",
+        ),
+        (
+            &["--derived-source", "Nothing=cache"][..],
+            "`--derived-source` names `Nothing`, which this programme does not derive",
+        ),
+        (
+            &[
+                "--derived-source",
+                "PartAllocated=live",
+                "--derived-source",
+                "PartAllocated=cache",
+            ][..],
+            "--derived-source names `PartAllocated` twice",
+        ),
+    ] {
+        let (ok, stdout, stderr, sources) = generate_mixed(args);
+        assert!(!ok && stderr.contains(expected), "{args:?}: {stderr}");
+        assert!(
+            stdout.is_empty() && sources.is_empty(),
+            "{args:?} wrote output"
+        );
+    }
+}
+
+/// A claim chosen live that the renderer cannot express is refused by
+/// name, never read from the cache instead.
+#[test]
+fn derived_source_live_never_falls_back_to_the_cache() {
+    let (ok, stdout, stderr, sources) = generate_mixed(&["--derived-source", "PartReorder=live"]);
+    assert!(!ok);
+    assert!(
+        stderr.contains("derived `PartReorder` cannot be read live")
+            && stderr.contains("`--derived-source PartReorder=cache`"),
+        "{stderr}"
+    );
+    assert!(stdout.is_empty() && sources.is_empty());
 }
 
 /// `--history` adds a history view per base predicate, catalogued and

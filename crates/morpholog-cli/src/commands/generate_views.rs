@@ -11,6 +11,7 @@
 //! Refusal is whole-run, as in `generate python-client`: every identifier
 //! that cannot be emitted is printed to stderr, and nothing is written.
 
+use std::collections::BTreeMap;
 use std::io::Write as _;
 
 use morpholog_postgres::{DerivedSource, render_views};
@@ -31,11 +32,24 @@ pub(crate) fn run(args: &GenerateViewsArgs) -> anyhow::Result<()> {
     let validated = validate_or_report(&parsed)?;
     let hash = crate::commands::hash::canonical_hash(&parsed.program);
 
-    let source = match args.derived {
+    let source = |arg: DerivedSourceArg| match arg {
         DerivedSourceArg::Cache => DerivedSource::Cache,
         DerivedSourceArg::Live => DerivedSource::Live,
     };
-    let rendered = match render_views(&validated, &args.schema, &hash, source, args.history) {
+    let mut overrides = BTreeMap::new();
+    for (name, arg) in &args.derived_sources {
+        if overrides.insert(name.clone(), source(*arg)).is_some() {
+            anyhow::bail!("--derived-source names `{name}` twice; give each claim one source");
+        }
+    }
+    let rendered = match render_views(
+        &validated,
+        &args.schema,
+        &hash,
+        source(args.derived),
+        &overrides,
+        args.history,
+    ) {
         Ok(rendered) => rendered,
         Err(refusals) => {
             for refusal in &refusals {
@@ -51,10 +65,22 @@ pub(crate) fn run(args: &GenerateViewsArgs) -> anyhow::Result<()> {
 
     let total =
         rendered.base_view_count + rendered.derived_view_count + rendered.history_view_count;
+    let live = rendered
+        .surface
+        .views
+        .iter()
+        .filter(|v| v.source.as_deref() == Some("live"))
+        .count();
     let mut summary = format!(
         "generated {total} view(s): {} base, {} derived",
         rendered.base_view_count, rendered.derived_view_count
     );
+    if !overrides.is_empty() {
+        summary.push_str(&format!(
+            " ({live} live, {} cached)",
+            rendered.derived_view_count - live
+        ));
+    }
     if args.history {
         summary.push_str(&format!(", {} history", rendered.history_view_count));
     }

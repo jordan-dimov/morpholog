@@ -55,6 +55,15 @@ class ReadingTheDescription(unittest.TestCase):
         self.assertIsNone(several.single_key())
         self.assertIsNone(none.single_key())
 
+    def test_reads_derived_views_with_different_sources(self):
+        payload = json.loads(DESCRIPTION.read_text())
+        cached = next(v for v in payload["views"] if v["kind"] == "derived")
+        live = dict(cached, predicate="Other", view="other", source="live")
+        payload["views"].append(live)
+        described = envelopes.ViewSurface.from_json(payload)
+        sources = {v.predicate: v.source for v in described.views if v.kind == "derived"}
+        self.assertEqual(sources, {cached["predicate"]: "cache", "Other": "live"})
+
     def test_a_drifted_description_is_refused(self):
         payload = json.loads(DESCRIPTION.read_text())
         payload["views"][0]["columns"][0]["nullable"] = True

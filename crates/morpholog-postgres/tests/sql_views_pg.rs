@@ -100,6 +100,7 @@ fn render(p: &Program, schema: &str) -> String {
         schema,
         SENTINEL_HASH,
         morpholog_postgres::DerivedSource::Cache,
+        &Default::default(),
         false,
     )
     .expect("renders")
@@ -545,4 +546,203 @@ async fn derived_view_reflects_a_new_generation() {
         .await
         .unwrap();
     assert_eq!(account_total(&pool, "a1").await, Some(Decimal::from(17)));
+}
+
+// Live or cache per derived claim. Two claims over one fixture: each
+// view reads from the source chosen for it, a view switched between the
+// two is recreated rather than replaced, and a refresh still computes
+// every claim, the live ones included.
+
+const MIXED_FIXTURE: &str = "program mixed\n\
+    predicate Entry(account: Subject, amount: Decimal)\n\
+    predicate AccountTotal(account: Subject, total: Decimal)\n\
+    predicate AccountEntries(account: Subject, entries: Decimal)\n\
+    transformation post(account, amount):\n    admit Entry(account, amount)\n\
+    derived AccountTotal(account):\n    over Entry(account, _)\n    \
+        value total = sum(a | Entry(account, a))\n\
+    derived AccountEntries(account):\n    over Entry(account, _)\n    \
+        value entries = sum(1 | Entry(account, a))\n";
+
+fn mixed_fixture() -> Program {
+    let p = parse_program(MIXED_FIXTURE).expect("mixed parses");
+    p.validate().expect("mixed validates");
+    p
+}
+
+/// The surface with `live` read live and every other derived claim from
+/// the cache.
+fn render_with_live(p: &Program, live: &[&str]) -> String {
+    let overrides = live
+        .iter()
+        .map(|name| (name.to_string(), morpholog_postgres::DerivedSource::Live))
+        .collect();
+    render_views(
+        &p.validated().unwrap(),
+        "morpholog_views",
+        SENTINEL_HASH,
+        morpholog_postgres::DerivedSource::Cache,
+        &overrides,
+        false,
+    )
+    .expect("renders")
+    .sql
+}
+
+/// Apply a script on one connection, rolling back what a failure left
+/// open, as `psql -v ON_ERROR_STOP=1` does by ending its session.
+async fn apply(pool: &PgPool, sql: &str) -> Result<(), sqlx::Error> {
+    let mut conn = pool.acquire().await?;
+    let applied = sqlx::raw_sql(sqlx::AssertSqlSafe(sql.to_string()))
+        .execute(&mut *conn)
+        .await;
+    if applied.is_err() {
+        sqlx::raw_sql("ROLLBACK").execute(&mut *conn).await?;
+    }
+    applied.map(|_| ())
+}
+
+async fn entries(pool: &PgPool, account: &str) -> Option<Decimal> {
+    sqlx::query_scalar::<_, Decimal>(
+        "SELECT entries FROM morpholog_views.account_entries WHERE account = $1",
+    )
+    .bind(account)
+    .fetch_optional(pool)
+    .await
+    .expect("query account_entries view")
+}
+
+async fn columns_of(pool: &PgPool, view: &str) -> Vec<String> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT column_name::text FROM information_schema.columns \
+         WHERE table_schema = 'morpholog_views' AND table_name = $1 ORDER BY ordinal_position",
+    )
+    .bind(view)
+    .fetch_all(pool)
+    .await
+    .expect("columns")
+}
+
+#[tokio::test]
+async fn a_mixed_surface_reads_each_view_from_its_own_source() {
+    let pool = test_pool().await;
+    reset(&pool).await;
+    let p = mixed_fixture();
+    seed_entry(&pool, &p, "a1", 10).await;
+    refresh_derived(&pool, &p.validated().unwrap(), SENTINEL_HASH)
+        .await
+        .unwrap();
+    apply(&pool, &render_with_live(&p, &["AccountTotal"]))
+        .await
+        .expect("script applies");
+    assert_eq!(account_total(&pool, "a1").await, Some(Decimal::from(10)));
+    assert_eq!(entries(&pool, "a1").await, Some(Decimal::from(1)));
+
+    // A commit: the live view shows it at once, the cached one at the
+    // next refresh.
+    seed_entry(&pool, &p, "a1", 5).await;
+    assert_eq!(account_total(&pool, "a1").await, Some(Decimal::from(15)));
+    assert_eq!(entries(&pool, "a1").await, Some(Decimal::from(1)));
+    refresh_derived(&pool, &p.validated().unwrap(), SENTINEL_HASH)
+        .await
+        .unwrap();
+    assert_eq!(entries(&pool, "a1").await, Some(Decimal::from(2)));
+}
+
+/// A view's columns differ between the cache and live, so switching one
+/// view's source is refused as a replacement, and the whole script rolls
+/// back. Dropping that one view first lets it apply. Both directions.
+#[tokio::test]
+async fn switching_one_view_s_source_recreates_it() {
+    let pool = test_pool().await;
+    reset(&pool).await;
+    let p = mixed_fixture();
+    let cached = render_with_live(&p, &[]);
+    let live = render_with_live(&p, &["AccountTotal"]);
+    for (from, to) in [(&cached, &live), (&live, &cached)] {
+        sqlx::raw_sql("DROP SCHEMA IF EXISTS morpholog_views CASCADE")
+            .execute(&pool)
+            .await
+            .unwrap();
+        apply(&pool, from).await.expect("the first surface applies");
+        let before = columns_of(&pool, "account_total").await;
+        let err = apply(&pool, to)
+            .await
+            .expect_err("a source switch is not a compatible replace");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("cannot drop columns from view")
+                || msg.contains("cannot change name of view column"),
+            "{msg}"
+        );
+        assert_eq!(
+            columns_of(&pool, "account_total").await,
+            before,
+            "rolled back"
+        );
+
+        apply(&pool, "DROP VIEW morpholog_views.account_total")
+            .await
+            .unwrap();
+        apply(&pool, to)
+            .await
+            .expect("applies once the view is dropped");
+        assert_ne!(columns_of(&pool, "account_total").await, before);
+    }
+}
+
+/// `refresh derived` computes every derived claim, the ones read live
+/// included. A live claim the kernel cannot compute (a sum past the
+/// decimal range) fails the whole refresh, so the cached claim keeps its
+/// last generation, while the live view names the failure.
+#[tokio::test]
+async fn a_live_claim_that_cannot_compute_still_fails_the_refresh() {
+    let pool = test_pool().await;
+    reset(&pool).await;
+    let p = mixed_fixture();
+    seed_entry(&pool, &p, "a1", 10).await;
+    refresh_derived(&pool, &p.validated().unwrap(), SENTINEL_HASH)
+        .await
+        .unwrap();
+    apply(&pool, &render_with_live(&p, &["AccountTotal"]))
+        .await
+        .expect("script applies");
+
+    let big = "50000000000000000000000000000";
+    let bigger = "60000000000000000000000000000";
+    for amount in [big, bigger] {
+        let post = p.transformation("post").unwrap();
+        let args = vec![
+            EvalValue::Subject("a2".into()),
+            EvalValue::Decimal(amount.parse().unwrap()),
+        ];
+        let outcome =
+            common::propose_pg_with_test_actor(&pool, &common::pg_program(p.clone()), post, args)
+                .await
+                .expect("post proposes");
+        assert!(
+            matches!(
+                outcome,
+                morpholog_postgres::PgProposalOutcome::Committed { .. }
+            ),
+            "{outcome:?}"
+        );
+    }
+    seed_entry(&pool, &p, "a1", 5).await;
+
+    refresh_derived(&pool, &p.validated().unwrap(), SENTINEL_HASH)
+        .await
+        .expect_err("the live claim's sum overflows in the kernel");
+    assert_eq!(
+        entries(&pool, "a1").await,
+        Some(Decimal::from(1)),
+        "the last generation"
+    );
+    assert_eq!(entries(&pool, "a2").await, None);
+    let error: Option<String> = sqlx::query_scalar(
+        "SELECT _morpholog_error FROM morpholog_views.account_total WHERE account = 'a2'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(error.as_deref(), Some("sum_range"));
 }

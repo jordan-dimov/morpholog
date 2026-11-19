@@ -24,6 +24,7 @@ fn render_ok(src: &str) -> RenderedViews {
         "morpholog_views",
         "sha256:testhash",
         DerivedSource::Cache,
+        &Default::default(),
         false,
     )
     .expect("renders")
@@ -37,6 +38,7 @@ fn refusals(src: &str, schema: &str) -> Vec<ViewRefusal> {
         schema,
         "sha256:testhash",
         DerivedSource::Cache,
+        &Default::default(),
         false,
     )
     .expect_err("refuses")
@@ -189,6 +191,7 @@ fn derived_heads_get_a_derived_view_over_the_cache() {
         "morpholog_views",
         "sha256:x",
         DerivedSource::Cache,
+        &Default::default(),
         false,
     )
     .expect("renders");
@@ -224,7 +227,7 @@ fn zero_predicates_is_lawful_empty() {
         &[],
         &[],
         &std::collections::BTreeMap::new(),
-        DerivedSource::Cache,
+        &std::collections::BTreeMap::new(),
         &std::collections::BTreeMap::new(),
     );
     assert!(views.is_empty());
@@ -375,7 +378,7 @@ fn header_values_cannot_break_out_of_the_comment() {
         &[],
         &[],
         &std::collections::BTreeMap::new(),
-        DerivedSource::Cache,
+        &std::collections::BTreeMap::new(),
         &std::collections::BTreeMap::new(),
     );
     assert!(
@@ -536,6 +539,7 @@ fn render_with_history(src: &str) -> Result<RenderedViews, Vec<ViewRefusal>> {
         "morpholog_views",
         "sha256:testhash",
         DerivedSource::Cache,
+        &Default::default(),
         true,
     )
 }
@@ -703,7 +707,9 @@ async fn the_applied_views_have_the_described_columns() {
         let validated = program.validated().unwrap();
         let hash = format!("sha256:{}", "0".repeat(64));
         let schema = "described_views";
-        let Ok(rendered) = render_views(&validated, schema, &hash, source, true) else {
+        let Ok(rendered) =
+            render_views(&validated, schema, &hash, source, &Default::default(), true)
+        else {
             continue;
         };
         if source == DerivedSource::Live && !validated.as_program().derived_claims.is_empty() {
@@ -777,6 +783,7 @@ fn live_derived_views_are_computed_from_their_definitions() {
         "morpholog_views",
         "sha256:testhash",
         DerivedSource::Cache,
+        &Default::default(),
         false,
     )
     .unwrap();
@@ -785,6 +792,7 @@ fn live_derived_views_are_computed_from_their_definitions() {
         "morpholog_views",
         "sha256:testhash",
         DerivedSource::Live,
+        &Default::default(),
         false,
     )
     .unwrap();
@@ -885,13 +893,14 @@ derived OnHand(item):
         "morpholog_views",
         "sha256:testhash",
         DerivedSource::Live,
+        &Default::default(),
         false,
     )
     .expect_err("a value lookup is outside the fragment");
     assert_eq!(refused.len(), 1);
     assert_eq!(
         refused[0].to_string(),
-        "derived `OnHand` cannot be read live: `value lookup` is outside the compiled fragment; keep `--derived cache` or respell it"
+        "derived `OnHand` cannot be read live: `value lookup` is outside the compiled fragment; read it from the cache (`--derived-source OnHand=cache`) or respell it"
     );
     assert!(
         render_views(
@@ -899,6 +908,7 @@ derived OnHand(item):
             "morpholog_views",
             "sha256:testhash",
             DerivedSource::Cache,
+            &Default::default(),
             false,
         )
         .is_ok()
@@ -924,6 +934,7 @@ derived Counted(item):
         "morpholog_views",
         "sha256:testhash",
         DerivedSource::Live,
+        &Default::default(),
         false,
     )
     .expect("a binding call renders live");
@@ -961,12 +972,28 @@ async fn switching_a_deployed_surface_to_live_needs_the_derived_views_dropped() 
     .execute(&pool)
     .await
     .unwrap();
-    let cached = render_views(&validated, schema, &hash, DerivedSource::Cache, false).unwrap();
+    let cached = render_views(
+        &validated,
+        schema,
+        &hash,
+        DerivedSource::Cache,
+        &Default::default(),
+        false,
+    )
+    .unwrap();
     sqlx::raw_sql(sqlx::AssertSqlSafe(cached.sql))
         .execute(&pool)
         .await
         .unwrap();
-    let live = render_views(&validated, schema, &hash, DerivedSource::Live, false).unwrap();
+    let live = render_views(
+        &validated,
+        schema,
+        &hash,
+        DerivedSource::Live,
+        &Default::default(),
+        false,
+    )
+    .unwrap();
     // On its own connection: the script's `BEGIN` leaves the failed
     // transaction open, and the pool would hand it on.
     let mut conn = pool.acquire().await.unwrap();
@@ -1032,6 +1059,7 @@ derived Seen(at):
             "morpholog_views",
             "sha256:testhash",
             source,
+            &Default::default(),
             false,
         )
         .expect("renders");
@@ -1077,6 +1105,7 @@ predicate Tick(at: Timestamp)
         "instant_views",
         "sha256:testhash",
         DerivedSource::Cache,
+        &Default::default(),
         false,
     )
     .unwrap();
