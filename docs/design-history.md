@@ -1573,3 +1573,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** a power-trading embedder (#861). Its import workbench previews every row through `explain` before proposing any, and would mark the columns a refusing gate reads. Only a real proposal carried `related_parameters`, so only a real proposal could mark them.
 
 **Landed:** an explanation's gate verdict carries `related_parameters`, from the walk a refusal uses: possibly empty for a named gate, absent for an unnamed one. The verdict's variant is the origin, so an invariant that shares the gate's name has no such field to fill. `explain`, the session's `explain` and the explanation inside `--explain-on-reject` all get it from the kernel; decisions, audit rows and `inspect rejections` are unchanged.
+
+### A batch row refuses a field it does not read
+
+**Forced by:** a code audit (#855). Every other way to send an act refused an unknown field, but a `--batch` row dropped one silently. A row-level `explain_on_reject`, which a session request honours, was ignored without a word.
+
+**Landed:** a batch row with any field besides `transformation`, `actor`, `args` and `args_named` gets an `invalid_request` receipt naming the field, before anything is proposed for it, and the rows around it still run. Every embedder checked sent only those fields.

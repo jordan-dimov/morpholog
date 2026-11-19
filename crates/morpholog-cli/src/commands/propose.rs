@@ -203,9 +203,10 @@ fn print_rule_location(reason: &str, parsed: &ParsedSource) {
 }
 
 /// One NDJSON batch row: a transition naming its own transformation and
-/// actor, with args in exactly one codec. Also the body of a session's
-/// propose request, which adds a per-request explanation flag.
+/// actor, with args in exactly one codec. Any other field is refused, so
+/// a row never carries a setting the batch ignores.
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct BatchRow {
     pub(crate) transformation: String,
     pub(crate) actor: String,

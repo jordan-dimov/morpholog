@@ -860,15 +860,17 @@ rolls back on its own - an import is explicitly NOT all-or-nothing -
 and produces one NDJSON receipt on stdout in input order: the
 single-proposal envelope above plus `"row"`, the 1-based input line number
 (blank lines skip silently, so receipts map back to the file). A
-malformed row (bad JSON, unknown transformation, undecodable args)
-yields `{"row": N, "status": "error", "code": "...", "error": "..."}` and
+malformed row (bad JSON, a field other than `transformation`, `actor`,
+`args` and `args_named`, unknown transformation, undecodable args) is
+never proposed and yields `{"row": N, "status": "error", "code": "...", "error": "..."}` and
 processing continues; `code` is the same stable set a session error
 receipt carries (`invalid_request`, `actor_assertion_unauthorised`,
 `serialization_failure`, `deadlock_detected`, ...) minus the session-only `unknown_operation`,
 so a control test matches a refusal by code through both batch and
 session, never by prose. A single `propose` prints the same codes in its
 error object. `--explain-on-reject` composes per row, exactly as in
-single proposals. A summary line lands on stderr.
+single proposals; it is a flag on the command, and a row that carries
+`explain_on_reject` is refused rather than ignored. A summary line lands on stderr.
 
 **Exit code contract - deliberately different from a single `propose`.**
 A single `propose` exits 1 on a rejection; a batch exits 0 whenever every
