@@ -44,6 +44,14 @@ FIRST_RECORD=v0.0.20
 
 cd "$(git rev-parse --show-toplevel)"
 
+# The record steps hand files to gh by path, and a gh installed as a
+# snap has its own private /tmp, so every temporary directory the script
+# makes lives under target/ instead, and goes when it exits.
+mkdir -p target
+TMPDIR="$(mktemp -d "$PWD/target/release-tmp.XXXXXX")"
+export TMPDIR
+trap 'rm -rf "$TMPDIR"' EXIT
+
 die() { echo "error: $*" >&2; exit 1; }
 say() { echo "==> $*"; }
 
