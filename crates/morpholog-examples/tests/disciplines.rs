@@ -208,6 +208,31 @@ transformation undo_batch(batch_id):
     );
 }
 
+#[test]
+fn the_retract_ban_reaches_inside_both_branches_and_a_pattern_loop() {
+    let errors = validation_errors(
+        r#"
+program branch_undo
+
+predicate Record(id: Subject)
+    append only
+predicate Flag(id: Subject)
+
+transformation undo(id):
+    if Flag(id):
+        retract Record(id)
+    else:
+        for Flag(other):
+            retract Record(other)
+"#,
+    );
+    let bans = errors
+        .iter()
+        .filter(|e| matches!(e, ValidationError::RetractsAppendOnly { .. }))
+        .count();
+    assert_eq!(bans, 2, "got {errors:?}");
+}
+
 // The lineage named by `superseded via` is append only without saying so.
 #[test]
 fn retracting_a_lineage_predicate_is_refused_too() {

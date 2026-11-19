@@ -371,64 +371,29 @@ impl ReadPlan {
     }
 }
 
-/// Names a body binds as it runs: unknown before it does.
+/// Names a body binds as it runs: unknown before it does. A `for x in`
+/// loop's own variable counts; [`let_names`] leaves it out.
 fn rebound_names(stmt: &Stmt, out: &mut BTreeSet<Var>) {
-    match stmt {
-        Stmt::Let { name, .. } | Stmt::LetNewSubject { name } => {
+    crate::fold::walk_stmt(stmt, &mut |node| {
+        if let crate::fold::Node::Stmt(
+            Stmt::Let { name, .. } | Stmt::LetNewSubject { name } | Stmt::For { binding: name, .. },
+        ) = node
+        {
             out.insert(name.clone());
         }
-        Stmt::For { binding, body, .. } => {
-            out.insert(binding.clone());
-            for inner in body {
-                rebound_names(inner, out);
-            }
-        }
-        Stmt::ForEach { body, .. } => {
-            for inner in body {
-                rebound_names(inner, out);
-            }
-        }
-        Stmt::If {
-            then, otherwise, ..
-        } => {
-            for inner in then.iter().chain(otherwise) {
-                rebound_names(inner, out);
-            }
-        }
-        Stmt::Require { .. }
-        | Stmt::BindOne { .. }
-        | Stmt::Assert(_)
-        | Stmt::Retract { .. }
-        | Stmt::Emit(_) => {}
-    }
+    });
 }
 
 /// Names a `let` or a `new Subject()` binds, anywhere in the body: a
 /// loop binding so named is replaced as the body runs, so it is never
 /// known as an element.
 fn let_names(stmt: &Stmt, out: &mut BTreeSet<Var>) {
-    match stmt {
-        Stmt::Let { name, .. } | Stmt::LetNewSubject { name } => {
+    crate::fold::walk_stmt(stmt, &mut |node| {
+        if let crate::fold::Node::Stmt(Stmt::Let { name, .. } | Stmt::LetNewSubject { name }) = node
+        {
             out.insert(name.clone());
         }
-        Stmt::For { body, .. } | Stmt::ForEach { body, .. } => {
-            for inner in body {
-                let_names(inner, out);
-            }
-        }
-        Stmt::If {
-            then, otherwise, ..
-        } => {
-            for inner in then.iter().chain(otherwise) {
-                let_names(inner, out);
-            }
-        }
-        Stmt::Require { .. }
-        | Stmt::BindOne { .. }
-        | Stmt::Assert(_)
-        | Stmt::Retract { .. }
-        | Stmt::Emit(_) => {}
-    }
+    });
 }
 
 /// The variables known at a point, and what they are known as.
@@ -969,4 +934,45 @@ fn coordinates(args: &[Term], known: &Env) -> Vec<(usize, KnownTerm)> {
         .enumerate()
         .filter_map(|(i, term)| known_term(term, known).map(|t| (i, t)))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::{let_names, rebound_names};
+    use crate::ir::{Stmt, ValueExpr, Var};
+    use crate::ir_builder::{claim, for_each, let_, let_new_subject, var};
+
+    /// Both walks find a `let` and a `new Subject()` at any depth, under
+    /// an `if`, a `for` and a `for Pattern`. Only `rebound_names` counts a
+    /// `for x in` loop's own variable: the loop rebinds it each turn, but
+    /// a `let` is what replaces a pattern loop's element.
+    #[test]
+    fn a_for_loops_variable_is_rebound_but_not_let_bound() {
+        let body = vec![Stmt::For {
+            binding: Var::from("x"),
+            collection: ValueExpr::Term(var("items")),
+            body: vec![
+                let_("a", ValueExpr::Term(var("x"))),
+                Stmt::If {
+                    when: claim("P", vec![var("x")]),
+                    then: vec![let_new_subject("b")],
+                    otherwise: vec![for_each(
+                        "Q",
+                        vec![var("y")],
+                        vec![let_("c", ValueExpr::Term(var("y")))],
+                    )],
+                },
+            ],
+        }];
+        let (mut rebound, mut let_bound) = (BTreeSet::new(), BTreeSet::new());
+        for stmt in &body {
+            rebound_names(stmt, &mut rebound);
+            let_names(stmt, &mut let_bound);
+        }
+        let names = |n: &[&str]| n.iter().map(|s| Var::from(*s)).collect::<BTreeSet<_>>();
+        assert_eq!(rebound, names(&["a", "b", "c", "x"]));
+        assert_eq!(let_bound, names(&["a", "b", "c"]));
+    }
 }
