@@ -663,6 +663,7 @@
             "statement_kind": { "enum": ["require", "bind_one"] },
             "witness": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/witness_binding" } },
             "compared": { "$ref": "#/$defs/compared" },
+            "related_parameters": { "description": "As on `rejected`: present, possibly empty, for a named gate; absent for an unnamed one.", "type": "array", "items": { "type": "string" } },
             "directly_missing_claims": {
               "type": "array",
               "items": { "$ref": "#/$defs/missing_claim" }

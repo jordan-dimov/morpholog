@@ -16,7 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::analysis::transformations_asserting;
+use crate::analysis::{related_parameters, transformations_asserting};
 use crate::eval::{RenderedClaim, render_eval_value};
 use crate::ir::Program;
 use crate::propose::{
@@ -97,6 +97,11 @@ pub struct GateRejection {
     /// The comparison the diagnosis blamed, with its two values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compared: Option<Compared>,
+    /// The act's parameters a named gate reads, as a refusal of this
+    /// proposal would carry them: the same walk. Possibly empty; `None`
+    /// for an unnamed gate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub related_parameters: Option<Vec<String>>,
 }
 
 /// Which kind of gate rejected.
@@ -195,7 +200,18 @@ pub(crate) fn explain(
         TracedProposal::Completed {
             outcome: Outcome::Rejected { reason },
             trace,
-        } => verdict_from_rejection(program, &reason, &trace),
+        } => {
+            let mut verdict = verdict_from_rejection(program, &reason, &trace);
+            // Only a gate's verdict names the parameters it reads; an
+            // invariant sharing the gate's name has no such field.
+            if let Verdict::Rejected(Rejection::Gate(gate)) = &mut verdict {
+                gate.related_parameters = gate
+                    .rule
+                    .as_deref()
+                    .and_then(|rule| related_parameters(transformation, rule));
+            }
+            verdict
+        }
     };
 
     Explanation {
@@ -369,6 +385,7 @@ fn gate_verdict(
         directly_missing_claims,
         witness,
         compared,
+        related_parameters: None,
     }))
 }
 

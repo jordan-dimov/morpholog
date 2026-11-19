@@ -19,6 +19,9 @@
       ],
       "gate": "Flag(account_id)",
       "kind": "gate",
+      "related_parameters": [
+        "account_id"
+      ],
       "rule": "account_is_not_flagged",
       "statement_kind": "require",
       "witness": [

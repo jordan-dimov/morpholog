@@ -965,6 +965,9 @@ class GateRejection:
     # same proposal would carry them. Empty when nothing was in scope.
     witness: list[WitnessBinding] = field(default_factory=list)
     compared: Compared | None = None
+    # The act's parameters a named gate reads: possibly empty, None for an
+    # unnamed gate. Read by the gate, not judged wrong.
+    related_parameters: list[str] | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> GateRejection:
@@ -972,7 +975,7 @@ class GateRejection:
             "gate rejection",
             payload,
             {"kind", "gate", "statement_kind", "directly_missing_claims"},
-            {"rule", "witness", "compared"},
+            {"rule", "witness", "compared", "related_parameters"},
         )
         data.constant("kind", "gate")
         return cls(
@@ -982,6 +985,11 @@ class GateRejection:
             rule=data.optional_text("rule"),
             witness=data.optional_array("witness", WitnessBinding.from_json, non_empty=True),
             compared=data.optional_nested("compared", Compared.from_json),
+            related_parameters=(
+                data.texts("related_parameters")
+                if "related_parameters" in data
+                else None
+            ),
         )
 
 

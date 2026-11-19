@@ -2640,6 +2640,7 @@ pub struct morpholog_core::GateRejection
 pub morpholog_core::GateRejection::compared: core::option::Option<morpholog_core::Compared>
 pub morpholog_core::GateRejection::directly_missing_claims: alloc::vec::Vec<morpholog_core::MissingClaim>
 pub morpholog_core::GateRejection::gate: alloc::string::String
+pub morpholog_core::GateRejection::related_parameters: core::option::Option<alloc::vec::Vec<alloc::string::String>>
 pub morpholog_core::GateRejection::rule: core::option::Option<alloc::string::String>
 pub morpholog_core::GateRejection::statement_kind: morpholog_core::GateKind
 pub morpholog_core::GateRejection::witness: alloc::vec::Vec<morpholog_core::WitnessBinding>

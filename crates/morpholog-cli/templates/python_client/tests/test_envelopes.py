@@ -634,6 +634,25 @@ class Explanations(unittest.TestCase):
         error = envelopes.Explanation.from_json(golden("explanation_error.json"))
         self.assertIsInstance(error.rejection, envelopes.ErrorRejection)
 
+    def test_a_named_gate_names_the_parameters_it_reads(self):
+        named = golden("explanation_gate_named.json")
+        gate = envelopes.Explanation.from_json(named).rejection
+        assert isinstance(gate, envelopes.GateRejection)
+        self.assertEqual(gate.related_parameters, ["account_id"])
+        # A named gate over the state alone reads none: an empty list,
+        # never None, which is the unnamed gate's.
+        named["verdict"]["rejected"]["related_parameters"] = []
+        gate = envelopes.Explanation.from_json(named).rejection
+        assert isinstance(gate, envelopes.GateRejection)
+        self.assertEqual(gate.related_parameters, [])
+        unnamed = envelopes.Explanation.from_json(golden("explanation_gate.json")).rejection
+        assert isinstance(unnamed, envelopes.GateRejection)
+        self.assertIsNone(unnamed.related_parameters)
+        invariant = golden("explanation_invariant.json")
+        invariant["verdict"]["rejected"]["related_parameters"] = ["a"]
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.Explanation.from_json(invariant)
+
 
 class BatchReceipts(unittest.TestCase):
     def test_the_three_receipt_shapes(self):
