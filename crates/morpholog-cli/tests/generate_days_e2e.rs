@@ -887,3 +887,101 @@ transformation publish(local_date, starts_at, ends_at, tzdb_version, tzdb_digest
     assert_eq!(digest_of("Europe/Amsterdam"), expected("Europe/Amsterdam"));
     assert_ne!(digest_of("Europe/London"), digest_of("Europe/Amsterdam"));
 }
+
+/// The generated client's `local_days` and `business_days` return the
+/// rows the binary prints, unparsed and unchanged, across a clock change
+/// and with fixed values of every codec shape. The rows commit through
+/// the client's own `transact`, and a refusal raises with the binary's
+/// reason.
+#[tokio::test(flavor = "current_thread")]
+async fn the_generated_client_returns_the_rows_the_binary_prints() {
+    reset_db().await;
+    let out = tempfile::tempdir().unwrap();
+    let file = example_23();
+    let file = file.to_str().unwrap();
+    let generated = run(&[
+        "generate",
+        "python-client",
+        file,
+        "--out",
+        out.path().to_str().unwrap(),
+    ]);
+    assert!(generated.status.success(), "{generated:?}");
+    propose(
+        file,
+        "appoint_calendar_publisher",
+        "ops",
+        r#"{"calendar":"uk","publisher":"cal_uk"}"#,
+    );
+    let probe = r#"
+import json, sys
+out, file, url, binary, zoneinfo, business, holidays, flagged = sys.argv[1:9]
+sys.path.insert(0, out)
+from morpholog_client import Morpholog, MorphologError
+client = Morpholog(file, url, binary=binary)
+days = client.local_days(
+    "publish_delivery_day", "cal_uk", first="2026-03-28", until="2026-03-30",
+    zone="Europe/London", zoneinfo=zoneinfo, fixed={"calendar": "uk"},
+)
+print(json.dumps(days))
+outcome = client.transact(days)
+print(json.dumps([type(outcome).__name__, len(outcome.acts)]))
+print(json.dumps(Morpholog(business, url, binary=binary).business_days(
+    "admit_business_day", "ops", first="2026-12-21", until="2026-12-31",
+    holidays=holidays, fixed={"calendar": "uk"},
+)))
+print(json.dumps(Morpholog(flagged, url, binary=binary).local_days(
+    "publish", "cal", first="2026-01-01", until="2026-01-01",
+    zone="Europe/London", zoneinfo=zoneinfo,
+    fixed={"provisional": True, "tags": ["a", "b"]},
+)))
+try:
+    client.local_days(
+        "publish_delivery_day", "cal_uk", first="2026-03-28", until="2026-03-30",
+        zone="Nowhere/Atlantis", zoneinfo=zoneinfo, fixed={"calendar": "uk"},
+    )
+    print(json.dumps("WRONG no error"))
+except MorphologError as exc:
+    print(json.dumps(str(exc)))
+"#;
+    let output = Command::new("python3")
+        .args([
+            "-c",
+            probe,
+            out.path().to_str().unwrap(),
+            file,
+            &database_url(),
+            bin(),
+            &zoneinfo(),
+            fixture("business_days.morph").to_str().unwrap(),
+            fixture("uk_holidays_2026.json").to_str().unwrap(),
+            fixture("flagged_days.morph").to_str().unwrap(),
+        ])
+        .output()
+        .expect("python3 runs the emitted package");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<Value> = stdout
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(
+        lines.len(),
+        5,
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let days = rows(&local_days("uk", "2026-03-28", "2026-03-30"));
+    assert_eq!(lines[0], Value::Array(days));
+    assert_eq!(lines[1], serde_json::json!(["AtomicCommitted", 3]));
+    assert_eq!(
+        lines[2],
+        Value::Array(rows(&business_days("2026-12-21", "2026-12-31")))
+    );
+    assert_eq!(lines[3][0]["args_named"]["provisional"], true);
+    assert_eq!(
+        lines[3][0]["args_named"]["tags"],
+        serde_json::json!(["a", "b"])
+    );
+    let refusal = lines[4].as_str().unwrap();
+    assert!(refusal.contains("Nowhere/Atlantis"), "{refusal}");
+}

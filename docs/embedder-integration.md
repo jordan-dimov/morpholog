@@ -1061,10 +1061,14 @@ morpholog generate business-days bank.morph admit_business_day \
 Each writes `propose --batch` rows to stdout, one per day, proposing
 the named transformation. Each row is already the act that `transact`
 and `propose_batch` take, decoded through the named codec before it was
-written, so the generated client admits a calendar whole with
-`client.transact([json.loads(line) for line in out.splitlines()])`. No
-typed request has to be rebuilt from the rows, and the tzdb release
-stays the one the generator stamped. `local-days` fills `local_date`, `starts_at`,
+written. The generated client runs either generator and returns those
+rows, so a calendar is admitted whole with
+`client.transact(client.local_days("publish_delivery_day", "cal_uk",
+first="2026-01-01", until="2026-12-31", zone="Europe/London",
+fixed={"calendar": "uk"}))`; `business_days` takes `holidays` instead
+of `zone`, and a refusal raises `MorphologError` with the binary's
+reason. No typed request has to be rebuilt from the rows, and the tzdb
+release stays the one the generator stamped. `local-days` fills `local_date`, `starts_at`,
 `ends_at` and `tzdb_version`: the day's bounds as UTC instants and the
 release the zone was read under. A clock change makes a day shorter or
 longer, by an hour in most zones and half an hour in some. So count
