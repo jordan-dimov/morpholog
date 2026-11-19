@@ -86,15 +86,12 @@ fn parse_error_diagnostics(errs: Vec<Rich<'_, Token>>) -> Vec<Diagnostic> {
             let mut message = format!("parse error: {}", e.reason());
             // A labelled parser that fails on its first token names its label as expected;
             // one that fails further in carries it as context.
-            let labels: Vec<&str> = e
-                .contexts()
-                .map(|(pattern, _)| pattern)
-                .chain(e.expected())
-                .filter_map(|pattern| match pattern {
-                    chumsky::error::RichPattern::Label(label) => Some(label.as_ref()),
-                    _ => None,
-                })
-                .collect();
+            let label = |pattern: &chumsky::error::RichPattern<'_, Token>| match pattern {
+                chumsky::error::RichPattern::Label(label) => Some(label.to_string()),
+                _ => None,
+            };
+            let expected: Vec<String> = e.expected().filter_map(label).collect();
+            let within: Vec<String> = e.contexts().filter_map(|(p, _)| label(p)).collect();
             if matches!(e.found(), Some(Token::Indent)) {
                 message.push_str(
                     "; continuation lines of one expression stay at the same column - \
@@ -102,7 +99,8 @@ fn parse_error_diagnostics(errs: Vec<Rich<'_, Token>>) -> Vec<Diagnostic> {
                      make layout stop mattering until they close",
                 );
             }
-            if labels.contains(&LET_VALUE) {
+            // Only a missing `(` is about the parentheses; an error inside them is not.
+            if expected.iter().any(|l| l == LET_VALUE) {
                 message.push_str(
                     "; a definition's `let` value goes in parentheses: \
                      `let total = (sum(q | Pos(book, q)))`",
@@ -126,7 +124,7 @@ fn parse_error_diagnostics(errs: Vec<Rich<'_, Token>>) -> Vec<Diagnostic> {
             if computed
                 && let Some((_, verb)) = TERM_ARGUMENTS
                     .iter()
-                    .find(|(label, _)| labels.contains(label))
+                    .find(|(label, _)| within.iter().any(|l| l == label))
             {
                 message.push_str(&format!(
                     "; an argument of `{verb}` is a name, a literal or a parameter, not a \

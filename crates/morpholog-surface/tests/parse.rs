@@ -489,9 +489,21 @@ fn a_computed_statement_argument_names_the_let_fix() {
 }
 
 /// A definition's `let` value without parentheses says the parentheses are the grammar, and
-/// never that the word after `=` is reserved.
+/// never that the word after `=` is reserved. An error inside the parentheses says nothing
+/// of them.
 #[test]
 fn a_definition_let_without_parentheses_names_them() {
+    let inside = parse_program(
+        "program demo\npredicate Pos(book: Subject, qty: Decimal)\n\
+         define too_big(book, cap):\n    let total = (cap + )\n    total > cap\n",
+    )
+    .expect_err("an operand is missing");
+    assert!(
+        inside
+            .iter()
+            .all(|d| !d.message.contains("goes in parentheses")),
+        "{inside:?}"
+    );
     for value in ["sum(q | Pos(book: book, qty: q))", "a + cap"] {
         let source = format!(
             "program demo\npredicate Pos(book: Subject, qty: Decimal)\n\
