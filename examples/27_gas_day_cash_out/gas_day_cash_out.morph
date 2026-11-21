@@ -86,6 +86,42 @@ predicate Renominates(new_message: Subject, prior_message: Subject)
 -- computed from the nominations, never stored: see `implied_flow_rate`.
 predicate ImpliedFlowRate(shipper: Subject, gas_day: Date, kwh_per_hour: Decimal)
 
+-- Two shippers can also trade gas without moving any: one "disposes" of
+-- a quantity on a day, the other "acquires" it, and each tells the
+-- network in a "trade nomination" naming the other (TPD C5). The two
+-- must correspond and arrive close enough together; then the pair is
+-- effective, and the quantity moves from one shipper's imbalance to the
+-- other's. A side with no counterpart in time is rejected; a pair whose
+-- quantities differ is rejected, both sides.
+predicate TradeNomination(message: Subject, shipper: Subject, gas_day: Date, side: Subject, counterparty: Subject, qty_kwh: Decimal)
+    unique by (message)
+    append only
+predicate TradeEffective(first: Subject, second: Subject)
+    unique by (first)
+    unique by (second)
+    append only
+predicate TradeRejected(message: Subject, reason: Subject)
+    unique by (message)
+    append only
+predicate TradeWithdrawn(message: Subject, withdrawal: Subject)
+    unique by (message)
+    append only
+
+-- The network's system answers every message it receives: it takes it
+-- as a nomination of some kind, or sets it aside, as malformed, of a
+-- kind this example does not model, or refused.
+predicate SetAside(message: Subject, reason: Subject)
+    unique by (message)
+    append only
+
+-- How far the network's system says its record of receipts is complete:
+-- every message it received before `until` is on the record. It speaks
+-- for one system, never for the world, and only moves forward. It is
+-- what lets a trade nomination be rejected for want of a counterpart
+-- without a timely counterpart turning up afterwards.
+predicate CompleteThrough(boundary: Subject, until: Timestamp)
+    append only
+
 -- The market's evidence: the day's balancing trades, National Gas's own
 -- buy and sell actions, and a statement that the day's actions are all
 -- on the record. "No action that day" is only known once that statement
@@ -182,6 +218,35 @@ define depends_on(v, prior):
 define stale(v):
     directly_stale(v) or (depends_on(v, w) and directly_stale(w))
 
+-- A trade nomination still waiting: not part of an effective pair, not
+-- rejected, not withdrawn.
+define trade_pending(m):
+    TradeNomination(message: m, ..) and not TradeEffective(m, _) and not TradeEffective(_, m) and not TradeRejected(m, _) and not TradeWithdrawn(m, _)
+
+-- When the counterpart to a trade nomination received at `at` is due
+-- (TPD C5.2.3(b)): by 06:00 on the gas day if the first side came before
+-- the day started, which is 06:00 on the day's own date, an hour into it;
+-- otherwise within the hour after it.
+-- Whether the network has read a message: taken it as a nomination, a
+-- trade nomination or a withdrawal, or set it aside. Each act that reads
+-- a message refuses one already read (`unread`), so a message is read
+-- once and one set aside never becomes a nomination afterwards.
+define message_read(m):
+    OutputNomination(message: m, ..) or TradeNomination(message: m, ..) or TradeWithdrawn(_, m) or SetAside(m, _)
+
+define counterpart_due(at, day_starts, six_am) = (if(at strictly_before day_starts, six_am, at + duration(PT60M)))
+
+-- Two trade nominations that correspond (C5.1.1, C5.2.1): the same day,
+-- opposite sides, each naming the other's shipper.
+define trades_correspond(a, b):
+    TradeNomination(a, shipper, gas_day, side, counterparty, _) and TradeNomination(b, counterparty, gas_day, other_side, shipper, _) and not (other_side = side)
+
+-- The later of two trade nominations arrived in time for the earlier
+-- (C5.2.3(b)). "Within 60 minutes before or after" is the same either
+-- way round, so the earlier one sets the deadline.
+define received_in_time(a, b):
+    TradeNomination(message: a, gas_day: gas_day, ..) and Received(a, #gemini, a_at) and Received(b, #gemini, b_at) and LocalDay(#gas_day, gas_day, day_starts, _, _, _) and LocalDay(#trade_counterpart_deadline, gas_day, six_am, _, _, _) and ((a_at at_or_before b_at and b_at at_or_before counterpart_due(a_at, day_starts, six_am)) or (b_at strictly_before a_at and a_at at_or_before counterpart_due(b_at, day_starts, six_am)))
+
 -- The implied flow rate of a shipper's nomination for a day (TPD C1.8).
 -- A first nomination flows evenly over 24 hours, even on a 23- or
 -- 25-hour day: the code divides by 24 whatever the day's length. Each
@@ -241,9 +306,13 @@ transformation publish_local_day(calendar, local_date: Date, starts_at: Timestam
 
 
 -- The network's system acknowledges a message. Only its own receiver
--- may say so: a shipper cannot admit a receipt for itself.
+-- may say so: a shipper cannot admit a receipt for itself. Nor may the
+-- receiver record a receipt before an instant it has already said its
+-- record is complete through: a decision taken on that word would no
+-- longer rest on what it said.
 transformation receive(message, boundary, received_at: Timestamp):
     require receiver: ReceiptAuthority(boundary, actor)
+    require record_open: not (CompleteThrough(boundary, until) and received_at strictly_before until)
     admit Received(message, boundary, received_at)
 
 -- A daily-metered output nomination (TPD C1.2, C2.3.1): due by 13:00 on
@@ -256,6 +325,7 @@ transformation nominate_output(message, shipper, gas_day: Date, qty_kwh: Decimal
     require gas_day_published: LocalDay(#gas_day, gas_day, _, _, _, _)
     require received_by_the_network: Received(message, #gemini, _)
     bind Received(message, #gemini, received_at)
+    require unread: not message_read(message)
     let preceding_day = gas_day - span(P1D)
     bind LocalDay(#dm_output_deadline, preceding_day, due, _, _, _)
     require in_time: received_at strictly_before due
@@ -284,6 +354,7 @@ transformation renominate(message, shipper, gas_day: Date, previous, effective_a
     require may_nominate: MayNominate(actor, shipper)
     require received_by_the_network: Received(message, #gemini, _)
     bind Received(message, #gemini, received_at)
+    require unread: not message_read(message)
     require earlier_nomination: CurrentNomination(shipper, gas_day, _)
     require previous_in_force: CurrentNomination(shipper, gas_day, previous)
     bind OutputNomination(previous, shipper, gas_day, prior_qty)
@@ -305,6 +376,105 @@ transformation renominate(message, shipper, gas_day: Date, previous, effective_a
     retract CurrentNomination(shipper, gas_day, previous)
     admit Renominates(message, previous)
     admit CurrentNomination(shipper, gas_day, message)
+
+
+-- A trade nomination (TPD C5.2). It names the day, its side, the
+-- shipper on the other side and the quantity. It may be made from the
+-- start of the gas day thirty days before to 03:00 on the gas day,
+-- judged on its receipt, between two different shippers.
+transformation trade_nominate(message, shipper, gas_day: Date, side, counterparty, qty_kwh: Decimal):
+    require may_nominate: MayNominate(actor, shipper)
+    require received_by_the_network: Received(message, #gemini, _)
+    bind Received(message, #gemini, received_at)
+    require unread: not message_read(message)
+    require known_side: side = #disposing or side = #acquiring
+    require two_shippers: not (counterparty = shipper)
+    let opening_day = gas_day - span(P30D)
+    let next_date = gas_day + span(P1D)
+    bind LocalDay(#gas_day, opening_day, opens, _, _, _)
+    bind LocalDay(#renomination_end, next_date, closes, _, _, _)
+    require in_window: opens at_or_before received_at and received_at at_or_before closes
+    admit TradeNomination(message, shipper, gas_day, side, counterparty, qty_kwh)
+
+-- The network's system pairs two waiting trade nominations. They must
+-- correspond, and the later must arrive in time for the earlier. Then
+-- the pair is effective, or, if the quantities differ, both sides are
+-- rejected (C5.2.3(c)). A trade nomination names no trade, so with
+-- several sides waiting the network chooses the pair; but it may not
+-- reject a pair for unequal quantities while either side has an equal
+-- partner waiting in time, which would discard a pair the code makes
+-- effective. That limit is this example's (`example_trade_pairing_v1`).
+transformation match_trades(first, second):
+    require network: ReceiptAuthority(#gemini, actor)
+    require both_waiting: trade_pending(first) and trade_pending(second)
+    require corresponding: trades_correspond(first, second)
+    require in_time: received_in_time(first, second)
+    bind TradeNomination(message: first, qty_kwh: first_qty, ..)
+    bind TradeNomination(message: second, qty_kwh: second_qty, ..)
+    require no_equal_pair: first_qty = second_qty or not ((trades_correspond(first, o) and not (o = second) and trade_pending(o) and received_in_time(first, o) and TradeNomination(message: o, qty_kwh: first_qty, ..)) or (trades_correspond(second, o) and not (o = first) and trade_pending(o) and received_in_time(second, o) and TradeNomination(message: o, qty_kwh: second_qty, ..)))
+    if first_qty = second_qty:
+        admit TradeEffective(first, second)
+    else:
+        admit TradeRejected(first, #quantity_mismatch)
+        admit TradeRejected(second, #quantity_mismatch)
+
+-- A waiting trade nomination with no counterpart in time is rejected
+-- (C5.2.3(b)). But only once the network's system reports its record
+-- complete past the counterpart's deadline, so no timely counterpart can
+-- still arrive, and only if no waiting counterpart came in time. That
+-- evidence rule is this example's, not a clause. Complete through an
+-- instant covers what came before it, and a counterpart at the deadline
+-- exactly is in time, so the record must be complete past the deadline.
+-- A complete record of receipts is not yet a complete record of trade
+-- nominations: a message received in time may not have been read. So
+-- every message received by the deadline must have been read
+-- (`example_all_receipts_read_v1`), and one read is never read again.
+transformation expire_trade(message):
+    require network: ReceiptAuthority(#gemini, actor)
+    require waiting: trade_pending(message)
+    bind TradeNomination(message: message, gas_day: gas_day, ..)
+    bind Received(message, #gemini, received_at)
+    bind LocalDay(#gas_day, gas_day, day_starts, _, _, _)
+    bind LocalDay(#trade_counterpart_deadline, gas_day, six_am, _, _, _)
+    let due = counterpart_due(received_at, day_starts, six_am)
+    require record_complete: CompleteThrough(#gemini, until) and due strictly_before until
+    require every_receipt_read: not (Received(m, #gemini, at) and at at_or_before due and not message_read(m))
+    require no_counterpart_in_time: not (trades_correspond(message, o) and trade_pending(o) and received_in_time(message, o))
+    admit TradeRejected(message, #no_counterpart)
+
+-- A trade nomination withdrawn by its shipper's nominator, any time
+-- before the gas day and never within it (C5.2.4). The withdrawal is a
+-- message of its own, judged on its receipt. The code also allows
+-- withdrawing one side of a pair already effective, before the day, but
+-- does not say what becomes of the other side; this example does not
+-- model it and refuses. Nothing amends a trade nomination here: the code
+-- allows no amendment within the day and says nothing of one before it.
+transformation withdraw_trade(message, withdrawal):
+    bind TradeNomination(message, shipper, gas_day, _, _, _)
+    require may_nominate: MayNominate(actor, shipper)
+    require received_by_the_network: Received(withdrawal, #gemini, _)
+    bind Received(withdrawal, #gemini, withdrawn_at)
+    require unread: not message_read(withdrawal)
+    require standing: not TradeRejected(message, _) and not TradeWithdrawn(message, _)
+    bind LocalDay(#gas_day, gas_day, day_starts, _, _, _)
+    require before_the_day: withdrawn_at strictly_before day_starts
+    require unpaired: not TradeEffective(message, _) and not TradeEffective(_, message)
+    admit TradeWithdrawn(message, withdrawal)
+
+-- The network's system sets a message aside, once, and only one it has
+-- not read already.
+transformation set_aside(message, reason):
+    bind Received(message, boundary, _)
+    require receiver: ReceiptAuthority(boundary, actor)
+    require unread: not message_read(message)
+    admit SetAside(message, reason)
+
+-- The network's system reports how far its record is complete. It only
+-- moves forward.
+transformation report_complete_through(boundary, until: Timestamp):
+    require receiver: ReceiptAuthority(boundary, actor)
+    require forward: not (CompleteThrough(boundary, u) and until at_or_before u)
+    admit CompleteThrough(boundary, until)
 
 
 -- Market data, from its appointed source only.

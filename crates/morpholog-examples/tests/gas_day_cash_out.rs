@@ -4,7 +4,8 @@
 //! makes a price and every quiet day that leaned on it stale; and a
 //! correction beside the original statement; and renominations, each
 //! judged on its window, effective hour and lead time, with the implied
-//! flow rate they leave.
+//! flow rate they leave; and trade nominations that pair, are rejected,
+//! expire on the network's own completeness evidence, or are withdrawn.
 //!
 //! The figures are the independent reference's frozen expectations
 //! (computed with exact fractions from the UNC text), not values read back
@@ -59,6 +60,7 @@ fn set_up() -> State {
         "dm_output_deadline",
         "renomination_start",
         "renomination_end",
+        "trade_counterpart_deadline",
     ] {
         s = accept(
             s,
@@ -124,6 +126,21 @@ fn set_up() -> State {
             "2026-10-25",
             "2026-10-25T03:00:00Z",
             "2026-10-26T03:00:00Z",
+        ),
+        // The gas day thirty days before, when its trade nominations may
+        // first be made, and 06:00 London on the gas day, in summer time,
+        // when a counterpart to one made before the day is due.
+        (
+            "gas_day",
+            "2026-09-24",
+            "2026-09-24T04:00:00Z",
+            "2026-09-25T04:00:00Z",
+        ),
+        (
+            "trade_counterpart_deadline",
+            "2026-10-24",
+            "2026-10-24T05:00:00Z",
+            "2026-10-25T06:00:00Z",
         ),
     ];
     for (calendar, local_date, starts_at, ends_at) in rows {
@@ -466,6 +483,558 @@ fn a_renomination_is_judged_on_its_window_hour_and_lead_and_moves_the_implied_ra
     let current: Vec<_> = s.claims_for("CurrentNomination").collect();
     assert_eq!(current.len(), 1);
     assert_eq!(current[0].args[2], subj("ren_small"));
+}
+
+/// One step of the trade-nomination story, with the gate that refuses it,
+/// if any.
+enum Event {
+    /// Message, shipper, side, counterparty, quantity, receipt.
+    Submit(
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        i64,
+        &'static str,
+        Option<&'static str>,
+    ),
+    /// A message held and read later: message, its receipt.
+    Receive(&'static str, &'static str),
+    /// A held message read as a trade nomination: message, shipper, side,
+    /// counterparty, quantity.
+    ReadTrade(
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        i64,
+        Option<&'static str>,
+    ),
+    /// A held message the network takes as no nomination: message, reason.
+    SetAside(&'static str, &'static str, Option<&'static str>),
+    /// An output nomination for the day: message, shipper, quantity, receipt.
+    Output(&'static str, &'static str, i64, &'static str),
+    /// A held message read as an output nomination: message, shipper,
+    /// quantity.
+    ReadOutput(&'static str, &'static str, i64, Option<&'static str>),
+    /// A held message read as a renomination: message, shipper, previous,
+    /// effective hour, quantity.
+    ReadRenomination(
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        i64,
+        Option<&'static str>,
+    ),
+    /// A held message read as a withdrawal: the trade nomination, the
+    /// withdrawal.
+    ReadWithdrawal(&'static str, &'static str, Option<&'static str>),
+    /// First, second.
+    Match(&'static str, &'static str, Option<&'static str>),
+    /// Message, how far the network's record is complete.
+    Expire(&'static str, &'static str, Option<&'static str>),
+    /// Message, the withdrawal's receipt.
+    Withdraw(&'static str, &'static str, Option<&'static str>),
+}
+
+/// Trade nominations for the 25-hour gas day of 24 October 2026 (TPD C5),
+/// in the reference's order and with its frozen outcomes: the window from
+/// thirty days before to 03:00 on the day, a counterpart due by 06:00 on
+/// the day for a side made before it and within the hour otherwise, a
+/// pair whose quantities differ rejected on both sides, an expiry only
+/// once the network's record is complete past the deadline, every
+/// message received by it is read and no counterpart waits in time, and
+/// a withdrawal before the day only.
+#[test]
+fn trade_nominations_pair_expire_and_withdraw_as_the_code_says() {
+    let mut s = set_up();
+    s = accept(
+        s,
+        "grant_nomination",
+        "operator",
+        vec![subj("nominator_a"), subj("shipper_b")],
+    );
+    let events = [
+        Event::Submit(
+            "tn_early",
+            "shipper_a",
+            "disposing",
+            "shipper_b",
+            10_000,
+            "2026-09-24T03:59:00Z",
+            Some("in_window"),
+        ),
+        Event::SetAside("tn_early", "refused", None),
+        Event::Output("on_a", "shipper_a", 2_400_000, "2026-10-23T08:30:00Z"),
+        Event::Submit(
+            "tn_self",
+            "shipper_a",
+            "disposing",
+            "shipper_a",
+            10_000,
+            "2026-10-23T09:00:00Z",
+            Some("two_shippers"),
+        ),
+        Event::SetAside("tn_self", "refused", None),
+        Event::ReadOutput("tn_self", "shipper_b", 1_000_000, Some("unread")),
+        Event::Submit(
+            "tn_a1",
+            "shipper_a",
+            "disposing",
+            "shipper_b",
+            100_000,
+            "2026-10-23T10:00:00Z",
+            None,
+        ),
+        Event::Submit(
+            "tn_a2",
+            "shipper_a",
+            "disposing",
+            "shipper_b",
+            50_000,
+            "2026-10-23T11:00:00Z",
+            None,
+        ),
+        Event::Submit(
+            "tn_a6",
+            "shipper_a",
+            "disposing",
+            "shipper_b",
+            10_000,
+            "2026-10-23T12:00:00Z",
+            None,
+        ),
+        Event::Submit(
+            "tn_a8",
+            "shipper_a",
+            "disposing",
+            "shipper_b",
+            7_000,
+            "2026-10-23T13:00:00Z",
+            None,
+        ),
+        Event::Submit(
+            "tn_b8",
+            "shipper_b",
+            "acquiring",
+            "shipper_a",
+            7_000,
+            "2026-10-23T14:00:00Z",
+            None,
+        ),
+        Event::Match("tn_a8", "tn_b8", None),
+        Event::Withdraw("tn_a8", "2026-10-23T20:00:00Z", Some("unpaired")),
+        Event::SetAside("withdraw_tn_a8", "refused", None),
+        Event::ReadWithdrawal("tn_a2", "withdraw_tn_a8", Some("unread")),
+        Event::Withdraw("tn_a6", "2026-10-24T03:00:00Z", None),
+        Event::Submit(
+            "tn_b1",
+            "shipper_b",
+            "acquiring",
+            "shipper_a",
+            100_000,
+            "2026-10-24T04:30:00Z",
+            None,
+        ),
+        Event::Match("tn_a1", "tn_b1", None),
+        Event::Withdraw("tn_a1", "2026-10-24T04:45:00Z", Some("before_the_day")),
+        Event::SetAside("withdraw_tn_a1", "refused", None),
+        Event::ReadRenomination(
+            "withdraw_tn_a1",
+            "shipper_a",
+            "on_a",
+            "2026-10-24T06:00:00Z",
+            2_400_000,
+            Some("unread"),
+        ),
+        Event::Submit(
+            "tn_b2",
+            "shipper_b",
+            "acquiring",
+            "shipper_a",
+            50_000,
+            "2026-10-24T05:01:00Z",
+            None,
+        ),
+        Event::Match("tn_a2", "tn_b2", Some("in_time")),
+        Event::Expire("tn_a2", "2026-10-24T04:59:00Z", Some("record_complete")),
+        Event::Expire("tn_a2", "2026-10-24T05:00:00Z", Some("record_complete")),
+        Event::Expire("tn_a2", "2026-10-24T05:01:00Z", None),
+        Event::Submit(
+            "tn_b2x",
+            "shipper_b",
+            "acquiring",
+            "shipper_a",
+            50_000,
+            "2026-10-24T04:50:00Z",
+            Some("record_open"),
+        ),
+        Event::Submit(
+            "tn_a3",
+            "shipper_a",
+            "disposing",
+            "shipper_b",
+            30_000,
+            "2026-10-24T12:00:00Z",
+            None,
+        ),
+        Event::Submit(
+            "tn_b3",
+            "shipper_b",
+            "acquiring",
+            "shipper_a",
+            30_000,
+            "2026-10-24T12:59:00Z",
+            None,
+        ),
+        Event::Match("tn_a3", "tn_b3", None),
+        Event::Submit(
+            "tn_a4",
+            "shipper_a",
+            "disposing",
+            "shipper_b",
+            20_000,
+            "2026-10-24T13:00:00Z",
+            None,
+        ),
+        Event::Submit(
+            "tn_b4",
+            "shipper_b",
+            "acquiring",
+            "shipper_a",
+            20_000,
+            "2026-10-24T14:01:00Z",
+            None,
+        ),
+        Event::Match("tn_a4", "tn_b4", Some("in_time")),
+        Event::Submit(
+            "tn_a5",
+            "shipper_a",
+            "disposing",
+            "shipper_b",
+            40_000,
+            "2026-10-24T15:00:00Z",
+            None,
+        ),
+        Event::Submit(
+            "tn_b5",
+            "shipper_b",
+            "acquiring",
+            "shipper_a",
+            45_000,
+            "2026-10-24T15:10:00Z",
+            None,
+        ),
+        Event::Match("tn_a5", "tn_b5", None),
+        Event::Expire("tn_b2", "2026-10-24T15:30:00Z", None),
+        Event::Expire("tn_a4", "2026-10-24T15:30:00Z", None),
+        Event::Expire("tn_b4", "2026-10-24T15:30:00Z", None),
+        Event::Submit(
+            "tn_a7",
+            "shipper_a",
+            "disposing",
+            "shipper_b",
+            5_000,
+            "2026-10-24T16:00:00Z",
+            None,
+        ),
+        Event::Submit(
+            "tn_b7",
+            "shipper_b",
+            "acquiring",
+            "shipper_a",
+            5_000,
+            "2026-10-24T16:30:00Z",
+            None,
+        ),
+        Event::Expire(
+            "tn_a7",
+            "2026-10-24T17:30:00Z",
+            Some("no_counterpart_in_time"),
+        ),
+        Event::Match("tn_a7", "tn_b7", None),
+        Event::Submit(
+            "tn_a9",
+            "shipper_a",
+            "disposing",
+            "shipper_b",
+            40_000,
+            "2026-10-24T18:00:00Z",
+            None,
+        ),
+        Event::Submit(
+            "tn_a10",
+            "shipper_a",
+            "disposing",
+            "shipper_b",
+            45_000,
+            "2026-10-24T18:05:00Z",
+            None,
+        ),
+        Event::Submit(
+            "tn_b9",
+            "shipper_b",
+            "acquiring",
+            "shipper_a",
+            45_000,
+            "2026-10-24T18:10:00Z",
+            None,
+        ),
+        Event::Match("tn_a9", "tn_b9", Some("no_equal_pair")),
+        Event::Match("tn_a10", "tn_b9", None),
+        Event::Submit(
+            "tn_a11",
+            "shipper_a",
+            "disposing",
+            "shipper_b",
+            30_000,
+            "2026-10-24T19:00:00Z",
+            None,
+        ),
+        Event::Submit(
+            "tn_b11",
+            "shipper_b",
+            "acquiring",
+            "shipper_a",
+            35_000,
+            "2026-10-24T19:05:00Z",
+            None,
+        ),
+        Event::Submit(
+            "tn_b12",
+            "shipper_b",
+            "acquiring",
+            "shipper_a",
+            30_000,
+            "2026-10-24T19:10:00Z",
+            None,
+        ),
+        Event::Match("tn_a11", "tn_b11", Some("no_equal_pair")),
+        Event::Match("tn_a11", "tn_b12", None),
+        Event::Withdraw("tn_a9", "2026-10-24T19:30:00Z", Some("before_the_day")),
+        Event::SetAside("withdraw_tn_a9", "refused", None),
+        Event::Submit(
+            "tn_a13",
+            "shipper_a",
+            "disposing",
+            "shipper_b",
+            25_000,
+            "2026-10-24T20:10:00Z",
+            None,
+        ),
+        Event::Receive("tn_b13", "2026-10-24T20:40:00Z"),
+        Event::Expire("tn_a13", "2026-10-24T21:11:00Z", Some("every_receipt_read")),
+        Event::ReadTrade(
+            "tn_b13",
+            "shipper_b",
+            "acquiring",
+            "shipper_a",
+            25_000,
+            None,
+        ),
+        Event::Match("tn_a13", "tn_b13", None),
+        Event::Submit(
+            "tn_a14",
+            "shipper_a",
+            "disposing",
+            "shipper_b",
+            15_000,
+            "2026-10-24T21:20:00Z",
+            None,
+        ),
+        Event::Receive("msg_garbled", "2026-10-24T22:20:00Z"),
+        Event::Expire("tn_a14", "2026-10-24T22:21:00Z", Some("every_receipt_read")),
+        Event::SetAside("msg_garbled", "malformed", None),
+        Event::Expire("tn_a14", "2026-10-24T22:21:00Z", None),
+        Event::ReadTrade(
+            "msg_garbled",
+            "shipper_b",
+            "acquiring",
+            "shipper_a",
+            15_000,
+            Some("unread"),
+        ),
+        Event::SetAside("tn_a14", "refused", Some("unread")),
+        Event::Submit(
+            "tn_late",
+            "shipper_a",
+            "disposing",
+            "shipper_b",
+            10_000,
+            "2026-10-25T03:01:00Z",
+            Some("in_window"),
+        ),
+        Event::SetAside("tn_late", "refused", None),
+    ];
+    for event in events {
+        let (name, actor, args, refusal) = match event {
+            Event::Submit(message, shipper, side, counterparty, qty, received_at, refusal) => {
+                // A receipt before an instant the record is complete through
+                // is refused at the receipt, before any nomination.
+                if refusal == Some("record_open") {
+                    let args = vec![subj(message), subj("gemini"), ts(received_at)];
+                    refused_by(
+                        &refuse(&s, "receive", "gemini_receiver", args),
+                        "record_open",
+                    );
+                    continue;
+                }
+                s = receive(s, message, received_at);
+                let args = vec![
+                    subj(message),
+                    subj(shipper),
+                    date("2026-10-24"),
+                    subj(side),
+                    subj(counterparty),
+                    dec(qty),
+                ];
+                ("trade_nominate", "nominator_a", args, refusal)
+            }
+            Event::Receive(message, received_at) => {
+                s = receive(s, message, received_at);
+                continue;
+            }
+            Event::ReadTrade(message, shipper, side, counterparty, qty, refusal) => {
+                let args = vec![
+                    subj(message),
+                    subj(shipper),
+                    date("2026-10-24"),
+                    subj(side),
+                    subj(counterparty),
+                    dec(qty),
+                ];
+                ("trade_nominate", "nominator_a", args, refusal)
+            }
+            Event::SetAside(message, reason, refusal) => (
+                "set_aside",
+                "gemini_receiver",
+                vec![subj(message), subj(reason)],
+                refusal,
+            ),
+            Event::Output(message, shipper, qty, received_at) => {
+                s = receive(s, message, received_at);
+                let args = vec![subj(message), subj(shipper), date("2026-10-24"), dec(qty)];
+                ("nominate_output", "nominator_a", args, None)
+            }
+            Event::ReadOutput(message, shipper, qty, refusal) => {
+                let args = vec![subj(message), subj(shipper), date("2026-10-24"), dec(qty)];
+                ("nominate_output", "nominator_a", args, refusal)
+            }
+            Event::ReadRenomination(message, shipper, previous, effective_at, qty, refusal) => {
+                let args = vec![
+                    subj(message),
+                    subj(shipper),
+                    date("2026-10-24"),
+                    subj(previous),
+                    ts(effective_at),
+                    dec(qty),
+                ];
+                ("renominate", "nominator_a", args, refusal)
+            }
+            Event::ReadWithdrawal(message, withdrawal, refusal) => (
+                "withdraw_trade",
+                "nominator_a",
+                vec![subj(message), subj(withdrawal)],
+                refusal,
+            ),
+            Event::Match(first, second, refusal) => (
+                "match_trades",
+                "gemini_receiver",
+                vec![subj(first), subj(second)],
+                refusal,
+            ),
+            Event::Expire(message, complete_through, refusal) => {
+                let known = s
+                    .claims_for("CompleteThrough")
+                    .any(|c| c.args[1] == ts(complete_through));
+                if !known {
+                    s = accept(
+                        s,
+                        "report_complete_through",
+                        "gemini_receiver",
+                        vec![subj("gemini"), ts(complete_through)],
+                    );
+                }
+                (
+                    "expire_trade",
+                    "gemini_receiver",
+                    vec![subj(message)],
+                    refusal,
+                )
+            }
+            Event::Withdraw(message, received_at, refusal) => {
+                let withdrawal = format!("withdraw_{message}");
+                s = receive(s, &withdrawal, received_at);
+                (
+                    "withdraw_trade",
+                    "nominator_a",
+                    vec![subj(message), subj(&withdrawal)],
+                    refusal,
+                )
+            }
+        };
+        match refusal {
+            Some(gate) => refused_by(&refuse(&s, name, actor, args), gate),
+            None => s = accept(s, name, actor, args),
+        }
+    }
+    let pairs: Vec<_> = s
+        .claims_for("TradeEffective")
+        .map(|c| (c.args[0].clone(), c.args[1].clone()))
+        .collect();
+    assert_eq!(
+        pairs,
+        [
+            ("tn_a8", "tn_b8"),
+            ("tn_a1", "tn_b1"),
+            ("tn_a3", "tn_b3"),
+            ("tn_a7", "tn_b7"),
+            ("tn_a10", "tn_b9"),
+            ("tn_a11", "tn_b12"),
+            ("tn_a13", "tn_b13"),
+        ]
+        .map(|(a, b)| (subj(a), subj(b)))
+    );
+    let mut rejected: Vec<_> = s
+        .claims_for("TradeRejected")
+        .map(|c| (c.args[0].clone(), c.args[1].clone()))
+        .collect();
+    rejected.sort_by_key(|r| format!("{r:?}"));
+    assert_eq!(
+        rejected,
+        [
+            ("tn_a14", "no_counterpart"),
+            ("tn_a2", "no_counterpart"),
+            ("tn_a4", "no_counterpart"),
+            ("tn_a5", "quantity_mismatch"),
+            ("tn_b2", "no_counterpart"),
+            ("tn_b4", "no_counterpart"),
+            ("tn_b5", "quantity_mismatch"),
+        ]
+        .map(|(m, r)| (subj(m), subj(r)))
+    );
+    let withdrawn: Vec<_> = s
+        .claims_for("TradeWithdrawn")
+        .map(|c| c.args[0].clone())
+        .collect();
+    assert_eq!(withdrawn, [subj("tn_a6")]);
+    // A shipper's nominator cannot pair, expire or set aside trade
+    // nominations: that is the network's system's act.
+    refused_by(
+        &refuse(&s, "expire_trade", "nominator_a", vec![subj("tn_a9")]),
+        "network",
+    );
+    s = receive(s, "msg_unread", "2026-10-25T03:30:00Z");
+    refused_by(
+        &refuse(
+            &s,
+            "set_aside",
+            "nominator_a",
+            vec![subj("msg_unread"), subj("malformed")],
+        ),
+        "receiver",
+    );
 }
 
 const TRADES: [(&str, &str, i64, &str); 11] = [

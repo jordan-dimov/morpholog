@@ -21,6 +21,10 @@ The rules are the Uniform Network Code: TPD Sections C and F v6.27 (14 September
 | `OutputNomination(message, shipper, gas_day, qty_kwh)` | An admitted nomination, first or renomination. |
 | `Renomination(message, effective_at)` | A nomination that replaces the one in force, which still applies until the hour the shipper names. |
 | `CurrentNomination(shipper, gas_day, message)` | The nomination in force, replaced only through `Renominates`. |
+| `TradeNomination(message, shipper, gas_day, side, counterparty, qty_kwh)` | One side of a trade between two shippers: disposing or acquiring, naming the other. |
+| `TradeEffective(first, second)`, `TradeRejected(message, reason)`, `TradeWithdrawn(message, withdrawal)` | A pair that took effect; a side rejected, for want of a counterpart in time or for a quantity that differs; a side withdrawn before the day. |
+| `SetAside(message, reason)` | A message the network's system read and took as no nomination: malformed, of a kind the example does not model, or refused. |
+| `CompleteThrough(boundary, until)` | The network's system says every message it received before `until` is on the record. It only moves forward, and no receipt before `until` may be recorded after it. |
 | `ImpliedFlowRate(shipper, gas_day, kwh_per_hour)` | A view: the rate the nomination in force implies from its effective hour to the end of the day, from the chain that led to it. |
 | `OcmTrade(trade, gas_day, qty_kwh, price_p_per_kwh)` | A balancing trade, from the appointed market data source. |
 | `SapDetermination(version, gas_day, sap_p_per_kwh, precision)` | One SAP, with an identity, the policy it was kept to, and (`SapUsedTrade`, `SapUsedPrior`) the evidence it used. |
@@ -36,6 +40,10 @@ The rules are the Uniform Network Code: TPD Sections C and F v6.27 (14 September
 | `received_by_the_network`, `in_time` | A nomination's receipt comes from the network's own system, and is before the published 13:00 deadline on the day before. |
 | `first_or_stale` | A new determination or statement replaces the current one only when that one is stale. |
 | `previous_in_force`, `after_the_previous` | A renomination names the nomination it revises, which must still be the one in force, and must have been received before it. |
+| `corresponding`, `in_time` | Two trade nominations pair only on the same day, on opposite sides, each naming the other's shipper, the second by 06:00 on the day when the first came before it, otherwise within the hour. |
+| `record_complete`, `every_receipt_read`, `no_counterpart_in_time`, `record_open` | A side is rejected for want of a counterpart only once the network's record is complete past the deadline, every message received by the deadline has been read, and no waiting counterpart came in time; and no receipt may then be recorded inside the span the record was said to be complete for. |
+| `unread` | A message is read once: one already taken as a nomination or set aside is not read again, as an output nomination, a renomination, a trade nomination or a withdrawal. |
+| `no_equal_pair`, `unpaired` | A pair is not rejected for unequal quantities while either side has an equal partner waiting in time; a side already paired is not withdrawn. |
 | `in_window`, `within_the_day`, `on_the_hour`, `lead_time`, `in_order`, `rate_not_negative` | A renomination's receipt between 15:00 London the day before and 03:00 on the gas day; an effective hour inside the day, on the hour, at least an hour after the receipt, and not before the one it replaces takes effect; and no change so deep and late that the gas would have to flow backwards. |
 | `sap_not_stale`, `inputs_current` | No statement uses, and no quiet day leans on, a SAP the record already knows is stale. |
 
@@ -43,6 +51,7 @@ The rules are the Uniform Network Code: TPD Sections C and F v6.27 (14 September
 | --- | --- |
 | `publish_local_day` | A calendar row, as `generate local-days` writes it, from the calendar's publisher. |
 | `receive`, `nominate_output`, `renominate` | A receipt from the network's receiver; a nomination or a renomination judged on it. |
+| `trade_nominate`, `match_trades`, `expire_trade`, `withdraw_trade`, `set_aside`, `report_complete_through` | One side of a trade, from the shipper's nominator; pairing and expiry, by the network's system; a withdrawal before the day; a message the network takes as no nomination; how far the network's record is complete. |
 | `report_trade`, `report_buy_action`, `report_sell_action`, `report_actions_complete`, `publish_default_smp` | Market evidence, from its source. |
 | `determine_sap`, `determine_fallback_sap` | A SAP computed from the record, naming what it used. |
 | `record_imbalance`, `issue_statement` | A shipper's imbalance; a statement computed from the current SAP. |
@@ -55,7 +64,7 @@ The code states no precision for SAP, for charging or for a flow rate, and a dec
 - `example_charging_price_4dp_v1`: the calculated SMP to four decimal places, halves away from zero, before it is multiplied by the imbalance. The charge is in pence and is not rounded to whole pence.
 - `example_flow_rate_precision_v1`: each term of a nomination's implied flow rate, the first quantity's 1/24 share and each renomination's change over the hours left, to six decimal places of kWh an hour, halves away from zero, before they are added.
 
-They are illustrative, not the code's settlement calculation, so these are not production-accurate cash-out amounts. Two readings of the code are the example's too. On a day National Gas took no balancing action, SMP is SAP plus or minus the default margin, and only once the day's actions are reported complete. And a renomination may not take effect before the one it replaces (`example_renomination_order_v1`): the code says a renomination replaces the nomination it names, which still applies until the new one's effective time (C4.1.5(a), C4.1.8), but not what an earlier effective time does to it.
+They are illustrative, not the code's settlement calculation, so these are not production-accurate cash-out amounts. Four readings of the code are the example's too. On a day National Gas took no balancing action, SMP is SAP plus or minus the default margin, and only once the day's actions are reported complete. And a renomination may not take effect before the one it replaces (`example_renomination_order_v1`): the code says a renomination replaces the nomination it names, which still applies until the new one's effective time (C4.1.5(a), C4.1.8), but not what an earlier effective time does to it. And a trade nomination with no counterpart in time is rejected only once the network's system reports its record complete past the counterpart's deadline, so a timely counterpart cannot arrive after the rejection: an evidence rule, not a clause. A complete record of receipts is not yet a complete record of trade nominations, so every message received by the deadline must also have been read, as a nomination of some kind or set aside (`example_all_receipts_read_v1`). A trade nomination names no trade, so with several sides waiting the network chooses the pair, but may not reject one for unequal quantities while either side has an equal partner waiting in time (`example_trade_pairing_v1`). Nothing amends a trade nomination: the code forbids amendment within the day and is silent before it.
 
 ## How to run it
 
@@ -69,7 +78,7 @@ morpholog generate local-days examples/27_gas_day_cash_out/gas_day_cash_out.morp
   | morpholog propose examples/27_gas_day_cash_out/gas_day_cash_out.morph --batch - --database-url "$URL"
 ```
 
-The tests in `crates/morpholog-examples/tests/gas_day_cash_out.rs` walk the story: the nomination admitted, refused as late, refused for authority, and a forged receipt refused; seven trade days and two chained quiet days; the statement; the late trade, the review it raises, and the correction; and renominations on the 25-hour gas day, each refused by the clause it breaks or admitted with the rate the reference computed.
+The tests in `crates/morpholog-examples/tests/gas_day_cash_out.rs` walk the story: the nomination admitted, refused as late, refused for authority, and a forged receipt refused; seven trade days and two chained quiet days; the statement; the late trade, the review it raises, and the correction; renominations on the 25-hour gas day, each refused by the clause it breaks or admitted with the rate the reference computed; and trade nominations that pair, are rejected, expire, wait for a message read late, or are withdrawn, as the reference says.
 
 ## What it does not cover
 
@@ -80,4 +89,6 @@ Two limits of this slice:
 
 The renominations leave out the 15-minute lead time of very large daily-metered sites (every site here takes the hour), the network's own NDM renominations, the deemed approval of C4.1.7, a "New Renomination" with no earlier nomination to revise, and revising a first nomination before its 13:00 deadline: a second first nomination for the day is refused.
 
-Not modelled yet: trade nominations, the OCM operator's role, Gemini's clock-change outage, completeness evidence for closing a receipt window, the EU timetable, capacity, and multi-day trades. Those are the next steps for this example, on the same programme.
+Trade nominations leave out their effect on each shipper's imbalance (TPD E5): the example records an imbalance as its owner reports it. Also left out: withdrawing one side of a pair already effective, which the code allows before the day without saying what becomes of the other side; National Gas's system trades, single-sided trade nominations, and the OCM operator's nominations on behalf of both sides.
+
+Not modelled yet: the OCM operator's role, Gemini's clock-change outage, closing a nomination window on the completeness evidence trade nominations already use, the EU timetable, capacity, and multi-day trades. Those are the next steps for this example, on the same programme.
