@@ -3772,8 +3772,9 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
             }
             let body = lifted.probes;
             // The sum target must be a bound decimal variable or a decimal
-            // literal, or, in a live view, arithmetic over them computed
-            // per row; any other computed target refuses.
+            // literal, or, in a live view, arithmetic over them or a value
+            // definition's call, computed per row; any other computed
+            // target refuses.
             let mut kind_report = ErrorReport::SumKind;
             let (val, kind_test, can_meet_foreign): (String, String, bool) = match value.as_ref() {
                 ValueExpr::Term(Term::Var(v)) => {
@@ -3803,7 +3804,9 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
                 ),
                 // NULL exactly on a row the kernel cannot compute, so the
                 // row drops out of the total and its flag reports it.
-                ValueExpr::Arith { .. } | ValueExpr::Call { .. } if ctx.computed_targets => {
+                ValueExpr::Arith { .. } | ValueExpr::Call { .. } | ValueExpr::Defined { .. }
+                    if ctx.computed_targets =>
+                {
                     let amount = arith::row_target(value, &r.env, ctx)?;
                     kind_report = ErrorReport::SumTarget;
                     (amount.clone(), format!("bool_or(({amount}) IS NULL)"), true)
