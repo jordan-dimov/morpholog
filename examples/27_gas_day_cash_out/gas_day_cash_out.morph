@@ -69,6 +69,23 @@ predicate OutputNomination(message: Subject, shipper: Subject, gas_day: Date, qt
     unique by (message)
     append only
 
+-- A shipper can change its mind during the day: a "renomination" is a
+-- new nomination for the same day that takes over from the one in
+-- force, from an hour the shipper names. Each one is a nomination of
+-- its own, kept forever; the record says which is current and which
+-- one each replaced.
+predicate Renomination(message: Subject, effective_at: Timestamp)
+    unique by (message)
+    append only
+predicate CurrentNomination(shipper: Subject, gas_day: Date, message: Subject)
+    current pointer by (shipper, gas_day)
+    superseded via Renominates
+predicate Renominates(new_message: Subject, prior_message: Subject)
+
+-- The rate gas is expected to flow at, in kWh an hour (TPD C1.8). It is
+-- computed from the nominations, never stored: see `implied_flow_rate`.
+predicate ImpliedFlowRate(shipper: Subject, gas_day: Date, kwh_per_hour: Decimal)
+
 -- The market's evidence: the day's balancing trades, National Gas's own
 -- buy and sell actions, and a statement that the day's actions are all
 -- on the record. "No action that day" is only known once that statement
@@ -165,6 +182,19 @@ define depends_on(v, prior):
 define stale(v):
     directly_stale(v) or (depends_on(v, w) and directly_stale(w))
 
+-- The implied flow rate of a shipper's nomination for a day (TPD C1.8).
+-- A first nomination flows evenly over 24 hours, even on a 23- or
+-- 25-hour day: the code divides by 24 whatever the day's length. Each
+-- renomination then adds its change in quantity, spread over the hours
+-- left from its effective hour to the end of the day. Renominations
+-- form one chain per shipper and day, each replacing the one current
+-- when it came, so the rate is the first quantity's share plus every
+-- change since, summed. The code states no precision for the rate, and
+-- a decimal cannot hold a long quotient added to a rate, so the example
+-- states one, `example_flow_rate_precision_v1`: each term to six decimal
+-- places of kWh an hour, halves away from zero, before they are added.
+define implied_flow_rate(shipper, gas_day) = (sum(round(q / 24, 0.000001) | OutputNomination(m, shipper, gas_day, q) and not Renomination(m, _)) + sum(round((q - prior_q) / ((day_ends - e) / duration(PT1H)), 0.000001) | Renomination(m, e) and OutputNomination(m, shipper, gas_day, q) and Renominates(m, prior) and OutputNomination(prior, _, _, prior_q) and LocalDay(#gas_day, gas_day, _, day_ends, _, _)))
+
 
 -- Set-up. The first operator appoints itself once; the operator then
 -- names who publishes each calendar, which system's receiver vouches for
@@ -229,7 +259,52 @@ transformation nominate_output(message, shipper, gas_day: Date, qty_kwh: Decimal
     let preceding_day = gas_day - span(P1D)
     bind LocalDay(#dm_output_deadline, preceding_day, due, _, _, _)
     require in_time: received_at strictly_before due
+    require first_for_the_day: not CurrentNomination(shipper, gas_day, _)
     admit OutputNomination(message, shipper, gas_day, qty_kwh)
+    admit CurrentNomination(shipper, gas_day, message)
+
+-- A renomination (TPD C4.1). It names the nomination it revises (C4.1.5(a)),
+-- and that must be the one in force: a message judged after a later one
+-- has already replaced its nomination is refused, whatever order the
+-- network received them in, and so is one naming a nomination received
+-- after it. Once admitted it replaces that nomination at once, though
+-- the one it replaced still governs the flow until the new one takes
+-- effect (C4.1.8). Its receipt falls between 15:00 London the day before
+-- and 03:00 on the gas day itself, which falls on the next calendar
+-- date, since the day runs to 05:00 (C1.2, C4.1.3(b)). Both instants are
+-- read from published rows. The shipper names the hour it takes effect:
+-- inside the day, on the hour (C1.9), and at least an hour after the
+-- network received it (C4.1.10(a)). The code does not say what a
+-- renomination taking effect before the one it replaces does to that
+-- one; this example refuses it (`example_renomination_order_v1`), so the
+-- nominations in force take effect in the order they replace each other.
+-- And it may not imply gas flowing backwards: a cut so deep, so late,
+-- that the hours left would need a negative rate is refused (C4.1.3(d)).
+transformation renominate(message, shipper, gas_day: Date, previous, effective_at: Timestamp, qty_kwh: Decimal):
+    require may_nominate: MayNominate(actor, shipper)
+    require received_by_the_network: Received(message, #gemini, _)
+    bind Received(message, #gemini, received_at)
+    require earlier_nomination: CurrentNomination(shipper, gas_day, _)
+    require previous_in_force: CurrentNomination(shipper, gas_day, previous)
+    bind OutputNomination(previous, shipper, gas_day, prior_qty)
+    bind Received(previous, #gemini, previous_received)
+    require after_the_previous: previous_received strictly_before received_at
+    let preceding_day = gas_day - span(P1D)
+    let next_date = gas_day + span(P1D)
+    bind LocalDay(#renomination_start, preceding_day, opens, _, _, _)
+    bind LocalDay(#renomination_end, next_date, closes, _, _, _)
+    require in_window: opens at_or_before received_at and received_at at_or_before closes
+    bind LocalDay(#gas_day, gas_day, day_starts, day_ends, _, _)
+    require within_the_day: day_starts at_or_before effective_at and effective_at strictly_before day_ends
+    require on_the_hour: ((effective_at - day_starts) / duration(PT1H)) % 1 = 0
+    require lead_time: received_at + duration(PT60M) at_or_before effective_at
+    require in_order: not Renomination(previous, _) or (Renomination(previous, previous_effective) and previous_effective at_or_before effective_at)
+    require rate_not_negative: implied_flow_rate(shipper, gas_day) + round((qty_kwh - prior_qty) / ((day_ends - effective_at) / duration(PT1H)), 0.000001) >= 0
+    admit OutputNomination(message, shipper, gas_day, qty_kwh)
+    admit Renomination(message, effective_at)
+    retract CurrentNomination(shipper, gas_day, previous)
+    admit Renominates(message, previous)
+    admit CurrentNomination(shipper, gas_day, message)
 
 
 -- Market data, from its appointed source only.
@@ -341,3 +416,10 @@ transformation issue_statement(shipper, gas_day: Date, policy):
 -- read, never stored, so it can never fall out of step with the record.
 derived NeedsReview(statement):
     over CurrentStatement(_, _, statement) and Statement(statement: statement, sap_version: used, ..) and stale(used)
+
+-- The rate the nomination in force implies, read from the chain that led
+-- to it: the rate from its effective hour to the end of the day. Before
+-- that hour the nomination it replaced still applies, at its own rate.
+derived ImpliedFlowRate(shipper, gas_day):
+    over CurrentNomination(shipper, gas_day, _)
+    value kwh_per_hour = implied_flow_rate(shipper, gas_day)
