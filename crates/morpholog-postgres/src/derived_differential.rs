@@ -1167,3 +1167,78 @@ derived Weighted(order):
         "{text}"
     );
 }
+
+/// A quantity stored where a decimal is declared is the attack: no
+/// admission puts it there, a direct write can. The kernel's arithmetic
+/// keeps its unit, so the row's target is a quantity, which a decimal
+/// column cannot hold: the view names `value` for that order rather than
+/// summing the bare amount. A quantity over one of the same unit is a
+/// bare decimal, so that row computes as the kernel's figure.
+#[tokio::test]
+async fn a_computed_target_that_carries_a_unit_is_not_summed_as_a_decimal() {
+    let pool = test_pool().await;
+    let program = morpholog_surface::parse_program(
+        "program quantities
+predicate Order(order: Subject)
+predicate Line(line: Subject, order: Subject, quantity: Decimal, price: Decimal)
+predicate Weighted(order: Subject, total: Decimal)
+predicate Size(order: Subject, total: Decimal)
+predicate Ratio(order: Subject, total: Decimal)
+derived Weighted(order):
+    over Order(order: order)
+    value total = sum(q * p | Line(l, order, q, p))
+derived Size(order):
+    over Order(order: order)
+    value total = sum(abs(q) | Line(l, order, q, p))
+derived Ratio(order):
+    over Order(order: order)
+    value total = sum(q / p | Line(l, order, q, p))
+",
+    )
+    .unwrap();
+    let validated = program.validated().unwrap();
+    let kg = |amount: &str| morpholog_test_support::qty(amount, "kg");
+    let lines = |q: EvalValue, p: EvalValue| {
+        State::from_claims(vec![
+            claim_instance("Order", &[subj("o")]),
+            claim_instance("Line", &[subj("l1"), subj("o"), q, p]),
+        ])
+    };
+    let reseed = async |state: &State| {
+        apply(&pool, &validated).await.unwrap();
+        crate::testing::reset_database(&pool).await.unwrap();
+        seed(&pool, &state.claims().to_vec()).await;
+    };
+
+    let state = lines(kg("-3"), dec(2));
+    reseed(&state).await;
+    for (predicate, view, kernel) in [("Weighted", "weighted", "-6"), ("Size", "size", "3")] {
+        let rows = validated
+            .enumerate_derived(predicate, &state)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            rows[0].args[1],
+            kg(kernel),
+            "{predicate}: the kernel keeps the unit"
+        );
+        let (text, error) = raw(&pool, view, "total", "o").await;
+        assert_eq!(
+            (text, error.as_deref()),
+            (None, Some("value")),
+            "{predicate}"
+        );
+    }
+
+    let state = lines(kg("6"), kg("2"));
+    reseed(&state).await;
+    let rows = validated
+        .enumerate_derived("Ratio", &state)
+        .unwrap()
+        .unwrap();
+    assert_eq!(rows[0].args[1], dec(3), "kg over kg is a bare decimal");
+    let (text, error) = raw(&pool, "ratio", "total", "o").await;
+    assert_eq!(error, None);
+    let live: rust_decimal::Decimal = text.unwrap().parse().unwrap();
+    assert_eq!(live.normalize().to_string(), "3");
+}

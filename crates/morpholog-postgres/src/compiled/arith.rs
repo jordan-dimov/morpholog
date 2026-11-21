@@ -49,8 +49,9 @@ fn across_flavours(what: &str) -> CompileReason {
 
 /// A sum's target computed per matched row, over the body's bound
 /// decimals and literals: its amount, NULL exactly where the kernel
-/// raises on the row. A target that brings in an aggregate of its own, or
-/// carries a unit, is refused by name.
+/// raises on the row, or where its result carries a unit at run time. A
+/// target that brings in an aggregate of its own, or carries a unit by
+/// its declarations, is refused by name.
 pub(super) fn row_target(
     expr: &ValueExpr,
     env: &Env,
@@ -69,7 +70,12 @@ pub(super) fn row_target(
             detail: "a computed target with a unit",
         });
     }
-    Ok(dd.amount)
+    // A stored quantity where a decimal is declared keeps its unit
+    // through the kernel's arithmetic; its bare amount is not the target.
+    Ok(format!(
+        "(CASE WHEN ({}) IS NULL THEN {} END)",
+        dd.unit, dd.amount
+    ))
 }
 
 /// A computed value as a comparison operand, with the probe that
