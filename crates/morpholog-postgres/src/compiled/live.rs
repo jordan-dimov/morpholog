@@ -3,9 +3,9 @@
 //!
 //! The kernel's rows are the distinct key tuples of the domain's matches,
 //! each value evaluated under that tuple. The rendering is `SELECT
-//! DISTINCT ON` the keys' seek expressions over the domain's joins, each
-//! value a computed expression with its sums as LATERAL items, the way
-//! the compiled checks render a comparison's operands. Where a value's
+//! DISTINCT ON` the keys' columns and seek expressions over the domain's
+//! joins, each value a computed expression with its sums as LATERAL
+//! items, the way the compiled checks render a comparison's operands. Where a value's
 //! probes say the kernel would raise on the row, the value is NULL and
 //! `_morpholog_error` names the class of failure; everywhere else it is
 //! NULL. What the renderer cannot express refuses by name, as an
@@ -20,7 +20,7 @@ use super::{
     Bound, CompileReason, Ctx, Env, ErrorReport, Pending, decimal_sql, from_list, lift,
     nested_scope, outside_consequent, quote_literal, render_prop, seek_sql, value_sql,
 };
-use crate::sql_views::column_sql_at;
+use crate::sql_views::{column_sql_at, stored_kind_test};
 
 /// One live view's body: the `SELECT` that computes the derived claim's
 /// rows, and the metadata columns it leads with.
@@ -73,6 +73,7 @@ pub(crate) fn compile_derived(
         });
     }
 
+    let mut leads = Vec::with_capacity(derived.keys.len());
     let mut seeks = Vec::with_capacity(derived.keys.len());
     let mut columns = vec![format!(
         "{}::text AS \"_morpholog_model_hash\"",
@@ -92,13 +93,30 @@ pub(crate) fn compile_derived(
                 detail: format!("head arity under the keys of {}", head.name),
             })?
             .kind;
+        let qualifier = format!("{}.", col.alias);
+        let mut column = column_sql_at(kind, &qualifier, col.position).expr;
+        // A column decoded only where the stored value is of the key's
+        // kind is equal wherever the value key is: two values with one value
+        // key share a tag, since the key begins with it, so both are decoded
+        // or both are NULL, and decoded, a value is keyed as itself or, for a
+        // decimal or a quantity, by its trimmed scale, which numeric equality
+        // also ignores. A collection's elements are keyed by their trimmed
+        // scale while its column is the raw JSON, and an `Any` value has no
+        // kind to decode, so those keys keep the value key alone.
+        if !matches!(kind, PredicateArgKind::Collection)
+            && let Some(test) = stored_kind_test(kind, &qualifier, col.position)
+        {
+            column = format!("CASE WHEN {test} THEN {column} END");
+            leads.push(column.clone());
+        }
         seeks.push(seek_sql(col));
-        key_columns.push(format!(
-            "{} AS {}",
-            column_sql_at(kind, &format!("{}.", col.alias), col.position).expr,
-            quote_ident(&head.args[i].name)
-        ));
+        key_columns.push(format!("{column} AS {}", quote_ident(&head.args[i].name)));
     }
+    // PostgreSQL moves a filter on a column into a `DISTINCT ON` only when
+    // the column is one it is distinct on. A key column equal wherever its
+    // value keys are equal changes no row by leading, and lets a read of
+    // one key compute that key alone.
+    let distinct: Vec<String> = leads.into_iter().chain(seeks).collect();
 
     // Each value: its expression under the keys, its sums as LATERAL
     // items, and the conditions under which the kernel would raise on
@@ -154,8 +172,8 @@ pub(crate) fn compile_derived(
     let mut from = vec![from_list(&domain)];
     from.extend(laterals);
     let select = format!(
-        "SELECT DISTINCT ON ({seeks})\n    {columns}\nFROM {from}\nWHERE {where_}\nORDER BY {seeks}",
-        seeks = seeks.join(", "),
+        "SELECT DISTINCT ON ({distinct})\n    {columns}\nFROM {from}\nWHERE {where_}\nORDER BY {distinct}",
+        distinct = distinct.join(", "),
         columns = columns.join(",\n    "),
         from = from.join(", "),
         where_ = domain.conjunction(),

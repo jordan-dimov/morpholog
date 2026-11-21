@@ -1061,14 +1061,19 @@ fn history_view_name(predicate: &str) -> String {
     format!("{}_history", snake_case(predicate))
 }
 
-/// A SQL test that the stored value at position `i` of `arguments` has
-/// the declared kind, whole: its tag, and for a quantity its unit, since
-/// two units share a tag. `None` for a kind every stored value has.
+/// A SQL test that the stored value at position `i` of `{qualifier}arguments`
+/// has the declared kind, whole: its tag, and for a quantity its unit,
+/// since two units share a tag. `None` for a kind every stored value has.
 ///
 /// **No `_` arm**, as in [`column_sql_at`]: a new kind must say what a
 /// stored value of it looks like.
-fn stored_kind_test(kind: &PredicateArgKind, i: usize) -> Option<String> {
-    let tagged = |tag: &str| Some(format!("arguments -> {i} ->> 'type' = '{tag}'"));
+pub(crate) fn stored_kind_test(
+    kind: &PredicateArgKind,
+    qualifier: &str,
+    i: usize,
+) -> Option<String> {
+    let at = format!("{qualifier}arguments -> {i}");
+    let tagged = |tag: &str| Some(format!("{at} ->> 'type' = '{tag}'"));
     match kind {
         PredicateArgKind::Subject => tagged("subject"),
         PredicateArgKind::Decimal => tagged("decimal"),
@@ -1079,7 +1084,7 @@ fn stored_kind_test(kind: &PredicateArgKind, i: usize) -> Option<String> {
         PredicateArgKind::Collection => tagged("collection"),
         PredicateArgKind::CalendarSpan => tagged("calendarspan"),
         PredicateArgKind::Quantity(unit) => Some(format!(
-            "arguments -> {i} ->> 'type' = 'quantity' AND arguments -> {i} -> 'value' ->> 'unit' = {}",
+            "{at} ->> 'type' = 'quantity' AND {at} -> 'value' ->> 'unit' = {}",
             quote_literal(unit.as_str())
         )),
         PredicateArgKind::Any => None,
@@ -1136,7 +1141,7 @@ fn render_history_view(
         .collect();
     let mut shape = format!("jsonb_array_length(arguments) = {}", predicate.args.len());
     for (i, arg) in predicate.args.iter().enumerate() {
-        if let Some(test) = stored_kind_test(&arg.kind, i) {
+        if let Some(test) = stored_kind_test(&arg.kind, "", i) {
             let _ = write!(shape, " AND {test}");
         }
     }
@@ -1167,7 +1172,7 @@ fn render_history_view(
             sql_type: col.sql_type.to_string(),
             position: Some(i),
         });
-        let expr = match stored_kind_test(&arg.kind, i) {
+        let expr = match stored_kind_test(&arg.kind, "", i) {
             Some(test) => format!("CASE WHEN {test} THEN {} END", col.expr),
             None => col.expr,
         };

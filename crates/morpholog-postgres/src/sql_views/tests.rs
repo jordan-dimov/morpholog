@@ -807,7 +807,7 @@ fn live_derived_views_are_computed_from_their_definitions() {
         "read-only wrapper: {block}"
     );
     assert!(block.contains(
-        "SELECT DISTINCT ON (morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0)))"
+        "SELECT DISTINCT ON (CASE WHEN t0.arguments -> 0 ->> 'type' = 'subject' THEN t0.arguments -> 0 ->> 'value' END, morpholog.claim_digest(morpholog.value_key_v1(t0.arguments -> 0)))"
     ));
     assert!(block.contains("LATERAL (SELECT COALESCE(sum("));
     assert!(block.contains("AS \"_morpholog_error\""));

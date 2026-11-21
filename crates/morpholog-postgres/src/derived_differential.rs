@@ -12,7 +12,7 @@
 
 use morpholog_core::{ClaimInstance, EvalValue, Program, State, Transition, ValidatedProgram};
 use morpholog_test_support::differential::sample_state;
-use morpholog_test_support::{claim_instance, dec, subj, test_actor};
+use morpholog_test_support::{claim_instance, coll, dec, subj, test_actor};
 use sqlx::{PgPool, Row};
 
 use crate::attestation::Proposal;
@@ -244,9 +244,63 @@ transformation guard(line, floor: Decimal):
     admit LineGuard(line, floor)
 ";
 
+/// CTENEX's order status and InvenTree's line figures (#895): views a
+/// host reads one key at a time, and a decimal key that two claims spell
+/// with different scales.
+const KEYED: &str = "program keyed
+predicate Order(order: Subject, qty: Decimal)
+predicate Fill(fill: Subject, order: Subject, qty: Decimal)
+predicate Filled(order: Subject, filled: Decimal)
+predicate Offer(level: Decimal, qty: Decimal)
+predicate AtLevel(level: Decimal, qty: Decimal)
+derived Filled(order):
+    over Order(order, _)
+    value filled = sum(q | Fill(_, order, q))
+derived AtLevel(level):
+    over Offer(level, _)
+    value qty = sum(q | Offer(level, q))
+transformation place(order, qty: Decimal):
+    admit Order(order, qty)
+transformation fill(fill, order, qty: Decimal):
+    admit Fill(fill, order, qty)
+";
+
+/// Keys whose column can spell one value key two ways: a key of any kind,
+/// and a collection of decimals, whose columns are raw JSON; a subject key
+/// read from a position of any kind; one read through
+/// a condition whose first branch binds a subject and whose second any
+/// kind, with a parameter that is no key; and a subject key over a
+/// position declared a subject, holding decimals admitted before
+/// admission held each claim to its kinds. Their columns are not the
+/// kernel's text, so rows are counted, not compared.
+const ANY_KEYED: &str = "program any_keyed
+predicate Tag(thing: Any)
+predicate Basket(items: Collection)
+predicate Baskets(items: Collection)
+predicate Source(thing: Subject)
+predicate FromSource(thing: Subject)
+predicate Label(thing: Subject, by: Subject)
+predicate Mark(thing: Any, by: Subject)
+predicate Tagged(thing: Any)
+predicate Named(thing: Subject)
+predicate Marked(thing: Subject)
+define marked(x, by):
+    Label(x, by) or Mark(x, by)
+derived Tagged(thing):
+    over Tag(thing)
+derived Named(thing):
+    over Tag(thing)
+derived Marked(thing):
+    over marked(thing, by)
+derived FromSource(thing):
+    over Source(thing)
+derived Baskets(items):
+    over Basket(items)
+";
+
 fn programs() -> Vec<Program> {
     let mut out: Vec<Program> = [
-        SPIKE, EDGES, ORDERS, MEMBERS, CHOICES, ROLES, EXTREMA, TOTALS,
+        SPIKE, EDGES, ORDERS, MEMBERS, CHOICES, ROLES, EXTREMA, TOTALS, KEYED,
     ]
     .iter()
     .map(|s| morpholog_surface::parse_program(s).expect("fragment parses"))
@@ -380,6 +434,9 @@ async fn agree(
     claims.sort_by_key(|c| format!("{c:?}"));
     claims.dedup();
     seed(pool, &claims).await;
+    // A generated state can hold one claim twice; admitted state is a set,
+    // so the kernel reads the claims the database holds.
+    let state = &State::from_claims(claims);
     for predicate in &derived {
         let mut live = live_rows(pool, validated, predicate).await;
         live.sort();
@@ -1276,4 +1333,103 @@ derived Scaled(order):
     assert_eq!(error, None);
     let live: rust_decimal::Decimal = text.unwrap().parse().unwrap();
     assert_eq!(live.normalize().to_string(), "3");
+}
+
+/// A key spelt two ways is one key: a decimal at two scales is one level,
+/// in the kernel and in the view, though its column leads the view's
+/// `DISTINCT ON`. A key holding a value of another kind than it declares
+/// shows NULL, as a history view's field does, so its two spellings are
+/// one row too; a key of any kind keeps the value key alone.
+#[tokio::test]
+async fn a_key_spelt_two_ways_is_one_row() {
+    let pool = test_pool().await;
+    let one = morpholog_test_support::dec_str("1.0");
+    let one_again = morpholog_test_support::dec_str("1.00");
+    let keyed = morpholog_surface::parse_program(KEYED).unwrap();
+    let keyed_v = keyed.validated().unwrap();
+    let state = State::from_claims(vec![
+        claim_instance("Offer", &[one.clone(), dec(2)]),
+        claim_instance("Offer", &[one_again.clone(), dec(3)]),
+        claim_instance("Offer", &[dec(2), dec(1)]),
+    ]);
+    assert_eq!(agree(&pool, &keyed_v, &state, "keyed built").await, 2);
+    let levels = live_rows(&pool, &keyed_v, "AtLevel").await;
+    assert_eq!(levels.len(), 2, "{levels:?}");
+
+    let any = morpholog_surface::parse_program(ANY_KEYED).unwrap();
+    let any_v = any.validated().unwrap();
+    let state = State::from_claims(vec![
+        claim_instance("Tag", std::slice::from_ref(&one)),
+        claim_instance("Tag", std::slice::from_ref(&one_again)),
+        claim_instance("Tag", &[subj("t")]),
+        claim_instance("Mark", &[one.clone(), subj("a")]),
+        claim_instance("Mark", &[one_again.clone(), subj("b")]),
+        claim_instance("Mark", &[subj("t"), subj("a")]),
+        // Built, not admitted: as a deployment holds them from before
+        // admission held each claim to its declared kinds.
+        claim_instance("Source", std::slice::from_ref(&one)),
+        claim_instance("Source", std::slice::from_ref(&one_again)),
+        claim_instance("Source", &[subj("t")]),
+        claim_instance("Basket", &[coll(vec![one.clone()])]),
+        claim_instance("Basket", &[coll(vec![one_again.clone()])]),
+        claim_instance("Basket", &[coll(vec![subj("t")])]),
+    ]);
+    apply(&pool, &any_v).await.expect("the view renders");
+    crate::testing::reset_database(&pool).await.unwrap();
+    seed(&pool, &state.claims().to_vec()).await;
+    for predicate in ["FromSource", "Tagged", "Baskets", "Named", "Marked"] {
+        let kernel = any_v.enumerate_derived(predicate, &state).unwrap().unwrap();
+        let mut live = live_rows(&pool, &any_v, predicate).await;
+        assert_eq!((live.len(), kernel.len()), (2, 2), "{predicate}: {live:?}");
+        if !["Tagged", "Baskets"].contains(&predicate) {
+            live.sort();
+            assert_eq!(live[0].0, ["NULL"], "{predicate}: {live:?}");
+        }
+    }
+}
+
+/// A read of one key computes that key alone (#895): the filter on the
+/// key column reaches the scan of the domain, below the step that keeps
+/// one row per key, rather than waiting for every key to be computed.
+#[tokio::test]
+async fn a_read_of_one_key_filters_the_domains_scan() {
+    let pool = test_pool().await;
+    let keyed = morpholog_surface::parse_program(KEYED).unwrap();
+    let keyed_v = keyed.validated().unwrap();
+    let mut claims = Vec::new();
+    for i in 0..50 {
+        claims.push(claim_instance("Order", &[subj(&format!("o{i}")), dec(10)]));
+        claims.push(claim_instance(
+            "Fill",
+            &[subj(&format!("f{i}")), subj(&format!("o{i}")), dec(1)],
+        ));
+    }
+    let state = State::from_claims(claims);
+    assert_eq!(agree(&pool, &keyed_v, &state, "keyed seek").await, 2);
+    let plan: serde_json::Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "EXPLAIN (FORMAT JSON) SELECT * FROM {SCHEMA}.filled WHERE \"order\" = 'o7'"
+    )))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let mut scans = Vec::new();
+    domain_scans(&plan[0]["Plan"], &mut scans);
+    assert_eq!(scans.len(), 1, "one scan of the domain: {plan}");
+    assert!(
+        scans[0].contains("'o7'"),
+        "the key filter reaches the domain's scan: {plan}"
+    );
+}
+
+/// The filter and index condition of every plan node that scans the
+/// domain's claims, `t0`.
+fn domain_scans(node: &serde_json::Value, out: &mut Vec<String>) {
+    if node["Alias"] == "t0" {
+        out.push(format!("{} {}", node["Filter"], node["Index Cond"]));
+    }
+    if let Some(children) = node["Plans"].as_array() {
+        for child in children {
+            domain_scans(child, out);
+        }
+    }
 }
