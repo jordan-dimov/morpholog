@@ -144,6 +144,30 @@ transformation publish_prices(calendar, local_date):
 -- checked when the trade is captured; lowering a cap later does not
 -- unwind trades, it raises a breach to be managed, which is another
 -- act and another record.
+--
+-- The hour-by-hour check sums the book once for every hour of the
+-- window, so a month-long trade sums it 744 times. A book's position
+-- only changes where a trade starts or ends, which gives a cheaper
+-- rule: check at the window's first instant, then at every trade
+-- start and every trade end inside the window. Its cost follows the
+-- trades in the book, not the length of the window:
+--
+--     require at_start_within_limit: abs(sum(m | Trade(book, _, m, s, e) and s at_or_before starts_at and starts_at strictly_before e) + mw) <= cap_mw
+--     require at_starts_within_limit: forall x in Trade(book: book, starts_at: x, ..):
+--         (starts_at strictly_before x and x strictly_before ends_at)
+--         implies abs(sum(m | Trade(book, _, m, s, e) and s at_or_before x and x strictly_before e) + mw) <= cap_mw
+--     require at_ends_within_limit: forall x in Trade(book: book, ends_at: x, ..):
+--         (starts_at strictly_before x and x strictly_before ends_at)
+--         implies abs(sum(m | Trade(book, _, m, s, e) and s at_or_before x and x strictly_before e) + mw) <= cap_mw
+--
+-- Here the two decide alike. `whole_hours` puts every trade's start
+-- and end on an hour mark, so the position holds still across each
+-- hour, and its value at the hour's start is its value throughout.
+-- Where a trade can start between the marks, they differ. A trade
+-- from 10:15 to 10:30 covers no hour's start, so the grid never
+-- counts it, and the breakpoint form does. Which one is right is a
+-- business question: is the cap on each hour's position, or on the
+-- position at every instant?
 transformation capture(book, trade, mw, starts_at, ends_at):
     bind Limit(book, cap_mw)
     require not Trade(trade: trade, ..)
