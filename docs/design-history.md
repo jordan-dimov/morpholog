@@ -1591,3 +1591,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** the InvenTree fork (#886). An order's total is a sum of quantity times price less discount, and the live renderer refused any sum target that was not a bound column. The workaround was a stored line amount kept in step by every act that changes a price, a quantity or a discount, and with currency rates every rate change would rewrite every line.
 
 **Landed:** in a live derived view, a sum's target may be arithmetic over the decimals its body binds and literals, rendered per row by the compiled arithmetic the comparisons already use, division rounded as the kernel's. A row whose target the kernel cannot compute, or whose result keeps a unit from a stored quantity, fails its own key as `value`, after any raising body and before the total's range. A target with an aggregate of its own, or a unit, is refused by name, and the compiled invariant checks keep refusing a computed target.
+
+### A value definition's call as a live sum target
+
+**Forced by:** the InvenTree fork's measurement of #886 (#892). A build line's formula was needed in two views and was spelt four times: a bare definition call as the target was refused, while the same call times one rendered.
+
+**Landed:** the target's match takes a value definition's call, which the compiled arithmetic already rendered under its arguments' frame. A definition whose body raises, or holds an aggregate of its own, fails or is refused as written-out arithmetic does.

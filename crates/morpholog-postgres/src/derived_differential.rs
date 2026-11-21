@@ -220,6 +220,8 @@ predicate LineGuard(line: Subject, floor: Decimal)
 predicate OrderTotal(order: Subject, total: Decimal)
 predicate OrderThird(order: Subject, third: Decimal)
 predicate GuardedRatio(order: Subject, ratio: Decimal)
+predicate OrderNet(order: Subject, net: Decimal)
+define net(unit_price, qty, discount) = (qty * unit_price * (1 - discount / 100))
 derived OrderTotal(order):
     over Order(order: order)
     value total = sum(q * price * (1 - d / 100) | SalesLine(l, order, _, q) and LinePrice(l, price, _, d))
@@ -229,6 +231,9 @@ derived OrderThird(order):
 derived GuardedRatio(order):
     over Order(order: order)
     value ratio = sum(q / d | SalesLine(l, order, _, q) and LinePrice(l, _, _, d) and LineGuard(l, f) and q > f)
+derived OrderNet(order):
+    over Order(order: order)
+    value net = sum(net(price, q, d) | SalesLine(l, order, _, q) and LinePrice(l, price, _, d))
 transformation open(order):
     admit Order(order)
 transformation line(line, order, part, quantity: Decimal):
@@ -1031,7 +1036,7 @@ async fn a_computed_target_is_the_kernels_figure() {
             ("l2", dec(2), dec(7), dec(5), dec(0)),
         ],
     ));
-    assert_eq!(agree(&pool, &validated, &state, "totals built").await, 3);
+    assert_eq!(agree(&pool, &validated, &state, "totals built").await, 4);
     for (view, column, predicate, expected) in [
         ("order_total", "total", "OrderTotal", "39.55"),
         (
@@ -1041,6 +1046,7 @@ async fn a_computed_target_is_the_kernels_figure() {
             "5.6666666666666666666666666666",
         ),
         ("guarded_ratio", "ratio", "GuardedRatio", "0.64"),
+        ("order_net", "net", "OrderNet", "39.55"),
     ] {
         let rows = validated
             .enumerate_derived(predicate, &state)
@@ -1093,6 +1099,20 @@ async fn a_computed_target_that_raises_names_why() {
             "value",
         ),
         (
+            "a product no decimal holds, through a definition",
+            order_lines("o", &[("l1", max.clone(), dec(2), dec(0), dec(0))]),
+            "order_net",
+            "net",
+            "value",
+        ),
+        (
+            "an operand of another kind, through a definition",
+            order_lines("o", &[("l1", dec(3), subj("ten"), dec(0), dec(0))]),
+            "order_net",
+            "net",
+            "value",
+        ),
+        (
             "a total past the range",
             order_lines(
                 "o",
@@ -1123,49 +1143,54 @@ async fn a_computed_target_that_raises_names_why() {
         let state = State::from_claims(claims);
         let predicate = match view {
             "order_total" => "OrderTotal",
+            "order_net" => "OrderNet",
             _ => "GuardedRatio",
         };
         assert!(
             validated.enumerate_derived(predicate, &state).is_err(),
             "{label}: the kernel raises"
         );
-        assert_eq!(agree(&pool, &validated, &state, label).await, 3);
+        assert_eq!(agree(&pool, &validated, &state, label).await, 4);
         let (text, error) = raw(&pool, view, column, "o").await;
         assert_eq!((text, error.as_deref()), (None, Some(class)), "{label}");
     }
 }
 
 /// A target that brings in an aggregate of its own is refused by name,
-/// not rendered: the per-row scope has no place for it.
+/// not rendered, written out or inside a called definition: the per-row
+/// scope has no place for it.
 #[test]
 fn a_computed_target_with_its_own_aggregate_is_refused() {
-    let program = morpholog_surface::parse_program(
-        "program nested
+    for target in ["q * sum(1 | Order(o))", "weight(q)"] {
+        let program = morpholog_surface::parse_program(&format!(
+            "program nested
 predicate Order(order: Subject)
 predicate SalesLine(line: Subject, order: Subject, quantity: Decimal)
 predicate Weighted(order: Subject, total: Decimal)
+define weight(x) = (x * sum(1 | Order(o)))
 derived Weighted(order):
     over Order(order: order)
-    value total = sum(q * sum(1 | Order(o)) | SalesLine(l, order, q))
-",
-    )
-    .unwrap();
-    let validated = program.validated().unwrap();
-    let Err(refused) = render_views(
-        &validated,
-        SCHEMA,
-        &format!("sha256:{}", "0".repeat(64)),
-        DerivedSource::Live,
-        &Default::default(),
-        false,
-    ) else {
-        panic!("a nested aggregate in a target renders");
-    };
-    let text = format!("{refused:?}");
-    assert!(
-        text.contains("a computed target with an aggregate of its own"),
-        "{text}"
-    );
+    value total = sum({target} | SalesLine(l, order, q))
+"
+        ))
+        .unwrap();
+        let validated = program.validated().unwrap();
+        let Err(refused) = render_views(
+            &validated,
+            SCHEMA,
+            &format!("sha256:{}", "0".repeat(64)),
+            DerivedSource::Live,
+            &Default::default(),
+            false,
+        ) else {
+            panic!("{target}: a nested aggregate in a target renders");
+        };
+        let text = format!("{refused:?}");
+        assert!(
+            text.contains("a computed target with an aggregate of its own"),
+            "{target}: {text}"
+        );
+    }
 }
 
 /// A quantity stored where a decimal is declared is the attack: no
@@ -1173,7 +1198,8 @@ derived Weighted(order):
 /// keeps its unit, so the row's target is a quantity, which a decimal
 /// column cannot hold: the view names `value` for that order rather than
 /// summing the bare amount. A quantity over one of the same unit is a
-/// bare decimal, so that row computes as the kernel's figure.
+/// bare decimal, so that row computes as the kernel's figure. A value
+/// definition's call is the same arithmetic under its arguments.
 #[tokio::test]
 async fn a_computed_target_that_carries_a_unit_is_not_summed_as_a_decimal() {
     let pool = test_pool().await;
@@ -1184,6 +1210,8 @@ predicate Line(line: Subject, order: Subject, quantity: Decimal, price: Decimal)
 predicate Weighted(order: Subject, total: Decimal)
 predicate Size(order: Subject, total: Decimal)
 predicate Ratio(order: Subject, total: Decimal)
+predicate Scaled(order: Subject, total: Decimal)
+define scaled(x, y) = (x * y)
 derived Weighted(order):
     over Order(order: order)
     value total = sum(q * p | Line(l, order, q, p))
@@ -1193,6 +1221,9 @@ derived Size(order):
 derived Ratio(order):
     over Order(order: order)
     value total = sum(q / p | Line(l, order, q, p))
+derived Scaled(order):
+    over Order(order: order)
+    value total = sum(scaled(q, p) | Line(l, order, q, p))
 ",
     )
     .unwrap();
@@ -1212,7 +1243,11 @@ derived Ratio(order):
 
     let state = lines(kg("-3"), dec(2));
     reseed(&state).await;
-    for (predicate, view, kernel) in [("Weighted", "weighted", "-6"), ("Size", "size", "3")] {
+    for (predicate, view, kernel) in [
+        ("Weighted", "weighted", "-6"),
+        ("Size", "size", "3"),
+        ("Scaled", "scaled", "-6"),
+    ] {
         let rows = validated
             .enumerate_derived(predicate, &state)
             .unwrap()
