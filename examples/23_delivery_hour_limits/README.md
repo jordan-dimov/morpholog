@@ -51,6 +51,17 @@ The limit is a gate by design: a pre-trade check at capture. Lowering
 a cap under open trades is a breach to manage, another act, not
 covered here.
 
+The hour-by-hour cap sums the book once per hour of the window. A
+cheaper rule checks only where the position can change: the window's
+first instant, and each trade start and end inside it. Its cost
+follows the trades in the book, not the window's length. Here the two
+decide alike, since every trade starts and ends on the hour. Where
+trades can start between hour marks, the breakpoint form also catches
+a short trade the hourly grid never samples. Which to use is a
+business question: a cap on each hour's position, or on the position
+at every instant. The `.morph` spells out the breakpoint form beside
+`capture`.
+
 ## Run it
 
 ```bash
