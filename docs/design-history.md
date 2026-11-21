@@ -1585,3 +1585,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** a power-trading embedder (#864). It named intermediate figures with `let` inside a definition and used each several times. A body `let` is substituted before the IR exists, so every use was its own copy, computed again: one dry-run capture went from 49.8 s to 193.5 s.
 
 **Landed:** within one evaluation (a gate statement, an invariant's judgement, a derived claim's rows), a `sum` or `max`/`min` keeps its result, keyed by the node's structure, the values of the variables it names as written, and the state it reads; the memo is absent inside a recursive condition's fixpoint. Substitution stays the semantics and no decision moves: the gallery gives the same explanations, traces and derived rows with the memo on and off. On a one-year capture over 100 trades, a figure used three times went from 2.15 s to 0.77 s, and three distinct figures stayed at 2.1 s.
+
+### A live total computed from its lines
+
+**Forced by:** the InvenTree fork (#886). An order's total is a sum of quantity times price less discount, and the live renderer refused any sum target that was not a bound column. The workaround was a stored line amount kept in step by every act that changes a price, a quantity or a discount, and with currency rates every rate change would rewrite every line.
+
+**Landed:** in a live derived view, a sum's target may be arithmetic over the decimals its body binds and literals, rendered per row by the compiled arithmetic the comparisons already use, division rounded as the kernel's. A row whose target the kernel cannot compute, or whose result keeps a unit from a stored quantity, fails its own key as `value`, after any raising body and before the total's range. A target with an aggregate of its own, or a unit, is refused by name, and the compiled invariant checks keep refusing a computed target.

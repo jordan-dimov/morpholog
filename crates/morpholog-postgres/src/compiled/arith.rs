@@ -47,6 +47,37 @@ fn across_flavours(what: &str) -> CompileReason {
     }
 }
 
+/// A sum's target computed per matched row, over the body's bound
+/// decimals and literals: its amount, NULL exactly where the kernel
+/// raises on the row, or where its result carries a unit at run time. A
+/// target that brings in an aggregate of its own, or carries a unit by
+/// its declarations, is refused by name.
+pub(super) fn row_target(
+    expr: &ValueExpr,
+    env: &Env,
+    ctx: &mut Ctx<'_>,
+) -> Result<String, CompileReason> {
+    let start = ctx.pending.len();
+    let mut sums = Vec::new();
+    let dd = render(expr, env, ctx, &mut sums)?;
+    if !sums.is_empty() || ctx.pending.len() != start {
+        return Err(CompileReason::SumShape {
+            detail: "a computed target with an aggregate of its own",
+        });
+    }
+    if dd.flavour != Flavour::Bare {
+        return Err(CompileReason::SumShape {
+            detail: "a computed target with a unit",
+        });
+    }
+    // A stored quantity where a decimal is declared keeps its unit
+    // through the kernel's arithmetic; its bare amount is not the target.
+    Ok(format!(
+        "(CASE WHEN ({}) IS NULL THEN {} END)",
+        dd.unit, dd.amount
+    ))
+}
+
 /// A computed value as a comparison operand, with the probe that
 /// reports where it errs queued in the kernel's evaluation order.
 pub(super) fn computed_operand(

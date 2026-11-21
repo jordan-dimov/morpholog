@@ -52,6 +52,7 @@ pub(crate) fn compile_derived(
 ) -> Result<LiveDerived, CompileReason> {
     let mut ctx = Ctx::fresh(decls, defs);
     ctx.binding_calls = true;
+    ctx.computed_targets = true;
     ctx.in_domain = true;
     let domain = render_prop(&derived.domain, Env::new(), &mut ctx);
     ctx.in_domain = false;
@@ -303,7 +304,7 @@ fn decimal_value(
                     failures.push((probe.condition, class_of(&probe.report)));
                 }
                 if sum.can_meet_foreign {
-                    failures.push((sum.kind_error, "sum_kind"));
+                    failures.push((sum.kind_error, class_of(&sum.kind_report)));
                 }
                 failures.push((sum.range_error, "sum_range"));
                 laterals.push(sum.lateral);
@@ -414,6 +415,7 @@ fn class_of(report: &ErrorReport) -> &'static str {
     match report {
         ErrorReport::SumRange => "sum_range",
         ErrorReport::SumKind => "sum_kind",
+        ErrorReport::SumTarget => "value",
         ErrorReport::Compare { .. } => "compare",
         ErrorReport::Value { .. } => "value",
         ErrorReport::Lifted { .. } => "scope",

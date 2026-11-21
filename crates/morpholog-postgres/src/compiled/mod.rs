@@ -1731,6 +1731,7 @@ fn report_column(
     Ok(match (report, column) {
         (ErrorReport::SumRange, Column::Kind) => Some("'range'".to_string()),
         (ErrorReport::SumKind, Column::Kind) => Some("'sum_kind'".to_string()),
+        (ErrorReport::SumTarget, Column::Kind) => Some("'sum_target'".to_string()),
         (ErrorReport::Compare { .. }, Column::Kind) => Some("'compare'".to_string()),
         (ErrorReport::Value { .. }, Column::Kind) => Some("'value'".to_string()),
         (ErrorReport::Value { index, .. }, Column::Domain) => Some(format!("'{index}'")),
@@ -1789,7 +1790,10 @@ fn report_column(
             }
         }
         (ErrorReport::SumRange, Column::Domain | Column::Left | Column::Right)
-        | (ErrorReport::SumKind, Column::Domain | Column::Left | Column::Right)
+        | (
+            ErrorReport::SumKind | ErrorReport::SumTarget,
+            Column::Domain | Column::Left | Column::Right,
+        )
         | (ErrorReport::Value { .. }, Column::Right) => None,
     })
 }
@@ -1924,6 +1928,7 @@ impl<'a> Ctx<'a> {
             in_consequent: false,
             binding_calls: false,
             in_domain: false,
+            computed_targets: false,
             in_truth_call: false,
             counter: 0,
             required: BTreeSet::new(),
@@ -1958,6 +1963,10 @@ struct Ctx<'a> {
     /// `or` body, renders as the distinct projection of its branches, as
     /// under a sum.
     in_domain: bool,
+    /// Whether a sum's target may be arithmetic over its body's bound
+    /// decimals, computed per row: a live derived view's values. The
+    /// compiled invariant checks decide admission, and keep refusing it.
+    computed_targets: bool,
     /// Rendering the body of a fully bound call under a sum, which the
     /// sum reads as a truth test: whether the body holds, never how many
     /// ways. An `or` there is a truth test too, and a sum may close a
@@ -2007,6 +2016,9 @@ struct RenderedSum {
     body: Vec<Probe>,
     range_error: String,
     kind_error: String,
+    /// What `kind_error` reports: a target of another kind, or a row
+    /// whose computed target the kernel cannot evaluate.
+    kind_report: ErrorReport,
     /// Whether the sum can meet a value other than a decimal: a literal
     /// target cannot.
     can_meet_foreign: bool,
@@ -2027,6 +2039,10 @@ enum ErrorReport {
     SumRange,
     /// A sum met a value other than a decimal, which the kernel decides.
     SumKind,
+    /// A row of a sum whose computed target the kernel cannot evaluate:
+    /// a zero divisor, a figure no decimal holds, an operand of another
+    /// kind. Only a live view renders such a target.
+    SumTarget,
     /// Two operands the kernel cannot order: the tagged values, as jsonb
     /// expressions, for the kernel to judge.
     Compare {
@@ -2273,7 +2289,7 @@ fn shape_refusal(r: &Rendered, sum: &'static str, comparison: &'static str) -> C
         match &p.report {
             ErrorReport::Compare { .. } | ErrorReport::Value { .. } => true,
             ErrorReport::Lifted { probes, .. } => probes.iter().any(compares),
-            ErrorReport::SumRange | ErrorReport::SumKind => false,
+            ErrorReport::SumRange | ErrorReport::SumKind | ErrorReport::SumTarget => false,
         }
     }
     if r.probes.iter().flat_map(|d| d.probes.iter()).any(compares) {
@@ -3641,7 +3657,7 @@ fn close_comparison(
                 if s.can_meet_foreign {
                     probes.push(Probe {
                         condition: s.kind_error.clone(),
-                        report: ErrorReport::SumKind,
+                        report: s.kind_report.clone(),
                     });
                 }
                 probes.push(Probe {
@@ -3756,7 +3772,9 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
             }
             let body = lifted.probes;
             // The sum target must be a bound decimal variable or a decimal
-            // literal; a computed target refuses.
+            // literal, or, in a live view, arithmetic over them computed
+            // per row; any other computed target refuses.
+            let mut kind_report = ErrorReport::SumKind;
             let (val, kind_test, can_meet_foreign): (String, String, bool) = match value.as_ref() {
                 ValueExpr::Term(Term::Var(v)) => {
                     let Some(Bound::Col(col)) = r.env.get(v) else {
@@ -3783,6 +3801,13 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
                     "false".to_string(),
                     false,
                 ),
+                // NULL exactly on a row the kernel cannot compute, so the
+                // row drops out of the total and its flag reports it.
+                ValueExpr::Arith { .. } | ValueExpr::Call { .. } if ctx.computed_targets => {
+                    let amount = arith::row_target(value, &r.env, ctx)?;
+                    kind_report = ErrorReport::SumTarget;
+                    (amount.clone(), format!("bool_or(({amount}) IS NULL)"), true)
+                }
                 ValueExpr::Term(_)
                 | ValueExpr::Arith { .. }
                 | ValueExpr::Sum { .. }
@@ -3811,6 +3836,7 @@ fn value_sql(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Result<Operand, 
                 body,
                 range_error: range_error_sql(&total),
                 kind_error: format!("{alias}.f"),
+                kind_report,
                 can_meet_foreign,
             }));
             Ok(Operand {

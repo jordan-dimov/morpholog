@@ -209,11 +209,43 @@ transformation serial(part, n):
     admit Serial(part, n)
 ";
 
+/// InvenTree's order total (#886): a sum whose target is computed from
+/// each line, a division that does not terminate, and a body that can
+/// raise beside a target that can.
+const TOTALS: &str = "program totals
+predicate Order(order: Subject)
+predicate SalesLine(line: Subject, order: Subject, part: Subject, quantity: Decimal)
+predicate LinePrice(line: Subject, price: Decimal, currency: Subject, discount: Decimal)
+predicate LineGuard(line: Subject, floor: Decimal)
+predicate OrderTotal(order: Subject, total: Decimal)
+predicate OrderThird(order: Subject, third: Decimal)
+predicate GuardedRatio(order: Subject, ratio: Decimal)
+derived OrderTotal(order):
+    over Order(order: order)
+    value total = sum(q * price * (1 - d / 100) | SalesLine(l, order, _, q) and LinePrice(l, price, _, d))
+derived OrderThird(order):
+    over Order(order: order)
+    value third = sum(price / 3 | SalesLine(l, order, _, q) and LinePrice(l, price, _, d))
+derived GuardedRatio(order):
+    over Order(order: order)
+    value ratio = sum(q / d | SalesLine(l, order, _, q) and LinePrice(l, _, _, d) and LineGuard(l, f) and q > f)
+transformation open(order):
+    admit Order(order)
+transformation line(line, order, part, quantity: Decimal):
+    admit SalesLine(line, order, part, quantity)
+transformation price(line, price: Decimal, currency, discount: Decimal):
+    admit LinePrice(line, price, currency, discount)
+transformation guard(line, floor: Decimal):
+    admit LineGuard(line, floor)
+";
+
 fn programs() -> Vec<Program> {
-    let mut out: Vec<Program> = [SPIKE, EDGES, ORDERS, MEMBERS, CHOICES, ROLES, EXTREMA]
-        .iter()
-        .map(|s| morpholog_surface::parse_program(s).expect("fragment parses"))
-        .collect();
+    let mut out: Vec<Program> = [
+        SPIKE, EDGES, ORDERS, MEMBERS, CHOICES, ROLES, EXTREMA, TOTALS,
+    ]
+    .iter()
+    .map(|s| morpholog_surface::parse_program(s).expect("fragment parses"))
+    .collect();
     out.extend(morpholog_examples::all_programs());
     out
 }
@@ -394,7 +426,14 @@ async fn live_views_compute_the_kernels_rows_over_generated_states() {
             live.push(program.name.to_string());
         }
     }
-    for fragment in ["edge_shapes", "members", "choices", "roles", "extrema"] {
+    for fragment in [
+        "edge_shapes",
+        "members",
+        "choices",
+        "roles",
+        "extrema",
+        "totals",
+    ] {
         assert!(
             live.iter().any(|n| n == fragment),
             "{fragment} renders live and is compared: {live:?}"
@@ -930,4 +969,276 @@ async fn a_raising_body_fails_the_extremum_rather_than_skipping_a_candidate() {
             Some("scope".to_string())
         )]
     );
+}
+
+/// One order's lines, priced, with a guard each.
+fn order_lines(
+    order: &str,
+    lines: &[(&str, EvalValue, EvalValue, EvalValue, EvalValue)],
+) -> Vec<ClaimInstance> {
+    let mut claims = vec![claim_instance("Order", &[subj(order)])];
+    for (line, q, price, d, floor) in lines {
+        claims.push(claim_instance(
+            "SalesLine",
+            &[subj(line), subj(order), subj("part"), q.clone()],
+        ));
+        claims.push(claim_instance(
+            "LinePrice",
+            &[subj(line), price.clone(), subj("usd"), d.clone()],
+        ));
+        claims.push(claim_instance("LineGuard", &[subj(line), floor.clone()]));
+    }
+    claims
+}
+
+/// The live view's own text for one column of one key.
+async fn raw(
+    pool: &PgPool,
+    view: &str,
+    column: &str,
+    order: &str,
+) -> (Option<String>, Option<String>) {
+    // Safe: identifiers are this test's constants.
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {column}::text, _morpholog_error FROM {SCHEMA}.{view} WHERE \"order\" = $1"
+    )))
+    .bind(order)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    (row.try_get(0).unwrap(), row.try_get(1).unwrap())
+}
+
+/// An order total computed per line is the kernel's to the last digit,
+/// a non-terminating division rounded per row as the kernel rounds it.
+/// The kernel normalises a sum's total, so the view's text is compared
+/// with its trailing zeros trimmed: that drops no significant digit.
+#[tokio::test]
+async fn a_computed_target_is_the_kernels_figure() {
+    let pool = test_pool().await;
+    let program = morpholog_surface::parse_program(TOTALS).unwrap();
+    let validated = program.validated().unwrap();
+    let state = State::from_claims(order_lines(
+        "o1",
+        &[
+            (
+                "l1",
+                dec(3),
+                dec(10),
+                morpholog_test_support::dec_str("12.5"),
+                dec(0),
+            ),
+            ("l2", dec(2), dec(7), dec(5), dec(0)),
+        ],
+    ));
+    assert_eq!(agree(&pool, &validated, &state, "totals built").await, 3);
+    for (view, column, predicate, expected) in [
+        ("order_total", "total", "OrderTotal", "39.55"),
+        (
+            "order_third",
+            "third",
+            "OrderThird",
+            "5.6666666666666666666666666666",
+        ),
+        ("guarded_ratio", "ratio", "GuardedRatio", "0.64"),
+    ] {
+        let rows = validated
+            .enumerate_derived(predicate, &state)
+            .unwrap()
+            .unwrap();
+        let EvalValue::Decimal(kernel) = &rows[0].args[1] else {
+            panic!("{predicate}: {rows:?}");
+        };
+        assert_eq!(kernel.to_string(), expected, "{predicate}");
+        let (text, error) = raw(&pool, view, column, "o1").await;
+        assert_eq!(error, None, "{predicate}");
+        let live: rust_decimal::Decimal = text.unwrap().parse().unwrap();
+        assert_eq!(live.normalize().to_string(), expected, "{predicate}");
+    }
+}
+
+/// Where the kernel cannot compute a row's target, the view names
+/// `value` for that order alone: a zero divisor, a product no decimal
+/// holds, an operand of another kind. A total past the range from rows
+/// that are each in range is `sum_range`. A body that raises on one line
+/// outranks a target that raises on another, as the kernel finds the
+/// body's matches before it computes a target: `scope`.
+#[tokio::test]
+async fn a_computed_target_that_raises_names_why() {
+    let pool = test_pool().await;
+    let program = morpholog_surface::parse_program(TOTALS).unwrap();
+    let validated = program.validated().unwrap();
+    let huge = morpholog_test_support::dec_str("50000000000000000000000000000");
+    let max = morpholog_test_support::dec_str("79228162514264337593543950335");
+    let cases: Vec<(&str, Vec<ClaimInstance>, &str, &str, &str)> = vec![
+        (
+            "a zero divisor",
+            order_lines("o", &[("l1", dec(3), dec(10), dec(0), dec(0))]),
+            "guarded_ratio",
+            "ratio",
+            "value",
+        ),
+        (
+            "a product no decimal holds",
+            order_lines("o", &[("l1", max.clone(), dec(2), dec(0), dec(0))]),
+            "order_total",
+            "total",
+            "value",
+        ),
+        (
+            "an operand of another kind",
+            order_lines("o", &[("l1", dec(3), subj("ten"), dec(0), dec(0))]),
+            "order_total",
+            "total",
+            "value",
+        ),
+        (
+            "a total past the range",
+            order_lines(
+                "o",
+                &[
+                    ("l1", huge.clone(), dec(1), dec(0), dec(0)),
+                    ("l2", huge, dec(1), dec(0), dec(0)),
+                ],
+            ),
+            "order_total",
+            "total",
+            "sum_range",
+        ),
+        (
+            "a raising body beside a raising target",
+            order_lines(
+                "o",
+                &[
+                    ("l1", dec(3), dec(10), dec(5), subj("no_floor")),
+                    ("l2", dec(3), dec(10), dec(0), dec(0)),
+                ],
+            ),
+            "guarded_ratio",
+            "ratio",
+            "scope",
+        ),
+    ];
+    for (label, claims, view, column, class) in cases {
+        let state = State::from_claims(claims);
+        let predicate = match view {
+            "order_total" => "OrderTotal",
+            _ => "GuardedRatio",
+        };
+        assert!(
+            validated.enumerate_derived(predicate, &state).is_err(),
+            "{label}: the kernel raises"
+        );
+        assert_eq!(agree(&pool, &validated, &state, label).await, 3);
+        let (text, error) = raw(&pool, view, column, "o").await;
+        assert_eq!((text, error.as_deref()), (None, Some(class)), "{label}");
+    }
+}
+
+/// A target that brings in an aggregate of its own is refused by name,
+/// not rendered: the per-row scope has no place for it.
+#[test]
+fn a_computed_target_with_its_own_aggregate_is_refused() {
+    let program = morpholog_surface::parse_program(
+        "program nested
+predicate Order(order: Subject)
+predicate SalesLine(line: Subject, order: Subject, quantity: Decimal)
+predicate Weighted(order: Subject, total: Decimal)
+derived Weighted(order):
+    over Order(order: order)
+    value total = sum(q * sum(1 | Order(o)) | SalesLine(l, order, q))
+",
+    )
+    .unwrap();
+    let validated = program.validated().unwrap();
+    let Err(refused) = render_views(
+        &validated,
+        SCHEMA,
+        &format!("sha256:{}", "0".repeat(64)),
+        DerivedSource::Live,
+        &Default::default(),
+        false,
+    ) else {
+        panic!("a nested aggregate in a target renders");
+    };
+    let text = format!("{refused:?}");
+    assert!(
+        text.contains("a computed target with an aggregate of its own"),
+        "{text}"
+    );
+}
+
+/// A quantity stored where a decimal is declared is the attack: no
+/// admission puts it there, a direct write can. The kernel's arithmetic
+/// keeps its unit, so the row's target is a quantity, which a decimal
+/// column cannot hold: the view names `value` for that order rather than
+/// summing the bare amount. A quantity over one of the same unit is a
+/// bare decimal, so that row computes as the kernel's figure.
+#[tokio::test]
+async fn a_computed_target_that_carries_a_unit_is_not_summed_as_a_decimal() {
+    let pool = test_pool().await;
+    let program = morpholog_surface::parse_program(
+        "program quantities
+predicate Order(order: Subject)
+predicate Line(line: Subject, order: Subject, quantity: Decimal, price: Decimal)
+predicate Weighted(order: Subject, total: Decimal)
+predicate Size(order: Subject, total: Decimal)
+predicate Ratio(order: Subject, total: Decimal)
+derived Weighted(order):
+    over Order(order: order)
+    value total = sum(q * p | Line(l, order, q, p))
+derived Size(order):
+    over Order(order: order)
+    value total = sum(abs(q) | Line(l, order, q, p))
+derived Ratio(order):
+    over Order(order: order)
+    value total = sum(q / p | Line(l, order, q, p))
+",
+    )
+    .unwrap();
+    let validated = program.validated().unwrap();
+    let kg = |amount: &str| morpholog_test_support::qty(amount, "kg");
+    let lines = |q: EvalValue, p: EvalValue| {
+        State::from_claims(vec![
+            claim_instance("Order", &[subj("o")]),
+            claim_instance("Line", &[subj("l1"), subj("o"), q, p]),
+        ])
+    };
+    let reseed = async |state: &State| {
+        apply(&pool, &validated).await.unwrap();
+        crate::testing::reset_database(&pool).await.unwrap();
+        seed(&pool, &state.claims().to_vec()).await;
+    };
+
+    let state = lines(kg("-3"), dec(2));
+    reseed(&state).await;
+    for (predicate, view, kernel) in [("Weighted", "weighted", "-6"), ("Size", "size", "3")] {
+        let rows = validated
+            .enumerate_derived(predicate, &state)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            rows[0].args[1],
+            kg(kernel),
+            "{predicate}: the kernel keeps the unit"
+        );
+        let (text, error) = raw(&pool, view, "total", "o").await;
+        assert_eq!(
+            (text, error.as_deref()),
+            (None, Some("value")),
+            "{predicate}"
+        );
+    }
+
+    let state = lines(kg("6"), kg("2"));
+    reseed(&state).await;
+    let rows = validated
+        .enumerate_derived("Ratio", &state)
+        .unwrap()
+        .unwrap();
+    assert_eq!(rows[0].args[1], dec(3), "kg over kg is a bare decimal");
+    let (text, error) = raw(&pool, "ratio", "total", "o").await;
+    assert_eq!(error, None);
+    let live: rust_decimal::Decimal = text.unwrap().parse().unwrap();
+    assert_eq!(live.normalize().to_string(), "3");
 }
