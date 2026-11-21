@@ -2,7 +2,9 @@
 //! network's receiver may record, before a deadline read from a published
 //! calendar; SAP determinations that name their evidence; a late trade that
 //! makes a price and every quiet day that leaned on it stale; and a
-//! correction beside the original statement.
+//! correction beside the original statement; and renominations, each
+//! judged on its window, effective hour and lead time, with the implied
+//! flow rate they leave.
 //!
 //! The figures are the independent reference's frozen expectations
 //! (computed with exact fractions from the UNC text), not values read back
@@ -52,7 +54,12 @@ fn set_up() -> State {
         "operator",
         vec![subj("operator")],
     );
-    for calendar in ["gas_day", "dm_output_deadline"] {
+    for calendar in [
+        "gas_day",
+        "dm_output_deadline",
+        "renomination_start",
+        "renomination_end",
+    ] {
         s = accept(
             s,
             "appoint_calendar_publisher",
@@ -103,6 +110,20 @@ fn set_up() -> State {
             "2026-10-23",
             "2026-10-23T12:00:00Z",
             "2026-10-24T12:00:00Z",
+        ),
+        // The renomination window of that gas day: 15:00 London the day
+        // before, in summer time, to 03:00 on the gas day, in winter time.
+        (
+            "renomination_start",
+            "2026-10-23",
+            "2026-10-23T14:00:00Z",
+            "2026-10-24T14:00:00Z",
+        ),
+        (
+            "renomination_end",
+            "2026-10-25",
+            "2026-10-25T03:00:00Z",
+            "2026-10-26T03:00:00Z",
         ),
     ];
     for (calendar, local_date, starts_at, ends_at) in rows {
@@ -185,6 +206,266 @@ fn a_nomination_is_judged_on_its_receipt_by_a_party_allowed_to_make_it() {
         "receiver",
     );
     assert_eq!(s.claims_for("OutputNomination").count(), 1);
+}
+
+fn implied_rates(state: &State) -> Vec<ClaimInstance> {
+    enumerate_derived(
+        &gas_day_cash_out::program(),
+        &gas_day_cash_out::implied_flow_rate(),
+        state,
+    )
+    .unwrap()
+}
+
+/// A renomination's message, shipper, receipt, the nomination it names
+/// as previous, its effective hour and quantity; the gate that refuses it, if any; and the rate after it.
+type Renomination = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    i64,
+    Option<&'static str>,
+    &'static str,
+);
+
+/// Renominations on the 25-hour gas day of 24 October 2026, in the order
+/// they are judged. Each names the nomination it revises, which must be
+/// the one in force (C4.1.5(a), C4.1.8): `ren_p`, judged after `ren_q`
+/// though received before it, names a nomination `ren_q` already
+/// replaced. Then the window from 15:00 London the day before to 03:00 on
+/// the gas day (TPD C4.1.3(b)), an effective hour inside the day and on
+/// the hour (C1.9), an hour's lead (C4.1.10(a)), not before the one it
+/// replaces takes effect (the example's own order policy), and no
+/// negative rate (C4.1.3(d)). The implied rate is
+/// the first quantity over 24, though the day has 25 hours, plus each
+/// change over the hours left (C1.8). Outcomes and rates are the
+/// reference's frozen ones.
+#[test]
+fn a_renomination_is_judged_on_its_window_hour_and_lead_and_moves_the_implied_rate() {
+    let mut s = set_up();
+    s = receive(s, "nom_d24", "2026-10-23T09:00:00Z");
+    s = accept(
+        s,
+        "nominate_output",
+        "nominator_a",
+        vec![
+            subj("nom_d24"),
+            subj("shipper_a"),
+            date("2026-10-24"),
+            dec(2_400_000),
+        ],
+    );
+    let rate = |s: &State| implied_rates(s)[0].args[2].clone();
+    assert_eq!(rate(&s), dec(100_000));
+    // Revising a first nomination before its deadline is not modelled: a
+    // second one for the same day is refused.
+    s = receive(s, "nom_d24_again", "2026-10-23T09:30:00Z");
+    refused_by(
+        &refuse(
+            &s,
+            "nominate_output",
+            "nominator_a",
+            vec![
+                subj("nom_d24_again"),
+                subj("shipper_a"),
+                date("2026-10-24"),
+                dec(2_000_000),
+            ],
+        ),
+        "first_for_the_day",
+    );
+
+    let cases: [Renomination; 14] = [
+        (
+            "ren_early",
+            "shipper_a",
+            "2026-10-23T13:59:00Z",
+            "nom_d24",
+            "2026-10-24T06:00:00Z",
+            2_000_000,
+            Some("in_window"),
+            "100000",
+        ),
+        (
+            "ren_a",
+            "shipper_a",
+            "2026-10-24T10:20:00Z",
+            "nom_d24",
+            "2026-10-24T13:00:00Z",
+            2_000_000,
+            None,
+            "75000",
+        ),
+        (
+            "ren_before_a",
+            "shipper_a",
+            "2026-10-24T11:00:00Z",
+            "ren_a",
+            "2026-10-24T12:00:00Z",
+            2_100_000,
+            Some("in_order"),
+            "75000",
+        ),
+        (
+            "ren_off_hour",
+            "shipper_a",
+            "2026-10-24T11:00:00Z",
+            "ren_a",
+            "2026-10-24T14:30:00Z",
+            2_100_000,
+            Some("on_the_hour"),
+            "75000",
+        ),
+        (
+            "ren_short_lead",
+            "shipper_a",
+            "2026-10-24T13:30:00Z",
+            "ren_a",
+            "2026-10-24T14:00:00Z",
+            2_100_000,
+            Some("lead_time"),
+            "75000",
+        ),
+        (
+            "ren_outside_day",
+            "shipper_a",
+            "2026-10-24T20:00:00Z",
+            "ren_a",
+            "2026-10-25T05:00:00Z",
+            2_100_000,
+            Some("within_the_day"),
+            "75000",
+        ),
+        (
+            "ren_q",
+            "shipper_a",
+            "2026-10-24T16:30:00Z",
+            "ren_a",
+            "2026-10-24T19:00:00Z",
+            2_060_000,
+            None,
+            "81000",
+        ),
+        (
+            "ren_p",
+            "shipper_a",
+            "2026-10-24T16:00:00Z",
+            "ren_a",
+            "2026-10-24T18:00:00Z",
+            2_050_000,
+            Some("previous_in_force"),
+            "81000",
+        ),
+        (
+            "ren_names_later",
+            "shipper_a",
+            "2026-10-24T16:10:00Z",
+            "ren_q",
+            "2026-10-24T20:00:00Z",
+            2_050_000,
+            Some("after_the_previous"),
+            "81000",
+        ),
+        (
+            "ren_b",
+            "shipper_a",
+            "2026-10-24T22:30:00Z",
+            "ren_q",
+            "2026-10-25T00:00:00Z",
+            2_300_000,
+            None,
+            "129000",
+        ),
+        (
+            "ren_small",
+            "shipper_a",
+            "2026-10-25T00:30:00Z",
+            "ren_b",
+            "2026-10-25T02:00:00Z",
+            2_310_000,
+            None,
+            "132333.333333",
+        ),
+        (
+            "ren_negative",
+            "shipper_a",
+            "2026-10-25T00:45:00Z",
+            "ren_small",
+            "2026-10-25T03:00:00Z",
+            0,
+            Some("rate_not_negative"),
+            "132333.333333",
+        ),
+        (
+            "ren_late",
+            "shipper_a",
+            "2026-10-25T03:01:00Z",
+            "ren_small",
+            "2026-10-25T04:00:00Z",
+            2_200_000,
+            Some("in_window"),
+            "132333.333333",
+        ),
+        (
+            "ren_no_earlier",
+            "shipper_b",
+            "2026-10-24T10:00:00Z",
+            "nom_none",
+            "2026-10-24T13:00:00Z",
+            1_000_000,
+            Some("earlier_nomination"),
+            "132333.333333",
+        ),
+    ];
+    s = accept(
+        s,
+        "grant_nomination",
+        "operator",
+        vec![subj("nominator_a"), subj("shipper_b")],
+    );
+    for (message, shipper, received_at, previous, effective_at, qty, refusal, after) in cases {
+        s = receive(s, message, received_at);
+        let args = vec![
+            subj(message),
+            subj(shipper),
+            date("2026-10-24"),
+            subj(previous),
+            ts(effective_at),
+            dec(qty),
+        ];
+        match refusal {
+            Some(gate) => refused_by(&refuse(&s, "renominate", "nominator_a", args), gate),
+            None => s = accept(s, "renominate", "nominator_a", args),
+        }
+        assert_eq!(rate(&s), dec_str(after), "{message}");
+    }
+    // Only the shipper's nominator may renominate, on the network's own
+    // receipt.
+    s = receive(s, "ren_unauthorised", "2026-10-24T10:00:00Z");
+    refused_by(
+        &refuse(
+            &s,
+            "renominate",
+            "other_party",
+            vec![
+                subj("ren_unauthorised"),
+                subj("shipper_a"),
+                date("2026-10-24"),
+                subj("ren_small"),
+                ts("2026-10-24T13:00:00Z"),
+                dec(2_000_000),
+            ],
+        ),
+        "may_nominate",
+    );
+    // Each renomination stays on the record beside the one it replaced.
+    assert_eq!(s.claims_for("OutputNomination").count(), 5);
+    assert_eq!(s.claims_for("Renominates").count(), 4);
+    let current: Vec<_> = s.claims_for("CurrentNomination").collect();
+    assert_eq!(current.len(), 1);
+    assert_eq!(current[0].args[2], subj("ren_small"));
 }
 
 const TRADES: [(&str, &str, i64, &str); 11] = [
