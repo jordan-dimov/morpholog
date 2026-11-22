@@ -275,11 +275,15 @@ async fn a_history_view_outlives_the_script_that_stops_asking_for_it() {
         left
     });
 
+    // A history view's lookup functions return its rows, so they go with
+    // it: an operator drops the view with CASCADE.
     for view in &history {
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP VIEW {SCHEMA}.{view}")))
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "DROP VIEW {SCHEMA}.{view} CASCADE"
+        )))
+        .execute(&pool)
+        .await
+        .unwrap();
     }
     assert!(uncatalogued(&pool).await.is_empty());
     assert!(matches!(

@@ -1739,7 +1739,18 @@
             }
           }
         },
-        "statistics": { "type": "array", "items": { "$ref": "#/$defs/provisioned_statistics" } }
+        "statistics": { "type": "array", "items": { "$ref": "#/$defs/provisioned_statistics" } },
+        "history": {
+          "description": "With --history: the audit log's index that history views and their lookups read through. A deployment's choice, reconciled by its reserved name; no run prunes it.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action", "name"],
+          "properties": {
+            "action": { "enum": ["keep", "create", "repair_invalid", "satisfied_externally", "conflict"] },
+            "detail": { "description": "For an operator to read; not for parsing.", "type": "string" },
+            "name": { "type": "string" }
+          }
+        }
       }
     },
     "provisioned_index": {
@@ -2530,12 +2541,12 @@
       ]
     },
     "view_surface": {
-      "description": "What `generate views --describe` writes: the generated view surface, for a host that builds its read models from it instead of restating them. `model_hash` is what every row of the deployed catalogue must carry; `format` moves when this description's shape changes, apart from the programme; 2 added `source` on a derived view, 3 the `history` kind, 4 made `identity` the column sets that identify a row.",
+      "description": "What `generate views --describe` writes: the generated view surface, for a host that builds its read models from it instead of restating them. `model_hash` is what every row of the deployed catalogue must carry; `format` moves when this description's shape changes, apart from the programme; 2 added `source` on a derived view, 3 the `history` kind, 4 made `identity` the column sets that identify a row, 5 added `lookups` on a history view.",
       "type": "object",
       "additionalProperties": false,
       "required": ["format", "programme", "model_hash", "schema", "catalog", "seal_table", "views"],
       "properties": {
-        "format": { "const": 4 },
+        "format": { "const": 5 },
         "programme": { "type": "string" },
         "model_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
         "schema": { "type": "string" },
@@ -2545,7 +2556,7 @@
       }
     },
     "view_description": {
-      "description": "One generated view: its predicate, name and kind, its columns in the view's order, and `identity`, the column sets whose values identify a row of the view, each listed once. For a base view: each field set the programme guarantees unique (`unique by`, `current pointer by`, an `effective by` key with its date), or every field when none is declared, since two identical claims are one. For a derived view: its keys. A set holding a timestamp or a duration is left out, since its column keeps microseconds where the claim keeps nanoseconds; a view with the exact `_morpholog_arguments` column then names that alone. A live derived view has no such column, so its identity may be empty. A `history` view, generated with `--history`, holds the operations the audit log records on the predicate; its identity is the operation's place in the log.",
+      "description": "One generated view: its predicate, name and kind, its columns in the view's order, and `identity`, the column sets whose values identify a row of the view, each listed once. For a base view: each field set the programme guarantees unique (`unique by`, `current pointer by`, an `effective by` key with its date), or every field when none is declared, since two identical claims are one. For a derived view: its keys. A set holding a timestamp or a duration is left out, since its column keeps microseconds where the claim keeps nanoseconds; a view with the exact `_morpholog_arguments` column then names that alone. A live derived view has no such column, so its identity may be empty. A `history` view, generated with `--history`, holds the operations the audit log records on the predicate; its identity is the operation's place in the log, and `lookups` names a function per declared key (`unique by`, `current pointer by`, an `effective by` key without its date) that returns one entity's rows of the view, taking the key's fields in the order listed. A history view of a predicate that declares no key has no lookups.",
       "type": "object",
       "additionalProperties": false,
       "required": ["predicate", "view", "kind", "columns", "identity"],
@@ -2555,7 +2566,18 @@
         "kind": { "enum": ["base", "derived", "history"] },
         "source": { "enum": ["live", "cache"] },
         "columns": { "type": "array", "items": { "$ref": "#/$defs/view_column" } },
-        "identity": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } }
+        "identity": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } },
+        "lookups": { "type": "array", "items": { "$ref": "#/$defs/view_lookup" } }
+      }
+    },
+    "view_lookup": {
+      "description": "A generated history lookup: the SQL function, in the view's schema, and the key fields it takes as parameters, in order.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["function", "key"],
+      "properties": {
+        "function": { "type": "string" },
+        "key": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
       }
     },
     "view_column": {

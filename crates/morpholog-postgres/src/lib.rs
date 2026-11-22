@@ -15,8 +15,8 @@ pub mod testing;
 mod completeness_race;
 
 pub use sql_views::{
-    ColumnDescription, DerivedSource, RenderedViews, VIEW_SURFACE_FORMAT, ViewDescription,
-    ViewRefusal, ViewSurface, render_views,
+    ColumnDescription, DerivedSource, LookupDescription, RenderedViews, VIEW_SURFACE_FORMAT,
+    ViewDescription, ViewRefusal, ViewSurface, render_views,
 };
 
 pub use sqlx::PgPool;
@@ -112,8 +112,9 @@ pub use derived::{RefreshSummary, list_derived, list_derived_at, refresh_derived
 pub use error::PgError;
 pub use history::ReplayConflict;
 pub use indexes::{
-    IndexAction, IndexNeed, IndexPlanEntry, NeedKind, ProvisionReport, ProvisionedProgram,
-    RequiredElsewhere, StatisticsAction, StatisticsPlanEntry, check_named_programs, plan_indexes,
+    HISTORY_INDEX, HistoryIndexEntry, IndexAction, IndexNeed, IndexPlanEntry, NeedKind,
+    ProvisionReport, ProvisionedProgram, RequiredElsewhere, StatisticsAction, StatisticsPlanEntry,
+    check_named_programs, plan_history_index, plan_indexes, provision_history_index,
     provision_indexes,
 };
 pub use merkle::{Digest, DigestError};

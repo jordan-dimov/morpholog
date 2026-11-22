@@ -1627,3 +1627,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 
 **Landed:** tests in the adapter, with a crate-private pause after a proposal has read the claims it decides on, the same point on every route. A receipt that read the record open commits and is placed before the report. An expiry that read the report but not that receipt closes a cycle serializable isolation cannot order, so one of the two is aborted, and the retry is refused by the example's own rule. The effect order of the log can place such a receipt after the report, so rehearsing the unchanged programme reports it refused: a pinned case of #644, not a wrong admission. The fixture needed claims between the two predicates in the claims key: PostgreSQL locks index pages, and a near-empty table made every pair of writers conflict.
 
+### One entity's history, read through the log's index
+
+**Forced by:** the InvenTree fork's stock-history page (#749). It read 15 history views of a 24,465-row audit log, and each read unnested the whole log: 0.5 seconds unloaded and 10.6 under four browser workers, past the page's 10-second limit. A history read cost the whole log, whatever it asked for.
+
+**Landed:** `provision indexes --history` builds one GIN index over the log's operations, a deployment's choice that no run prunes. Each history view carries a condition that index serves, applied to the audit row before its operations are expanded. Each declared key gets a lookup function that narrows by the subjects the key holds and then decides the key by position, rendered with the view from one history-row renderer. On a 200,000-row log one item's history went from 100 to 9 milliseconds, at about 1 to 2% of write throughput. Without the index a lookup is slower than the view, which the guide says.
+
