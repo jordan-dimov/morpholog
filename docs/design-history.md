@@ -1620,3 +1620,10 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** the GB gas day's clock change (#834). On 25 October 2026 the hour from 01:00 repeats, and National Gas's notice says Gemini takes no renomination or trade nomination in its second pass and holds renominations received from 01:55 BST until 02:25 GMT. The calendar allows what the market's system cannot do, and the code says none of it.
 
 **Landed:** in example 27, the notice enters as claims of its own, each naming its source: an outage and a deferral, announced by the network's system. A renomination or trade nomination received in an outage is refused as unavailable, not as late. A renomination held back counts its hour's lead from its processing, the example's policy, since the code counts from submission. An announcement must come before any message it governs in its stretch is read, or it would contradict an admitted nomination: an outage governs both kinds, a deferral renominations only. No platform change.
+
+### A receipt racing the report that the record is complete
+
+**Forced by:** the gas example's completeness evidence (#834). The plan had a `Closed(window)` claim, but every act it would refuse was already refused by `record_open`, `every_receipt_read` and `unread`. What was left to show was concurrent: a receipt in flight while the record is reported complete, and an expiry deciding in between.
+
+**Landed:** tests in the adapter, with a crate-private pause after a proposal has read the claims it decides on, the same point on every route. A receipt that read the record open commits and is placed before the report. An expiry that read the report but not that receipt closes a cycle serializable isolation cannot order, so one of the two is aborted, and the retry is refused by the example's own rule. The effect order of the log can place such a receipt after the report, so rehearsing the unchanged programme reports it refused: a pinned case of #644, not a wrong admission. The fixture needed claims between the two predicates in the claims key: PostgreSQL locks index pages, and a near-empty table made every pair of writers conflict.
+

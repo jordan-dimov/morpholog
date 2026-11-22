@@ -37,6 +37,8 @@ morpholog-core = { path = "../morpholog-core", features = ["measure"] }
 morpholog-examples = { path = "../morpholog-examples" }
 morpholog-surface = { path = "../morpholog-surface" }
 morpholog-test-support = { path = "../morpholog-test-support" }
+# The race tests hold one proposal while another commits.
+tokio = { workspace = true, features = ["sync"] }
 
 [lints]
 workspace = true
