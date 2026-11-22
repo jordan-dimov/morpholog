@@ -14,7 +14,8 @@ use common::{pg_program, reset_db, session_is_superuser, test_pool};
 use morpholog_core::ir_builder::program;
 use morpholog_examples::double_entry_ledger;
 use morpholog_postgres::{
-    IndexAction, PgPool, PgProgram, StatisticsAction, plan_indexes, provision_indexes,
+    IndexAction, PgPool, PgProgram, StatisticsAction, plan_history_index, plan_indexes,
+    provision_history_index, provision_indexes,
 };
 use sqlx::Row as _;
 
@@ -1369,4 +1370,74 @@ async fn a_dry_run_states_what_the_applying_run_does() {
         .collect();
     reported.sort();
     assert_eq!(recorded_requirements(&pool).await, reported);
+}
+
+/// The audit log's index for history reads is a deployment's choice, made
+/// with `--history`: built once, kept after, and left alone by every run
+/// that does not ask for it, a pruning one included.
+#[tokio::test]
+async fn the_history_index_is_built_kept_and_never_pruned() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    sqlx::raw_sql("DROP INDEX IF EXISTS morpholog.morpholog_audit_operations")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        plan_history_index(&pool).await.unwrap().action,
+        IndexAction::Create
+    );
+    assert_eq!(
+        provision_history_index(&pool).await.unwrap().action,
+        IndexAction::Create
+    );
+    let kept = plan_history_index(&pool).await.unwrap();
+    assert_eq!(kept.action, IndexAction::Keep);
+    assert!(kept.is_current());
+    provision_indexes(&pool, &[&ledger()], true).await.unwrap();
+    assert_eq!(
+        plan_history_index(&pool).await.unwrap().action,
+        IndexAction::Keep,
+        "a pruning run without --history leaves it"
+    );
+    sqlx::raw_sql("DROP INDEX morpholog.morpholog_audit_operations")
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+/// Another definition under the reserved name is a conflict, left alone;
+/// an operator's equivalent index under another name satisfies the choice.
+#[tokio::test]
+async fn the_history_index_reports_a_conflict_and_accepts_an_equivalent() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    sqlx::raw_sql(
+        "DROP INDEX IF EXISTS morpholog.morpholog_audit_operations;
+         CREATE INDEX morpholog_audit_operations ON morpholog.audit (transition_id)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let conflict = provision_history_index(&pool).await.unwrap();
+    assert_eq!(conflict.action, IndexAction::Conflict);
+    assert!(!conflict.is_current());
+    sqlx::raw_sql(
+        "DROP INDEX morpholog.morpholog_audit_operations;
+         CREATE INDEX operator_history ON morpholog.audit USING gin (operations jsonb_path_ops)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let external = provision_history_index(&pool).await.unwrap();
+    assert_eq!(external.action, IndexAction::SatisfiedExternally);
+    assert!(
+        external.detail.contains("operator_history"),
+        "{}",
+        external.detail
+    );
+    sqlx::raw_sql("DROP INDEX morpholog.operator_history")
+        .execute(&pool)
+        .await
+        .unwrap();
 }

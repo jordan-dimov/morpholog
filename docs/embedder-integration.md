@@ -641,7 +641,7 @@ A deployment that forgets a step still answers correctly, only slowly, so nothin
 
 The `check` step is the exception. A programme that does not fit the stored claims answers wrongly, not slowly, so each programme must fit the claims stored now and agree with the others on every predicate they share.
 
-Because a forgotten step fails nothing, gate on it where a step can be skipped: `migrate --check` exits non-zero while the schema is not current, and `provision indexes --check` (with the same programme files) exits non-zero while anything is left to create or repair, anything is stale, or a conflict needs an operator. Both change nothing and print the same report as the step they check. `migrate --check` reports on any database a Morpholog release made, one below the baseline included. While the canonical-order migration is pending it also carries `activation_preflight`: how far its preparation has gone, the estimated preparation time and writer pause, and what refuses the cutover; `migrate --prepare` runs that preparation ahead of the window, so the pause is scheduled, not discovered (`docs/install.md`). A non-zero exit with no report means the state could not be reported: the connection failed, say, the `morpholog` schema is absent, or the migration record is inconsistent.
+Because a forgotten step fails nothing, gate on it where a step can be skipped: `migrate --check` exits non-zero while the schema is not current, and `provision indexes --check` (with the same programme files, and `--history` where history views are read) exits non-zero while anything is left to create or repair, anything is stale, or a conflict needs an operator. Both change nothing and print the same report as the step they check. `migrate --check` reports on any database a Morpholog release made, one below the baseline included. While the canonical-order migration is pending it also carries `activation_preflight`: how far its preparation has gone, the estimated preparation time and writer pause, and what refuses the cutover; `migrate --prepare` runs that preparation ahead of the window, so the pause is scheduled, not discovered (`docs/install.md`). A non-zero exit with no report means the state could not be reported: the connection failed, say, the `morpholog` schema is absent, or the migration record is inconsistent.
 
 Every command that opens a database, `init` and `migrate` apart, asks first whether it is one this binary serves, and refuses by name before its first query when it is behind or ahead; how an existing deployment upgrades is in `docs/install.md`.
 
@@ -811,7 +811,18 @@ WHERE table_schema = 'morpholog_views' AND table_name <> '_morpholog_catalog'
   AND table_name NOT IN (SELECT view_name FROM morpholog_views._morpholog_catalog);
 ```
 
-**What a read costs.** A history view unnests the audit log, so a filter on one entity walks every audit row: 170 milliseconds for one key's 798 rows over a log of 200,000 audit rows, linear in the log. The views are not yet an efficient way to browse one entity's history in a large log; that read needs an interface that reaches the entity's rows directly (#749).
+**One entity's history.** Each key a predicate declares (`unique by`, `current pointer by`, an `effective by` key without its date) gets a lookup function beside its history view, named for the view and the key: `stock_item_history_by_item('i3')` returns that item's rows of `stock_item_history`, in the log's order, with the view's columns. A composite key takes each of its fields, in the key's order. A predicate that declares no key gets none: no field is guessed to identify it. The description lists each history view's `lookups`, each with its function and key fields. A lookup reads the log with its owner's rights, as its view does, so a reader granted only the view surface needs no access to Morpholog's own schema; and like a view it is granted to no one until you grant it: `GRANT EXECUTE ON FUNCTION` where you grant `SELECT` on its view. A lookup returns its view's rows, so dropping a history view needs `DROP VIEW ... CASCADE`.
+
+**What a read costs.** A history view unnests the audit log's operations. Without help, every read walks the whole log, whatever it asks for. `provision indexes --history` builds one GIN index over the log's operations, `morpholog_audit_operations`. Each history view carries a condition that index serves, so a view reads only the audit rows that touch its predicate. A lookup reads only those that mention its key, and then decides the key by position, so a subject appearing in another field never comes through. Measured on a log of 200,000 audit rows of six operations each:
+
+| Read | Without the index | With it |
+|---|---:|---:|
+| one item's lookup | 349 ms | 9 ms, 1,338 buffers |
+| the view filtered by item | 100 ms | 100 ms, 33,334 buffers |
+| a view of a predicate 1 in 50 rows touch | 49 ms | 17 ms, 4,046 buffers |
+| a view of a predicate every row touches | 98 ms | 98 ms, a scan as before |
+
+So read one entity through its lookup, not by filtering the view. And build the index wherever lookups are used: without it a lookup is the slower of the two. The index costs writes little; paired runs of 1 and 8 writers committed about 1 to 2% fewer per second, within the runs' spread. History readers did not raise the writers' retries at READ COMMITTED, at SERIALIZABLE, or at SERIALIZABLE READ ONLY DEFERRABLE, which is the level for several reads that must agree. The index is the deployment's choice, not the programme's: a run without `--history` leaves it alone, and no run prunes it.
 
 ## The derived read model (`refresh derived`)
 

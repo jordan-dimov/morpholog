@@ -909,6 +909,13 @@ pub(crate) struct ProvisionIndexesArgs {
     #[arg(long)]
     pub(crate) prune: bool,
 
+    /// Also build the audit log's index that history views and their
+    /// lookups read through (`generate views --history`), so a history read
+    /// scales with the history it returns. A deployment's choice: a run
+    /// without it leaves the index alone, and no run prunes it.
+    #[arg(long)]
+    pub(crate) history: bool,
+
     /// Emit the report as one JSON object instead of the printed plan.
     #[arg(long)]
     pub(crate) json: bool,

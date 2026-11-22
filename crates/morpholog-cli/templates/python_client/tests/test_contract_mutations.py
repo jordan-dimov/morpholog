@@ -116,6 +116,7 @@ CASES = {
         E.MigrationReport.from_json,
     ),
     "provision_report_applied.json": ("provision_report", E.ProvisionReport.from_json),
+    "provision_report_history.json": ("provision_report", E.ProvisionReport.from_json),
     "provision_report_dry_run.json": ("provision_report", E.ProvisionReport.from_json),
     "provision_report_conflict.json": ("provision_report", E.ProvisionReport.from_json),
     "provision_report_pruned.json": ("provision_report", E.ProvisionReport.from_json),

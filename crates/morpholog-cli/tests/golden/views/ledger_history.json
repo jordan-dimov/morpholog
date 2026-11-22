@@ -1,5 +1,5 @@
 {
-  "format": 4,
+  "format": 5,
   "programme": "double_entry_ledger",
   "model_hash": "sha256:020f60c452e642e1f8ada44dcfa11c19d40891bb0e7400541e444dae7bf33ec6",
   "schema": "morpholog_views",
@@ -339,6 +339,14 @@
           "_morpholog_transition_id",
           "_morpholog_operation"
         ]
+      ],
+      "lookups": [
+        {
+          "function": "journal_entry_history_by_entry_id",
+          "key": [
+            "entry_id"
+          ]
+        }
       ]
     },
     {
@@ -614,6 +622,14 @@
           "_morpholog_transition_id",
           "_morpholog_operation"
         ]
+      ],
+      "lookups": [
+        {
+          "function": "supersedes_history_by_prior_entry_id",
+          "key": [
+            "prior_entry_id"
+          ]
+        }
       ]
     }
   ]

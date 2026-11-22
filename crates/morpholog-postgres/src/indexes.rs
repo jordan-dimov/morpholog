@@ -1050,6 +1050,114 @@ async fn reconcile_locked(
     })
 }
 
+/// The audit log's index for history reads: one GIN index over every
+/// recorded operation, which a history view's containment condition and
+/// its lookups' read through, so a read scales with the history it returns
+/// rather than with the log. Built by `provision indexes --history`. It is
+/// a deployment's choice, not a programme's requirement, so it is
+/// reconciled against the catalogue alone, by this reserved name, and no
+/// run prunes it.
+pub const HISTORY_INDEX: &str = "morpholog_audit_operations";
+
+/// What a `--history` run planned and did for [`HISTORY_INDEX`].
+#[derive(Debug, Clone)]
+pub struct HistoryIndexEntry {
+    pub index_name: String,
+    pub action: IndexAction,
+    /// For an operator to read; nothing to decide on.
+    pub detail: String,
+}
+
+impl HistoryIndexEntry {
+    pub fn is_current(&self) -> bool {
+        matches!(
+            self.action,
+            IndexAction::Keep | IndexAction::SatisfiedExternally
+        )
+    }
+}
+
+/// Plan [`HISTORY_INDEX`] and change nothing.
+pub async fn plan_history_index(pool: &PgPool) -> Result<HistoryIndexEntry, PgError> {
+    let mut conn = pool.acquire().await.map_err(classify)?;
+    classify_history_index(&mut conn).await
+}
+
+/// Build [`HISTORY_INDEX`] if it is missing, and rebuild it if an
+/// interrupted build left it invalid; a conflicting definition under its
+/// name is reported and left alone. Concurrent, so the log stays writable.
+pub async fn provision_history_index(pool: &PgPool) -> Result<HistoryIndexEntry, PgError> {
+    let mut conn = pool.acquire().await.map_err(classify)?;
+    let entry = classify_history_index(&mut conn).await?;
+    let create = format!(
+        "CREATE INDEX CONCURRENTLY {} ON morpholog.audit USING gin (operations jsonb_path_ops)",
+        quote_ident(HISTORY_INDEX)
+    );
+    match entry.action {
+        IndexAction::Create => {}
+        IndexAction::RepairInvalid => drop_concurrently(&mut conn, HISTORY_INDEX).await?,
+        _ => return Ok(entry),
+    }
+    sqlx::raw_sql(sqlx::AssertSqlSafe(create))
+        .execute(&mut *conn)
+        .await
+        .map_err(classify)?;
+    Ok(entry)
+}
+
+async fn classify_history_index(
+    conn: &mut sqlx::PgConnection,
+) -> Result<HistoryIndexEntry, PgError> {
+    let rows = sqlx::query!(
+        r#"SELECT c.relname AS "name!",
+                  i.indisvalid AS "valid!",
+                  am.amname = 'gin'
+                      AND i.indnkeyatts = 1
+                      AND i.indexprs IS NULL
+                      AND i.indpred IS NULL
+                      AND (SELECT a.attname FROM pg_attribute a
+                           WHERE a.attrelid = i.indrelid AND a.attnum = i.indkey[0]) = 'operations'
+                      AND (SELECT o.opcname FROM pg_opclass o WHERE o.oid = i.indclass[0])
+                          = 'jsonb_path_ops'
+                      AS "equivalent!"
+           FROM pg_index i
+           JOIN pg_class c ON c.oid = i.indexrelid
+           JOIN pg_am am ON am.oid = c.relam
+           WHERE i.indrelid = 'morpholog.audit'::regclass"#
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(classify_checked_query)?;
+    let entry = |action, detail: String| HistoryIndexEntry {
+        index_name: HISTORY_INDEX.to_string(),
+        action,
+        detail,
+    };
+    if let Some(ours) = rows.iter().find(|r| r.name == HISTORY_INDEX) {
+        return Ok(if !ours.equivalent {
+            entry(
+                IndexAction::Conflict,
+                "the index under this name is not a GIN index over operations jsonb_path_ops"
+                    .to_string(),
+            )
+        } else if ours.valid {
+            entry(IndexAction::Keep, String::new())
+        } else {
+            entry(
+                IndexAction::RepairInvalid,
+                "an interrupted concurrent build left it invalid".to_string(),
+            )
+        });
+    }
+    if let Some(external) = rows.iter().find(|r| r.valid && r.equivalent) {
+        return Ok(entry(
+            IndexAction::SatisfiedExternally,
+            format!("{} is equivalent and stays unmanaged", external.name),
+        ));
+    }
+    Ok(entry(IndexAction::Create, String::new()))
+}
+
 async fn drop_concurrently(conn: &mut sqlx::PgConnection, name: &str) -> Result<(), PgError> {
     // The only dynamic part is the name, quoted like every generated view.
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(

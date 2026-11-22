@@ -233,10 +233,79 @@ async fn agree(
             .unwrap();
             assert_eq!(wrong, 0, "{label}: {predicate}: a typed field differs");
         }
+
+        // Each lookup returns the view's rows for its key, in the view's
+        // order, for every key the view holds.
+        for lookup in &view.lookups {
+            let typed: Vec<(String, String)> = lookup
+                .key
+                .iter()
+                .map(|field| {
+                    let column = view.columns.iter().find(|c| &c.name == field).unwrap();
+                    (quote_ident(field), column.sql_type.clone())
+                })
+                .collect();
+            let keys: Vec<Vec<String>> =
+                sqlx::query_scalar::<_, Vec<String>>(sqlx::AssertSqlSafe(format!(
+                    "SELECT DISTINCT ARRAY[{}] FROM {SCHEMA}.{} WHERE {}",
+                    typed
+                        .iter()
+                        .map(|(c, _)| format!("{c}::text"))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    quote_ident(&view.view),
+                    typed
+                        .iter()
+                        .map(|(c, _)| format!("{c} IS NOT NULL"))
+                        .collect::<Vec<_>>()
+                        .join(" AND ")
+                )))
+                .fetch_all(pool)
+                .await
+                .unwrap();
+            for key in keys {
+                let values: Vec<String> = key
+                    .iter()
+                    .zip(&typed)
+                    .map(|(v, (_, t))| format!("{}::{t}", crate::sql_quote::quote_literal(v)))
+                    .collect();
+                let order = "ORDER BY h._morpholog_audit_order, h._morpholog_act_ordinal, h._morpholog_operation";
+                let through: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                    "SELECT h::text FROM {SCHEMA}.{}({}) h",
+                    quote_ident(&lookup.function),
+                    values.join(", ")
+                )))
+                .fetch_all(pool)
+                .await
+                .unwrap();
+                let filtered: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                    "SELECT h::text FROM {SCHEMA}.{} h WHERE {} {order}",
+                    quote_ident(&view.view),
+                    typed
+                        .iter()
+                        .zip(&values)
+                        .map(|((c, _), v)| format!("h.{c} = {v}"))
+                        .collect::<Vec<_>>()
+                        .join(" AND ")
+                )))
+                .fetch_all(pool)
+                .await
+                .unwrap();
+                assert_eq!(
+                    through, filtered,
+                    "{label}: {}: the lookup and the view disagree for {key:?}",
+                    lookup.function
+                );
+                LOOKUPS_CHECKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
         compared += rows.len();
     }
     (compared, deletes)
 }
+
+/// Lookup calls compared with the view, over every test in this module.
+static LOOKUPS_CHECKED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 #[tokio::test]
 async fn history_views_replay_to_the_claims_table_over_the_gallery() {
@@ -289,6 +358,8 @@ async fn history_views_replay_to_the_claims_table_over_the_gallery() {
     assert!(commits >= 30, "committed acts: {commits}");
     assert!(compared >= 60, "history rows compared: {compared}");
     assert!(deletes >= 1, "no history held a delete");
+    let lookups = LOOKUPS_CHECKED.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(lookups >= 20, "lookup calls compared: {lookups}");
 }
 
 const STOCK: &str = "program stock
@@ -578,4 +649,203 @@ async fn a_writer_still_open_can_commit_below_a_row_already_shown() {
         "the first writer's row now reads before the one already shown"
     );
     assert!(after[1].1 < after[2].1);
+}
+
+const LINKS: &str = "program links
+predicate Link(item: Subject, other: Subject)
+    unique by (item)
+transformation link(item, other):
+    admit Link(item, other)
+";
+
+/// A lookup's index match finds every audit row whose operation holds the
+/// subject in any field; the key is then decided by position. So `a`'s
+/// history is the link keyed by `a`, not the one that merely points at it.
+#[tokio::test]
+async fn a_lookup_returns_the_key_s_rows_not_a_subject_s_in_another_field() {
+    let pool = test_pool().await;
+    crate::testing::reset_database(&pool).await.unwrap();
+    let (program, pg) = pg(LINKS);
+    let validated = program.validated().unwrap();
+    let views = apply(&pool, &validated).await.unwrap();
+    assert_eq!(views[0].lookups[0].function, "link_history_by_item");
+    assert!(act(&pool, &pg, "link", vec![subj("a"), subj("b")]).await);
+    assert!(act(&pool, &pg, "link", vec![subj("b"), subj("a")]).await);
+    let items: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT item FROM {SCHEMA}.link_history_by_item('a')"
+    )))
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(items, ["a"]);
+}
+
+const SPREAD: &str = "program spread
+predicate Item(item: Subject, qty: Decimal)
+    unique by (item)
+predicate Note(item: Subject, text: Subject)
+transformation stock(item, qty: Decimal):
+    admit Item(item, qty)
+transformation note(item, text):
+    admit Note(item, text)
+";
+
+/// Every audit-row scan in a plan, with the rows it returned and whether
+/// it went through the history index.
+fn audit_scans(node: &serde_json::Value, out: &mut Vec<(String, u64)>) {
+    if node["Relation Name"] == "audit" || node["Index Name"] == crate::HISTORY_INDEX {
+        out.push((
+            node["Node Type"].as_str().unwrap_or_default().to_string(),
+            node["Actual Rows"].as_f64().unwrap_or_default() as u64,
+        ));
+    }
+    if let Some(children) = node["Plans"].as_array() {
+        for child in children {
+            audit_scans(child, out);
+        }
+    }
+}
+
+/// With the history index, a view of a predicate few audit rows touch, and
+/// a lookup of one item, read only the audit rows that mention them: the
+/// index condition sits on the audit row, before its operations are
+/// expanded. Sequential scans are turned off, as a large log would make
+/// them lose; on a small one the planner rightly prefers them.
+#[tokio::test]
+async fn the_history_index_reaches_a_rare_predicate_and_one_entity() {
+    let pool = test_pool().await;
+    crate::testing::reset_database(&pool).await.unwrap();
+    let (program, pg) = pg(SPREAD);
+    let validated = program.validated().unwrap();
+    apply(&pool, &validated).await.unwrap();
+    for i in 0..40 {
+        assert!(act(&pool, &pg, "stock", vec![subj(&format!("i{i}")), dec(i)]).await);
+    }
+    assert!(act(&pool, &pg, "note", vec![subj("i3"), subj("checked")]).await);
+    crate::provision_history_index(&pool).await.unwrap();
+    sqlx::raw_sql("ANALYZE morpholog.audit")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // A lookup runs with its owner's rights, so PostgreSQL does not inline
+    // it and a plan of the call shows a function scan only; its body, with
+    // the key filled in, is what it runs.
+    let body: String =
+        sqlx::query_scalar("SELECT prosrc FROM pg_proc WHERE proname = 'item_history_by_item'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    for (what, query, candidates) in [
+        (
+            "the rare predicate's view",
+            format!("SELECT * FROM {SCHEMA}.note_history"),
+            1,
+        ),
+        ("one item's lookup", body.replace("$1", "'i3'::text"), 1),
+    ] {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::raw_sql("SET LOCAL enable_seqscan = off")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let plan: serde_json::Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN (ANALYZE, FORMAT JSON) {query}"
+        )))
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        tx.rollback().await.unwrap();
+        let mut scans = Vec::new();
+        audit_scans(&plan[0]["Plan"], &mut scans);
+        assert!(
+            scans.iter().any(|(node, _)| node == "Bitmap Index Scan"),
+            "{what}: the index serves it: {plan}"
+        );
+        assert!(
+            scans.iter().all(|(_, rows)| *rows <= candidates),
+            "{what}: only the audit rows that mention it are read: {scans:?}"
+        );
+    }
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "DROP INDEX morpholog.{}",
+        crate::HISTORY_INDEX
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+}
+
+/// A history view is read with its owner's rights, so a reader granted
+/// only the view surface reads the log through it. Its lookup is the same:
+/// a role with no access to Morpholog's own schema calls it once granted
+/// EXECUTE, and is refused until then, as it is a view it was not granted.
+#[tokio::test]
+async fn a_reader_of_the_view_surface_reads_through_a_lookup_it_was_granted() {
+    let pool = test_pool().await;
+    let (is_super,): (bool,) =
+        sqlx::query_as("SELECT rolsuper FROM pg_roles WHERE rolname = session_user")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    if !is_super {
+        eprintln!("skipped: creating a role needs a superuser session");
+        return;
+    }
+    crate::testing::reset_database(&pool).await.unwrap();
+    let (program, pg) = pg(LINKS);
+    let validated = program.validated().unwrap();
+    apply(&pool, &validated).await.unwrap();
+    assert!(act(&pool, &pg, "link", vec![subj("a"), subj("b")]).await);
+    // Roles belong to the cluster, and the gate runs this suite in several
+    // databases at once, so each run makes a role of its own.
+    let reader = format!("history_reader_{}", Uuid::now_v7().simple());
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "CREATE ROLE {reader} NOLOGIN;
+         GRANT USAGE ON SCHEMA {SCHEMA} TO {reader};
+         GRANT SELECT ON {SCHEMA}.link_history TO {reader};"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let as_reader = async |sql: &str| -> Result<Vec<String>, sqlx::Error> {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("SET LOCAL ROLE {reader}")))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let rows = sqlx::query_scalar(sqlx::AssertSqlSafe(sql.to_string()))
+            .fetch_all(&mut *tx)
+            .await;
+        tx.rollback().await.unwrap();
+        rows
+    };
+    let call = format!("SELECT item FROM {SCHEMA}.link_history_by_item('a')");
+    assert_eq!(
+        as_reader(&format!("SELECT item FROM {SCHEMA}.link_history"))
+            .await
+            .unwrap(),
+        ["a"],
+        "the view reads the log with its owner's rights"
+    );
+    let refused = as_reader(&call).await.unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("permission denied for function"),
+        "not granted, the lookup is refused: {refused}"
+    );
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "GRANT EXECUTE ON FUNCTION {SCHEMA}.link_history_by_item(text) TO {reader}"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(as_reader(&call).await.unwrap(), ["a"]);
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "DROP OWNED BY {reader}; DROP ROLE {reader}"
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
 }

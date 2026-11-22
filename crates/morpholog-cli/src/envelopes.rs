@@ -452,6 +452,17 @@ pub struct ProvisionReport<'a> {
     pub prune: bool,
     pub required_elsewhere: Vec<RequiredElsewhere<'a>>,
     pub statistics: Vec<ProvisionedStatistics<'a>>,
+    /// With `--history`: the audit log's index for history reads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history: Option<ProvisionedHistoryIndex<'a>>,
+}
+
+#[derive(Serialize)]
+pub struct ProvisionedHistoryIndex<'a> {
+    pub action: morpholog_postgres::IndexAction,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    pub detail: &'a str,
+    pub name: &'a str,
 }
 
 #[derive(Serialize)]
@@ -498,9 +509,26 @@ pub struct ProvisionedStatistics<'a> {
     pub required_by: &'a [String],
 }
 
+impl<'a> ProvisionReport<'a> {
+    pub fn new(
+        r: &'a morpholog_postgres::ProvisionReport,
+        history: Option<&'a morpholog_postgres::HistoryIndexEntry>,
+    ) -> Self {
+        Self {
+            history: history.map(|h| ProvisionedHistoryIndex {
+                action: h.action,
+                detail: &h.detail,
+                name: &h.index_name,
+            }),
+            ..Self::from(r)
+        }
+    }
+}
+
 impl<'a> From<&'a morpholog_postgres::ProvisionReport> for ProvisionReport<'a> {
     fn from(r: &'a morpholog_postgres::ProvisionReport) -> Self {
         Self {
+            history: None,
             applied: r.applied,
             dry_run: r.dry_run,
             indexes: r

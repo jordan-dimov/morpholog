@@ -1,0 +1,45 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.relname AS \"name!\",\n                  i.indisvalid AS \"valid!\",\n                  am.amname = 'gin'\n                      AND i.indnkeyatts = 1\n                      AND i.indexprs IS NULL\n                      AND i.indpred IS NULL\n                      AND (SELECT a.attname FROM pg_attribute a\n                           WHERE a.attrelid = i.indrelid AND a.attnum = i.indkey[0]) = 'operations'\n                      AND (SELECT o.opcname FROM pg_opclass o WHERE o.oid = i.indclass[0])\n                          = 'jsonb_path_ops'\n                      AS \"equivalent!\"\n           FROM pg_index i\n           JOIN pg_class c ON c.oid = i.indexrelid\n           JOIN pg_am am ON am.oid = c.relam\n           WHERE i.indrelid = 'morpholog.audit'::regclass",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "pg_class",
+            "name": "relname"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "valid!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "pg_index",
+            "name": "indisvalid"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "equivalent!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "9aff956b354b59b8b38dfc9cae8b40be565664cbbb11ca5eb12895c6d461f877"
+}

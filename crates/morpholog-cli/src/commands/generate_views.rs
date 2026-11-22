@@ -82,7 +82,11 @@ pub(crate) fn run(args: &GenerateViewsArgs) -> anyhow::Result<()> {
         ));
     }
     if args.history {
-        summary.push_str(&format!(", {} history", rendered.history_view_count));
+        let lookups: usize = rendered.surface.views.iter().map(|v| v.lookups.len()).sum();
+        summary.push_str(&format!(
+            ", {} history, {lookups} lookup(s); run `provision indexes --history` so they read through the audit log's index",
+            rendered.history_view_count
+        ));
     }
     if let Some(path) = &args.describe {
         let mut json = serde_json::to_string_pretty(&rendered.surface)?;

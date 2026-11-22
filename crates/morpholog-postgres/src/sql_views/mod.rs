@@ -61,7 +61,7 @@ pub struct RenderedViews {
 /// shape changes, apart from the model hash, which moves with the
 /// programme. 2 added `source` on a derived view; 3 added the `history`
 /// kind; 4 made `identity` the column sets that identify a row.
-pub const VIEW_SURFACE_FORMAT: u32 = 4;
+pub const VIEW_SURFACE_FORMAT: u32 = 5;
 
 /// Where a derived predicate's view reads from: the `morpholog_read`
 /// cache `refresh derived` fills, or the claims themselves, computed at
@@ -118,6 +118,18 @@ pub struct ViewDescription {
     pub source: Option<String>,
     pub columns: Vec<ColumnDescription>,
     pub identity: Vec<Vec<String>>,
+    /// For a history view, a function per declared key that returns one
+    /// entity's rows of the view.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub lookups: Vec<LookupDescription>,
+}
+
+/// A generated history lookup: the function, and the key fields it takes,
+/// in its parameters' order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LookupDescription {
+    pub function: String,
+    pub key: Vec<String>,
 }
 
 /// One column, in the view's order: the generator's metadata columns
@@ -595,6 +607,17 @@ fn sweep(
             &view,
             &mut refusals,
         );
+        for key in history_keys(predicate) {
+            let function = lookup_name(&view, &key);
+            check_identifier(
+                format!(
+                    "predicate `{}` (history lookup name `{function}`)",
+                    predicate.name
+                ),
+                &function,
+                &mut refusals,
+            );
+        }
     }
 
     // snake_case is many-to-one, so two distinct predicate names can render
@@ -965,6 +988,7 @@ fn render_view(
         source: None,
         columns,
         identity,
+        lookups: Vec::new(),
     }
 }
 
@@ -1033,6 +1057,7 @@ fn render_live_view(
         source: None,
         columns,
         identity,
+        lookups: Vec::new(),
     }
 }
 
@@ -1091,31 +1116,51 @@ pub(crate) fn stored_kind_test(
     }
 }
 
-/// Render one predicate's history view: a row for each operation a
-/// commit performed on the predicate's claims, in the log's order, from
-/// `morpholog.audit.operations`. A `noop`, an admission that found the
-/// claim present, changed nothing and is left out.
-///
-/// The log outlives every declaration, so a row may hold another arity
-/// or another kind at a position than the predicate declares now. A
-/// field is decoded only where the stored kind is the declared one, and
-/// is NULL otherwise; `_morpholog_shape_matches` says whether the whole
-/// row has today's structure, which is not a statement about what its
-/// fields meant; `_morpholog_arguments` is the original on every row.
-/// `_morpholog_model_hash` is the hash of the programme that wrote the
-/// row, which for a baseline row is the activation's, not the admitting
-/// programme's.
-fn render_history_view(
-    out: &mut String,
-    schema: &str,
-    predicate: &PredicateDecl,
-) -> ViewDescription {
-    let name = predicate.name.as_str();
-    let view = history_view_name(name);
-    let qualified = format!("{}.{}", quote_ident(schema), quote_ident(&view));
+/// The key sets a history lookup is generated for: each field set the
+/// programme declares as identifying (`unique by`, `current pointer by`,
+/// an `effective by` key without its date), each once. A predicate that
+/// declares none gets no lookup: no field is guessed to identify it.
+fn history_keys(predicate: &PredicateDecl) -> Vec<Vec<String>> {
+    let mut keys: Vec<Vec<String>> = Vec::new();
+    for discipline in &predicate.disciplines {
+        let key = match discipline {
+            Discipline::UniqueBy { fields } | Discipline::CurrentPointerBy { fields } => {
+                fields.clone()
+            }
+            Discipline::EffectiveBy { keys, .. } => keys.clone(),
+            Discipline::AppendOnly | Discipline::SupersededVia { .. } => continue,
+        };
+        let declared = key
+            .iter()
+            .all(|field| predicate.args.iter().any(|a| &a.name == field));
+        if declared && !key.is_empty() && !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
+}
 
-    let _ = writeln!(out, "\n-- History view for base predicate `{name}`.");
-    let _ = writeln!(out, "CREATE OR REPLACE VIEW {qualified} AS");
+/// A history lookup's function name: the view's, then the key fields.
+fn lookup_name(view: &str, key: &[String]) -> String {
+    format!("{view}_by_{}", key.join("_"))
+}
+
+/// The containment that lets the audit log's GIN index find the rows that
+/// record operations on `predicate`. Constant for a view.
+fn predicate_containment(predicate: &str) -> String {
+    let json = serde_json::json!([{ "predicate": predicate }]).to_string();
+    format!("a.operations @> {}::jsonb", quote_literal(&json))
+}
+
+/// One predicate's history rows, as a query: the operations the audit log
+/// records on it, a field decoded only where the stored kind is the
+/// declared one. `audit_filter` is a condition on the audit row `a`,
+/// applied before its operations are expanded, so an index on the log can
+/// narrow the rows read; the exact predicate test still decides. One
+/// renderer for the view and its lookups, so they cannot drift apart.
+fn history_select(predicate: &PredicateDecl, audit_filter: &str) -> String {
+    let name = predicate.name.as_str();
+    let mut out = String::new();
     out.push_str("WITH governed_operations AS (\n");
     out.push_str(
         "    SELECT o.op -> 'args' AS arguments, a.transition_id, a.audit_order, a.act_ordinal,\n",
@@ -1127,14 +1172,26 @@ fn render_history_view(
     out.push_str(
         "    FROM morpholog.audit a, jsonb_array_elements(a.operations) WITH ORDINALITY AS o(op, n)\n",
     );
+    let _ = writeln!(out, "    WHERE {audit_filter}");
     let _ = writeln!(
         out,
-        "    WHERE o.op ->> 'predicate' = {}",
+        "      AND o.op ->> 'predicate' = {}",
         quote_literal(name)
     );
     out.push_str("      AND o.op ->> 'op' <> 'noop'\n");
     out.push_str(")\nSELECT\n");
+    let selects = history_selects(predicate);
+    for (idx, (expr, alias, _)) in selects.iter().enumerate() {
+        let comma = if idx + 1 < selects.len() { "," } else { "" };
+        let _ = writeln!(out, "    {expr} AS {}{comma}", quote_ident(alias));
+    }
+    out.push_str("FROM governed_operations");
+    out
+}
 
+/// A history row's columns: the metadata, then each declared field
+/// decoded where its stored kind is the declared one.
+fn history_selects(predicate: &PredicateDecl) -> Vec<(String, String, &'static str)> {
     let mut selects: Vec<(String, String, &str)> = HISTORY_METADATA
         .iter()
         .map(|(expr, alias, sql_type)| ((*expr).to_string(), (*alias).to_string(), *sql_type))
@@ -1151,9 +1208,53 @@ fn render_history_view(
         "boolean",
     ));
     selects.push(("arguments".into(), "_morpholog_arguments".into(), "jsonb"));
+    for (i, arg) in predicate.args.iter().enumerate() {
+        let col = column_sql(&arg.kind, i);
+        let expr = match stored_kind_test(&arg.kind, "", i) {
+            Some(test) => format!("CASE WHEN {test} THEN {} END", col.expr),
+            None => col.expr,
+        };
+        selects.push((expr, arg.name.clone(), col.sql_type));
+    }
+    selects
+}
 
+/// Render one predicate's history view: a row for each operation a
+/// commit performed on the predicate's claims, in the log's order, from
+/// `morpholog.audit.operations`. A `noop`, an admission that found the
+/// claim present, changed nothing and is left out.
+///
+/// The log outlives every declaration, so a row may hold another arity
+/// or another kind at a position than the predicate declares now. A
+/// field is decoded only where the stored kind is the declared one, and
+/// is NULL otherwise; `_morpholog_shape_matches` says whether the whole
+/// row has today's structure, which is not a statement about what its
+/// fields meant; `_morpholog_arguments` is the original on every row.
+/// `_morpholog_model_hash` is the hash of the programme that wrote the
+/// row, which for a baseline row is the activation's, not the admitting
+/// programme's.
+///
+/// Beside it, one lookup function per declared key: the history of one
+/// entity, read through the audit log's index (`provision indexes
+/// --history`) rather than over the whole log.
+fn render_history_view(
+    out: &mut String,
+    schema: &str,
+    predicate: &PredicateDecl,
+) -> ViewDescription {
+    let name = predicate.name.as_str();
+    let view = history_view_name(name);
+    let qualified = format!("{}.{}", quote_ident(schema), quote_ident(&view));
+
+    let _ = writeln!(out, "\n-- History view for base predicate `{name}`.");
+    let _ = writeln!(out, "CREATE OR REPLACE VIEW {qualified} AS");
+    out.push_str(&history_select(predicate, &predicate_containment(name)));
+    out.push_str(";\n");
+
+    let selects = history_selects(predicate);
     let mut columns: Vec<ColumnDescription> = selects
         .iter()
+        .take(selects.len() - predicate.args.len())
         .map(|(_, alias, sql_type)| ColumnDescription {
             name: alias.clone(),
             role: "metadata".to_string(),
@@ -1172,18 +1273,8 @@ fn render_history_view(
             sql_type: col.sql_type.to_string(),
             position: Some(i),
         });
-        let expr = match stored_kind_test(&arg.kind, "", i) {
-            Some(test) => format!("CASE WHEN {test} THEN {} END", col.expr),
-            None => col.expr,
-        };
-        selects.push((expr, arg.name.clone(), col.sql_type));
         column_comments.push((arg.name.clone(), col.kind_comment));
     }
-    for (idx, (expr, alias, _)) in selects.iter().enumerate() {
-        let comma = if idx + 1 < selects.len() { "," } else { "" };
-        let _ = writeln!(out, "    {expr} AS {}{comma}", quote_ident(alias));
-    }
-    out.push_str("FROM governed_operations;\n");
 
     let _ = writeln!(
         out,
@@ -1202,6 +1293,12 @@ fn render_history_view(
             quote_literal(&comment),
         );
     }
+
+    let mut lookups = Vec::new();
+    for key in history_keys(predicate) {
+        lookups.push(render_history_lookup(out, schema, predicate, &view, &key));
+    }
+
     ViewDescription {
         predicate: name.to_string(),
         view,
@@ -1212,6 +1309,105 @@ fn render_history_view(
             "_morpholog_transition_id".to_string(),
             "_morpholog_operation".to_string(),
         ]],
+        lookups,
+    }
+}
+
+/// One entity's history: a function taking the key's fields and returning
+/// the view's rows for them. The audit rows are narrowed first, by the
+/// predicate and by each subject the key holds, which the log's index
+/// serves; that match ignores position, so the decoded key columns then
+/// decide exactly, as the view decodes them. A subject is stored in one
+/// canonical form; a key of another kind narrows by the predicate alone,
+/// since a decimal's stored scale need not be the one asked for.
+///
+/// A view reads the log with its owner's rights, so a reader granted only
+/// the view surface can read it; the lookup is `SECURITY DEFINER` with a
+/// fixed `search_path` for the same reason, and its body reads no more
+/// than its view. Like a view it is granted to no one until the host
+/// grants it.
+fn render_history_lookup(
+    out: &mut String,
+    schema: &str,
+    predicate: &PredicateDecl,
+    view: &str,
+    key: &[String],
+) -> LookupDescription {
+    let name = predicate.name.as_str();
+    let function = lookup_name(view, key);
+    let qualified = format!("{}.{}", quote_ident(schema), quote_ident(&function));
+    let mut parameters = Vec::new();
+    let mut subjects = Vec::new();
+    let mut exact = Vec::new();
+    for (n, field) in key.iter().enumerate() {
+        // `history_keys` keeps only keys whose fields are declared.
+        let Some((i, arg)) = predicate
+            .args
+            .iter()
+            .enumerate()
+            .find(|(_, a)| &a.name == field)
+        else {
+            continue;
+        };
+        let col = column_sql(&arg.kind, i);
+        parameters.push(col.sql_type);
+        let placeholder = format!("${}", n + 1);
+        if matches!(arg.kind, PredicateArgKind::Subject) {
+            subjects.push(format!(
+                "jsonb_build_object('type', 'subject', 'value', {placeholder})"
+            ));
+        }
+        exact.push(format!("h.{} = {placeholder}", quote_ident(field)));
+    }
+    // A scalar subquery, so the containment is built once for the call,
+    // not again for each audit row a scan without the index reads.
+    let mut filter = format!(
+        "a.operations @> (SELECT jsonb_build_array(jsonb_build_object('predicate', {}",
+        quote_literal(name)
+    );
+    if subjects.is_empty() {
+        filter.push_str(")))");
+    } else {
+        let _ = write!(
+            filter,
+            ", 'args', jsonb_build_array({}))))",
+            subjects.join(", ")
+        );
+    }
+    let _ = writeln!(
+        out,
+        "\n-- History of one `{name}` by ({}): the audit rows narrowed through the log's index, then the key decided exactly.",
+        key.join(", ")
+    );
+    let _ = writeln!(
+        out,
+        "CREATE OR REPLACE FUNCTION {qualified}({}) RETURNS SETOF {}.{} LANGUAGE sql STABLE \
+         SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $morpholog$",
+        parameters.join(", "),
+        quote_ident(schema),
+        quote_ident(view)
+    );
+    let _ = writeln!(out, "SELECT h.* FROM (");
+    out.push_str(&history_select(predicate, &filter));
+    let _ = writeln!(out, "\n) h");
+    let _ = writeln!(out, "WHERE {}", exact.join(" AND "));
+    let _ = writeln!(
+        out,
+        "ORDER BY h._morpholog_audit_order, h._morpholog_act_ordinal, h._morpholog_operation"
+    );
+    out.push_str("$morpholog$;\n");
+    // Run with the owner's rights, as its view is read with them, so a
+    // reader granted the view surface needs no access to the log; and
+    // granted to no one, as a view is, until the host grants EXECUTE as it
+    // grants SELECT on the view.
+    let _ = writeln!(
+        out,
+        "REVOKE ALL ON FUNCTION {qualified}({}) FROM PUBLIC;",
+        parameters.join(", ")
+    );
+    LookupDescription {
+        function,
+        key: key.to_vec(),
     }
 }
 

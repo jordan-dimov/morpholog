@@ -2784,6 +2784,28 @@ class RequiredElsewhere:
 
 
 @dataclass(frozen=True)
+class ProvisionedHistoryIndex:
+    """With ``--history``: the audit log's index that history views and
+    their lookups read through. A deployment's choice; no run prunes it."""
+
+    action: str
+    name: str
+    detail: str | None = None
+
+    @classmethod
+    def from_json(cls, payload: object) -> ProvisionedHistoryIndex:
+        data = _strict("history index", payload, {"action", "name"}, optional={"detail"})
+        return cls(
+            action=data.member(
+                "action",
+                {"keep", "create", "repair_invalid", "satisfied_externally", "conflict"},
+            ),
+            name=data.text("name"),
+            detail=data.optional_text("detail"),
+        )
+
+
+@dataclass(frozen=True)
 class ProvisionReport:
     """What `provision indexes` planned and did, over every programme the
     call named."""
@@ -2799,13 +2821,16 @@ class ProvisionReport:
     # position is not known. While any, no statistics object is stale;
     # provisioning them again records it.
     positions_unknown_for: list[str]
+    history: ProvisionedHistoryIndex | None = None
 
     @property
     def has_conflict(self) -> bool:
         """Something under Morpholog's own name has another definition. The
         run applied nothing and an operator has to look."""
-        return any(i.action == "conflict" for i in self.indexes) or any(
-            s.action == "conflict" for s in self.statistics
+        return (
+            any(i.action == "conflict" for i in self.indexes)
+            or any(s.action == "conflict" for s in self.statistics)
+            or (self.history is not None and self.history.action == "conflict")
         )
 
     @property
@@ -2818,8 +2843,10 @@ class ProvisionReport:
         did, so its actions read `create` and this is false straight after
         a successful apply. Gate an applying run on `applied` and not
         `has_conflict`, and a check run on this."""
-        return all(i.action in ("keep", "satisfied_externally") for i in self.indexes) and all(
-            s.action == "keep" for s in self.statistics
+        return (
+            all(i.action in ("keep", "satisfied_externally") for i in self.indexes)
+            and all(s.action == "keep" for s in self.statistics)
+            and (self.history is None or self.history.action in ("keep", "satisfied_externally"))
         )
 
     @property
@@ -2839,6 +2866,7 @@ class ProvisionReport:
             payload,
             {"applied", "dry_run", "prune", "programs", "indexes", "statistics",
              "required_elsewhere", "positions_unknown_for"},
+            optional={"history"},
         )
         return cls(
             applied=data.flag("applied"),
@@ -2849,6 +2877,7 @@ class ProvisionReport:
             statistics=data.array("statistics", ProvisionedStatistics.from_json),
             required_elsewhere=data.array("required_elsewhere", RequiredElsewhere.from_json),
             positions_unknown_for=data.texts("positions_unknown_for"),
+            history=data.optional_nested("history", ProvisionedHistoryIndex.from_json),
         )
 
 
@@ -4584,6 +4613,28 @@ class ViewColumn:
 
 
 @dataclass(frozen=True)
+class ViewLookup:
+    """A generated history lookup: the SQL function, in the view's schema,
+    and the key fields it takes as parameters, in order. It returns one
+    entity's rows of the history view."""
+
+    function: str
+    key: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, payload: object) -> ViewLookup:
+        data = _strict("view_lookup", payload, {"function", "key"})
+        key = data.array("key", _key_item)
+        if not key:
+            raise EnvelopeError("view_lookup: key is empty")
+        return cls(function=data.text("function"), key=key)
+
+
+def _key_item(value: object) -> str:
+    return _text("key field", value)
+
+
+@dataclass(frozen=True)
 class ViewDescription:
     """One generated view. ``identity`` lists the column sets whose values
     identify a row: the keys the programme guarantees, or every field when
@@ -4592,7 +4643,8 @@ class ViewDescription:
     ``_morpholog_arguments`` column where the view has one. A live derived
     view may have none. A ``history`` view holds the operations the audit
     log records on the predicate, and its identity is the operation's
-    place in the log."""
+    place in the log; ``lookups`` names a function per declared key that
+    returns one entity's rows of it."""
 
     predicate: str
     view: str
@@ -4600,6 +4652,7 @@ class ViewDescription:
     columns: list[ViewColumn] = field(default_factory=list)
     identity: list[list[str]] = field(default_factory=list)
     source: str | None = None
+    lookups: list[ViewLookup] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, payload: object) -> ViewDescription:
@@ -4607,9 +4660,10 @@ class ViewDescription:
             "view_description",
             payload,
             {"predicate", "view", "kind", "columns", "identity"},
-            {"source"},
+            {"source", "lookups"},
         )
         source = data.member("source", {"live", "cache"}) if "source" in data else None
+        lookups = data.array("lookups", ViewLookup.from_json) if "lookups" in data else []
         return cls(
             predicate=data.text("predicate"),
             view=data.text("view"),
@@ -4617,6 +4671,7 @@ class ViewDescription:
             columns=data.array("columns", ViewColumn.from_json),
             identity=data.array("identity", lambda item: parse_list(item, _text_item)),
             source=source,
+            lookups=lookups,
         )
 
     def single_key(self) -> str | None:
@@ -4649,12 +4704,12 @@ class ViewSurface:
             payload,
             {"format", "programme", "model_hash", "schema", "catalog", "seal_table", "views"},
         )
-        if data.raw("format") != 4:
+        if data.raw("format") != 5:
             raise EnvelopeError(
-                f"view_surface: format {data.raw('format')!r} is not the 4 this client reads"
+                f"view_surface: format {data.raw('format')!r} is not the 5 this client reads"
             )
         return cls(
-            format=4,
+            format=5,
             programme=data.text("programme"),
             model_hash=_hash(data, "model_hash"),
             schema=data.text("schema"),

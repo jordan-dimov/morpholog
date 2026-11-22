@@ -301,12 +301,15 @@ impl core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::Prefligh
 pub struct morpholog_cli::envelopes::ProvisionReport<'a>
 pub morpholog_cli::envelopes::ProvisionReport::applied: bool
 pub morpholog_cli::envelopes::ProvisionReport::dry_run: bool
+pub morpholog_cli::envelopes::ProvisionReport::history: core::option::Option<morpholog_cli::envelopes::ProvisionedHistoryIndex<'a>>
 pub morpholog_cli::envelopes::ProvisionReport::indexes: alloc::vec::Vec<morpholog_cli::envelopes::ProvisionedIndex<'a>>
 pub morpholog_cli::envelopes::ProvisionReport::positions_unknown_for: &'a [alloc::string::String]
 pub morpholog_cli::envelopes::ProvisionReport::programs: alloc::vec::Vec<morpholog_cli::envelopes::ProvisionedProgram<'a>>
 pub morpholog_cli::envelopes::ProvisionReport::prune: bool
 pub morpholog_cli::envelopes::ProvisionReport::required_elsewhere: alloc::vec::Vec<morpholog_cli::envelopes::RequiredElsewhere<'a>>
 pub morpholog_cli::envelopes::ProvisionReport::statistics: alloc::vec::Vec<morpholog_cli::envelopes::ProvisionedStatistics<'a>>
+impl<'a> morpholog_cli::envelopes::ProvisionReport<'a>
+pub fn morpholog_cli::envelopes::ProvisionReport<'a>::new(&'a morpholog_postgres::indexes::ProvisionReport, core::option::Option<&'a morpholog_postgres::indexes::HistoryIndexEntry>) -> Self
 impl<'a> core::convert::From<&'a morpholog_postgres::indexes::ProvisionReport> for morpholog_cli::envelopes::ProvisionReport<'a>
 pub fn morpholog_cli::envelopes::ProvisionReport<'a>::from(&'a morpholog_postgres::indexes::ProvisionReport) -> Self
 impl<'a> serde_core::ser::Serialize for morpholog_cli::envelopes::ProvisionReport<'a>
@@ -318,6 +321,19 @@ impl<'a> core::marker::Unpin for morpholog_cli::envelopes::ProvisionReport<'a>
 impl<'a> core::marker::UnsafeUnpin for morpholog_cli::envelopes::ProvisionReport<'a>
 impl<'a> core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::ProvisionReport<'a>
 impl<'a> core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::ProvisionReport<'a>
+pub struct morpholog_cli::envelopes::ProvisionedHistoryIndex<'a>
+pub morpholog_cli::envelopes::ProvisionedHistoryIndex::action: morpholog_postgres::indexes::IndexAction
+pub morpholog_cli::envelopes::ProvisionedHistoryIndex::detail: &'a str
+pub morpholog_cli::envelopes::ProvisionedHistoryIndex::name: &'a str
+impl<'a> serde_core::ser::Serialize for morpholog_cli::envelopes::ProvisionedHistoryIndex<'a>
+pub fn morpholog_cli::envelopes::ProvisionedHistoryIndex<'a>::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'a> core::marker::Freeze for morpholog_cli::envelopes::ProvisionedHistoryIndex<'a>
+impl<'a> core::marker::Send for morpholog_cli::envelopes::ProvisionedHistoryIndex<'a>
+impl<'a> core::marker::Sync for morpholog_cli::envelopes::ProvisionedHistoryIndex<'a>
+impl<'a> core::marker::Unpin for morpholog_cli::envelopes::ProvisionedHistoryIndex<'a>
+impl<'a> core::marker::UnsafeUnpin for morpholog_cli::envelopes::ProvisionedHistoryIndex<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for morpholog_cli::envelopes::ProvisionedHistoryIndex<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for morpholog_cli::envelopes::ProvisionedHistoryIndex<'a>
 pub struct morpholog_cli::envelopes::ProvisionedIndex<'a>
 pub morpholog_cli::envelopes::ProvisionedIndex::action: morpholog_postgres::indexes::IndexAction
 pub morpholog_cli::envelopes::ProvisionedIndex::detail: &'a str

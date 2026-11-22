@@ -28,7 +28,7 @@ def catalogue_rows(described: envelopes.ViewSurface) -> list[tuple[str, str, str
 class ReadingTheDescription(unittest.TestCase):
     def test_reads_every_view_with_typed_columns(self):
         described = surface()
-        self.assertEqual(described.format, 4)
+        self.assertEqual(described.format, 5)
         self.assertEqual(described.programme, "trade_lifecycle")
         self.assertTrue(described.model_hash.startswith("sha256:"))
         self.assertEqual(described.catalog, "_morpholog_catalog")
@@ -91,6 +91,16 @@ class ReadingTheDescription(unittest.TestCase):
         fields = lambda v: [(c.name, c.kind, c.sql_type) for c in v.columns if c.role == "field"]  # noqa: E731
         self.assertEqual(fields(lines), fields(of_base))
         self.assertEqual(envelopes.catalogue_differences(described, catalogue_rows(described)), [])
+
+    def test_reads_the_lookup_each_declared_key_gets(self):
+        described = envelopes.read_view_surface(str(HISTORY_DESCRIPTION))
+        entries = next(v for v in described.views if v.view == "journal_entry_history")
+        self.assertEqual(
+            entries.lookups,
+            [envelopes.ViewLookup("journal_entry_history_by_entry_id", ["entry_id"])],
+        )
+        lines = next(v for v in described.views if v.view == "journal_line_history")
+        self.assertEqual(lines.lookups, [], "a predicate with no declared key has none")
 
 
 class ComparingWithTheCatalogue(unittest.TestCase):

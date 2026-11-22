@@ -1866,6 +1866,23 @@ pub fn morpholog_postgres::FrontierProgress::eq(&self, &morpholog_postgres::Fron
 impl core::fmt::Debug for morpholog_postgres::FrontierProgress
 pub fn morpholog_postgres::FrontierProgress::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for morpholog_postgres::FrontierProgress
+pub struct morpholog_postgres::HistoryIndexEntry
+pub morpholog_postgres::HistoryIndexEntry::action: morpholog_postgres::IndexAction
+pub morpholog_postgres::HistoryIndexEntry::detail: alloc::string::String
+pub morpholog_postgres::HistoryIndexEntry::index_name: alloc::string::String
+impl morpholog_postgres::HistoryIndexEntry
+pub fn morpholog_postgres::HistoryIndexEntry::is_current(&self) -> bool
+impl core::clone::Clone for morpholog_postgres::HistoryIndexEntry
+pub fn morpholog_postgres::HistoryIndexEntry::clone(&self) -> morpholog_postgres::HistoryIndexEntry
+impl core::fmt::Debug for morpholog_postgres::HistoryIndexEntry
+pub fn morpholog_postgres::HistoryIndexEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for morpholog_postgres::HistoryIndexEntry
+impl core::marker::Send for morpholog_postgres::HistoryIndexEntry
+impl core::marker::Sync for morpholog_postgres::HistoryIndexEntry
+impl core::marker::Unpin for morpholog_postgres::HistoryIndexEntry
+impl core::marker::UnsafeUnpin for morpholog_postgres::HistoryIndexEntry
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::HistoryIndexEntry
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::HistoryIndexEntry
 pub struct morpholog_postgres::IndexNeed
 pub morpholog_postgres::IndexNeed::kind: morpholog_postgres::NeedKind
 pub morpholog_postgres::IndexNeed::name: alloc::string::String
@@ -1931,6 +1948,27 @@ impl core::marker::Unpin for morpholog_postgres::LockPolicy
 impl core::marker::UnsafeUnpin for morpholog_postgres::LockPolicy
 impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::LockPolicy
 impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::LockPolicy
+pub struct morpholog_postgres::LookupDescription
+pub morpholog_postgres::LookupDescription::function: alloc::string::String
+pub morpholog_postgres::LookupDescription::key: alloc::vec::Vec<alloc::string::String>
+impl core::clone::Clone for morpholog_postgres::LookupDescription
+pub fn morpholog_postgres::LookupDescription::clone(&self) -> morpholog_postgres::LookupDescription
+impl core::cmp::Eq for morpholog_postgres::LookupDescription
+pub fn morpholog_postgres::LookupDescription::assert_fields_are_eq(&self)
+impl core::cmp::PartialEq for morpholog_postgres::LookupDescription
+pub fn morpholog_postgres::LookupDescription::eq(&self, &morpholog_postgres::LookupDescription) -> bool
+impl core::fmt::Debug for morpholog_postgres::LookupDescription
+pub fn morpholog_postgres::LookupDescription::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for morpholog_postgres::LookupDescription
+impl serde_core::ser::Serialize for morpholog_postgres::LookupDescription
+pub fn morpholog_postgres::LookupDescription::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for morpholog_postgres::LookupDescription
+impl core::marker::Send for morpholog_postgres::LookupDescription
+impl core::marker::Sync for morpholog_postgres::LookupDescription
+impl core::marker::Unpin for morpholog_postgres::LookupDescription
+impl core::marker::UnsafeUnpin for morpholog_postgres::LookupDescription
+impl core::panic::unwind_safe::RefUnwindSafe for morpholog_postgres::LookupDescription
+impl core::panic::unwind_safe::UnwindSafe for morpholog_postgres::LookupDescription
 pub struct morpholog_postgres::MigrationRef
 pub morpholog_postgres::MigrationRef::name: alloc::string::String
 pub morpholog_postgres::MigrationRef::version: i32
@@ -2920,6 +2958,7 @@ pub struct morpholog_postgres::ViewDescription
 pub morpholog_postgres::ViewDescription::columns: alloc::vec::Vec<morpholog_postgres::ColumnDescription>
 pub morpholog_postgres::ViewDescription::identity: alloc::vec::Vec<alloc::vec::Vec<alloc::string::String>>
 pub morpholog_postgres::ViewDescription::kind: alloc::string::String
+pub morpholog_postgres::ViewDescription::lookups: alloc::vec::Vec<morpholog_postgres::LookupDescription>
 pub morpholog_postgres::ViewDescription::predicate: alloc::string::String
 pub morpholog_postgres::ViewDescription::source: core::option::Option<alloc::string::String>
 pub morpholog_postgres::ViewDescription::view: alloc::string::String
@@ -3100,6 +3139,7 @@ pub const morpholog_postgres::BASELINE_VERSION: i32
 pub const morpholog_postgres::CHUNK_BYTES: usize
 pub const morpholog_postgres::CHUNK_CLAIMS: usize
 pub const morpholog_postgres::DEFAULT_ROLE_PREFIX: &str
+pub const morpholog_postgres::HISTORY_INDEX: &str
 pub const morpholog_postgres::LEGACY_PACK_FORMAT: u32
 pub const morpholog_postgres::MIGRATION_LOCK_KEY: i64
 pub const morpholog_postgres::PACK_FORMAT: u32
@@ -3180,6 +3220,7 @@ pub fn morpholog_postgres::pack_role_rebindings(&[morpholog_postgres::AuditRow],
 pub fn morpholog_postgres::parse_public_key(&str) -> core::result::Result<ed25519_dalek::verifying::VerifyingKey, morpholog_postgres::SigningError>
 pub fn morpholog_postgres::parse_receipt(&[u8]) -> core::result::Result<morpholog_postgres::ParsedReceipt, alloc::string::String>
 pub fn morpholog_postgres::parse_signature(&str) -> core::result::Result<ed25519::Signature, morpholog_postgres::SigningError>
+pub async fn morpholog_postgres::plan_history_index(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::HistoryIndexEntry, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::plan_indexes(&sqlx_postgres::PgPool, &[&morpholog_postgres::PgProgram], bool) -> core::result::Result<morpholog_postgres::ProvisionReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::process_one_outbox_row<D>(&sqlx_postgres::PgPool, &str, &str, core::time::Duration, &D, core::option::Option<&morpholog_postgres::CompensationSpec>, jiff::timestamp::Timestamp) -> core::result::Result<morpholog_postgres::ProcessOutcome, morpholog_postgres::PgError> where D: morpholog_postgres::Deliverer
 pub async fn morpholog_postgres::propose_against_pg(&sqlx_postgres::PgPool, &morpholog_postgres::PgProgram, &morpholog_postgres::Proposal) -> core::result::Result<morpholog_postgres::PgProposalOutcome, morpholog_postgres::PgError>
@@ -3187,6 +3228,7 @@ pub async fn morpholog_postgres::propose_against_pg_timed(&sqlx_postgres::PgPool
 pub async fn morpholog_postgres::propose_against_pg_with_rejection_state(&sqlx_postgres::PgPool, &morpholog_postgres::PgProgram, &morpholog_postgres::Proposal) -> core::result::Result<morpholog_postgres::RejectionStateOutcome, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::propose_against_pg_with_trace(&sqlx_postgres::PgPool, &morpholog_postgres::PgProgram, &morpholog_postgres::Proposal) -> core::result::Result<morpholog_postgres::PgTracedOutcome, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::propose_all_against_pg(&sqlx_postgres::PgPool, &morpholog_postgres::PgProgram, &[morpholog_postgres::Proposal]) -> core::result::Result<morpholog_postgres::PgAtomicOutcome, morpholog_postgres::PgError>
+pub async fn morpholog_postgres::provision_history_index(&sqlx_postgres::PgPool) -> core::result::Result<morpholog_postgres::HistoryIndexEntry, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::provision_indexes(&sqlx_postgres::PgPool, &[&morpholog_postgres::PgProgram], bool) -> core::result::Result<morpholog_postgres::ProvisionReport, morpholog_postgres::PgError>
 pub async fn morpholog_postgres::provision_least_privilege(&sqlx_postgres::PgPool, &morpholog_postgres::DeploymentRoles) -> core::result::Result<(), morpholog_postgres::PgError>
 pub async fn morpholog_postgres::read_claims(&sqlx_postgres::PgPool) -> core::result::Result<alloc::vec::Vec<morpholog_postgres::ClaimRead>, morpholog_postgres::PgError>

@@ -282,7 +282,7 @@ fn out_and_describe_together_write_both() {
     let sql = std::fs::read_to_string(&out).unwrap();
     let surface: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&described).unwrap()).unwrap();
-    assert_eq!(surface["format"], 4);
+    assert_eq!(surface["format"], 5);
     let hash = surface["model_hash"].as_str().unwrap();
     assert!(sql.contains(&format!("-- model hash: {hash}")));
     for view in surface["views"].as_array().unwrap() {

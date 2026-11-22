@@ -8,7 +8,8 @@ use std::io::Write;
 
 use anyhow::bail;
 use morpholog_postgres::{
-    IndexAction, PgProgram, ProvisionReport, StatisticsAction, check_named_programs, plan_indexes,
+    HistoryIndexEntry, IndexAction, PgProgram, ProvisionReport, StatisticsAction,
+    check_named_programs, plan_history_index, plan_indexes, provision_history_index,
     provision_indexes,
 };
 
@@ -28,17 +29,32 @@ pub(crate) async fn indexes(args: ProvisionIndexesArgs) -> anyhow::Result<()> {
     // A usage error should not need a database to be reported.
     check_named_programs(&programs)?;
     let pool = connect_or_report(&args.db.database_url, args.json).await?;
-    let report = if args.dry_run || args.check {
+    let planning = args.dry_run || args.check;
+    // A conflict anywhere applies nothing anywhere, the audit index's too.
+    let history_plan = if args.history {
+        Some(plan_history_index(&pool).await?)
+    } else {
+        None
+    };
+    let history_conflict = history_plan
+        .as_ref()
+        .is_some_and(|h| h.action == IndexAction::Conflict);
+    let mut report = if planning || history_conflict {
         plan_indexes(&pool, &programs, args.prune).await?
     } else {
         provision_indexes(&pool, &programs, args.prune).await?
     };
+    report.dry_run = planning;
+    let history = match history_plan {
+        Some(_) if report.applied => Some(provision_history_index(&pool).await?),
+        other => other,
+    };
     if args.json {
-        print_json(&envelopes::ProvisionReport::from(&report))?;
+        print_json(&envelopes::ProvisionReport::new(&report, history.as_ref()))?;
     } else {
-        print_plan(&report, args.check || args.dry_run)?;
+        print_plan(&report, history.as_ref(), planning)?;
     }
-    if report.has_conflict() {
+    if report.has_conflict() || history_conflict {
         let names: Vec<&str> = report
             .entries
             .iter()
@@ -51,13 +67,21 @@ pub(crate) async fn indexes(args: ProvisionIndexesArgs) -> anyhow::Result<()> {
                     .filter(|s| s.action == StatisticsAction::Conflict)
                     .map(|s| s.statistics_name.as_str()),
             )
+            .chain(
+                history
+                    .iter()
+                    .filter(|h| h.action == IndexAction::Conflict)
+                    .map(|h| h.index_name.as_str()),
+            )
             .collect();
         bail!(
             "an index or statistics object under Morpholog's name has another definition and was left alone: {}",
             names.join(", ")
         );
     }
-    if args.check && !report.is_current() {
+    if args.check
+        && !(report.is_current() && history.as_ref().is_none_or(HistoryIndexEntry::is_current))
+    {
         // The plan is already on stdout, so the caller sees what is
         // outstanding.
         eprintln!("error: the indexes are not provisioned for these programmes");
@@ -69,7 +93,11 @@ pub(crate) async fn indexes(args: ProvisionIndexesArgs) -> anyhow::Result<()> {
 /// The plan for a person. Not a machine surface: `--json` is. A check or
 /// a dry run lists only what is not already kept and counts the rest, so
 /// the line that matters in a failing gate is not buried.
-fn print_plan(report: &ProvisionReport, quiet: bool) -> anyhow::Result<()> {
+fn print_plan(
+    report: &ProvisionReport,
+    history: Option<&HistoryIndexEntry>,
+    quiet: bool,
+) -> anyhow::Result<()> {
     let mut out = out::stdout();
     for program in &report.programs {
         writeln!(out, "program: {} ({})", program.identity, program.hash)?;
@@ -147,6 +175,17 @@ fn print_plan(report: &ProvisionReport, quiet: bool) -> anyhow::Result<()> {
             }
         )?;
     }
+    if let Some(entry) = history
+        && !(quiet && entry.action == IndexAction::Keep)
+    {
+        writeln!(
+            out,
+            "{:<20} {}  morpholog.audit operations{}",
+            entry.action.to_string(),
+            entry.index_name,
+            detail(&entry.detail)
+        )?;
+    }
     if !report.positions_unknown_for.is_empty() {
         writeln!(
             out,
@@ -155,7 +194,7 @@ fn print_plan(report: &ProvisionReport, quiet: bool) -> anyhow::Result<()> {
         )?;
     }
     if quiet {
-        if report.is_current() {
+        if report.is_current() && history.is_none_or(HistoryIndexEntry::is_current) {
             writeln!(out, "{kept} kept; current")?;
             return Ok(());
         }

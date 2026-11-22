@@ -964,6 +964,17 @@ fn provision_reports_serialize_as_pinned() {
         &ProvisionReport::from(&applied),
     );
 
+    // With `--history`: the audit log's index, built by the same run.
+    let history = morpholog_postgres::HistoryIndexEntry {
+        index_name: morpholog_postgres::HISTORY_INDEX.to_string(),
+        action: IndexAction::Create,
+        detail: String::new(),
+    };
+    assert_golden_bytes(
+        "provision_report_history.json",
+        &ProvisionReport::new(&applied, Some(&history)),
+    );
+
     let dry_run = morpholog_postgres::ProvisionReport {
         dry_run: true,
         applied: false,
@@ -3604,6 +3615,7 @@ fn every_golden_validates_against_its_defs_entry() {
             "migration_report",
         ),
         ("provision_report_applied.json", "provision_report"),
+        ("provision_report_history.json", "provision_report"),
         ("provision_report_dry_run.json", "provision_report"),
         ("provision_report_conflict.json", "provision_report"),
         ("provision_report_pruned.json", "provision_report"),
