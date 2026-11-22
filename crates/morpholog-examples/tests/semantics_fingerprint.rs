@@ -158,6 +158,7 @@ fn decision(result: &Result<Outcome, EvalError>) -> Value {
                 version,
                 witness,
                 compared: _,
+                compared_branches: _,
             } => json!({"invariant": {"name": name, "version": version, "witness": witness}}),
             // A gate's stable identity is its rule name; how the refusing
             // expression renders is diagnosis, not meaning.

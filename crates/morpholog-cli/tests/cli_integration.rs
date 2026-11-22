@@ -272,6 +272,89 @@ transformation complete(order, allow):
     assert_eq!(propose("complete", true), ("committed".into(), None));
 }
 
+/// A book over its cap may trade only towards flat. A trade that grows
+/// it is refused at an `or` of two comparisons, and every surface that
+/// reports the refusal names both branches' figures, in order: `propose`,
+/// `propose --explain-on-reject`, `explain --json`, its prose, and the
+/// rejection log.
+#[tokio::test(flavor = "current_thread")]
+async fn a_refused_or_names_each_branchs_figures_on_every_surface() {
+    reset_db().await;
+    let morph = temp_file(
+        b"program shrink
+
+predicate Limit(book: Subject, cap: Decimal)
+predicate Traded(book: Subject, after: Decimal)
+
+transformation set_limit(book, cap: Decimal):
+    admit Limit(book, cap)
+
+transformation trade(book, before: Decimal, after: Decimal):
+    require shrinks: (forall cap in Limit(book: book, cap: cap): before <= cap or after < before)
+    admit Traded(book, after)
+",
+    );
+    let path = morph.path().to_str().unwrap();
+    let (status, _, stderr) = run_cli(&[
+        "propose",
+        path,
+        "set_limit",
+        "--actor",
+        "desk",
+        "--args",
+        r#"[{"type":"subject","value":"b1"},{"type":"decimal","value":"10"}]"#,
+    ]);
+    assert!(status.success(), "{stderr}");
+    let trade = r#"[{"type":"subject","value":"b1"},{"type":"decimal","value":"20"},{"type":"decimal","value":"30"}]"#;
+    let branches = serde_json::json!([
+        {"op": "<=", "left": {"type": "decimal", "value": "20"}, "right": {"type": "decimal", "value": "10"}},
+        {"op": "<", "left": {"type": "decimal", "value": "30"}, "right": {"type": "decimal", "value": "20"}},
+    ]);
+    let json = |stdout: &str| -> Value {
+        serde_json::from_str(stdout).unwrap_or_else(|e| panic!("JSON ({e}): {stdout}"))
+    };
+
+    for extra in [None, Some("--explain-on-reject")] {
+        let mut args = vec!["propose", path, "trade", "--actor", "desk", "--args", trade];
+        args.extend(extra);
+        let (status, stdout, _) = run_cli(&args);
+        assert!(!status.success());
+        let refused = json(&stdout);
+        assert_eq!(refused["rule"], "shrinks", "{refused}");
+        assert!(refused.get("compared").is_none(), "{refused}");
+        assert_eq!(refused["compared_branches"], branches, "{extra:?}");
+        if extra.is_some() {
+            let gate = &refused["explanation"]["verdict"]["rejected"];
+            assert_eq!(gate["compared_branches"], branches, "{refused}");
+        }
+    }
+
+    let (_, stdout, _) = run_cli(&[
+        "explain", path, "trade", "--actor", "desk", "--args", trade, "--json",
+    ]);
+    let explained = json(&stdout);
+    let rejection = &explained["verdict"]["rejected"];
+    assert!(rejection.get("compared").is_none(), "{explained}");
+    assert_eq!(rejection["compared_branches"], branches, "{explained}");
+    let (_, prose, _) = run_cli(&["explain", path, "trade", "--actor", "desk", "--args", trade]);
+    assert!(
+        prose.contains(
+            "  compared, each branch:\n    20 <= 10 did not hold\n    30 < 20 did not hold"
+        ),
+        "{prose}"
+    );
+
+    let (status, stdout, _) = run_cli(&["inspect", "rejections"]);
+    assert!(status.success());
+    let rows = json(&stdout);
+    let rows = rows.as_array().unwrap();
+    assert_eq!(rows.len(), 2, "both refusals are logged: {stdout}");
+    for row in rows {
+        assert!(row.get("compared").is_none(), "{row}");
+        assert_eq!(row["compared_branches"], branches, "{row}");
+    }
+}
+
 // ============================================================
 // `inspect claims` / `inspect audit` / `inspect outbox`
 // ============================================================

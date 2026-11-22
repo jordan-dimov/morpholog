@@ -241,6 +241,7 @@ fn governed_contract(obs: &ProbeObservation) -> Result<bool, String> {
                 version,
                 witness,
                 compared,
+                compared_branches,
             } = reason
             else {
                 // finish_staged_delta_with over a staged (not rejected)
@@ -279,11 +280,13 @@ fn governed_contract(obs: &ProbeObservation) -> Result<bool, String> {
                 }
                 // The comparison blamed, values and all, on the path
                 // admission reports.
-                if label == "case-bound" && s.compared != *compared {
+                if label == "case-bound"
+                    && (s.compared != *compared || s.compared_branches != *compared_branches)
+                {
                     return Err(disagreement(
                         "case-bound compared",
-                        &format!("{compared:?}"),
-                        &format!("{:?}", s.compared),
+                        &format!("{compared:?} {compared_branches:?}"),
+                        &format!("{:?} {:?}", s.compared, s.compared_branches),
                     ));
                 }
             }

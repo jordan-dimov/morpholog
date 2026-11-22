@@ -656,9 +656,18 @@ async fn both_routes_blame_the_same_comparison_with_the_same_values() {
          predicate Parcel(parcel: Subject, vessel: Subject, qty: Decimal)\n\
              unique by (parcel)\n\
          predicate Flag(flag: Subject)\n\
+         predicate Draft(vessel: Subject, before: Decimal, after: Decimal)\n\
+         predicate Trim(vessel: Subject, before: Decimal, after: Decimal)\n\
+         define settles(cap, before, after):\n    before <= cap or after < before\n\
          transformation set_cap(v, c):\n    admit Cap(v, c)\n\
          transformation load(p, v, q):\n    admit Parcel(p, v, q)\n\
          transformation raise(f):\n    admit Flag(f)\n\
+         transformation draft(v, b, a):\n    admit Draft(v, b, a)\n\
+         transformation trim(v, b, a):\n    admit Trim(v, b, a)\n\
+         invariant draft_settles:\n\
+         \x20   Cap(v, cap) and Draft(v, before, after) implies before <= cap or after < before\n\
+         invariant trim_settles:\n\
+         \x20   Cap(v, cap) and Trim(v, before, after) implies settles(cap, before, after)\n\
          invariant within_capacity:\n\
          \x20   Cap(v, cap) implies sum(q | Parcel(_, v, q)) <= cap\n\
          invariant never_raised:\n\
@@ -712,12 +721,13 @@ async fn both_routes_blame_the_same_comparison_with_the_same_values() {
                     rule,
                     witness,
                     compared,
+                    compared_branches,
                     ..
                 } = outcome
                 else {
                     panic!("expected a refusal, got {outcome:?}");
                 };
-                out.push((rule, witness, compared));
+                out.push((rule, witness, compared, compared_branches));
             }
             out
         }
@@ -732,7 +742,7 @@ async fn both_routes_blame_the_same_comparison_with_the_same_values() {
     };
     let both = refusals(t).await;
     assert_eq!(both[0], both[1], "interpreted vs compiled");
-    let (rule, _, compared) = &both[1];
+    let (rule, _, compared, _) = &both[1];
     assert_eq!(rule.as_deref(), Some("within_capacity"));
     let compared = compared.clone().expect("the comparison is blamed");
     assert_eq!(compared.op, "<=");
@@ -749,7 +759,7 @@ async fn both_routes_blame_the_same_comparison_with_the_same_values() {
     };
     let both = refusals(t).await;
     assert_eq!(both[0], both[1], "interpreted vs compiled");
-    let (rule, _, compared) = &both[1];
+    let (rule, _, compared, _) = &both[1];
     assert_eq!(rule.as_deref(), Some("never_raised"));
     assert_eq!(
         compared.clone().expect("the comparison is blamed"),
@@ -770,7 +780,7 @@ async fn both_routes_blame_the_same_comparison_with_the_same_values() {
     };
     let both = refusals(t).await;
     assert_eq!(both[0], both[1], "interpreted vs compiled");
-    let (rule, witness, compared) = &both[1];
+    let (rule, witness, compared, _) = &both[1];
     assert_eq!(rule.as_deref(), Some("fleet_total"));
     assert!(
         witness.is_empty(),
@@ -784,6 +794,27 @@ async fn both_routes_blame_the_same_comparison_with_the_same_values() {
             right: dec(100),
         }
     );
+    // A failed `or` of comparisons, written out and inside a named
+    // condition: each branch's values, in order, and no single blame.
+    let cmp = |op: &str, left: i64, right: i64| morpholog_core::Compared {
+        op: op.to_string(),
+        left: dec(left),
+        right: dec(right),
+    };
+    for (act_name, invariant) in [("draft", "draft_settles"), ("trim", "trim_settles")] {
+        let t = Transition {
+            transformation_name: act_name.into(),
+            args: vec![subj("v1"), dec(20), dec(30)],
+            actor: Subject::from("route_test"),
+            decided_at: None,
+        };
+        let both = refusals(t).await;
+        assert_eq!(both[0], both[1], "interpreted vs compiled, {invariant}");
+        let (rule, _, compared, branches) = &both[1];
+        assert_eq!(rule.as_deref(), Some(invariant));
+        assert_eq!(compared, &None);
+        assert_eq!(branches, &vec![cmp("<=", 20, 10), cmp("<", 30, 20)]);
+    }
     let _ = act("set_cap");
 }
 

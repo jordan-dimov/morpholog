@@ -97,6 +97,9 @@ pub struct GateRejection {
     /// The comparison the diagnosis blamed, with its two values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compared: Option<Compared>,
+    /// For a failed `or` of comparisons, each branch's two values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compared_branches: Vec<Compared>,
     /// The act's parameters a named gate reads, as a refusal of this
     /// proposal would carry them: the same walk. Possibly empty; `None`
     /// for an unnamed gate.
@@ -127,6 +130,9 @@ pub struct InvariantRejection {
     /// refusal of this proposal would carry it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compared: Option<Compared>,
+    /// For a failed `or` of comparisons, each branch's two values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compared_branches: Vec<Compared>,
 }
 
 /// The kernel raised an error before reaching a verdict.
@@ -241,9 +247,7 @@ impl Explanation {
                     Rejection::Gate(gate) => {
                         s.push_str(&format!("\nGate not satisfied:\n  {}\n", gate.gate));
                         push_witness(&mut s, &gate.witness);
-                        if let Some(c) = &gate.compared {
-                            s.push_str(&format!("{}\n", compared_line(c)));
-                        }
+                        push_compared(&mut s, gate.compared.as_ref(), &gate.compared_branches);
                         if !gate.directly_missing_claims.is_empty() {
                             s.push_str("\nDirectly missing claims:\n");
                             for claim in &gate.directly_missing_claims {
@@ -268,9 +272,7 @@ impl Explanation {
                             inv.name, inv.rule,
                         ));
                         push_witness(&mut s, &inv.witness);
-                        if let Some(c) = &inv.compared {
-                            s.push_str(&format!("{}\n", compared_line(c)));
-                        }
+                        push_compared(&mut s, inv.compared.as_ref(), &inv.compared_branches);
                     }
                     Rejection::Error(err) => {
                         s.push_str(&format!("\nError: {}\n", err.message));
@@ -303,9 +305,21 @@ fn verdict_from_rejection(
         | RejectionReason::Invariant { witness, .. } => witness.clone(),
     };
     let compared = match reason {
-        RejectionReason::Require { compared, .. }
-        | RejectionReason::BindNone { compared, .. }
-        | RejectionReason::Invariant { compared, .. } => compared.clone(),
+        RejectionReason::Require {
+            compared,
+            compared_branches,
+            ..
+        }
+        | RejectionReason::BindNone {
+            compared,
+            compared_branches,
+            ..
+        }
+        | RejectionReason::Invariant {
+            compared,
+            compared_branches,
+            ..
+        } => (compared.clone(), compared_branches.clone()),
     };
     match failing_entry(trace) {
         Some(TraceEntry::Require {
@@ -348,7 +362,8 @@ fn verdict_from_rejection(
             name: name.to_string(),
             rule: expression.clone(),
             witness,
-            compared,
+            compared: compared.0,
+            compared_branches: compared.1,
         })),
         _ => Verdict::Rejected(Rejection::Error(ErrorRejection {
             message: reason.to_string(),
@@ -365,7 +380,7 @@ fn gate_verdict(
     statement_kind: GateKind,
     missing: &[RenderedClaim],
     witness: Vec<WitnessBinding>,
-    compared: Option<Compared>,
+    (compared, compared_branches): (Option<Compared>, Vec<Compared>),
 ) -> Verdict {
     let directly_missing_claims = missing
         .iter()
@@ -385,6 +400,7 @@ fn gate_verdict(
         directly_missing_claims,
         witness,
         compared,
+        compared_branches,
         related_parameters: None,
     }))
 }
@@ -454,12 +470,23 @@ fn push_witness(s: &mut String, witness: &[WitnessBinding]) {
 }
 
 /// The blamed comparison as a reader prints it: the two values and the
-/// operator, as the source spells it.
-fn compared_line(c: &Compared) -> String {
-    format!(
-        "  compared: {} {} {} did not hold",
-        render_eval_value(&c.left),
-        c.op,
-        render_eval_value(&c.right)
-    )
+/// operator, as the source spells it. A failed `or` prints each branch.
+fn push_compared(s: &mut String, compared: Option<&Compared>, branches: &[Compared]) {
+    let line = |c: &Compared| {
+        format!(
+            "{} {} {} did not hold",
+            render_eval_value(&c.left),
+            c.op,
+            render_eval_value(&c.right)
+        )
+    };
+    if let Some(c) = compared {
+        s.push_str(&format!("  compared: {}\n", line(c)));
+    }
+    if !branches.is_empty() {
+        s.push_str("  compared, each branch:\n");
+        for c in branches {
+            s.push_str(&format!("    {}\n", line(c)));
+        }
+    }
 }

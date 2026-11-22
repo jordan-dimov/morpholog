@@ -63,6 +63,9 @@ pub enum PgAtomicOutcome {
         /// The comparison the refusal blamed, with its two values.
         #[serde(skip_serializing_if = "Option::is_none")]
         compared: Option<Compared>,
+        /// For a refused `or` of comparisons, each branch's two values.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        compared_branches: Vec<Compared>,
         /// Whether an invariant or a gate refused the act.
         #[serde(skip)]
         refused_by: crate::RefusedBy,
@@ -197,6 +200,7 @@ async fn refuse(
         rule,
         witness,
         compared,
+        compared_branches,
         refused_by,
     } = record_refusal(pool, tx, transformation, transition, &reason).await?;
     Ok(PgAtomicOutcome::Rejected {
@@ -205,6 +209,7 @@ async fn refuse(
         rule,
         witness,
         compared,
+        compared_branches,
         refused_by,
     })
 }

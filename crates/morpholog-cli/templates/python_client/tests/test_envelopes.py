@@ -123,6 +123,25 @@ class RunOutcomes(unittest.TestCase):
         row = envelopes.RejectionRow.from_json(golden("rejection_row_gate_with_compared.json"))
         self.assertEqual(row.compared.left, Decimal("152000"))
 
+    def test_a_refused_or_carries_each_branchs_values_in_order(self):
+        outcome = envelopes.parse_run_outcome(golden("rejected_gate_with_compared_branches.json"))
+        self.assertIsNone(outcome.compared)
+        self.assertEqual(
+            [(c.op, c.left, c.right) for c in outcome.compared_branches],
+            [("<=", Decimal("20"), Decimal("10")), ("<", Decimal("30"), Decimal("20"))],
+        )
+        self.assertEqual(envelopes.parse_run_outcome(golden("rejected.json")).compared_branches, [])
+        row = envelopes.RejectionRow.from_json(
+            golden("rejection_row_gate_with_compared_branches.json")
+        )
+        self.assertEqual(len(row.compared_branches), 2)
+
+    def test_a_refusal_carrying_both_compared_and_compared_branches_is_refused(self):
+        payload = golden("rejected_gate_with_compared_branches.json")
+        payload["compared"] = payload["compared_branches"][0]
+        with self.assertRaises(envelopes.EnvelopeError):
+            envelopes.parse_run_outcome(payload)
+
     def test_a_refusal_names_the_rule_that_refused(self):
         # The stable identifier, and the whole reason it exists: `reason` is
         # prose that any rewording changes, so a test that holds it breaks

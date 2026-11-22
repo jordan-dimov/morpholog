@@ -702,6 +702,9 @@ pub struct RejectedWithExplanation<'a, E> {
     /// The comparison the refusal blamed, with its two values.
     #[serde(skip_serializing_if = "Option::is_none")]
     compared: Option<&'a Compared>,
+    /// For a refused `or` of comparisons, each branch's two values.
+    #[serde(skip_serializing_if = "<[Compared]>::is_empty")]
+    compared_branches: &'a [Compared],
 }
 
 impl<'a, E> RejectedWithExplanation<'a, E> {
@@ -709,7 +712,7 @@ impl<'a, E> RejectedWithExplanation<'a, E> {
         reason: &'a str,
         rule: Option<&'a str>,
         witness: &'a [WitnessBinding],
-        compared: Option<&'a Compared>,
+        (compared, compared_branches): (Option<&'a Compared>, &'a [Compared]),
         explanation: E,
     ) -> Self {
         Self {
@@ -719,6 +722,7 @@ impl<'a, E> RejectedWithExplanation<'a, E> {
             status: "rejected",
             witness,
             compared,
+            compared_branches,
         }
     }
 }

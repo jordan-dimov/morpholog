@@ -2131,6 +2131,10 @@ pub(crate) struct Failure {
     pub(crate) bindings: Bindings,
     /// The comparison blamed, with its operands under those bindings.
     pub(crate) compared: Option<Compared>,
+    /// For a failed `or` whose branches are each a comparison: every
+    /// branch's figures, in branch order. No single branch is to blame,
+    /// so `compared` is then absent.
+    pub(crate) compared_branches: Vec<Compared>,
 }
 
 impl Failure {
@@ -2139,8 +2143,25 @@ impl Failure {
             rendered: crate::format::format_prop_inline(prop),
             bindings: ctx.bindings.clone(),
             compared: compared_at(prop, ctx),
+            compared_branches: compared_branches_at(prop, ctx),
         }
     }
+}
+
+/// The figures of each branch of a failed `or`, when every branch is a
+/// comparison that failed under `ctx`; empty otherwise. A branch that is
+/// no comparison, or whose operands cannot be evaluated, leaves the
+/// whole list empty: a partial list would blame some branches and not
+/// others.
+pub(crate) fn compared_branches_at(prop: &Prop, ctx: &EvalContext<'_>) -> Vec<Compared> {
+    let Prop::Or(branches) = prop else {
+        return Vec::new();
+    };
+    branches
+        .iter()
+        .map(|branch| compared_at(branch, ctx))
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_default()
 }
 
 /// The two values `prop` compares under `ctx`, when it is a comparison
@@ -2290,6 +2311,7 @@ pub(crate) fn find_failure(prop: &Prop, ctx: &EvalContext<'_>) -> Option<Failure
                 ),
                 bindings: inner.bindings,
                 compared: inner.compared,
+                compared_branches: inner.compared_branches,
             })
         }
         // No useful drill-down for these:

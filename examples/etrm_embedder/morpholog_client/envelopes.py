@@ -154,6 +154,12 @@ class _Fields:
         return parse(self.data[key])
 
 
+def _one_blame(data: _Fields) -> None:
+    """A refusal blames one comparison or reports every branch of an ``or``, never both."""
+    if "compared" in data and "compared_branches" in data:
+        raise EnvelopeError(f"{data.name}: carries both compared and compared_branches")
+
+
 def _strict(
     name: str,
     payload: object,
@@ -402,6 +408,9 @@ class Rejected:
     # The comparison the refusal blamed, with its two evaluated values.
     # None when it blamed none, or could not evaluate it.
     compared: Compared | None = None
+    # For a refused `or` of comparisons, each branch's two values in
+    # branch order; `compared` is then None.
+    compared_branches: list[Compared] = field(default_factory=list)
     # On a refusal by a named gate: the act's parameters the gate reads,
     # in parameter order, possibly none. A static dependency, not a
     # judgement of which input is wrong. None for an invariant or an
@@ -414,15 +423,26 @@ class Rejected:
             "rejected outcome",
             payload,
             {"status", "reason"},
-            {"explanation", "rule", "witness", "compared", "related_parameters"},
+            {
+                "explanation",
+                "rule",
+                "witness",
+                "compared",
+                "compared_branches",
+                "related_parameters",
+            },
         )
         data.constant("status", "rejected")
+        _one_blame(data)
         return cls(
             reason=data.text("reason"),
             rule=data.optional_text("rule"),
             explanation=data.optional_nested("explanation", Explanation.from_json),
             witness=data.optional_array("witness", WitnessBinding.from_json, non_empty=True),
             compared=data.optional_nested("compared", Compared.from_json),
+            compared_branches=data.optional_array(
+                "compared_branches", Compared.from_json, non_empty=True
+            ),
             related_parameters=(
                 data.texts("related_parameters")
                 if "related_parameters" in data
@@ -521,6 +541,7 @@ class AtomicRejected:
     rule: str | None = None
     witness: list[WitnessBinding] = field(default_factory=list)
     compared: Compared | None = None
+    compared_branches: list[Compared] = field(default_factory=list)
     related_parameters: list[str] | None = None
 
     @classmethod
@@ -529,16 +550,27 @@ class AtomicRejected:
             "atomic rejected",
             payload,
             {"status", "act", "reason"},
-            optional={"rule", "witness", "compared", "related_parameters", "row"},
+            optional={
+                "rule",
+                "witness",
+                "compared",
+                "compared_branches",
+                "related_parameters",
+                "row",
+            },
         )
         data.constant("status", "rejected")
         data.optional_integer("row", minimum=1)
+        _one_blame(data)
         return cls(
             act=data.integer("act", minimum=1),
             reason=data.text("reason"),
             rule=data.optional_text("rule"),
             witness=data.optional_array("witness", WitnessBinding.from_json, non_empty=True),
             compared=data.optional_nested("compared", Compared.from_json),
+            compared_branches=data.optional_array(
+                "compared_branches", Compared.from_json, non_empty=True
+            ),
             related_parameters=(
                 data.texts("related_parameters")
                 if "related_parameters" in data
@@ -965,6 +997,7 @@ class GateRejection:
     # same proposal would carry them. Empty when nothing was in scope.
     witness: list[WitnessBinding] = field(default_factory=list)
     compared: Compared | None = None
+    compared_branches: list[Compared] = field(default_factory=list)
     # The act's parameters a named gate reads: possibly empty, None for an
     # unnamed gate. Read by the gate, not judged wrong.
     related_parameters: list[str] | None = None
@@ -975,9 +1008,10 @@ class GateRejection:
             "gate rejection",
             payload,
             {"kind", "gate", "statement_kind", "directly_missing_claims"},
-            {"rule", "witness", "compared", "related_parameters"},
+            {"rule", "witness", "compared", "compared_branches", "related_parameters"},
         )
         data.constant("kind", "gate")
+        _one_blame(data)
         return cls(
             gate=data.text("gate"),
             statement_kind=data.member("statement_kind", {"require", "bind_one"}),
@@ -985,6 +1019,9 @@ class GateRejection:
             rule=data.optional_text("rule"),
             witness=data.optional_array("witness", WitnessBinding.from_json, non_empty=True),
             compared=data.optional_nested("compared", Compared.from_json),
+            compared_branches=data.optional_array(
+                "compared_branches", Compared.from_json, non_empty=True
+            ),
             related_parameters=(
                 data.texts("related_parameters")
                 if "related_parameters" in data
@@ -1001,18 +1038,26 @@ class InvariantRejection:
     # would carry them. Empty when the failing part binds nothing.
     witness: list[WitnessBinding] = field(default_factory=list)
     compared: Compared | None = None
+    compared_branches: list[Compared] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, payload: object) -> InvariantRejection:
         data = _strict(
-            "invariant rejection", payload, {"kind", "name", "rule"}, {"witness", "compared"}
+            "invariant rejection",
+            payload,
+            {"kind", "name", "rule"},
+            {"witness", "compared", "compared_branches"},
         )
         data.constant("kind", "invariant")
+        _one_blame(data)
         return cls(
             name=data.text("name"),
             rule=data.text("rule"),
             witness=data.optional_array("witness", WitnessBinding.from_json, non_empty=True),
             compared=data.optional_nested("compared", Compared.from_json),
+            compared_branches=data.optional_array(
+                "compared_branches", Compared.from_json, non_empty=True
+            ),
         )
 
 
@@ -1318,6 +1363,7 @@ class RejectionRow:
     # The comparison the refusal blamed. None when it blamed none, could
     # not evaluate it, or the row predates the column.
     compared: Compared | None = None
+    compared_branches: list[Compared] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, payload: object) -> RejectionRow:
@@ -1334,7 +1380,7 @@ class RejectionRow:
                 "reason",
                 "rejected_at",
             },
-            {"invariant_version", "witness", "compared"},
+            {"invariant_version", "witness", "compared", "compared_branches"},
         )
         kind = data.member("kind", {"invariant", "require", "bind"})
         # Only an invariant refusal has a version, and it always has one. A
@@ -1344,6 +1390,7 @@ class RejectionRow:
             raise EnvelopeError(
                 f"rejection row: kind {kind!r} and invariant_version disagree in {payload!r}"
             )
+        _one_blame(data)
         return cls(
             rejection_id=data.text("rejection_id"),
             transformation_name=data.text("transformation_name"),
@@ -1360,6 +1407,9 @@ class RejectionRow:
                 else None
             ),
             compared=data.optional_nested("compared", Compared.from_json),
+            compared_branches=data.optional_array(
+                "compared_branches", Compared.from_json, non_empty=True
+            ),
         )
 
 
@@ -2312,6 +2362,7 @@ class RehearsalRow:
     kind: str | None = None
     witness: list[WitnessBinding] | None = None
     compared: Compared | None = None
+    compared_branches: list[Compared] = field(default_factory=list)
     error: str | None = None
     because: str | None = None
     reason: str | None = None
@@ -2328,6 +2379,7 @@ class RehearsalRow:
             base | required,
             optional | {"model_hash", "semantics_version"},
         )
+        _one_blame(data)
         return cls(
             transition_id=data.text("transition_id"),
             transformation=data.text("transformation"),
@@ -2351,6 +2403,9 @@ class RehearsalRow:
                 else None
             ),
             compared=data.optional_nested("compared", Compared.from_json),
+            compared_branches=data.optional_array(
+                "compared_branches", Compared.from_json, non_empty=True
+            ),
             error=data.optional_text("error"),
             because=(
                 data.member("because", _REHEARSAL_UNREPLAYABLE) if "because" in data else None
@@ -2361,7 +2416,10 @@ class RehearsalRow:
 
 _REHEARSAL_ROW_SHAPES: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "different_delta": (frozenset({"recorded", "candidate"}), frozenset()),
-    "would_reject": (frozenset({"rule", "kind"}), frozenset({"witness", "compared"})),
+    "would_reject": (
+        frozenset({"rule", "kind"}),
+        frozenset({"witness", "compared", "compared_branches"}),
+    ),
     "would_error": (frozenset({"error", "kind"}), frozenset()),
     "unreplayable": (frozenset({"because", "reason"}), frozenset()),
 }
@@ -2375,6 +2433,7 @@ _REHEARSAL_ROW_OPTIONAL = frozenset(
         "kind",
         "witness",
         "compared",
+        "compared_branches",
         "error",
         "because",
         "reason",

@@ -661,13 +661,24 @@ CREATE TABLE rejections (
     compared             jsonb                 CHECK (
                              compared IS NULL OR jsonb_typeof(compared) = 'object'
                          ),
+    -- A refused `or` whose branches are each a comparison: every
+    -- branch's `compared`, in branch order. NULL otherwise, and then
+    -- `compared` may say what was blamed; never `[]`.
+    compared_branches    jsonb                 CHECK (
+                             compared_branches IS NULL
+                             OR (jsonb_typeof(compared_branches) = 'array'
+                                 AND jsonb_array_length(compared_branches) > 0
+                                 AND NOT jsonb_path_exists(compared_branches, '$[*] ? (@.type() != "object")'))
+                         ),
     rejected_at          timestamptz  NOT NULL DEFAULT now(),
     -- The writer never emits a versioned gate or an unversioned
     -- invariant; the constraint keeps hand-edits from corrupting
     -- the operational evidence either way.
     CONSTRAINT rejections_kind_version_agree CHECK (
         (kind = 'invariant') = (invariant_version IS NOT NULL)
-    )
+    ),
+    -- One comparison blamed, or every branch of an `or`, never both.
+    CONSTRAINT rejections_one_blame CHECK (compared IS NULL OR compared_branches IS NULL)
 );
 
 -- Keyset replay order for coverage, mirroring audit_committed_at.
@@ -1076,4 +1087,5 @@ INSERT INTO schema_migrations (version, name) VALUES
     (28, 'exact_arithmetic'),
     (29, 'executor_role'),
     (30, 'state_snapshots'),
-    (31, 'deployment_identity');
+    (31, 'deployment_identity'),
+    (32, 'rejection_compared_branches');

@@ -242,6 +242,7 @@ pub morpholog_core::rehearse::RowClass::WouldError::error: alloc::string::String
 pub morpholog_core::rehearse::RowClass::WouldError::kind: &'static str
 pub morpholog_core::rehearse::RowClass::WouldReject
 pub morpholog_core::rehearse::RowClass::WouldReject::compared: core::option::Option<morpholog_core::Compared>
+pub morpholog_core::rehearse::RowClass::WouldReject::compared_branches: alloc::vec::Vec<morpholog_core::Compared>
 pub morpholog_core::rehearse::RowClass::WouldReject::kind: morpholog_core::RefusalKind
 pub morpholog_core::rehearse::RowClass::WouldReject::rule: alloc::string::String
 pub morpholog_core::rehearse::RowClass::WouldReject::witness: alloc::vec::Vec<morpholog_core::WitnessBinding>
@@ -1328,16 +1329,19 @@ impl core::panic::unwind_safe::UnwindSafe for morpholog_core::Rejection
 pub enum morpholog_core::RejectionReason
 pub morpholog_core::RejectionReason::BindNone
 pub morpholog_core::RejectionReason::BindNone::compared: core::option::Option<morpholog_core::Compared>
+pub morpholog_core::RejectionReason::BindNone::compared_branches: alloc::vec::Vec<morpholog_core::Compared>
 pub morpholog_core::RejectionReason::BindNone::name: core::option::Option<morpholog_core::RuleName>
 pub morpholog_core::RejectionReason::BindNone::rendered: alloc::string::String
 pub morpholog_core::RejectionReason::BindNone::witness: alloc::vec::Vec<morpholog_core::WitnessBinding>
 pub morpholog_core::RejectionReason::Invariant
 pub morpholog_core::RejectionReason::Invariant::compared: core::option::Option<morpholog_core::Compared>
+pub morpholog_core::RejectionReason::Invariant::compared_branches: alloc::vec::Vec<morpholog_core::Compared>
 pub morpholog_core::RejectionReason::Invariant::name: morpholog_core::InvariantName
 pub morpholog_core::RejectionReason::Invariant::version: u32
 pub morpholog_core::RejectionReason::Invariant::witness: alloc::vec::Vec<morpholog_core::WitnessBinding>
 pub morpholog_core::RejectionReason::Require
 pub morpholog_core::RejectionReason::Require::compared: core::option::Option<morpholog_core::Compared>
+pub morpholog_core::RejectionReason::Require::compared_branches: alloc::vec::Vec<morpholog_core::Compared>
 pub morpholog_core::RejectionReason::Require::name: core::option::Option<morpholog_core::RuleName>
 pub morpholog_core::RejectionReason::Require::rendered: alloc::string::String
 pub morpholog_core::RejectionReason::Require::witness: alloc::vec::Vec<morpholog_core::WitnessBinding>
@@ -1399,6 +1403,7 @@ pub morpholog_core::RowClass::WouldError::error: alloc::string::String
 pub morpholog_core::RowClass::WouldError::kind: &'static str
 pub morpholog_core::RowClass::WouldReject
 pub morpholog_core::RowClass::WouldReject::compared: core::option::Option<morpholog_core::Compared>
+pub morpholog_core::RowClass::WouldReject::compared_branches: alloc::vec::Vec<morpholog_core::Compared>
 pub morpholog_core::RowClass::WouldReject::kind: morpholog_core::RefusalKind
 pub morpholog_core::RowClass::WouldReject::rule: alloc::string::String
 pub morpholog_core::RowClass::WouldReject::witness: alloc::vec::Vec<morpholog_core::WitnessBinding>
@@ -2656,6 +2661,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::GateRef
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::GateRef
 pub struct morpholog_core::GateRejection
 pub morpholog_core::GateRejection::compared: core::option::Option<morpholog_core::Compared>
+pub morpholog_core::GateRejection::compared_branches: alloc::vec::Vec<morpholog_core::Compared>
 pub morpholog_core::GateRejection::directly_missing_claims: alloc::vec::Vec<morpholog_core::MissingClaim>
 pub morpholog_core::GateRejection::gate: alloc::string::String
 pub morpholog_core::GateRejection::related_parameters: core::option::Option<alloc::vec::Vec<alloc::string::String>>
@@ -2965,6 +2971,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for morpholog_core::InvariantName
 impl core::panic::unwind_safe::UnwindSafe for morpholog_core::InvariantName
 pub struct morpholog_core::InvariantRejection
 pub morpholog_core::InvariantRejection::compared: core::option::Option<morpholog_core::Compared>
+pub morpholog_core::InvariantRejection::compared_branches: alloc::vec::Vec<morpholog_core::Compared>
 pub morpholog_core::InvariantRejection::name: alloc::string::String
 pub morpholog_core::InvariantRejection::rule: alloc::string::String
 pub morpholog_core::InvariantRejection::witness: alloc::vec::Vec<morpholog_core::WitnessBinding>

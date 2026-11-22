@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT rejection_id, transformation_name, arguments, actor,\n                        kind, rule, invariant_version, reason, witness, compared, rejected_at\n                 FROM morpholog.rejections\n                 WHERE jsonb_path_exists(\n                     jsonb_build_array(arguments, witness, compared),\n                     '$.** ? (@.type == \"subject\" && @.value == $s)', $2)\n                 ORDER BY rejected_at DESC, rejection_id DESC\n                 LIMIT $1",
+  "query": "SELECT rejection_id, transformation_name, arguments, actor,\n                        kind, rule, invariant_version, reason, witness, compared,\n                        compared_branches, rejected_at\n                 FROM morpholog.rejections\n                 ORDER BY rejected_at DESC, rejection_id DESC\n                 LIMIT $1",
   "describe": {
     "columns": [
       {
@@ -115,6 +115,17 @@
       },
       {
         "ordinal": 10,
+        "name": "compared_branches",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "morpholog.rejections",
+            "name": "compared_branches"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
         "name": "rejected_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -127,8 +138,7 @@
     ],
     "parameters": {
       "Left": [
-        "Int8",
-        "Jsonb"
+        "Int8"
       ]
     },
     "nullable": [
@@ -142,8 +152,9 @@
       false,
       true,
       true,
+      true,
       false
     ]
   },
-  "hash": "fb0036b56bf9a42b5f3c7b981a0d28c9c5d9320e13a8058052d6864754c395c6"
+  "hash": "9cfaf34484c606257119f3200af0cfa99decae84562d1d37cb91c7eb8afc3ce6"
 }
