@@ -5,7 +5,8 @@
 //! correction beside the original statement; and renominations, each
 //! judged on its window, effective hour and lead time, with the implied
 //! flow rate they leave; and trade nominations that pair, are rejected,
-//! expire on the network's own completeness evidence, or are withdrawn.
+//! expire on the network's own completeness evidence, or are withdrawn;
+//! and the clock change's outage and deferral, from National Gas's notice.
 //!
 //! The figures are the independent reference's frozen expectations
 //! (computed with exact fractions from the UNC text), not values read back
@@ -483,6 +484,277 @@ fn a_renomination_is_judged_on_its_window_hour_and_lead_and_moves_the_implied_ra
     let current: Vec<_> = s.claims_for("CurrentNomination").collect();
     assert_eq!(current.len(), 1);
     assert_eq!(current[0].args[2], subj("ren_small"));
+}
+
+/// The clock change of 25 October 2026, on the 25-hour gas day of 24
+/// October, from National Gas's notice (slides 4 and 7): no renomination or
+/// trade nomination from 01:00 to 01:59:59 GMT, refused as unavailable, not
+/// as late; renominations received from 01:55 BST (00:55 GMT) to 02:25 GMT
+/// processed at 02:25, so their hour's lead counts from then (the example's
+/// policy). Each announcement comes before anything it governs in it is
+/// read: an outage governs both kinds of message, a deferral renominations
+/// only. The
+/// renominations continue from `ren_small`, the one in force after the
+/// renomination test's cases. Outcomes and rates are the reference's frozen
+/// ones.
+#[test]
+fn on_the_clock_change_an_outage_refuses_and_a_deferral_holds_renominations_back() {
+    let mut s = set_up();
+    s = receive(s, "nom_d24", "2026-10-23T09:00:00Z");
+    s = accept(
+        s,
+        "nominate_output",
+        "nominator_a",
+        vec![
+            subj("nom_d24"),
+            subj("shipper_a"),
+            date("2026-10-24"),
+            dec(2_400_000),
+        ],
+    );
+    let chain = [
+        (
+            "ren_a",
+            "2026-10-24T10:20:00Z",
+            "nom_d24",
+            "2026-10-24T13:00:00Z",
+            2_000_000,
+        ),
+        (
+            "ren_q",
+            "2026-10-24T16:30:00Z",
+            "ren_a",
+            "2026-10-24T19:00:00Z",
+            2_060_000,
+        ),
+        (
+            "ren_b",
+            "2026-10-24T22:30:00Z",
+            "ren_q",
+            "2026-10-25T00:00:00Z",
+            2_300_000,
+        ),
+        (
+            "ren_small",
+            "2026-10-25T00:30:00Z",
+            "ren_b",
+            "2026-10-25T02:00:00Z",
+            2_310_000,
+        ),
+    ];
+    for (message, received_at, previous, effective_at, qty) in chain {
+        s = receive(s, message, received_at);
+        s = accept(
+            s,
+            "renominate",
+            "nominator_a",
+            vec![
+                subj(message),
+                subj("shipper_a"),
+                date("2026-10-24"),
+                subj(previous),
+                ts(effective_at),
+                dec(qty),
+            ],
+        );
+    }
+    let rate = |s: &State| implied_rates(s)[0].args[2].clone();
+    assert_eq!(rate(&s), dec_str("132333.333333"));
+
+    let notice = "gemini_clock_change_oct26_v2";
+    let outage = vec![
+        subj("gemini"),
+        ts("2026-10-25T01:00:00Z"),
+        ts("2026-10-25T02:00:00Z"),
+        subj(notice),
+    ];
+    let deferral = vec![
+        subj("gemini"),
+        ts("2026-10-25T00:55:00Z"),
+        ts("2026-10-25T02:25:00Z"),
+        ts("2026-10-25T02:25:00Z"),
+        subj(notice),
+    ];
+    // A shipper's nominator cannot announce the network's outage or
+    // deferral.
+    refused_by(
+        &refuse(&s, "announce_outage", "nominator_a", outage.clone()),
+        "receiver",
+    );
+    refused_by(
+        &refuse(&s, "announce_deferral", "nominator_a", deferral.clone()),
+        "receiver",
+    );
+    s = accept(s, "announce_outage", "gemini_receiver", outage);
+    s = accept(s, "announce_deferral", "gemini_receiver", deferral);
+    // Too late: `ren_small` was read at 00:30.
+    refused_by(
+        &refuse(
+            &s,
+            "announce_outage",
+            "gemini_receiver",
+            vec![
+                subj("gemini"),
+                ts("2026-10-25T00:25:00Z"),
+                ts("2026-10-25T00:35:00Z"),
+                subj("late"),
+            ],
+        ),
+        "nothing_read_in_it",
+    );
+    refused_by(
+        &refuse(
+            &s,
+            "announce_deferral",
+            "gemini_receiver",
+            vec![
+                subj("gemini"),
+                ts("2026-10-25T00:25:00Z"),
+                ts("2026-10-25T00:35:00Z"),
+                ts("2026-10-25T00:40:00Z"),
+                subj("late"),
+            ],
+        ),
+        "nothing_read_in_it",
+    );
+
+    let cases: [Renomination; 5] = [
+        (
+            "ren_blocked",
+            "shipper_a",
+            "2026-10-25T01:30:00Z",
+            "ren_small",
+            "2026-10-25T04:00:00Z",
+            2_320_000,
+            Some("available"),
+            "132333.333333",
+        ),
+        (
+            "ren_blocked_last",
+            "shipper_a",
+            "2026-10-25T01:59:59Z",
+            "ren_small",
+            "2026-10-25T04:00:00Z",
+            2_320_000,
+            Some("available"),
+            "132333.333333",
+        ),
+        (
+            "ren_deferred_short",
+            "shipper_a",
+            "2026-10-25T00:55:00Z",
+            "ren_small",
+            "2026-10-25T03:00:00Z",
+            2_320_000,
+            Some("lead_after_processing"),
+            "132333.333333",
+        ),
+        (
+            "ren_deferred",
+            "shipper_a",
+            "2026-10-25T00:57:00Z",
+            "ren_small",
+            "2026-10-25T04:00:00Z",
+            2_320_000,
+            None,
+            "142333.333333",
+        ),
+        (
+            "ren_reopened",
+            "shipper_a",
+            "2026-10-25T02:00:00Z",
+            "ren_deferred",
+            "2026-10-25T04:00:00Z",
+            2_330_000,
+            None,
+            "152333.333333",
+        ),
+    ];
+    for (message, shipper, received_at, previous, effective_at, qty, refusal, after) in cases {
+        s = receive(s, message, received_at);
+        let args = vec![
+            subj(message),
+            subj(shipper),
+            date("2026-10-24"),
+            subj(previous),
+            ts(effective_at),
+            dec(qty),
+        ];
+        match refusal {
+            Some(gate) => refused_by(&refuse(&s, "renominate", "nominator_a", args), gate),
+            None => s = accept(s, "renominate", "nominator_a", args),
+        }
+        assert_eq!(rate(&s), dec_str(after), "{message}");
+    }
+
+    // A trade nomination in the outage is refused the same way.
+    s = accept(
+        s,
+        "grant_nomination",
+        "operator",
+        vec![subj("nominator_a"), subj("shipper_b")],
+    );
+    s = receive(s, "tn_blocked", "2026-10-25T01:30:00Z");
+    refused_by(
+        &refuse(
+            &s,
+            "trade_nominate",
+            "nominator_a",
+            vec![
+                subj("tn_blocked"),
+                subj("shipper_a"),
+                date("2026-10-24"),
+                subj("disposing"),
+                subj("shipper_b"),
+                dec(5_000),
+            ],
+        ),
+        "available",
+    );
+    // One read after the outage cannot be covered by an outage announced
+    // afterwards.
+    s = receive(s, "tn_after", "2026-10-25T02:10:00Z");
+    s = accept(
+        s,
+        "trade_nominate",
+        "nominator_a",
+        vec![
+            subj("tn_after"),
+            subj("shipper_a"),
+            date("2026-10-24"),
+            subj("disposing"),
+            subj("shipper_b"),
+            dec(5_000),
+        ],
+    );
+    refused_by(
+        &refuse(
+            &s,
+            "announce_outage",
+            "gemini_receiver",
+            vec![
+                subj("gemini"),
+                ts("2026-10-25T02:05:00Z"),
+                ts("2026-10-25T02:15:00Z"),
+                subj("late"),
+            ],
+        ),
+        "nothing_read_in_it",
+    );
+    // A deferral over the same stretch is announced: it governs only
+    // renominations, and none was read there.
+    accept(
+        s,
+        "announce_deferral",
+        "gemini_receiver",
+        vec![
+            subj("gemini"),
+            ts("2026-10-25T02:05:00Z"),
+            ts("2026-10-25T02:15:00Z"),
+            ts("2026-10-25T02:20:00Z"),
+            subj("late"),
+        ],
+    );
 }
 
 /// One step of the trade-nomination story, with the gate that refuses it,

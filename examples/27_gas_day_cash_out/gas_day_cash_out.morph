@@ -122,6 +122,21 @@ predicate SetAside(message: Subject, reason: Subject)
 predicate CompleteThrough(boundary: Subject, until: Timestamp)
     append only
 
+-- The calendar can allow what the network's system cannot do. On the
+-- night the clocks go back, 25 October 2026, the hour from 01:00 to 02:00
+-- happens twice, and National Gas's notice ("Gemini October 2026 Clock
+-- Change Supporting Information", slides 4 and 7) says its system takes
+-- no renomination or trade nomination in the second one, 01:00 to
+-- 01:59:59 GMT, and processes renominations received from 01:55 BST to
+-- 02:25 GMT only at 02:25 GMT. The code says none of this, so the
+-- notice enters as claims of its own, each naming its source: a stretch
+-- the system was unavailable, from `starts` up to `ends`, and one in
+-- which it held renominations until `processed_at`.
+predicate Unavailable(system: Subject, starts: Timestamp, ends: Timestamp, source: Subject)
+    append only
+predicate RenominationDeferral(system: Subject, starts: Timestamp, ends: Timestamp, processed_at: Timestamp, source: Subject)
+    append only
+
 -- The market's evidence: the day's balancing trades, National Gas's own
 -- buy and sell actions, and a statement that the day's actions are all
 -- on the record. "No action that day" is only known once that statement
@@ -223,10 +238,6 @@ define stale(v):
 define trade_pending(m):
     TradeNomination(message: m, ..) and not TradeEffective(m, _) and not TradeEffective(_, m) and not TradeRejected(m, _) and not TradeWithdrawn(m, _)
 
--- When the counterpart to a trade nomination received at `at` is due
--- (TPD C5.2.3(b)): by 06:00 on the gas day if the first side came before
--- the day started, which is 06:00 on the day's own date, an hour into it;
--- otherwise within the hour after it.
 -- Whether the network has read a message: taken it as a nomination, a
 -- trade nomination or a withdrawal, or set it aside. Each act that reads
 -- a message refuses one already read (`unread`), so a message is read
@@ -234,6 +245,22 @@ define trade_pending(m):
 define message_read(m):
     OutputNomination(message: m, ..) or TradeNomination(message: m, ..) or TradeWithdrawn(_, m) or SetAside(m, _)
 
+-- Whether the system was unavailable at an instant, and whether it has
+-- already read a renomination, or a trade nomination, received in a
+-- stretch.
+define unavailable(system, at):
+    Unavailable(system, starts, ends, _) and starts at_or_before at and at strictly_before ends
+
+define renomination_read_in(system, starts, ends):
+    Received(m, system, at) and starts at_or_before at and at strictly_before ends and Renomination(m, _)
+
+define trade_nomination_read_in(system, starts, ends):
+    Received(m, system, at) and starts at_or_before at and at strictly_before ends and TradeNomination(message: m, ..)
+
+-- When the counterpart to a trade nomination received at `at` is due
+-- (TPD C5.2.3(b)): by 06:00 on the gas day if the first side came before
+-- the day started, which is 06:00 on the day's own date, an hour into it;
+-- otherwise within the hour after it.
 define counterpart_due(at, day_starts, six_am) = (if(at strictly_before day_starts, six_am, at + duration(PT60M)))
 
 -- Two trade nominations that correspond (C5.1.1, C5.2.1): the same day,
@@ -344,7 +371,11 @@ transformation nominate_output(message, shipper, gas_day: Date, qty_kwh: Decimal
 -- date, since the day runs to 05:00 (C1.2, C4.1.3(b)). Both instants are
 -- read from published rows. The shipper names the hour it takes effect:
 -- inside the day, on the hour (C1.9), and at least an hour after the
--- network received it (C4.1.10(a)). The code does not say what a
+-- network received it (C4.1.10(a)). One received while the system was
+-- unavailable is refused as unavailable, not as late. One the system
+-- held back counts its hour from when it was processed, since the
+-- network had no notice of it before (`example_deferred_lead_time_v1`).
+-- The code does not say what a
 -- renomination taking effect before the one it replaces does to that
 -- one; this example refuses it (`example_renomination_order_v1`), so the
 -- nominations in force take effect in the order they replace each other.
@@ -365,10 +396,12 @@ transformation renominate(message, shipper, gas_day: Date, previous, effective_a
     bind LocalDay(#renomination_start, preceding_day, opens, _, _, _)
     bind LocalDay(#renomination_end, next_date, closes, _, _, _)
     require in_window: opens at_or_before received_at and received_at at_or_before closes
+    require available: not unavailable(#gemini, received_at)
     bind LocalDay(#gas_day, gas_day, day_starts, day_ends, _, _)
     require within_the_day: day_starts at_or_before effective_at and effective_at strictly_before day_ends
     require on_the_hour: ((effective_at - day_starts) / duration(PT1H)) % 1 = 0
     require lead_time: received_at + duration(PT60M) at_or_before effective_at
+    require lead_after_processing: not (RenominationDeferral(#gemini, starts, ends, processed, _) and starts at_or_before received_at and received_at strictly_before ends and effective_at strictly_before processed + duration(PT60M))
     require in_order: not Renomination(previous, _) or (Renomination(previous, previous_effective) and previous_effective at_or_before effective_at)
     require rate_not_negative: implied_flow_rate(shipper, gas_day) + round((qty_kwh - prior_qty) / ((day_ends - effective_at) / duration(PT1H)), 0.000001) >= 0
     admit OutputNomination(message, shipper, gas_day, qty_kwh)
@@ -381,7 +414,8 @@ transformation renominate(message, shipper, gas_day: Date, previous, effective_a
 -- A trade nomination (TPD C5.2). It names the day, its side, the
 -- shipper on the other side and the quantity. It may be made from the
 -- start of the gas day thirty days before to 03:00 on the gas day,
--- judged on its receipt, between two different shippers.
+-- judged on its receipt, between two different shippers, and not while
+-- the system was unavailable.
 transformation trade_nominate(message, shipper, gas_day: Date, side, counterparty, qty_kwh: Decimal):
     require may_nominate: MayNominate(actor, shipper)
     require received_by_the_network: Received(message, #gemini, _)
@@ -394,6 +428,7 @@ transformation trade_nominate(message, shipper, gas_day: Date, side, counterpart
     bind LocalDay(#gas_day, opening_day, opens, _, _, _)
     bind LocalDay(#renomination_end, next_date, closes, _, _, _)
     require in_window: opens at_or_before received_at and received_at at_or_before closes
+    require available: not unavailable(#gemini, received_at)
     admit TradeNomination(message, shipper, gas_day, side, counterparty, qty_kwh)
 
 -- The network's system pairs two waiting trade nominations. They must
@@ -475,6 +510,23 @@ transformation report_complete_through(boundary, until: Timestamp):
     require receiver: ReceiptAuthority(boundary, actor)
     require forward: not (CompleteThrough(boundary, u) and until at_or_before u)
     admit CompleteThrough(boundary, until)
+
+-- The network's system announces an outage, or a stretch in which it
+-- holds renominations back, before it has read any message it governs
+-- received in it: one already taken in that stretch would contradict
+-- the announcement. An outage governs renominations and trade
+-- nominations; a deferral only changes when renominations are
+-- processed, so a trade nomination read in its stretch is no obstacle.
+-- National Gas published its notice three weeks ahead.
+transformation announce_outage(system, starts: Timestamp, ends: Timestamp, source):
+    require receiver: ReceiptAuthority(system, actor)
+    require nothing_read_in_it: not renomination_read_in(system, starts, ends) and not trade_nomination_read_in(system, starts, ends)
+    admit Unavailable(system, starts, ends, source)
+
+transformation announce_deferral(system, starts: Timestamp, ends: Timestamp, processed_at: Timestamp, source):
+    require receiver: ReceiptAuthority(system, actor)
+    require nothing_read_in_it: not renomination_read_in(system, starts, ends)
+    admit RenominationDeferral(system, starts, ends, processed_at, source)
 
 
 -- Market data, from its appointed source only.
