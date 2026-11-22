@@ -440,6 +440,7 @@ pub(crate) async fn propose_against_pg_run(
         prepared,
         timed,
         async || {},
+        async || {},
     )
     .await
 }
@@ -464,11 +465,43 @@ pub(crate) async fn propose_against_pg_pausing(
         program.prepared(),
         false,
         after_load,
+        async || {},
     )
     .await?;
     Ok(run.outcome)
 }
 
+/// [`propose_against_pg`] held after it has decided and before it
+/// commits. On the compiled route the delta is written and every compiled
+/// check has read by then, so a test can let other proposals run against
+/// a transaction that has done all its reading and writing.
+#[cfg(test)]
+pub(crate) async fn propose_against_pg_holding(
+    pool: &PgPool,
+    program: &PgProgram,
+    proposal: &Proposal,
+    after_decide: impl AsyncFnOnce(),
+) -> Result<PgProposalOutcome, PgError> {
+    let (transformation, _, _) = resolve(program.prepared(), &proposal.transformation_name)?;
+    let transition = proposal.transition();
+    let run = propose_against_pg_run_pausing(
+        pool,
+        program.route(),
+        transformation,
+        &transition,
+        program.prepared(),
+        false,
+        async || {},
+        after_decide,
+    )
+    .await?;
+    Ok(run.outcome)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "propose_against_pg_run's arguments and the two pauses"
+)]
 async fn propose_against_pg_run_pausing(
     pool: &PgPool,
     route: Route<'_>,
@@ -477,6 +510,7 @@ async fn propose_against_pg_run_pausing(
     prepared: &PreparedProgram,
     timed: bool,
     after_load: impl AsyncFnOnce(),
+    after_decide: impl AsyncFnOnce(),
 ) -> Result<ProposalRun, PgError> {
     let admission = &prepared.admission();
     let invariants = admission.invariants();
@@ -519,6 +553,7 @@ async fn propose_against_pg_run_pausing(
     let rejection_state =
         matches!(decided, Decided::Kernel(Outcome::Rejected { .. })).then_some(state);
     let kernel = elapsed(clock) - begin - load;
+    after_decide().await;
 
     let pg_outcome = finalise_outcome(
         pool,

@@ -1199,6 +1199,20 @@ To tell whether a deployment is affected, look in `pg_locks` while proposals run
 
 `check -v` lists each read in a transformation body that loads its predicate whole: the transformation, the predicate, the statement, its rule name when it has one, and the definitions the read goes through. A read is keyed only by values the transformation knows before it runs: a parameter no statement rebinds, `actor`, or a literal. A variable a gate binds as it runs, such as a trade it sums over, does not key anything, and the selector `effective by` generates looks for a later version by its keys alone, so passing it another field does not key that read. A limit gate that sums every trade's terms in force through that selector therefore reads every organisation's terms. A definition that names the organisation in its reads, passed the parameter, keys it. The list is text in `check -v`, not part of `check --json`.
 
+### Independent cases on one database
+
+Case-local admission limits which cases a check judges. It does not limit what PostgreSQL remembers the check read. PostgreSQL tracks serializable reads by index page, and one page holds the entries of many cases. When two proposals on unrelated cases read and write entries on the same page, PostgreSQL can link them, and with a third proposal it aborts one as a `serialization_failure`. No rule relates the two cases, so the retry commits, with the same claims.
+
+An exchange measured this with three contracts and one worker per contract. On one database it answered 17 to 23 orders a second, with a few hundred serialization failures a run, every one between different contracts. With a database per contract it answered 35 a second, with none.
+
+Two shapes make it worse:
+- **A small predicate.** Its entries fit on a few pages, so every case shares them.
+- **A claim every act rewrites,** such as a counter per contract. Its index holds a handful of entries on one page, and every act on every contract reads and writes there. Removing the exchange's counter cut its failures by about 30%, but did not remove them.
+
+Two things do not help. The exchange's record conflicted just as much with indexes rebuilt without B-tree deduplication, and its checks did not reach the predicate-lock limits above.
+
+So today: retry on `serialization_failure` as above, and keep each proposal's transaction short. Expect independent cases sharing one database to run slower than the same cases kept apart. Separate databases avoid the conflicts, but give up one record, so Morpholog does not recommend them. The adapter's tests pin what holds: overlapping proposals on independent cases either commit or fail as a `serialization_failure`, and a retry commits.
+
 ### A walk in a recorded order
 
 Some host code walks claims in order, and each pass depends on the ones before it. InvenTree ships a shipment this way. It visits the shipment's allocations with a running quantity per stock item: an allocation splits the item when it takes less than the item has left, and otherwise takes the item whole. A `for` pass reads the record as the act began, so there is no running value. But the running quantity is a prefix sum. What an item has left when an allocation is reached is its quantity, less the allocations of it that come earlier. Given an order that is a recorded fact, each pass computes that from the record:
