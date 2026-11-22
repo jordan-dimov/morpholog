@@ -591,6 +591,7 @@ pub morpholog_postgres::PgAtomicOutcome::Committed::acts: alloc::vec::Vec<morpho
 pub morpholog_postgres::PgAtomicOutcome::Rejected
 pub morpholog_postgres::PgAtomicOutcome::Rejected::act: u64
 pub morpholog_postgres::PgAtomicOutcome::Rejected::compared: core::option::Option<morpholog_core::propose::Compared>
+pub morpholog_postgres::PgAtomicOutcome::Rejected::compared_branches: alloc::vec::Vec<morpholog_core::propose::Compared>
 pub morpholog_postgres::PgAtomicOutcome::Rejected::reason: alloc::string::String
 pub morpholog_postgres::PgAtomicOutcome::Rejected::refused_by: morpholog_postgres::RefusedBy
 pub morpholog_postgres::PgAtomicOutcome::Rejected::rule: core::option::Option<alloc::string::String>
@@ -721,6 +722,7 @@ pub morpholog_postgres::PgProposalOutcome::Committed::retracted_claims: alloc::v
 pub morpholog_postgres::PgProposalOutcome::Committed::transition_id: uuid::Uuid
 pub morpholog_postgres::PgProposalOutcome::Rejected
 pub morpholog_postgres::PgProposalOutcome::Rejected::compared: core::option::Option<morpholog_core::propose::Compared>
+pub morpholog_postgres::PgProposalOutcome::Rejected::compared_branches: alloc::vec::Vec<morpholog_core::propose::Compared>
 pub morpholog_postgres::PgProposalOutcome::Rejected::reason: alloc::string::String
 pub morpholog_postgres::PgProposalOutcome::Rejected::refused_by: morpholog_postgres::RefusedBy
 pub morpholog_postgres::PgProposalOutcome::Rejected::rule: core::option::Option<alloc::string::String>
@@ -2478,6 +2480,7 @@ pub struct morpholog_postgres::RejectionRow
 pub morpholog_postgres::RejectionRow::actor: morpholog_core::ir::Subject
 pub morpholog_postgres::RejectionRow::arguments: alloc::vec::Vec<morpholog_core::state::EvalValue>
 pub morpholog_postgres::RejectionRow::compared: core::option::Option<morpholog_core::propose::Compared>
+pub morpholog_postgres::RejectionRow::compared_branches: core::option::Option<alloc::vec::Vec<morpholog_core::propose::Compared>>
 pub morpholog_postgres::RejectionRow::invariant_version: core::option::Option<i64>
 pub morpholog_postgres::RejectionRow::kind: alloc::string::String
 pub morpholog_postgres::RejectionRow::reason: alloc::string::String

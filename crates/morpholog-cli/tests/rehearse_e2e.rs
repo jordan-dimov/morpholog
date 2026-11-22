@@ -142,7 +142,25 @@ async fn every_recorded_proposal_is_re_decided_under_the_candidate() {
     assert_eq!(refused["rule"], "position_within_limit");
     assert_eq!(refused["kind"], "invariant");
     assert_eq!(refused["compared"]["op"], "<=", "{refused}");
+    assert!(refused.get("compared_branches").is_none(), "{refused}");
     assert_eq!(refused["semantics_version"], report["semantics_version"]);
+    // The same rule as an `or`: each branch's figures, no single blame.
+    let either = common::write_fixture(
+        "either",
+        &with(
+            "invariant position_within_limit:\n    Position(book, qty) and Limit(book, cap) implies qty <= cap or qty < 0\n",
+        ),
+    );
+    let either_report = rehearse(&either);
+    let either_refused = &either_report["differences"][0];
+    assert!(either_refused.get("compared").is_none(), "{either_refused}");
+    let figures: Vec<_> = either_refused["compared_branches"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{either_refused}"))
+        .iter()
+        .map(|c| c["op"].as_str().unwrap())
+        .collect();
+    assert_eq!(figures, ["<=", "<"], "{either_refused}");
     // The row names the programme that admitted it, which is not the
     // candidate: the refusing rule is newer than the row.
     assert_eq!(refused["model_hash"], hash_of(&ledger), "{refused}");

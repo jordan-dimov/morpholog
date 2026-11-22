@@ -1,0 +1,45 @@
+{
+  "compared_branches": [
+    {
+      "left": {
+        "type": "decimal",
+        "value": "20"
+      },
+      "op": "<=",
+      "right": {
+        "type": "decimal",
+        "value": "10"
+      }
+    },
+    {
+      "left": {
+        "type": "decimal",
+        "value": "30"
+      },
+      "op": "<",
+      "right": {
+        "type": "decimal",
+        "value": "20"
+      }
+    }
+  ],
+  "reason": "require `shrinks` failed: before <= cap or after < before did not hold over pre-state",
+  "rule": "shrinks",
+  "status": "rejected",
+  "witness": [
+    {
+      "value": {
+        "type": "subject",
+        "value": "inv_1"
+      },
+      "var": "doc"
+    },
+    {
+      "value": {
+        "type": "decimal",
+        "value": "5000"
+      },
+      "var": "limit"
+    }
+  ]
+}

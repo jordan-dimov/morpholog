@@ -125,6 +125,8 @@ pub enum RowClass {
         witness: Vec<WitnessBinding>,
         #[serde(skip_serializing_if = "Option::is_none")]
         compared: Option<Compared>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        compared_branches: Vec<Compared>,
     },
     WouldError {
         error: String,
@@ -336,34 +338,45 @@ impl<'p> Rehearsal<'p> {
 
 /// The first refusing rule, as `propose` stops there.
 fn refusal(reason: RejectionReason) -> RowClass {
-    let (rule, kind, witness, compared) = match reason {
+    let (rule, kind, witness, compared, compared_branches) = match reason {
         RejectionReason::Invariant {
             name,
             witness,
             compared,
+            compared_branches,
             ..
-        } => (name.to_string(), RefusalKind::Invariant, witness, compared),
+        } => (
+            name.to_string(),
+            RefusalKind::Invariant,
+            witness,
+            compared,
+            compared_branches,
+        ),
         RejectionReason::Require {
             name,
             rendered,
             witness,
             compared,
+            compared_branches,
         } => (
             name.map_or(rendered, |n| n.to_string()),
             RefusalKind::Require,
             witness,
             compared,
+            compared_branches,
         ),
         RejectionReason::BindNone {
             name,
             rendered,
             witness,
             compared,
+            compared_branches,
         } => (
             name.map_or(rendered, |n| n.to_string()),
             RefusalKind::Bind,
             witness,
             compared,
+            compared_branches,
         ),
     };
     RowClass::WouldReject {
@@ -371,6 +384,7 @@ fn refusal(reason: RejectionReason) -> RowClass {
         kind,
         witness,
         compared,
+        compared_branches,
     }
 }
 

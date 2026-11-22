@@ -231,6 +231,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["status", "reason"],
+      "not": { "description": "A refusal blames one comparison or reports every branch of an `or`, never both.", "required": ["compared", "compared_branches"] },
       "properties": {
         "status": { "const": "rejected" },
         "reason": { "type": "string" },
@@ -238,6 +239,7 @@
         "related_parameters": { "description": "On a refusal by a named gate: the act's parameters the gate's expression reads, directly or through the `let`, `bind` and `for` statements before it, in parameter order, possibly none. A static dependency, not a judgement of which input is wrong; absent for an invariant and for an unnamed gate.", "type": "array", "items": { "type": "string" } },
         "witness": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/witness_binding" } },
         "compared": { "$ref": "#/$defs/compared" },
+        "compared_branches": { "$ref": "#/$defs/compared_branches" },
         "explanation": { "$ref": "#/$defs/explanation" }
       }
     },
@@ -250,6 +252,12 @@
         "left": { "$ref": "#/$defs/tagged_value" },
         "right": { "$ref": "#/$defs/tagged_value" }
       }
+    },
+    "compared_branches": {
+      "description": "A refused `or` whose branches are each a comparison: every branch's two values, in branch order. `compared` is then absent, since no one branch is to blame.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/compared" }
     },
     "run_outcome": {
       "oneOf": [{ "$ref": "#/$defs/committed" }, { "$ref": "#/$defs/rejected" }]
@@ -294,6 +302,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["status", "act", "reason"],
+      "not": { "description": "A refusal blames one comparison or reports every branch of an `or`, never both.", "required": ["compared", "compared_branches"] },
       "properties": {
         "status": { "const": "rejected" },
         "act": { "type": "integer", "minimum": 1 },
@@ -302,6 +311,7 @@
         "related_parameters": { "description": "As on `rejected`, for the act that refused.", "type": "array", "items": { "type": "string" } },
         "witness": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/witness_binding" } },
         "compared": { "$ref": "#/$defs/compared" },
+        "compared_branches": { "$ref": "#/$defs/compared_branches" },
         "row": { "type": "integer", "minimum": 1 }
       }
     },
@@ -614,6 +624,7 @@
             "rejection_id", "transformation_name", "arguments", "actor",
             "kind", "rule", "invariant_version", "reason", "rejected_at"
           ],
+          "not": { "description": "A refusal blames one comparison or reports every branch of an `or`, never both.", "required": ["compared", "compared_branches"] },
           "properties": {
             "rejection_id": { "type": "string", "format": "uuid" },
             "transformation_name": { "type": "string" },
@@ -625,6 +636,7 @@
             "reason": { "type": "string" },
             "witness": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/witness_binding" } },
             "compared": { "$ref": "#/$defs/compared" },
+            "compared_branches": { "$ref": "#/$defs/compared_branches" },
             "rejected_at": { "type": "string", "format": "date-time" }
           }
         },
@@ -635,6 +647,7 @@
             "rejection_id", "transformation_name", "arguments", "actor",
             "kind", "rule", "reason", "rejected_at"
           ],
+          "not": { "description": "A refusal blames one comparison or reports every branch of an `or`, never both.", "required": ["compared", "compared_branches"] },
           "properties": {
             "rejection_id": { "type": "string", "format": "uuid" },
             "transformation_name": { "type": "string" },
@@ -645,6 +658,7 @@
             "reason": { "type": "string" },
             "witness": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/witness_binding" } },
             "compared": { "$ref": "#/$defs/compared" },
+            "compared_branches": { "$ref": "#/$defs/compared_branches" },
             "rejected_at": { "type": "string", "format": "date-time" }
           }
         }
@@ -656,6 +670,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["kind", "gate", "statement_kind", "directly_missing_claims"],
+          "not": { "description": "A refusal blames one comparison or reports every branch of an `or`, never both.", "required": ["compared", "compared_branches"] },
           "properties": {
             "kind": { "const": "gate" },
             "gate": { "type": "string" },
@@ -663,6 +678,7 @@
             "statement_kind": { "enum": ["require", "bind_one"] },
             "witness": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/witness_binding" } },
             "compared": { "$ref": "#/$defs/compared" },
+            "compared_branches": { "$ref": "#/$defs/compared_branches" },
             "related_parameters": { "description": "As on `rejected`: present, possibly empty, for a named gate; absent for an unnamed one.", "type": "array", "items": { "type": "string" } },
             "directly_missing_claims": {
               "type": "array",
@@ -674,12 +690,14 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["kind", "name", "rule"],
+          "not": { "description": "A refusal blames one comparison or reports every branch of an `or`, never both.", "required": ["compared", "compared_branches"] },
           "properties": {
             "kind": { "const": "invariant" },
             "name": { "type": "string" },
             "rule": { "type": "string" },
             "witness": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/witness_binding" } },
-            "compared": { "$ref": "#/$defs/compared" }
+            "compared": { "$ref": "#/$defs/compared" },
+            "compared_branches": { "$ref": "#/$defs/compared_branches" }
           }
         },
         {
@@ -740,6 +758,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["row", "status", "reason"],
+          "not": { "description": "A refusal blames one comparison or reports every branch of an `or`, never both.", "required": ["compared", "compared_branches"] },
           "properties": {
             "row": { "type": "integer", "minimum": 1 },
             "status": { "const": "rejected" },
@@ -748,6 +767,7 @@
             "related_parameters": { "description": "As on `rejected`.", "type": "array", "items": { "type": "string" } },
             "witness": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/witness_binding" } },
             "compared": { "$ref": "#/$defs/compared" },
+            "compared_branches": { "$ref": "#/$defs/compared_branches" },
             "explanation": { "$ref": "#/$defs/explanation" }
           }
         },
@@ -1361,6 +1381,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["transition_id", "transformation", "class", "rule", "kind"],
+          "not": { "description": "A refusal blames one comparison or reports every branch of an `or`, never both.", "required": ["compared", "compared_branches"] },
           "properties": {
             "transition_id": { "type": "string", "format": "uuid" },
             "transformation": { "type": "string" },
@@ -1370,7 +1391,8 @@
             "rule": { "type": "string" },
             "kind": { "enum": ["require", "bind", "invariant"] },
             "witness": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/witness_binding" } },
-            "compared": { "$ref": "#/$defs/compared" }
+            "compared": { "$ref": "#/$defs/compared" },
+            "compared_branches": { "$ref": "#/$defs/compared_branches" }
           }
         },
         {

@@ -702,5 +702,10 @@ async fn a_baseline_database_is_behind_until_migrated_and_then_keeps_a_gate_witn
         "the comparison the gate blamed"
     );
     assert_eq!(rows[1].rule, "within_limit");
-    assert!(rows[1].witness.is_none() && rows[1].compared.is_none());
+    assert!(
+        rows[1].witness.is_none()
+            && rows[1].compared.is_none()
+            && rows[1].compared_branches.is_none(),
+        "a row from before the columns decodes with them absent"
+    );
 }

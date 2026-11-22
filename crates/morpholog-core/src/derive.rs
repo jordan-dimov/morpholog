@@ -214,6 +214,7 @@ pub(crate) fn invariant_witness_cases_over(
 pub(crate) struct Diagnosis {
     pub(crate) witness: Vec<WitnessBinding>,
     pub(crate) compared: Option<crate::propose::Compared>,
+    pub(crate) compared_branches: Vec<crate::propose::Compared>,
 }
 
 impl Diagnosis {
@@ -221,6 +222,7 @@ impl Diagnosis {
         Self {
             witness: sorted_witness(failure.bindings),
             compared: failure.compared,
+            compared_branches: failure.compared_branches,
         }
     }
 }

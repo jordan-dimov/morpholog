@@ -59,6 +59,10 @@ pub enum PgProposalOutcome {
         /// values. Omitted when it blamed none, or could not evaluate it.
         #[serde(skip_serializing_if = "Option::is_none")]
         compared: Option<Compared>,
+        /// For a refused `or` whose branches are each a comparison, every
+        /// branch's two values in branch order; `compared` is then absent.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        compared_branches: Vec<Compared>,
         /// Whether an invariant or a gate refused. `rule` names either,
         /// and a gate may share an invariant's name.
         #[serde(skip)]
@@ -880,6 +884,7 @@ pub(crate) struct Refusal {
     pub(crate) rule: Option<String>,
     pub(crate) witness: Vec<WitnessBinding>,
     pub(crate) compared: Option<Compared>,
+    pub(crate) compared_branches: Vec<Compared>,
     pub(crate) refused_by: RefusedBy,
 }
 
@@ -901,22 +906,32 @@ pub(crate) async fn record_refusal(
     write_rejection(pool, transformation, transition, reason)
         .await
         .map_err(|e| PgError::RejectionLogFailure(Box::new(e)))?;
-    let (witness, compared) = match reason {
+    let (witness, compared, compared_branches) = match reason {
         RejectionReason::Invariant {
-            witness, compared, ..
+            witness,
+            compared,
+            compared_branches,
+            ..
         }
         | RejectionReason::Require {
-            witness, compared, ..
+            witness,
+            compared,
+            compared_branches,
+            ..
         }
         | RejectionReason::BindNone {
-            witness, compared, ..
-        } => (witness.clone(), compared.clone()),
+            witness,
+            compared,
+            compared_branches,
+            ..
+        } => (witness.clone(), compared.clone(), compared_branches.clone()),
     };
     Ok(Refusal {
         reason: reason.to_string(),
         rule: rule_identity(reason),
         witness,
         compared,
+        compared_branches,
         refused_by: RefusedBy::of(reason),
     })
 }
@@ -965,6 +980,7 @@ async fn finalise_outcome(
                 rule,
                 witness,
                 compared,
+                compared_branches,
                 refused_by,
             } = record_refusal(pool, tx, transformation, transition, &reason).await?;
             Ok(PgProposalOutcome::Rejected {
@@ -972,6 +988,7 @@ async fn finalise_outcome(
                 rule,
                 witness,
                 compared,
+                compared_branches,
                 refused_by,
             })
         }
@@ -1577,6 +1594,20 @@ pub(crate) async fn write_rejection(
             .transpose()
             .map_err(PgError::Encoding)?,
     };
+    let compared_branches_json: Option<serde_json::Value> = match reason {
+        RejectionReason::Invariant {
+            compared_branches, ..
+        }
+        | RejectionReason::Require {
+            compared_branches, ..
+        }
+        | RejectionReason::BindNone {
+            compared_branches, ..
+        } if !compared_branches.is_empty() => {
+            Some(serde_json::to_value(compared_branches).map_err(PgError::Encoding)?)
+        }
+        _ => None,
+    };
     let args_json: serde_json::Value =
         serde_json::to_value(&transition.args).map_err(PgError::Encoding)?;
     let actor_json: serde_json::Value =
@@ -1585,8 +1616,8 @@ pub(crate) async fn write_rejection(
     sqlx::query!(
         "INSERT INTO morpholog.rejections (
             rejection_id, transformation_name, arguments, actor,
-            kind, rule, invariant_version, reason, witness, compared
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            kind, rule, invariant_version, reason, witness, compared, compared_branches
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         Uuid::now_v7(),
         transformation.name.as_str(),
         args_json,
@@ -1597,6 +1628,7 @@ pub(crate) async fn write_rejection(
         reason.to_string(),
         witness_json,
         compared_json,
+        compared_branches_json,
     )
     .execute(pool)
     .await

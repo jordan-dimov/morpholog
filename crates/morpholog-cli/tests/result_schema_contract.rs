@@ -213,6 +213,7 @@ fn rejected_outcome() -> PgProposalOutcome {
         rule: Some("no_flagged_accounts".to_string()),
         witness: Vec::new(),
         compared: None,
+        compared_branches: Vec::new(),
         refused_by: morpholog_postgres::RefusedBy::Invariant,
     }
 }
@@ -235,6 +236,7 @@ fn rejected_with_witness_outcome() -> PgProposalOutcome {
         rule: Some("no_flagged_accounts".to_string()),
         witness: witness_sample(),
         compared: None,
+        compared_branches: Vec::new(),
         refused_by: morpholog_postgres::RefusedBy::Invariant,
     }
 }
@@ -345,6 +347,7 @@ fn a_refusal_by_a_named_gate_names_its_parameters_as_pinned() {
         rule: Some("within_approval_limit".to_string()),
         witness: Vec::new(),
         compared: None,
+        compared_branches: Vec::new(),
         refused_by,
     };
     let enriched = |outcome: &PgProposalOutcome| {
@@ -367,6 +370,7 @@ fn a_refusal_by_a_named_gate_names_its_parameters_as_pinned() {
         rule: Some("within_approval_limit".to_string()),
         witness: Vec::new(),
         compared: None,
+        compared_branches: Vec::new(),
         refused_by: RefusedBy::Gate,
     };
     let atomic = with_related_parameters(
@@ -395,6 +399,7 @@ fn run_outcomes_serialize_as_pinned() {
             rule: Some("within_approval_limit".to_string()),
             witness: gate_witness_sample(),
             compared: None,
+            compared_branches: Vec::new(),
             refused_by: morpholog_postgres::RefusedBy::Gate,
         }),
     );
@@ -406,6 +411,19 @@ fn run_outcomes_serialize_as_pinned() {
             rule: Some("within_approval_limit".to_string()),
             witness: gate_witness_sample(),
             compared: Some(compared_sample()),
+            compared_branches: Vec::new(),
+            refused_by: morpholog_postgres::RefusedBy::Gate,
+        }),
+    );
+    // A failed `or` of comparisons: each branch's values, no single blame.
+    assert_golden(
+        "rejected_gate_with_compared_branches.json",
+        &to_value(&PgProposalOutcome::Rejected {
+            reason: "require `shrinks` failed: before <= cap or after < before did not hold over pre-state".to_string(),
+            rule: Some("shrinks".to_string()),
+            witness: gate_witness_sample(),
+            compared: None,
+            compared_branches: compared_branches_sample(),
             refused_by: morpholog_postgres::RefusedBy::Gate,
         }),
     );
@@ -413,6 +431,23 @@ fn run_outcomes_serialize_as_pinned() {
         "rejected_with_witness.json",
         &to_value(&rejected_with_witness_outcome()),
     );
+}
+
+/// The two branches of a refused `or`: over the cap, and growing.
+fn compared_branches_sample() -> Vec<Compared> {
+    let d = |n: i64| EvalValue::Decimal(Decimal::from(n));
+    vec![
+        Compared {
+            op: "<=".to_string(),
+            left: d(20),
+            right: d(10),
+        },
+        Compared {
+            op: "<".to_string(),
+            left: d(30),
+            right: d(20),
+        },
+    ]
 }
 
 /// `explanation_program` with its gate named, and nothing else changed.
@@ -580,6 +615,7 @@ fn traced_run(
                         | RejectionReason::Require { compared, .. }
                         | RejectionReason::BindNone { compared, .. } => compared.clone(),
                     },
+                    compared_branches: Vec::new(),
                 },
             };
             let mut trace = trace;
@@ -767,6 +803,7 @@ fn rejection_rows_serialize_as_pinned() {
         reason: "invariant `line_net_is_the_rounded_recompute` violated".to_string(),
         witness: Some(witness_sample()),
         compared: None,
+        compared_branches: None,
         rejected_at: "2026-06-01T12:00:00Z".parse::<jiff::Timestamp>().unwrap(),
     };
     assert_golden("rejection_row.json", &to_value(&base));
@@ -799,6 +836,15 @@ fn rejection_rows_serialize_as_pinned() {
     assert_golden(
         "rejection_row_gate_with_compared.json",
         &to_value(&gate_with_compared),
+    );
+    let gate_with_branches = morpholog_postgres::RejectionRow {
+        compared: None,
+        compared_branches: Some(compared_branches_sample()),
+        ..gate_with_compared
+    };
+    assert_golden(
+        "rejection_row_gate_with_compared_branches.json",
+        &to_value(&gate_with_branches),
     );
 }
 
@@ -1582,7 +1628,7 @@ fn composite_envelopes_serialize_as_pinned() {
             "invariant `no_flagged_accounts` violated",
             Some("no_flagged_accounts"),
             &[],
-            None,
+            (None, &[]),
             explanation,
         )),
     );
@@ -1599,7 +1645,7 @@ fn composite_envelopes_serialize_as_pinned() {
             "invariant `no_flagged_accounts` violated",
             Some("no_flagged_accounts"),
             &witness_sample(),
-            None,
+            (None, &[]),
             explanation,
         )),
     );
@@ -1673,6 +1719,7 @@ fn composite_envelopes_serialize_as_pinned() {
         rule: None,
         witness: witness_sample(),
         compared: Some(compared_sample()),
+        compared_branches: Vec::new(),
         refused_by: morpholog_postgres::RefusedBy::Gate,
     });
     batch_compared["row"] = serde_json::json!(3);
@@ -2531,6 +2578,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
             rule: Some("balance_unique_by_account".to_string()),
             witness: witness_sample(),
             compared: Some(compared_sample()),
+            compared_branches: Vec::new(),
             refused_by: morpholog_postgres::RefusedBy::Invariant,
         }),
     );
@@ -2586,6 +2634,7 @@ fn tamper_evidence_envelopes_serialize_as_pinned() {
         rule: None,
         witness: Vec::new(),
         compared: None,
+        compared_branches: Vec::new(),
         refused_by: morpholog_postgres::RefusedBy::Gate,
     });
     in_session["row"] = serde_json::json!(4);
@@ -3164,8 +3213,9 @@ fn result_schema() -> serde_json::Value {
 }
 
 /// Shallow structural validation: discriminants (const/enum), required
-/// keys, no extra keys, recursing through properties, items, $ref and
-/// oneOf. Format, pattern and minimum are left to the byte-exact layer.
+/// keys, keys a `not` forbids together, no extra keys, recursing through
+/// properties, items, $ref and oneOf. Format, pattern and minimum are
+/// left to the byte-exact layer.
 fn validate(
     value: &serde_json::Value,
     schema: &serde_json::Value,
@@ -3252,6 +3302,27 @@ fn validate(
                 if !object.contains_key(key) {
                     return Err(format!("{path}: missing required key `{key}`"));
                 }
+            }
+        }
+        // A `not` here only ever forbids keys together; any other shape
+        // would pass unread, so it is refused.
+        if let Some(not) = schema.get("not") {
+            let forbidden = not
+                .get("required")
+                .and_then(|r| r.as_array())
+                .filter(|_| {
+                    not.as_object()
+                        .is_some_and(|o| o.keys().all(|k| k == "required" || k == "description"))
+                })
+                .ok_or_else(|| format!("{path}: only a `not` of required keys is read: {not}"))?;
+            if forbidden
+                .iter()
+                .filter_map(|k| k.as_str())
+                .all(|k| object.contains_key(k))
+            {
+                return Err(format!(
+                    "{path}: carries {forbidden:?} together, which `not` forbids"
+                ));
             }
         }
         if let Some(deps) = schema.get("dependentRequired").and_then(|d| d.as_object()) {
@@ -4263,4 +4334,29 @@ fn the_history_view_surface_golden_validates_against_its_def() {
         views.iter().any(|v| v["kind"] == "history"),
         "a history view is pinned"
     );
+}
+
+/// A refusal blames one comparison or reports every branch of an `or`,
+/// never both: the schema refuses an envelope or a row carrying both.
+#[test]
+fn a_refusal_never_carries_both_compared_and_compared_branches() {
+    let schema = result_schema();
+    let defs = schema.get("$defs").expect("$defs");
+    for (golden, def) in [
+        ("rejected_gate_with_compared_branches.json", "rejected"),
+        (
+            "rejection_row_gate_with_compared_branches.json",
+            "rejection_row",
+        ),
+    ] {
+        let path = golden_dir().join(golden);
+        let mut value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let entry = defs.get(def).expect("def");
+        validate(&value, entry, defs, def).expect("the golden validates as it stands");
+        let first = value["compared_branches"][0].clone();
+        value["compared"] = first;
+        let err = validate(&value, entry, defs, def).expect_err("both together are refused");
+        assert!(err.contains("which `not` forbids"), "{golden}: {err}");
+    }
 }

@@ -488,3 +488,139 @@ async fn a_rejection_persists_the_comparison_it_blamed() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].compared.as_ref(), Some(&compared));
 }
+
+/// A refused `or` of comparisons persists each branch's two values, in
+/// branch order, and reads back as the proposal reported them; the
+/// single blame stays absent. `--mentions` finds the refusal by a value
+/// named in a branch only.
+#[tokio::test]
+async fn a_rejection_persists_each_branch_of_a_failed_or() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let p = parse_program(
+        "program shrink\n\
+         predicate Limit(book: Subject, cap: Decimal)\n\
+         predicate Desk(book: Subject, head: Subject)\n\
+         predicate Traded(book: Subject, after: Decimal)\n\
+         transformation set_limit(b, c):\n    admit Limit(b, c)\n\
+         transformation trade(b, before: Decimal, after: Decimal):\n\
+         \x20   require shrinks: (forall cap in Limit(book: b, cap: cap): before <= cap or after < before)\n\
+         \x20   admit Traded(b, after)\n\
+         transformation hand_over(b, head):\n\
+         \x20   require kept: actor = head or actor = #deputy\n\
+         \x20   admit Desk(b, head)\n",
+    )
+    .expect("parses");
+    let pg = common::pg_program(p.clone());
+    let act = |name: &str| pg.prepared().transformation(&name.into()).unwrap().clone();
+    common::expect_committed(
+        common::propose_pg_with_test_actor(&pool, &pg, &act("set_limit"), vec![subj("b"), dec(10)])
+            .await
+            .unwrap(),
+    );
+    let outcome = common::propose_pg_with_test_actor(
+        &pool,
+        &pg,
+        &act("trade"),
+        vec![subj("b"), dec(20), dec(30)],
+    )
+    .await
+    .expect("rejection is a lawful outcome");
+    let PgProposalOutcome::Rejected {
+        compared,
+        compared_branches,
+        ..
+    } = outcome
+    else {
+        panic!("expected a refusal");
+    };
+    assert_eq!(compared, None);
+    let figures: Vec<_> = compared_branches
+        .iter()
+        .map(|c| (c.op.as_str(), c.left.clone(), c.right.clone()))
+        .collect();
+    assert_eq!(
+        figures,
+        vec![("<=", dec(20), dec(10)), ("<", dec(30), dec(20))]
+    );
+    let rows = morpholog_postgres::list_rejection_rows(&pool, 10, None)
+        .await
+        .expect("reading the log back");
+    assert_eq!(rows[0].compared, None);
+    assert_eq!(rows[0].compared_branches.as_ref(), Some(&compared_branches));
+
+    // `deputy` is in a branch only: not an argument, nor bound, nor the
+    // actor.
+    let outcome = common::propose_pg_with_test_actor(
+        &pool,
+        &pg,
+        &act("hand_over"),
+        vec![subj("b"), subj("alice")],
+    )
+    .await
+    .expect("rejection is a lawful outcome");
+    assert!(matches!(outcome, PgProposalOutcome::Rejected { .. }));
+    let found = morpholog_postgres::list_rejection_rows(&pool, 10, Some("deputy"))
+        .await
+        .unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].transformation_name.as_str(), "hand_over");
+    assert!(found[0].compared.is_none() && found[0].compared_branches.is_some());
+    let deputy = morpholog_core::EvalValue::Subject("deputy".into());
+    assert!(
+        found[0].witness.iter().flatten().all(|w| w.value != deputy),
+        "deputy is in the branches only: {:?}",
+        found[0].witness
+    );
+}
+
+// The column holds a non-empty list of objects or nothing: a hand-written
+// `[]` would say "an `or` with no branches", which no refusal is.
+#[tokio::test]
+async fn the_table_refuses_an_empty_or_malformed_branch_list() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let insert = |branches: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "INSERT INTO morpholog.rejections (
+                    rejection_id, transformation_name, arguments, actor,
+                    kind, rule, reason, compared_branches
+                 ) VALUES ($1, 'hand_written', '[]'::jsonb,
+                           '{\"type\":\"subject\",\"value\":\"x\"}'::jsonb,
+                           'require', 'r', 'reason', $2::jsonb)",
+            )
+            .bind(uuid::Uuid::now_v7())
+            .bind(branches)
+            .execute(&pool)
+            .await
+        }
+    };
+    for bad in ["[]", "[1]", "{}", "[{\"op\":\"<\"}, 2]"] {
+        let err = insert(bad).await.expect_err(bad);
+        assert!(
+            err.to_string()
+                .contains("rejections_compared_branches_check"),
+            "{bad}: {err}"
+        );
+    }
+    insert("[{\"op\":\"<\",\"left\":{\"type\":\"decimal\",\"value\":\"1\"},\"right\":{\"type\":\"decimal\",\"value\":\"0\"}}]")
+        .await
+        .expect("a list of comparisons is accepted");
+
+    // One comparison blamed, or every branch, never both.
+    let err = sqlx::query(
+        "INSERT INTO morpholog.rejections (
+            rejection_id, transformation_name, arguments, actor,
+            kind, rule, reason, compared, compared_branches
+         ) VALUES ($1, 'hand_written', '[]'::jsonb,
+                   '{\"type\":\"subject\",\"value\":\"x\"}'::jsonb,
+                   'require', 'r', 'reason', '{}'::jsonb, '[{}]'::jsonb)",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .execute(&pool)
+    .await
+    .expect_err("both together are refused");
+    assert!(err.to_string().contains("rejections_one_blame"), "{err}");
+}

@@ -1633,3 +1633,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 
 **Landed:** `provision indexes --history` builds one GIN index over the log's operations, a deployment's choice that no run prunes. Each history view carries a condition that index serves, applied to the audit row before its operations are expanded. Each declared key gets a lookup function that narrows by the subjects the key holds and then decides the key by position, rendered with the view from one history-row renderer. On a 200,000-row log one item's history went from 100 to 9 milliseconds, at about 1 to 2% of write throughput. Without the index a lookup is slower than the view, which the guide says.
 
+
+### A refused `or` names each branch's figures
+
+**Forced by:** a power-trading embedder's position limits (#862). "A breach must shrink" is `before <= cap or after < before`, and its refusals carried no figures: the failure walk blames a single comparison, and an `or` has none to blame. The embedder had rewritten a sibling rule as one comparison only to get its figures back.
+
+**Landed:** a refusal at an `or` whose branches are each a comparison carries `compared_branches`, every branch's `{op, left, right}` in branch order, and no `compared`: the schema, the client and the log each refuse both together. A branch that is no comparison, or that cannot be evaluated, gives no list at all, never a partial one. It is the same walk, so a definition's frame and a `forall`'s failing iteration hold as they do for `compared`. The compiled route reads the figures in SQL, and the PostgreSQL route agrees with the kernel. Every surface carries it: the `rejected` envelope, `explain`'s verdict and prose, `rehearse`'s `would_reject` rows, and the rejection log, through migration 032, which `--mentions` searches. It is diagnosis only, so the semantics version does not move.

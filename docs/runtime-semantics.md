@@ -318,7 +318,12 @@ invariant's or a gate's, also carries a *witness*: the variables and values
 that were live where the rule failed, sorted by variable so one failure
 always reads the same way; and, where the part it blames is a comparison,
 `compared`: the operator and the two values that failed it, so a reader
-prints the figures and never reproduces the rule's arithmetic. It is diagnosed only after the refusal is decided - the
+prints the figures and never reproduces the rule's arithmetic. Where it
+blames an `or` whose branches are each a comparison, no one branch is to
+blame, so `compared` is absent and `compared_branches` holds every
+branch's figures in branch order: `before <= cap or after < before`
+refused at a cap of 10 names `20 <= 10` and `30 < 20`. An `or` with a
+branch that is not a comparison names none. It is diagnosed only after the refusal is decided - the
 accepting path never pays for it - and it is structured rather than
 rendered into the reason, because the reason string is a pinned wire
 format and an embedder should read a value, not parse prose. The `Display`

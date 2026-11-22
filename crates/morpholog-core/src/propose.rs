@@ -181,6 +181,9 @@ pub enum RejectionReason {
         /// one; absent otherwise, and absent when the diagnosis could
         /// not evaluate it.
         compared: Option<Compared>,
+        /// For a failed `or` of comparisons, each branch's values in
+        /// branch order; empty otherwise. `compared` is then absent.
+        compared_branches: Vec<Compared>,
     },
     /// A `require` gate found no witness over the pre-state.
     ///
@@ -198,6 +201,8 @@ pub enum RejectionReason {
         witness: Vec<WitnessBinding>,
         /// As for `Invariant`.
         compared: Option<Compared>,
+        /// As for `Invariant`.
+        compared_branches: Vec<Compared>,
     },
     /// A `bind` lookup matched no candidates. (Multi-match is an
     /// [`EvalError`], not a rejection.) `witness` as for `Require`.
@@ -207,6 +212,8 @@ pub enum RejectionReason {
         witness: Vec<WitnessBinding>,
         /// As for `Invariant`; a `bind` is a claim pattern, so rarely.
         compared: Option<Compared>,
+        /// As for `Invariant`; a `bind` is a claim pattern, so never.
+        compared_branches: Vec<Compared>,
     },
 }
 
@@ -239,24 +246,31 @@ impl std::fmt::Display for RejectionReason {
 fn gate_failure(
     expr: &Prop,
     ctx: &EvalContext<'_>,
-) -> (Option<String>, Vec<WitnessBinding>, Option<Compared>) {
+) -> (
+    Option<String>,
+    Vec<WitnessBinding>,
+    Option<Compared>,
+    Vec<Compared>,
+) {
     match find_failure(expr, ctx) {
         Some(failure) => (
             Some(failure.rendered),
             sorted_witness(failure.bindings),
             failure.compared,
+            failure.compared_branches,
         ),
         None => (
             None,
             sorted_witness(ctx.bindings.clone()),
             crate::eval::compared_at(expr, ctx),
+            crate::eval::compared_branches_at(expr, ctx),
         ),
     }
 }
 
 pub(crate) enum StmtOutcome {
     Continue,
-    Rejected(RejectionReason),
+    Rejected(Box<RejectionReason>),
 }
 
 // Trace: the per-statement record `propose_with_trace` produces.
@@ -741,7 +755,9 @@ pub(crate) fn stage_delta_inner(
             subjects,
         )? {
             StmtOutcome::Continue => {}
-            StmtOutcome::Rejected(reason) => return Ok(StagedDelta::Rejected { reason }),
+            StmtOutcome::Rejected(reason) => {
+                return Ok(StagedDelta::Rejected { reason: *reason });
+            }
         }
     }
 
@@ -823,6 +839,7 @@ fn judge_invariants(
                 version: inv.version,
                 witness: diagnosis.witness,
                 compared: diagnosis.compared,
+                compared_branches: diagnosis.compared_branches,
             }));
         }
     }
@@ -954,12 +971,13 @@ pub(crate) fn execute_stmt(
                 let rendered = format::format_prop_inline(expr);
                 // One descent names the failing part and the bindings it
                 // failed under, so the trace and the witness agree.
-                let (failing, witness, compared) = gate_failure(expr, &ctx);
+                let (failing, witness, compared, compared_branches) = gate_failure(expr, &ctx);
                 let reason = RejectionReason::Require {
                     name: name.clone(),
                     rendered: rendered.clone(),
                     witness,
                     compared,
+                    compared_branches,
                 };
                 if trace.is_on() {
                     let directly_missing_claims = unsatisfied_positive_claims(expr, &ctx);
@@ -973,7 +991,7 @@ pub(crate) fn execute_stmt(
                         },
                     });
                 }
-                Ok(StmtOutcome::Rejected(reason))
+                Ok(StmtOutcome::Rejected(Box::new(reason)))
             } else {
                 if trace.is_on() {
                     trace.push(TraceEntry::Require {
@@ -997,7 +1015,7 @@ pub(crate) fn execute_stmt(
             match matches.len() {
                 0 => {
                     let rendered = format::format_prop_inline(expr);
-                    let (failing, witness, compared) = gate_failure(expr, &ctx);
+                    let (failing, witness, compared, compared_branches) = gate_failure(expr, &ctx);
                     if trace.is_on() {
                         let directly_missing_claims = unsatisfied_positive_claims(expr, &ctx);
                         trace.push(TraceEntry::BindOne {
@@ -1009,12 +1027,13 @@ pub(crate) fn execute_stmt(
                             },
                         });
                     }
-                    Ok(StmtOutcome::Rejected(RejectionReason::BindNone {
+                    Ok(StmtOutcome::Rejected(Box::new(RejectionReason::BindNone {
                         name: name.clone(),
                         rendered,
                         witness,
                         compared,
-                    }))
+                        compared_branches,
+                    })))
                 }
                 1 => {
                     let new_bindings = matches.swap_remove(0);
@@ -1131,7 +1150,7 @@ pub(crate) fn execute_stmt(
                     let mut iter_entries: Vec<TraceEntry> = vec![];
                     // The block ends iter_sink's borrow before
                     // iter_entries moves.
-                    let iter_result: Result<Option<RejectionReason>, EvalError> = 'inner: {
+                    let iter_result: Result<Option<Box<RejectionReason>>, EvalError> = 'inner: {
                         let mut iter_sink = TraceSink::On(&mut iter_entries);
                         for inner in body {
                             match execute_stmt(

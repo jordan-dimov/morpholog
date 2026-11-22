@@ -51,6 +51,7 @@ CASES = {
     "rejected_with_witness.json": ("rejected", E.parse_run_outcome),
     "rejected_gate_with_witness.json": ("rejected", E.parse_run_outcome),
     "rejected_gate_with_compared.json": ("rejected", E.parse_run_outcome),
+    "rejected_gate_with_compared_branches.json": ("rejected", E.parse_run_outcome),
     "rejected_gate_with_related_parameters.json": ("rejected", E.parse_run_outcome),
     "traced_committed.json": ("traced_envelope", E.TracedEnvelope.from_json),
     "traced_rejected.json": ("traced_envelope", E.TracedEnvelope.from_json),
@@ -125,6 +126,10 @@ CASES = {
     "rejection_row_gate.json": ("rejection_row", E.RejectionRow.from_json),
     "rejection_row_gate_with_witness.json": ("rejection_row", E.RejectionRow.from_json),
     "rejection_row_gate_with_compared.json": ("rejection_row", E.RejectionRow.from_json),
+    "rejection_row_gate_with_compared_branches.json": (
+        "rejection_row",
+        E.RejectionRow.from_json,
+    ),
     "coverage_report.json": ("coverage_report", E.CoverageReport.from_json),
     "audit_row.json": ("audit_row", E.AuditRow.from_json),
     "audit_row_attested.json": ("audit_row", E.AuditRow.from_json),
@@ -336,6 +341,11 @@ def conforms(value, schema) -> bool:
     if isinstance(value, dict):
         if any(key not in value for key in schema.get("required", [])):
             return False
+        # As in the Rust walker: only a `not` of keys forbidden together.
+        if "not" in schema:
+            assert set(schema["not"]) <= {"required", "description"}, schema["not"]
+            if all(key in value for key in schema["not"]["required"]):
+                return False
         for trigger, needed in schema.get("dependentRequired", {}).items():
             if trigger in value and any(key not in value for key in needed):
                 return False
@@ -457,6 +467,15 @@ class MutantsTheSchemaRefusesAreRefused(unittest.TestCase):
         self.assertGreaterEqual(sum(refused.values()), MIN_REFUSED_MUTANTS)
         for kind, floor in MIN_REFUSED_BY_ORIGINAL_KIND.items():
             self.assertGreaterEqual(refused[kind], floor, f"too few mutants of {kind} values")
+
+
+
+class OneBlame(unittest.TestCase):
+    def test_the_schema_refuses_compared_and_compared_branches_together(self):
+        payload = golden("rejected_gate_with_compared_branches.json")
+        self.assertTrue(conforms(payload, DEFS["rejected"]))
+        payload["compared"] = payload["compared_branches"][0]
+        self.assertFalse(conforms(payload, DEFS["rejected"]))
 
 
 if __name__ == "__main__":

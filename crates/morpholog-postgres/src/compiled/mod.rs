@@ -206,6 +206,7 @@ pub(crate) struct SqlViolation {
     /// The comparison the diagnosis blamed, with its operands off the
     /// chosen row, as the kernel's walk would report it.
     pub(crate) compared: Option<Compared>,
+    pub(crate) compared_branches: Vec<Compared>,
 }
 
 impl From<SqlViolation> for RejectionReason {
@@ -215,6 +216,7 @@ impl From<SqlViolation> for RejectionReason {
             version: v.version,
             witness: v.witness,
             compared: v.compared,
+            compared_branches: v.compared_branches,
         }
     }
 }
@@ -270,12 +272,14 @@ impl KernelFallback<'_> {
                         version,
                         witness,
                         compared,
+                        compared_branches,
                     },
             } => Ok(Some(SqlViolation {
                 name,
                 version,
                 witness,
                 compared,
+                compared_branches,
             })),
             Outcome::Rejected { reason } => Err(PgError::InvalidState(format!(
                 "an invariant check refused by another rule: {reason}"
@@ -454,12 +458,13 @@ impl CompiledInvariantSet {
                     }
                 }
             }
-            let (witness, compared) = inv.diagnose(tx, cases.as_ref(), steps).await?;
+            let d = inv.diagnose(tx, cases.as_ref(), steps).await?;
             return Ok(Some(SqlViolation {
                 name: inv.name.clone(),
                 version: inv.version,
-                witness,
-                compared,
+                witness: d.witness,
+                compared: d.compared,
+                compared_branches: d.compared_branches,
             }));
         }
         Ok(None)
@@ -1082,7 +1087,25 @@ struct Level {
     /// The conjuncts that are a comparison or an equality, with their
     /// operands as the kernel would read them under the bindings at that
     /// point: the two values a refusal reports when the chain dies there.
-    leaves: BTreeMap<usize, LeafCompare>,
+    leaves: BTreeMap<usize, Leaf>,
+}
+
+/// What the SQL diagnosis reports beside the rule, as the kernel's walk
+/// would.
+#[derive(Debug, Default)]
+struct Diagnosed {
+    witness: Vec<WitnessBinding>,
+    compared: Option<Compared>,
+    compared_branches: Vec<Compared>,
+}
+
+/// A conjunct whose figures a refusal reports when the chain dies there.
+#[derive(Debug)]
+enum Leaf {
+    Compare(Box<LeafCompare>),
+    /// An `or` whose branches are each a comparison: every branch's two
+    /// values, in branch order.
+    Branches(Vec<LeafCompare>),
 }
 
 /// A comparison the diagnosis can blame, with its operands.
@@ -1189,6 +1212,17 @@ fn leaf_side(expr: &ValueExpr, env: &Env, ctx: &mut Ctx<'_>) -> Option<Side> {
 
 /// The comparison a conjunct is, if it is one, with its operands under
 /// `env`.
+fn leaf(conjunct: &Prop, env: &Env, ctx: &mut Ctx<'_>) -> Option<Leaf> {
+    if let Prop::Or(branches) = conjunct {
+        return branches
+            .iter()
+            .map(|branch| leaf_compare(branch, env, ctx))
+            .collect::<Option<Vec<_>>>()
+            .map(Leaf::Branches);
+    }
+    leaf_compare(conjunct, env, ctx).map(|leaf| Leaf::Compare(Box::new(leaf)))
+}
+
 fn leaf_compare(conjunct: &Prop, env: &Env, ctx: &mut Ctx<'_>) -> Option<LeafCompare> {
     let (op, left, right) = match conjunct {
         Prop::Compare {
@@ -1272,7 +1306,7 @@ fn diagnostic_level(
     let mut descents = BTreeMap::new();
     let mut leaves = BTreeMap::new();
     for (k, conjunct) in conjuncts.iter().enumerate() {
-        if let Some(leaf) = leaf_compare(conjunct, &acc.env, ctx) {
+        if let Some(leaf) = leaf(conjunct, &acc.env, ctx) {
             leaves.insert(k, leaf);
         }
         match conjunct {
@@ -1512,9 +1546,9 @@ impl CompiledInvariant {
         tx: &mut Transaction<'_, Postgres>,
         cases: Option<&BoundedCases>,
         steps: &[DeltaStep],
-    ) -> Result<(Vec<WitnessBinding>, Option<Compared>), PgError> {
+    ) -> Result<Diagnosed, PgError> {
         let Some(d) = &self.diagnosis else {
-            return Ok((Vec::new(), None));
+            return Ok(Diagnosed::default());
         };
         let order = |aliases: &[(String, PredicateName)]| -> Result<String, PgError> {
             Ok(aliases
@@ -1609,32 +1643,49 @@ impl CompiledInvariant {
                     // and the pinned rows, the comparison itself kept
                     // out of the selection, as the kernel's leaf reads
                     // them under the bindings it reached.
-                    let compared = match level.leaves.get(&killed) {
-                        Some(leaf) => {
-                            let prefix = longest
-                                .map(|s| level.prefixes[s].where_.as_str())
-                                .unwrap_or("true");
-                            compared_off(tx, &label, &chosen, prefix, leaf).await?
+                    let prefix = longest
+                        .map(|s| level.prefixes[s].where_.as_str())
+                        .unwrap_or("true");
+                    let (compared, branches) = match level.leaves.get(&killed) {
+                        Some(Leaf::Compare(leaf)) => (
+                            compared_off(tx, &label, &chosen, prefix, leaf).await?,
+                            Vec::new(),
+                        ),
+                        // As the kernel's walk: every branch's figures, or
+                        // none, never some.
+                        Some(Leaf::Branches(leaves)) => {
+                            let mut branches = Vec::with_capacity(leaves.len());
+                            for leaf in leaves {
+                                match compared_off(tx, &label, &chosen, prefix, leaf).await? {
+                                    Some(compared) => branches.push(compared),
+                                    None => {
+                                        branches.clear();
+                                        break;
+                                    }
+                                }
+                            }
+                            (None, branches)
                         }
-                        None => None,
+                        None => (None, Vec::new()),
                     };
-                    return Ok((
-                        witness
+                    return Ok(Diagnosed {
+                        witness: witness
                             .into_iter()
                             .map(|(var, value)| WitnessBinding { var, value })
                             .collect(),
                         compared,
-                    ));
+                        compared_branches: branches,
+                    });
                 }
             }
         }
-        Ok((
-            witness
+        Ok(Diagnosed {
+            witness: witness
                 .into_iter()
                 .map(|(var, value)| WitnessBinding { var, value })
                 .collect(),
-            None,
-        ))
+            ..Diagnosed::default()
+        })
     }
 
     /// Bound the check to the cases a delta could have changed: core

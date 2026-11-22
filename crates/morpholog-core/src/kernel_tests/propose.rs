@@ -104,6 +104,7 @@ fn rejection_reason_display_strings_are_pinned() {
             version: 3,
             witness: Vec::new(),
             compared: None,
+            compared_branches: Vec::new(),
         }
         .to_string(),
         "invariant `at_most_one` violated",
@@ -118,6 +119,7 @@ fn rejection_reason_display_strings_are_pinned() {
                 value: EvalValue::Subject("acct_42".into()),
             }],
             compared: None,
+            compared_branches: Vec::new(),
         }
         .to_string(),
         "invariant `at_most_one` violated",
@@ -129,6 +131,7 @@ fn rejection_reason_display_strings_are_pinned() {
             rendered: "Approved(doc)".into(),
             witness: vec![],
             compared: None,
+            compared_branches: Vec::new(),
         }
         .to_string(),
         "require failed: Approved(doc) did not hold over pre-state"
@@ -141,6 +144,7 @@ fn rejection_reason_display_strings_are_pinned() {
             rendered: "Approved(doc)".into(),
             witness: vec![],
             compared: None,
+            compared_branches: Vec::new(),
         }
         .to_string(),
         "require `approval_on_file` failed: Approved(doc) did not hold over pre-state"
@@ -151,6 +155,7 @@ fn rejection_reason_display_strings_are_pinned() {
             rendered: "Policy(policy_id, limit)".into(),
             witness: vec![],
             compared: None,
+            compared_branches: Vec::new(),
         }
         .to_string(),
         "bind_one failed: Policy(policy_id, limit) matched no candidates"
@@ -161,6 +166,7 @@ fn rejection_reason_display_strings_are_pinned() {
             rendered: "Policy(policy_id, limit)".into(),
             witness: vec![],
             compared: None,
+            compared_branches: Vec::new(),
         }
         .to_string(),
         "bind `governing_policy` failed: Policy(policy_id, limit) matched no candidates"

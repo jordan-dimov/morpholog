@@ -387,6 +387,148 @@ fn a_missing_claim_carries_no_comparison() {
     assert_eq!(compared_of(&reason), None);
 }
 
+// ============================================================
+// A failed `or` of comparisons: every branch's two values
+// ============================================================
+
+/// A book over its cap may trade only towards flat. Each way of
+/// stating the rule refuses the same trade.
+const SHRINK: &str = r#"
+program shrink
+predicate Limit(book: Subject, cap: Decimal)
+predicate Frozen(book: Subject)
+predicate Traded(book: Subject, after: Decimal)
+define shrinks_towards(cap, before, after):
+    before <= cap or after < before
+transformation trade(book, before: Decimal, after: Decimal):
+    require shrinks: (forall cap in Limit(book: book, cap: cap): before <= cap or after < before)
+    admit Traded(book, after)
+transformation trade_named(book, before: Decimal, after: Decimal):
+    require shrinks: forall cap in Limit(book: book, cap: cap): shrinks_towards(cap, before, after)
+    admit Traded(book, after)
+transformation trade_unless_frozen(book, before: Decimal, after: Decimal):
+    require shrinks: (forall cap in Limit(book: book, cap: cap): before <= cap or Frozen(book))
+    admit Traded(book, after)
+"#;
+
+fn shrink_outcome(state: &State, t: &Transition) -> Outcome {
+    let p = parse_program(SHRINK).expect("parses");
+    p.validate().expect("validates");
+    propose(&p, t, state, &mut subjects(["o1"])).expect("no kernel error")
+}
+
+fn branches_of(reason: &RejectionReason) -> (Option<Compared>, Vec<Compared>) {
+    match reason {
+        RejectionReason::Require {
+            compared,
+            compared_branches,
+            ..
+        }
+        | RejectionReason::BindNone {
+            compared,
+            compared_branches,
+            ..
+        }
+        | RejectionReason::Invariant {
+            compared,
+            compared_branches,
+            ..
+        } => (compared.clone(), compared_branches.clone()),
+    }
+}
+
+fn cmp(op: &str, left: i64, right: i64) -> Compared {
+    Compared {
+        op: op.to_string(),
+        left: dec(left),
+        right: dec(right),
+    }
+}
+
+fn caps(caps: &[i64]) -> State {
+    State::from_claims(
+        caps.iter()
+            .map(|cap| claim_instance("Limit", &[subj("book_b"), dec(*cap)]))
+            .collect(),
+    )
+}
+
+/// The issue's case: over the cap and growing. Neither branch is to
+/// blame alone, so `compared` is absent and each branch's figures come
+/// in branch order, under the iteration that failed.
+#[test]
+fn a_failed_or_of_comparisons_carries_each_branch_in_order() {
+    let t = transition("trade", vec![subj("book_b"), dec(20), dec(30)]);
+    let Outcome::Rejected { reason } = shrink_outcome(&caps(&[10]), &t) else {
+        panic!("over the cap and growing is refused");
+    };
+    assert_eq!(
+        branches_of(&reason),
+        (None, vec![cmp("<=", 20, 10), cmp("<", 30, 20)])
+    );
+}
+
+/// The `or` inside a named condition, called under a `forall` with two
+/// caps: the figures are the failing iteration's, in the body's frame.
+/// Under the cap of 25 the first branch holds, so figures read under the
+/// wrong iteration would come out empty.
+#[test]
+fn a_failed_or_inside_a_definition_carries_the_failing_iterations_figures() {
+    let t = transition("trade_named", vec![subj("book_b"), dec(20), dec(30)]);
+    let Outcome::Rejected { reason } = shrink_outcome(&caps(&[25, 10]), &t) else {
+        panic!("over the cap of 10 and growing is refused");
+    };
+    assert_eq!(
+        branches_of(&reason),
+        (None, vec![cmp("<=", 20, 10), cmp("<", 30, 20)])
+    );
+}
+
+/// The acceptance side: an `or` that holds admits, and an `or` with a
+/// branch that is no comparison carries no figures at all, never a
+/// partial list.
+#[test]
+fn an_or_that_holds_admits_and_one_with_a_claim_branch_carries_no_figures() {
+    let shrinking = transition("trade", vec![subj("book_b"), dec(20), dec(15)]);
+    assert!(matches!(
+        shrink_outcome(&caps(&[10]), &shrinking),
+        Outcome::Accepted { .. }
+    ));
+    let t = transition(
+        "trade_unless_frozen",
+        vec![subj("book_b"), dec(20), dec(30)],
+    );
+    let Outcome::Rejected { reason } = shrink_outcome(&caps(&[10]), &t) else {
+        panic!("over the cap and not frozen is refused");
+    };
+    assert_eq!(branches_of(&reason), (None, Vec::new()));
+}
+
+/// `explain` carries the figures in its verdict and its prose, from the
+/// same walk.
+#[test]
+fn explain_carries_each_branch_in_its_verdict_and_prose() {
+    let p = parse_program(SHRINK).expect("parses");
+    p.validate().expect("validates");
+    let t = transition("trade", vec![subj("book_b"), dec(20), dec(30)]);
+    let explanation = explain(&p, &t, &caps(&[10]), &mut subjects(["o1"]));
+    let Verdict::Rejected(Rejection::Gate(gate)) = &explanation.verdict else {
+        panic!("{:?}", explanation.verdict);
+    };
+    assert_eq!(gate.compared, None);
+    assert_eq!(
+        gate.compared_branches,
+        vec![cmp("<=", 20, 10), cmp("<", 30, 20)]
+    );
+    let prose = explanation.render();
+    assert!(
+        prose.contains(
+            "  compared, each branch:\n    20 <= 10 did not hold\n    30 < 20 did not hold"
+        ),
+        "{prose}"
+    );
+}
+
 const LIMITS: &str = r#"
 program limits
 predicate Entry(entry: Subject, desk: Subject, risk: Decimal)
