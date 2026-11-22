@@ -6,7 +6,9 @@
 //! judged on its window, effective hour and lead time, with the implied
 //! flow rate they leave; and trade nominations that pair, are rejected,
 //! expire on the network's own completeness evidence, or are withdrawn;
-//! and the clock change's outage and deferral, from National Gas's notice.
+//! and the clock change's outage and deferral, from National Gas's notice;
+//! and who may do what: a Trader User, and the OCM operator nominating both
+//! sides of a market trade.
 //!
 //! The figures are the independent reference's frozen expectations
 //! (computed with exact fractions from the UNC text), not values read back
@@ -1730,4 +1732,252 @@ fn the_cash_flow_is_signed_by_imbalance_and_price_together() {
         assert_eq!(cash_flow, dec_str(expected), "{day}: SAP {sap}, {kwh} kWh");
         s = next;
     }
+}
+
+/// The four trade nominations an OCM notice gave, as (shipper, side,
+/// counterparty, quantity), and its effective pairs, the same way.
+type Side = (String, String, String, EvalValue);
+
+fn market_nominations(state: &State, notice: &str) -> (Vec<Side>, Vec<(Side, Side)>) {
+    let mine: Vec<EvalValue> = state
+        .claims_for("NominatedUnder")
+        .filter(|c| c.args[1] == subj(notice))
+        .map(|c| c.args[0].clone())
+        .collect();
+    let side = |m: &EvalValue| -> Side {
+        let row = state
+            .claims_for("TradeNomination")
+            .find(|c| &c.args[0] == m)
+            .unwrap();
+        let text = |v: &EvalValue| match v {
+            EvalValue::Subject(s) => s.to_string(),
+            other => panic!("{other:?}"),
+        };
+        (
+            text(&row.args[1]),
+            text(&row.args[3]),
+            text(&row.args[4]),
+            row.args[5].clone(),
+        )
+    };
+    let mut sides: Vec<Side> = mine.iter().map(side).collect();
+    sides.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    let mut pairs: Vec<(Side, Side)> = state
+        .claims_for("TradeEffective")
+        .filter(|c| mine.contains(&c.args[0]) && mine.contains(&c.args[1]))
+        .map(|c| (side(&c.args[0]), side(&c.args[1])))
+        .collect();
+    pairs.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    (sides, pairs)
+}
+
+fn side(shipper: &str, side: &str, counterparty: &str, qty: i64) -> Side {
+    (shipper.into(), side.into(), counterparty.into(), dec(qty))
+}
+
+fn report(
+    notice: &str,
+    originating: &str,
+    accepting: &str,
+    sells: bool,
+    qty: i64,
+    physical: bool,
+) -> Vec<EvalValue> {
+    vec![
+        subj(notice),
+        date("2026-10-24"),
+        subj(originating),
+        subj(accepting),
+        morpholog_test_support::bool_(sells),
+        dec(qty),
+        morpholog_test_support::bool_(physical),
+    ]
+}
+
+/// A Trader User nominates no flow but makes trade nominations (TPD
+/// C1.12). The OCM operator reports a market trade in one notice and
+/// nominates both sides: two pairs through the clearer, each effective at
+/// once (D2.2.1(a), D2.2.5). A Trader User may accept a physical offer but
+/// not post one (Annex D-1 4.9(b)).
+#[test]
+fn a_trader_user_trades_but_nominates_no_flow_and_the_ocm_nominates_both_sides() {
+    let mut s = set_up();
+    s = accept(
+        s,
+        "register_trader_user",
+        "operator",
+        vec![subj("trader_u")],
+    );
+    s = accept(s, "appoint_ocm_operator", "operator", vec![subj("ocm")]);
+    s = accept(s, "appoint_clearer", "operator", vec![subj("clearer")]);
+    s = accept(
+        s,
+        "grant_nomination",
+        "operator",
+        vec![subj("nominator_a"), subj("trader_u")],
+    );
+
+    // In time, by a party allowed to make it, and still refused: a Trader
+    // User is no User for a nomination of flow.
+    s = receive(s, "ru_out", "2026-10-23T08:00:00Z");
+    refused_by(
+        &refuse(
+            &s,
+            "nominate_output",
+            "nominator_a",
+            vec![
+                subj("ru_out"),
+                subj("trader_u"),
+                date("2026-10-24"),
+                dec(1_000_000),
+            ],
+        ),
+        "not_a_trader_user",
+    );
+    // Nor a renomination, refused before anything else about it.
+    s = receive(s, "ru_ren", "2026-10-23T15:30:00Z");
+    refused_by(
+        &refuse(
+            &s,
+            "renominate",
+            "nominator_a",
+            vec![
+                subj("ru_ren"),
+                subj("trader_u"),
+                date("2026-10-24"),
+                subj("ru_out"),
+                ts("2026-10-24T08:00:00Z"),
+                dec(900_000),
+            ],
+        ),
+        "not_a_trader_user",
+    );
+    // Its trade nomination is admitted, and waits for a counterpart.
+    s = receive(s, "ru_tn", "2026-10-23T10:00:00Z");
+    s = accept(
+        s,
+        "trade_nominate",
+        "nominator_a",
+        vec![
+            subj("ru_tn"),
+            subj("trader_u"),
+            date("2026-10-24"),
+            subj("disposing"),
+            subj("shipper_r"),
+            dec(5_000),
+        ],
+    );
+
+    // A non-physical trade the Trader User posted and sold: exactly four
+    // nominations, in two effective pairs through the clearer.
+    s = receive(s, "mt_np", "2026-10-23T10:20:00Z");
+    s = accept(
+        s,
+        "report_market_transaction",
+        "ocm",
+        report("mt_np", "trader_u", "shipper_r", true, 20_000, false),
+    );
+    let (sides, pairs) = market_nominations(&s, "mt_np");
+    let seller_disposes = side("trader_u", "disposing", "clearer", 20_000);
+    let clearer_acquires = side("clearer", "acquiring", "trader_u", 20_000);
+    let clearer_disposes = side("clearer", "disposing", "shipper_r", 20_000);
+    let buyer_acquires = side("shipper_r", "acquiring", "clearer", 20_000);
+    let mut expected = vec![
+        seller_disposes.clone(),
+        clearer_acquires.clone(),
+        clearer_disposes.clone(),
+        buyer_acquires.clone(),
+    ];
+    expected.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    assert_eq!(sides, expected);
+    let mut expected_pairs = vec![
+        (clearer_disposes, buyer_acquires),
+        (seller_disposes, clearer_acquires),
+    ];
+    expected_pairs.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    assert_eq!(pairs, expected_pairs);
+    // Each pair corresponds as the code defines it: the same day, opposite
+    // sides, each naming the other's shipper, and equal quantities.
+    for (a, b) in &pairs {
+        assert!(
+            a.0 == b.2 && b.0 == a.2 && a.1 != b.1 && a.3 == b.3,
+            "{a:?} {b:?}"
+        );
+    }
+    // Neither side waits: the network has nothing left to match.
+    let effective: Vec<ClaimInstance> = s.claims_for("TradeEffective").cloned().collect();
+    for pair in &effective {
+        refused_by(
+            &refuse(
+                &s,
+                "match_trades",
+                "gemini_receiver",
+                vec![pair.args[0].clone(), pair.args[1].clone()],
+            ),
+            "both_waiting",
+        );
+    }
+
+    // The same notice read twice, and one from anyone but the operator.
+    refused_by(
+        &refuse(
+            &s,
+            "report_market_transaction",
+            "ocm",
+            report("mt_np", "trader_u", "shipper_r", true, 20_000, false),
+        ),
+        "unread",
+    );
+    s = receive(s, "mt_forged", "2026-10-23T10:25:00Z");
+    refused_by(
+        &refuse(
+            &s,
+            "report_market_transaction",
+            "shipper_r",
+            report("mt_forged", "trader_u", "shipper_r", true, 20_000, false),
+        ),
+        "operator",
+    );
+
+    // Physical: the Trader User may accept the offer, not post it.
+    s = receive(s, "mt_ph", "2026-10-23T10:30:00Z");
+    s = accept(
+        s,
+        "report_market_transaction",
+        "ocm",
+        report("mt_ph", "shipper_r", "trader_u", false, 30_000, true),
+    );
+    assert_eq!(market_nominations(&s, "mt_ph").1.len(), 2);
+    s = receive(s, "mt_ph_posted", "2026-10-23T10:40:00Z");
+    refused_by(
+        &refuse(
+            &s,
+            "report_market_transaction",
+            "ocm",
+            report("mt_ph_posted", "trader_u", "shipper_r", true, 10_000, true),
+        ),
+        "trader_user_does_not_post_physical",
+    );
+    assert_eq!(s.claims_for("MarketTransaction").count(), 2);
+    // A notice once read is a trade nomination read: an outage cannot then
+    // be announced over the instant it arrived.
+    refused_by(
+        &refuse(
+            &s,
+            "announce_outage",
+            "gemini_receiver",
+            vec![
+                subj("gemini"),
+                ts("2026-10-23T10:15:00Z"),
+                ts("2026-10-23T10:25:00Z"),
+                subj("late_notice"),
+            ],
+        ),
+        "nothing_read_in_it",
+    );
+    assert!(
+        !s.claims_for("TradeEffective")
+            .any(|c| c.args[0] == subj("ru_tn") || c.args[1] == subj("ru_tn")),
+        "the Trader User's own trade nomination still waits"
+    );
 }
