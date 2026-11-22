@@ -8,7 +8,7 @@ GB gas is traded and moved by the gas day, 05:00 to 05:00 London time: 04:00 UTC
 
 The programme decides what may happen: a nomination is admitted only on a receipt that only the network's receiver may record, before a deadline read from a published calendar, by a party allowed to nominate. And it explains what happened later: a late trade makes the price it should have changed stale, and every quiet day that leaned on it, and flags the statement that used it. A correction is a new determination and a new statement beside the original, which still names the price it used and stays lawful on the evidence of its time.
 
-The rules are the Uniform Network Code: TPD Sections C and F v6.27 (14 September 2026) and General Terms Section C v6.28 (9 November 2026). An independent reference, written from that text with exact fractions, computed the figures the tests pin before this programme existed.
+The rules are the Uniform Network Code: TPD Sections C and F v6.27 (14 September 2026), and TPD Section D and General Terms Section C v6.28 (9 November 2026). An independent reference, written from that text with exact fractions, computed the figures the tests pin before this programme existed.
 
 ## The programme
 
@@ -23,6 +23,8 @@ The rules are the Uniform Network Code: TPD Sections C and F v6.27 (14 September
 | `CurrentNomination(shipper, gas_day, message)` | The nomination in force, replaced only through `Renominates`. |
 | `TradeNomination(message, shipper, gas_day, side, counterparty, qty_kwh)` | One side of a trade between two shippers: disposing or acquiring, naming the other. |
 | `TradeEffective(first, second)`, `TradeRejected(message, reason)`, `TradeWithdrawn(message, withdrawal)` | A pair that took effect; a side rejected, for want of a counterpart in time or for a quantity that differs; a side withdrawn before the day. |
+| `TraderUser(party)`, `OcmOperator(operator)`, `TradingSystemClearer(clearer)` | A party that trades but nominates no flow; the market's operator; and the clearer that stands between the two parties of every market trade. |
+| `MarketTransaction(notice, gas_day, originating, accepting, originator_sells, qty_kwh, physical)`, `NominatedUnder(nomination, notice)` | A trade on the OCM, as its operator's notice reports it, and the notice each of its trade nominations came from. |
 | `SetAside(message, reason)` | A message the network's system read and took as no nomination: malformed, of a kind the example does not model, or refused. |
 | `CompleteThrough(boundary, until)` | The network's system says every message it received before `until` is on the record. It only moves forward, and no receipt before `until` may be recorded after it. |
 | `Unavailable(system, starts, ends, source)`, `RenominationDeferral(system, starts, ends, processed_at, source)` | A stretch in which the network's system takes no renomination or trade nomination; one in which it holds renominations until `processed_at`. Each names the notice it comes from. |
@@ -47,6 +49,8 @@ The rules are the Uniform Network Code: TPD Sections C and F v6.27 (14 September
 | `no_equal_pair`, `unpaired` | A pair is not rejected for unequal quantities while either side has an equal partner waiting in time; a side already paired is not withdrawn. |
 | `in_window`, `within_the_day`, `on_the_hour`, `lead_time`, `in_order`, `rate_not_negative` | A renomination's receipt between 15:00 London the day before and 03:00 on the gas day; an effective hour inside the day, on the hour, at least an hour after the receipt, and not before the one it replaces takes effect; and no change so deep and late that the gas would have to flow backwards. |
 | `available`, `lead_after_processing`, `nothing_read_in_it` | A renomination or trade nomination received in an outage is refused as unavailable, not as late; a renomination held back counts its hour's lead from when it was processed; and an outage or deferral is announced before any message it governs, received in it, is read: an outage governs renominations and trade nominations, a deferral renominations only. |
+| `not_a_trader_user` | A Trader User makes no output nomination or renomination: the code's nomination rules leave it out, except for trade nominations (TPD C1.12). |
+| `operator`, `two_participants`, `trader_user_does_not_post_physical` | Only the OCM operator reports a market trade, by its role in the market; between two parties, neither the clearer; and a Trader User may accept a physical offer but not post one (Annex D-1 4.9(b)). |
 | `sap_not_stale`, `inputs_current` | No statement uses, and no quiet day leans on, a SAP the record already knows is stale. |
 
 | Acts | |
@@ -54,6 +58,8 @@ The rules are the Uniform Network Code: TPD Sections C and F v6.27 (14 September
 | `publish_local_day` | A calendar row, as `generate local-days` writes it, from the calendar's publisher. |
 | `receive`, `nominate_output`, `renominate` | A receipt from the network's receiver; a nomination or a renomination judged on it. |
 | `trade_nominate`, `match_trades`, `expire_trade`, `withdraw_trade`, `set_aside`, `report_complete_through` | One side of a trade, from the shipper's nominator; pairing and expiry, by the network's system; a withdrawal before the day; a message the network takes as no nomination; how far the network's record is complete. |
+| `report_market_transaction` | A trade on the OCM, from its operator's notice: two pairs of trade nominations through the clearer, the seller disposing to it and it disposing to the buyer, each pair effective at once (TPD D2.2.1(a), D2.2.5). |
+| `register_trader_user`, `appoint_ocm_operator`, `appoint_clearer` | The roles above, from the operator. |
 | `announce_outage`, `announce_deferral` | The network's system says when it will be unavailable, or hold renominations back. |
 | `report_trade`, `report_buy_action`, `report_sell_action`, `report_actions_complete`, `publish_default_smp` | Market evidence, from its source. |
 | `determine_sap`, `determine_fallback_sap` | A SAP computed from the record, naming what it used. |
@@ -87,15 +93,17 @@ The tests in `crates/morpholog-examples/tests/gas_day_cash_out.rs` walk the stor
 
 ## What it does not cover
 
-Two limits of this slice:
+Two limits:
 
 - A statement names its SAP determination and its imbalance, but not which National Gas action, if any, set the SMP. Every action for the day is on the record, and the statement's SMP figures show which limb applied, but the action itself is not named.
 - The authorities rest on a trusted start: `appoint_operator` is first come, first served, so a deployment's first act must be its operator's. On a closed deployment each name can be asserted only by the logins granted it, so a shipper's login cannot act as the operator or a receiver, and cannot appoint a receipt authority or record a receipt for itself.
 
 The renominations leave out the 15-minute lead time of very large daily-metered sites (every site here takes the hour), the network's own NDM renominations, the deemed approval of C4.1.7, a "New Renomination" with no earlier nomination to revise, and revising a first nomination before its 13:00 deadline: a second first nomination for the day is refused.
 
-Trade nominations leave out their effect on each shipper's imbalance (TPD E5): the example records an imbalance as its owner reports it. Also left out: withdrawing one side of a pair already effective, which the code allows before the day without saying what becomes of the other side; National Gas's system trades, single-sided trade nominations, and the OCM operator's nominations on behalf of both sides.
+Trade nominations leave out their effect on each shipper's imbalance (TPD E5): the example records an imbalance as its owner reports it. Also left out: withdrawing one side of a pair already effective. The UNC allows it before the day without saying what becomes of the other side, so the example refuses it (`unpaired`). National Gas's system trades and single-sided trade nominations are left out too.
+
+A market trade is recorded as the OCM has made it. The operator vouches for what its notice says, and the network's receiver only for when it arrived. Its two pairs are effective at once. The code makes a pair effective when its sides correspond and arrive in time, and these four are built together from one notice, so they do by construction; the notice deeming them submitted (D2.2.6) does not by itself make them effective. The market's own conditions on a physical trade, the originating party's nominations of flow and the hour's lead time for posting it (D2.2.7), are the market's to check before it reports the trade. The example does not reconcile the operator's trades with the market data source's `OcmTrade` that SAP reads: they come from different authorities. A positive quantity is the example's reading; the code does not state one.
 
 The clock change leaves out the deferred approval times of OTC trades (slide 9), ICE closing the OCM at 01:50 BST (slide 10), and EU nominations.
 
-Not modelled yet: the OCM operator's role, the EU timetable, capacity, and multi-day trades. Those are the next steps for this example, on the same programme.
+Not modelled: input nominations, admission as a trading participant (D2.2.1(j)), the EU timetable, capacity, and multi-day trades. The same rules built conventionally, in plain Python and PostgreSQL, are a separate comparison, not part of the example.

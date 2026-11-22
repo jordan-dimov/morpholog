@@ -25,8 +25,8 @@
 -- image.
 --
 -- The rules are the Uniform Network Code (UNC): TPD Sections C and F
--- v6.27 of 14 September 2026, General Terms Section C v6.28 of 9 November
--- 2026. Where the code is silent, the comment says so and names the
+-- v6.27 of 14 September 2026, TPD Section D and General Terms Section C
+-- v6.28 of 9 November 2026. Where the code is silent, the comment says so and names the
 -- reading this example takes.
 --
 -- Here is how Morpholog thinks about it. It stores *claims* it has
@@ -49,6 +49,15 @@ predicate ReceiptAuthority(boundary: Subject, receiver: Subject)
 predicate MayNominate(nominator: Subject, shipper: Subject)
 predicate MarketDataSource(source: Subject)
 predicate SettlementAgent(agent: Subject)
+
+-- Not every party is a shipper. A Trader User may trade gas but
+-- nominates no flow: the code's nomination rules leave Trader Users out,
+-- except for trade nominations (TPD C1.12). The On-the-day Commodity
+-- Market (OCM) has an operator, which reports each trade made on it,
+-- and a clearer, which stands between the two parties of every one.
+predicate TraderUser(party: Subject)
+predicate OcmOperator(operator: Subject)
+predicate TradingSystemClearer(clearer: Subject)
 
 -- Local days, as `morpholog generate local-days` writes them. Gas days
 -- are one calendar (`--at 05:00`); the 13:00 nomination deadlines are
@@ -105,6 +114,18 @@ predicate TradeRejected(message: Subject, reason: Subject)
     append only
 predicate TradeWithdrawn(message: Subject, withdrawal: Subject)
     unique by (message)
+    append only
+
+-- A trade made on the OCM, as its operator's notice reports it: who
+-- posted the offer (`originating`), who accepted it, which way the gas
+-- goes, how much, and whether it is physical, a trade that also changes
+-- the gas a party puts in or takes out. Each of the trade nominations
+-- it gives names the notice it came from.
+predicate MarketTransaction(notice: Subject, gas_day: Date, originating: Subject, accepting: Subject, originator_sells: Bool, qty_kwh: Decimal, physical: Bool)
+    unique by (notice)
+    append only
+predicate NominatedUnder(nomination: Subject, notice: Subject)
+    unique by (nomination)
     append only
 
 -- The network's system answers every message it receives: it takes it
@@ -243,7 +264,7 @@ define trade_pending(m):
 -- a message refuses one already read (`unread`), so a message is read
 -- once and one set aside never becomes a nomination afterwards.
 define message_read(m):
-    OutputNomination(message: m, ..) or TradeNomination(message: m, ..) or TradeWithdrawn(_, m) or SetAside(m, _)
+    OutputNomination(message: m, ..) or TradeNomination(message: m, ..) or TradeWithdrawn(_, m) or SetAside(m, _) or MarketTransaction(notice: m, ..)
 
 -- Whether the system was unavailable at an instant, and whether it has
 -- already read a renomination, or a trade nomination, received in a
@@ -255,7 +276,7 @@ define renomination_read_in(system, starts, ends):
     Received(m, system, at) and starts at_or_before at and at strictly_before ends and Renomination(m, _)
 
 define trade_nomination_read_in(system, starts, ends):
-    Received(m, system, at) and starts at_or_before at and at strictly_before ends and TradeNomination(message: m, ..)
+    Received(m, system, at) and starts at_or_before at and at strictly_before ends and (TradeNomination(message: m, ..) or MarketTransaction(notice: m, ..))
 
 -- When the counterpart to a trade nomination received at `at` is due
 -- (TPD C5.2.3(b)): by 06:00 on the gas day if the first side came before
@@ -316,6 +337,19 @@ transformation appoint_settlement_agent(agent):
     require operator: Operator(actor)
     admit SettlementAgent(agent)
 
+transformation register_trader_user(party):
+    require operator: Operator(actor)
+    admit TraderUser(party)
+
+transformation appoint_ocm_operator(operator):
+    require operator: Operator(actor)
+    admit OcmOperator(operator)
+
+transformation appoint_clearer(clearer):
+    require operator: Operator(actor)
+    require one_clearer: not TradingSystemClearer(_)
+    admit TradingSystemClearer(clearer)
+
 transformation adopt_sap_precision(policy, quantum_p_per_kwh: Decimal):
     require operator: Operator(actor)
     require positive_quantum: 0 < quantum_p_per_kwh
@@ -349,6 +383,7 @@ transformation receive(message, boundary, received_at: Timestamp):
 -- Gemini, not on when this act runs or on a receipt from anywhere else.
 transformation nominate_output(message, shipper, gas_day: Date, qty_kwh: Decimal):
     require may_nominate: MayNominate(actor, shipper)
+    require not_a_trader_user: not TraderUser(shipper)
     require gas_day_published: LocalDay(#gas_day, gas_day, _, _, _, _)
     require received_by_the_network: Received(message, #gemini, _)
     bind Received(message, #gemini, received_at)
@@ -383,6 +418,7 @@ transformation nominate_output(message, shipper, gas_day: Date, qty_kwh: Decimal
 -- that the hours left would need a negative rate is refused (C4.1.3(d)).
 transformation renominate(message, shipper, gas_day: Date, previous, effective_at: Timestamp, qty_kwh: Decimal):
     require may_nominate: MayNominate(actor, shipper)
+    require not_a_trader_user: not TraderUser(shipper)
     require received_by_the_network: Received(message, #gemini, _)
     bind Received(message, #gemini, received_at)
     require unread: not message_read(message)
@@ -464,6 +500,59 @@ transformation match_trades(first, second):
 -- nominations: a message received in time may not have been read. So
 -- every message received by the deadline must have been read
 -- (`example_all_receipts_read_v1`), and one read is never read again.
+-- A trade on the OCM. The market's operator reports it in one notice
+-- and, by its role in the market rather than a mandate from either
+-- party, makes the trade nominations for both sides: on the clearer's
+-- account, and as each party's agent (TPD D2.2.5, D2.2.6). The clearer
+-- is the counterparty to each party separately (D2.2.1(a)), so one trade
+-- is two pairs: the seller disposing to the clearer, and the clearer
+-- disposing to the buyer. The operator vouches for what the notice says;
+-- the network's receiver, only for when it arrived.
+--
+-- Submitted is not yet effective: the code makes a pair effective when
+-- its two sides correspond and arrive in time. Here the four are built
+-- together from one notice, with one quantity and one receipt, so each
+-- pair corresponds and is in time by construction, and both pairs are
+-- effective in this act. There is nothing left for the network to match.
+--
+-- A Trader User may accept a physical offer but not post one (Annex D-1
+-- 4.9(b)). The market's other conditions on a physical trade, such as
+-- the hour's lead time for posting it (D2.2.7), are the market's to
+-- check before it reports the trade: this records a trade already made.
+-- A positive quantity is this example's reading; the code does not say.
+transformation report_market_transaction(notice, gas_day: Date, originating, accepting, originator_sells: Bool, qty_kwh: Decimal, physical: Bool):
+    require operator: OcmOperator(actor)
+    require received_by_the_network: Received(notice, #gemini, _)
+    bind Received(notice, #gemini, received_at)
+    require unread: not message_read(notice)
+    bind clearer_appointed: TradingSystemClearer(clearer)
+    require two_participants: not (originating = accepting) and not (originating = clearer) and not (accepting = clearer)
+    require positive_quantity: 0 < qty_kwh
+    let opening_day = gas_day - span(P30D)
+    let next_date = gas_day + span(P1D)
+    bind LocalDay(#gas_day, opening_day, opens, _, _, _)
+    bind LocalDay(#renomination_end, next_date, closes, _, _, _)
+    require in_window: opens at_or_before received_at and received_at at_or_before closes
+    require available: not unavailable(#gemini, received_at)
+    require trader_user_does_not_post_physical: not (physical = true and TraderUser(originating))
+    let seller = if(originator_sells = true, originating, accepting)
+    let buyer = if(originator_sells = true, accepting, originating)
+    let seller_disposes = new Subject()
+    let clearer_acquires = new Subject()
+    let clearer_disposes = new Subject()
+    let buyer_acquires = new Subject()
+    admit MarketTransaction(notice, gas_day, originating, accepting, originator_sells, qty_kwh, physical)
+    admit TradeNomination(seller_disposes, seller, gas_day, #disposing, clearer, qty_kwh)
+    admit TradeNomination(clearer_acquires, clearer, gas_day, #acquiring, seller, qty_kwh)
+    admit TradeNomination(clearer_disposes, clearer, gas_day, #disposing, buyer, qty_kwh)
+    admit TradeNomination(buyer_acquires, buyer, gas_day, #acquiring, clearer, qty_kwh)
+    admit NominatedUnder(seller_disposes, notice)
+    admit NominatedUnder(clearer_acquires, notice)
+    admit NominatedUnder(clearer_disposes, notice)
+    admit NominatedUnder(buyer_acquires, notice)
+    admit TradeEffective(seller_disposes, clearer_acquires)
+    admit TradeEffective(clearer_disposes, buyer_acquires)
+
 transformation expire_trade(message):
     require network: ReceiptAuthority(#gemini, actor)
     require waiting: trade_pending(message)

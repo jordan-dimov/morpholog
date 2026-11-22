@@ -1645,3 +1645,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** an exchange's three contracts on one database (#906). They answered half to two thirds of the orders a second they answered on a database each, and every serialization failure was between different contracts.
 
 **Landed:** the diagnosis, not a fix. PostgreSQL tracks serializable reads by index page, and a small predicate's entries, or a counter every act rewrites, share pages across cases. With three overlapping proposals the shared page makes a chain, and one is aborted. Rebuilding indexes without deduplication, and the predicate-lock limits, made no difference on the exchange's record. The guide now says what makes independent cases conflict and what to do about it: retry. The adapter's tests pin what holds: overlapping proposals on independent contracts commit or fail as a serialization failure, and the retry commits, while proposals on one contract conflict, as they must. The structural answer is open in the roadmap.
+
+### Who may do what: a Trader User and the OCM operator
+
+**Forced by:** the gas example's last rule (#834). A Trader User trades but nominates no flow (TPD C1.12), and the On-the-day Commodity Market's operator, not either party, nominates both sides of a market trade (D2.2.5).
+
+**Landed:** in example 27, a Trader User's output nomination and renomination are refused, and its trade nominations stand. `report_market_transaction` takes the operator's one notice as two pairs of trade nominations through the clearer, each pair effective at once, because the four are built from one notice and so correspond and are in time by construction. A Trader User may accept a physical offer but not post one (Annex D-1 4.9(b)). The independent reference was extended and frozen first. No platform change.
