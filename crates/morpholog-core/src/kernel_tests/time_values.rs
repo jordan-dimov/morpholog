@@ -852,3 +852,34 @@ fn a_refused_decimal_comparison_does_not_re_refine_its_degraded_operand() {
         "the healthy side must not re-refine the degraded operand: {errs:?}"
     );
 }
+
+/// A decimal comparator met by two instants names the comparators that
+/// order them, as `check` does (#907): the check misses some shapes, and
+/// the decision is then where an author first reads it.
+#[test]
+fn a_decimal_comparison_of_two_instants_names_the_comparators_that_order_them() {
+    let error = crate::ordered_compare_error(
+        OrderedDomain::Decimal,
+        &ts("2026-10-24T10:00:00Z"),
+        &ts("2026-10-24T11:00:00Z"),
+    )
+    .expect("two instants are not decimals");
+    let EvalError::TypeMismatch(message) = error else {
+        panic!("a type mismatch: {error:?}");
+    };
+    assert!(
+        message.contains("two timestamps compare with `strictly_before`, `at_or_before`, `strictly_after` or `at_or_after`"),
+        "{message}"
+    );
+    assert!(
+        !crate::ordered_compare_error(
+            OrderedDomain::Decimal,
+            &ts("2026-10-24T10:00:00Z"),
+            &dur("PT1H")
+        )
+        .map(|e| e.to_string())
+        .unwrap_or_default()
+        .contains("compare with"),
+        "no hint for operands of two different kinds"
+    );
+}

@@ -126,6 +126,10 @@ pub(crate) struct Cells {
     /// `periods` grid holds timestamps), which types its loop bindings
     /// before their first use. A supplied collection has none.
     generated: HashMap<CellId, PredicateArgKind>,
+    /// The kinds a name was used as where a value of another kind
+    /// raises rather than failing to match: an ordered comparison, an
+    /// arithmetic operand, `round`.
+    strict: HashMap<CellId, BTreeSet<PredicateArgKind>>,
 }
 
 impl Cells {
@@ -140,6 +144,10 @@ impl Cells {
 
     fn observed(&self, cell: CellId) -> &BTreeSet<PredicateArgKind> {
         &self.observed[cell.0]
+    }
+
+    fn strict(&self, cell: CellId) -> BTreeSet<PredicateArgKind> {
+        self.strict.get(&cell).cloned().unwrap_or_default()
     }
 
     /// The loop binding `binder` iterated `collection`: its kinds are
@@ -350,6 +358,9 @@ struct CheckCtx<'a> {
 struct DefinitionSig {
     param_kinds: Vec<InferredKind>,
     param_observed: Vec<BTreeSet<PredicateArgKind>>,
+    /// Per parameter, the kinds the body used it as where another kind
+    /// raises: see `Cells::strict`.
+    param_strict: Vec<BTreeSet<PredicateArgKind>>,
     generator: Vec<bool>,
     /// The kind of the figure a value body yields; `None` for a
     /// condition.
@@ -474,6 +485,7 @@ pub(crate) fn check_program(program: &Program) -> Checked {
                 DefinitionSig {
                     param_kinds: vec![InferredKind::UnknownOrAny; arity],
                     param_observed: vec![BTreeSet::new(); arity],
+                    param_strict: vec![BTreeSet::new(); arity],
                     generator: vec![true; arity],
                     result: None,
                 },
@@ -500,11 +512,23 @@ pub(crate) fn check_program(program: &Program) -> Checked {
                 })
                 .collect();
             let param_kinds = agreed_kinds(&param_observed);
+            let param_strict = def
+                .parameters
+                .iter()
+                .map(|p| {
+                    first
+                        .kinds
+                        .cell(p)
+                        .map(|c| cx.cells.strict(c))
+                        .unwrap_or_default()
+                })
+                .collect();
             cx.definition_sigs.insert(
                 def.name.to_string(),
                 DefinitionSig {
                     param_kinds,
                     param_observed,
+                    param_strict,
                     generator: vec![true; arity],
                     result: None,
                 },
@@ -580,11 +604,23 @@ pub(crate) fn check_program(program: &Program) -> Checked {
                 .map(|p| scope.kinds.lookup(p))
                 .collect()
         };
+        let param_strict = def
+            .parameters
+            .iter()
+            .map(|p| {
+                scope
+                    .kinds
+                    .cell(p)
+                    .map(|c| cx.cells.strict(c))
+                    .unwrap_or_default()
+            })
+            .collect();
         cx.definition_sigs.insert(
             def.name.to_string(),
             DefinitionSig {
                 param_kinds,
                 param_observed,
+                param_strict,
                 generator,
                 result,
             },
@@ -1267,7 +1303,7 @@ impl CheckCtx<'_> {
     ) {
         if let ValueExpr::Term(Term::Var(name)) = operand {
             self.use_var(scope, name);
-            self.observe_or_report(scope, name, InferredKind::Known(expected));
+            self.observe_strict(scope, name, expected);
             return;
         }
         // A variable inside `abs(...)` refines too, so
@@ -1318,7 +1354,7 @@ impl CheckCtx<'_> {
         }
         for operand in [left, right] {
             if let ValueExpr::Term(Term::Var(name)) = operand {
-                self.observe_or_report(scope, name, InferredKind::Known(expected.clone()));
+                self.observe_strict(scope, name, expected.clone());
             } else {
                 // `abs(gap) no_longer_than allowed` pins `gap` to Duration.
                 self.refine_through_abs(operand, &expected, scope);
@@ -1494,7 +1530,7 @@ impl CheckCtx<'_> {
         let refine =
             |this: &mut Self, operand: &ValueExpr, kind: PredicateArgKind, scope: &mut Scope| {
                 if let ValueExpr::Term(Term::Var(name)) = operand {
-                    this.observe_or_report(scope, name, InferredKind::Known(kind));
+                    this.observe_strict(scope, name, kind);
                 } else {
                     // `abs(x) <= 10` pins `x` to Decimal.
                     this.refine_through_abs(operand, &kind, scope);
@@ -1890,6 +1926,7 @@ impl CheckCtx<'_> {
         };
         let param_kinds = sig.param_kinds.clone();
         let param_observed = sig.param_observed.clone();
+        let param_strict = sig.param_strict.clone();
         let result = sig.result.clone();
         let n = args.len().min(param_kinds.len());
         for (position, arg) in args.iter().take(n).enumerate() {
@@ -1897,10 +1934,21 @@ impl CheckCtx<'_> {
             match (arg, expected) {
                 (ValueExpr::Term(Term::Var(var_name)), expected) => {
                     self.use_var(scope, var_name);
+                    let open = matches!(expected, InferredKind::UnknownOrAny);
                     self.observe_or_report(scope, var_name, expected);
+                    if open {
+                        self.check_raising_uses(scope, var_name, &param_strict[position]);
+                    }
                     let cell = scope.kinds.slot_mut(var_name, &mut self.cells).cell;
                     for kind in &param_observed[position] {
                         self.cells.record(cell, kind.clone());
+                    }
+                    if !param_strict[position].is_empty() {
+                        self.cells
+                            .strict
+                            .entry(cell)
+                            .or_default()
+                            .extend(param_strict[position].iter().cloned());
                     }
                 }
                 (arg, InferredKind::Known(kind)) => {
@@ -2212,6 +2260,7 @@ impl CheckCtx<'_> {
         };
         let param_kinds = sig.param_kinds.clone();
         let param_observed = sig.param_observed.clone();
+        let param_strict = sig.param_strict.clone();
         let generator = sig.generator.clone();
         let n = args.len().min(param_kinds.len());
         for (position, arg) in args.iter().take(n).enumerate() {
@@ -2223,12 +2272,23 @@ impl CheckCtx<'_> {
                     } else {
                         self.use_var(scope, var_name);
                     }
+                    let open = matches!(expected, InferredKind::UnknownOrAny);
                     self.observe_or_report(scope, var_name, expected);
+                    if open {
+                        self.check_raising_uses(scope, var_name, &param_strict[position]);
+                    }
                     // The argument is used as everything the body used
                     // the parameter as, branches included.
                     let cell = scope.kinds.slot_mut(var_name, &mut self.cells).cell;
                     for kind in &param_observed[position] {
                         self.cells.record(cell, kind.clone());
+                    }
+                    if !param_strict[position].is_empty() {
+                        self.cells
+                            .strict
+                            .entry(cell)
+                            .or_default()
+                            .extend(param_strict[position].iter().cloned());
                     }
                 }
                 Term::Wildcard => {
@@ -2415,6 +2475,45 @@ impl CheckCtx<'_> {
                 context,
             });
         }
+    }
+
+    /// An argument whose kind is already known, passed to a parameter the
+    /// definition's body uses where another kind raises: in an ordered
+    /// comparison, in arithmetic or in `round`. An `or` keeps no kind for
+    /// what one branch alone refines, so the call's expected kind says
+    /// nothing; but such a use of this argument is an error at decision,
+    /// not a branch that fails. A claim position of another kind only
+    /// fails to match, so it is not checked here. Checked, not refined: an
+    /// argument whose kind is still open keeps the `or`'s latitude.
+    fn check_raising_uses(
+        &mut self,
+        scope: &Scope,
+        name: &Var,
+        strict: &BTreeSet<PredicateArgKind>,
+    ) {
+        let InferredKind::Known(actual) = scope.kinds.lookup(name) else {
+            return;
+        };
+        if let Some(new) = strict
+            .iter()
+            .find(|k| !kinds_compatible(k, &actual))
+            .cloned()
+        {
+            self.report(|context| ValidationError::VariableKindConflict {
+                variable: name.to_string(),
+                previous: actual,
+                new,
+                context,
+            });
+        }
+    }
+
+    /// As [`Self::observe_or_report`], for a use where a value of another
+    /// kind raises: the kind is also recorded as strict for the name.
+    fn observe_strict(&mut self, scope: &mut Scope, name: &Var, kind: PredicateArgKind) {
+        self.observe_or_report(scope, name, InferredKind::Known(kind.clone()));
+        let cell = scope.kinds.slot_mut(name, &mut self.cells).cell;
+        self.cells.strict.entry(cell).or_default().insert(kind);
     }
 
     /// As [`Self::observe_or_report`], without recording for the contract.
