@@ -396,6 +396,27 @@ pub fn eval_value_over(
     Some(eval_value(expr, &ctx))
 }
 
+/// For two instants, dates or spans met by a decimal comparator, the
+/// comparators that order them, as the static check suggests.
+fn temporal_comparators(left: &EvalValue, right: &EvalValue) -> String {
+    let (domain, kinds) = match (left, right) {
+        (EvalValue::Timestamp(_), EvalValue::Timestamp(_)) => {
+            (OrderedDomain::Timestamp, "timestamps")
+        }
+        (EvalValue::Date(_), EvalValue::Date(_)) => (OrderedDomain::Date, "dates"),
+        (EvalValue::Duration(_), EvalValue::Duration(_)) => (OrderedDomain::Duration, "durations"),
+        _ => return String::new(),
+    };
+    let token = |op| crate::format::compare_token(op, domain);
+    format!(
+        "; two {kinds} compare with `{}`, `{}`, `{}` or `{}`",
+        token(CompareOp::Lt),
+        token(CompareOp::Le),
+        token(CompareOp::Gt),
+        token(CompareOp::Ge)
+    )
+}
+
 /// Why two runtime values cannot be ordered under `domain`, or `None`
 /// when they can. One authority for the interpreter and the compiled
 /// checks, so both report the same error for the same operands.
@@ -423,9 +444,10 @@ pub fn ordered_compare_error(
         }),
         (OrderedDomain::Decimal, l, r) => Some(EvalError::TypeMismatch(format!(
             "comparison expects two decimal-domain operands of one flavour \
-             (bare decimals, or quantities of the same unit); got {} vs {}",
+             (bare decimals, or quantities of the same unit); got {} vs {}{}",
             runtime_kind_label(l),
             runtime_kind_label(r),
+            temporal_comparators(l, r),
         ))),
         (OrderedDomain::Date, _, _) => Some(EvalError::TypeMismatch(
             "comparison expects civil-date operands".to_string(),

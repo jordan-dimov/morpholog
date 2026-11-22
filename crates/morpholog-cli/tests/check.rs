@@ -1731,3 +1731,49 @@ fn check_passes_an_antecedent_that_calls_a_definition_calling_itself_through_an_
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// The ordering rule of an exchange's book: by price, then by an instant.
+/// A decimal `<` on the instants sat in one branch of an `or` inside a
+/// definition, and `check` let it through; the first decision then failed
+/// on it (#907). An `or` keeps no kind for what one branch alone refines,
+/// but the caller's argument is a timestamp the branch can only refuse.
+const ORDERING: &str = "program ts\n\
+     predicate Order(order: Subject, price: Decimal, at: Timestamp)\n\
+     predicate First(order: Subject)\n\
+     define earlier(p, s, p2, s2):\n    p < p2 or WHEN\n\
+     transformation mark(o, p):\n    bind Order(o, a, s)\n    bind Order(p, a2, s2)\n    \
+     require first: earlier(a2, s2, a, s)\n    admit First(o)\n";
+
+fn check_ordering(when: &str) -> std::process::Output {
+    let tmp = temp_morph(&ORDERING.replace("WHEN", when));
+    Command::new(bin())
+        .arg("check")
+        .arg(tmp.path())
+        .output()
+        .expect("morpholog check should run")
+}
+
+#[test]
+fn check_refuses_a_decimal_comparison_of_instants_in_one_branch_of_an_or() {
+    for when in ["s < s2", "(p = p2 and s < s2)"] {
+        let out = check_ordering(when);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{when}: check passed");
+        assert!(
+            stderr.contains("first constrained to Timestamp but later used as Decimal"),
+            "{when}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn check_accepts_an_or_whose_branches_order_decimals_and_instants_each_their_way() {
+    for when in ["s strictly_before s2", "(p = p2 and s strictly_before s2)"] {
+        let out = check_ordering(when);
+        assert!(
+            out.status.success(),
+            "{when}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
