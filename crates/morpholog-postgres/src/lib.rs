@@ -11,6 +11,9 @@
 mod sql_views;
 pub mod testing;
 
+#[cfg(test)]
+mod completeness_race;
+
 pub use sql_views::{
     ColumnDescription, DerivedSource, RenderedViews, VIEW_SURFACE_FORMAT, ViewDescription,
     ViewRefusal, ViewSurface, render_views,

@@ -428,6 +428,52 @@ pub(crate) async fn propose_against_pg_run(
     prepared: &PreparedProgram,
     timed: bool,
 ) -> Result<ProposalRun, PgError> {
+    propose_against_pg_run_pausing(
+        pool,
+        route,
+        transformation,
+        transition,
+        prepared,
+        timed,
+        async || {},
+    )
+    .await
+}
+
+/// [`propose_against_pg`] with a pause after the transaction has read the
+/// claims it decides on and before it decides or writes anything, the same
+/// point on every route, so a test can commit another proposal in between.
+#[cfg(test)]
+pub(crate) async fn propose_against_pg_pausing(
+    pool: &PgPool,
+    program: &PgProgram,
+    proposal: &Proposal,
+    after_load: impl AsyncFnOnce(),
+) -> Result<PgProposalOutcome, PgError> {
+    let (transformation, _, _) = resolve(program.prepared(), &proposal.transformation_name)?;
+    let transition = proposal.transition();
+    let run = propose_against_pg_run_pausing(
+        pool,
+        program.route(),
+        transformation,
+        &transition,
+        program.prepared(),
+        false,
+        after_load,
+    )
+    .await?;
+    Ok(run.outcome)
+}
+
+async fn propose_against_pg_run_pausing(
+    pool: &PgPool,
+    route: Route<'_>,
+    transformation: &Transformation,
+    transition: &Transition,
+    prepared: &PreparedProgram,
+    timed: bool,
+    after_load: impl AsyncFnOnce(),
+) -> Result<ProposalRun, PgError> {
     let admission = &prepared.admission();
     let invariants = admission.invariants();
     let definitions = admission.definitions();
@@ -452,6 +498,7 @@ pub(crate) async fn propose_against_pg_run(
     );
     let state = load_state(&mut tx, &scope).await?;
     let load = elapsed(clock) - begin;
+    after_load().await;
 
     if !matches!(route, Route::Interpreted) {
         disable_jit(&mut tx).await?;
