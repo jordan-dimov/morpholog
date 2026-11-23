@@ -509,6 +509,7 @@ async fn live_views_compute_the_kernels_rows_over_generated_states() {
         "roles",
         "extrema",
         "totals",
+        "rates",
     ] {
         assert!(
             live.iter().any(|n| n == fragment),
