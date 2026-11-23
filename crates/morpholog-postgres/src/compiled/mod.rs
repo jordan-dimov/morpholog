@@ -3267,8 +3267,9 @@ fn exclusive_literal_test(
 /// array; their `UNION ALL` is the kernel's concatenation of matches, and
 /// `DISTINCT ON` the projection's keys is its deduplication, by the
 /// kernel's equality. The unbound arguments then read the synthetic
-/// table's columns as a claim's. A branch that can raise refuses, as any
-/// raising scope under a sum does.
+/// table's columns as a claim's. The kernel evaluates every branch whole
+/// for each caller row before it projects, so the ways a branch can raise
+/// are scopes of the caller's row, in branch order.
 fn render_binding_call(
     name: &DefinitionName,
     args: &[Term],
@@ -3293,16 +3294,13 @@ fn render_binding_call(
         | Prop::In(..)) => vec![body],
     };
     let mut selects = Vec::with_capacity(branches.len());
+    let mut raising = Vec::new();
     let mut kinds: Vec<Option<PredicateArgKind>> = vec![None; def.parameters.len()];
     for branch in branches {
         let r = nested_scope(outside_consequent(ctx, |ctx| {
             render_prop(branch, frame.clone(), ctx)
         })?)?;
-        if r.has_errors() {
-            return Err(CompileReason::SumShape {
-                detail: "a defined call under a sum whose body can raise",
-            });
-        }
+        raising.extend(r.probes.iter().cloned());
         if r.from.is_empty() {
             return Err(CompileReason::SumShape {
                 detail: "a defined call under a sum binding from no claim",
@@ -3376,6 +3374,7 @@ fn render_binding_call(
     }
     Ok(Rendered {
         from: vec![(alias, pseudo, item)],
+        probes: lifted_scopes(&raising),
         env,
         ..Rendered::default()
     })

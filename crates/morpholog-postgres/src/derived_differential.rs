@@ -12,7 +12,7 @@
 
 use morpholog_core::{ClaimInstance, EvalValue, Program, State, Transition, ValidatedProgram};
 use morpholog_test_support::differential::sample_state;
-use morpholog_test_support::{claim_instance, coll, dec, subj, test_actor};
+use morpholog_test_support::{claim_instance, coll, dec, subj, test_actor, ts};
 use sqlx::{PgPool, Row};
 
 use crate::attestation::Proposal;
@@ -298,9 +298,23 @@ derived Baskets(items):
     over Basket(items)
 ";
 
+/// A sum through a call that binds the rate in force, whose body compares
+/// instants: a converted order total.
+const RATES: &str = "program rates
+predicate Order(order: Subject)
+predicate Rate(currency: Subject, effective: Timestamp, rate: Decimal)
+predicate Line(line: Subject, order: Subject, quantity: Decimal, price: Decimal, currency: Subject)
+predicate OrderInBase(order: Subject, total: Decimal)
+define current_rate(c, r):
+    Rate(c, e, r) and not (Rate(c, later, _) and e strictly_before later)
+derived OrderInBase(order):
+    over Order(order: order)
+    value total = sum(q * p / r | Line(_, order, q, p, c) and current_rate(c, r))
+";
+
 fn programs() -> Vec<Program> {
     let mut out: Vec<Program> = [
-        SPIKE, EDGES, ORDERS, MEMBERS, CHOICES, ROLES, EXTREMA, TOTALS, KEYED,
+        SPIKE, EDGES, ORDERS, MEMBERS, CHOICES, ROLES, EXTREMA, TOTALS, KEYED, RATES,
     ]
     .iter()
     .map(|s| morpholog_surface::parse_program(s).expect("fragment parses"))
@@ -690,6 +704,63 @@ async fn live_views_follow_a_governed_history_commit_by_commit() {
         seen_values,
         ["2", "5", "5", "3", "0"],
         "the figure moved with every commit, with no refresh"
+    );
+}
+
+/// A call under a sum that binds the rate in force, whose body can raise.
+/// The kernel evaluates the call for each line, so a rate it cannot order
+/// fails the orders with a line in that currency and no other.
+#[tokio::test]
+async fn a_raising_call_under_a_sum_fails_the_orders_that_reach_it() {
+    let pool = test_pool().await;
+    let rates = morpholog_surface::parse_program(RATES).unwrap();
+    let v = rates.validated().unwrap();
+    let clean = vec![
+        claim_instance("Order", &[subj("a")]),
+        claim_instance("Order", &[subj("b")]),
+        claim_instance("Order", &[subj("c")]),
+        claim_instance("Rate", &[subj("x"), ts("2026-01-01T00:00:00Z"), dec(2)]),
+        claim_instance("Rate", &[subj("x"), ts("2026-02-01T00:00:00Z"), dec(4)]),
+        claim_instance("Rate", &[subj("y"), ts("2026-01-01T00:00:00Z"), dec(5)]),
+        claim_instance("Line", &[subj("a1"), subj("a"), dec(2), dec(10), subj("x")]),
+        claim_instance("Line", &[subj("a2"), subj("a"), dec(1), dec(5), subj("y")]),
+        claim_instance("Line", &[subj("b1"), subj("b"), dec(3), dec(4), subj("y")]),
+    ];
+    let state = State::from_claims(clean.clone());
+    assert_eq!(agree(&pool, &v, &state, "rates clean").await, 1);
+    let mut rows = live_rows(&pool, &v, "OrderInBase").await;
+    rows.sort();
+    let row = |order: &str, total: &str, error: Option<&str>| {
+        (
+            vec![order.to_string(), total.to_string()],
+            error.map(str::to_string),
+        )
+    };
+    assert_eq!(
+        rows,
+        [
+            row("a", "6", None),
+            row("b", "2.4", None),
+            row("c", "0", None)
+        ],
+        "each line at its currency's latest rate"
+    );
+
+    let mut dirty = clean;
+    dirty.push(claim_instance("Rate", &[subj("x"), subj("soon"), dec(3)]));
+    let state = State::from_claims(dirty);
+    assert!(v.enumerate_derived("OrderInBase", &state).is_err());
+    assert_eq!(agree(&pool, &v, &state, "rates dirty").await, 1);
+    let mut rows = live_rows(&pool, &v, "OrderInBase").await;
+    rows.sort();
+    assert_eq!(
+        rows,
+        [
+            row("a", "NULL", Some("scope")),
+            row("b", "2.4", None),
+            row("c", "0", None)
+        ],
+        "only the order with a line in x reaches the rate that cannot be ordered"
     );
 }
 
