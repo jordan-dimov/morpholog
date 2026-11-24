@@ -317,6 +317,42 @@ The law above was measured when a proposal read every predicate its body consult
 
 Two readings. With its index, a keyed read remembers only the index range it searched, so the shared-predicate case that anti-scaled runs at the disjoint case's speed: the unit of concurrency became the rows a body can observe, not the predicate. Without the index, a keyed read scans the predicate computing a key per row, slower than the old whole read and holding the same relation lock, so the interpreted ruler here measures keyed reads unindexed, not the interpreter; the ledger fixture moved nothing on either route, since its posting's only gate reads an empty predicate.
 
+### Independent cases on one record (2026-11-24, `cases`, PostgreSQL 19.0 and 18.7, compiled with indexes provisioned)
+
+Forced by #906: the CTENEX lab's contracts and the InvenTree lab's stock items abort each other on one database though no rule relates them. Both clusters run at defaults for serializable locking (64 predicate locks a transaction, 100 connections, 2 GB of shared buffers), on an Intel Core Ultra 7 155H laptop on mains power, with a one-core background job from another session running throughout. Each point runs for 20 s. The efficiency is the layout's committed rate over one database per case at the same point.
+
+One worker per case, a book of 30 (binary `1d7e5653`, commit `dc226ec0`, PostgreSQL 19.0, 12:53 UTC):
+
+| Cases | `shared` | `apart` | `databases` | Efficiency, `shared` | Efficiency, `apart` |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 183/s | 182/s | 177/s | 103% | 103% |
+| 4 | 442/s | 210/s | 612/s | 72% | 34% |
+| 16 | 1,337/s | 1,026/s | 1,736/s | 77% | 59% |
+| 64 | 1,644/s, 645 acts failed | 466/s | 2,919/s | 56% | 16% |
+
+A fixed load of 16 workers, a book of 300 (binary `ba04f1ee`, commit `21f20dc5`, PostgreSQL 19.0, 11:41 UTC). The later commit changed only how the rows are printed and sized a case database's pool one connection smaller:
+
+| Cases x workers | `shared` | `apart` | `databases` | Efficiency, `shared` |
+|---|---:|---:|---:|---:|
+| 1 x 16 | not comparable: 3,516 acts failed | 459/s | 550/s | - |
+| 2 x 8 | 176/s | 175/s | 1,114/s | 16% |
+| 4 x 4 | 327/s | 324/s | 1,125/s | 29% |
+| 8 x 2 | 667/s | 581/s | 1,039/s | 64% |
+| 16 x 1 | 1,236/s | 977/s | 1,642/s | 75% |
+
+The same fixed load at a book of 30, PostgreSQL 18.7 (13:00 UTC) against 19.0 (12:58 UTC), binary `1d7e5653`:
+
+| Cases x workers | 18.7 `shared` / `databases` | 19.0 `shared` / `databases` |
+|---|---|---|
+| 2 x 8 | 187 / 943, 20% | 197 / 978, 20% |
+| 16 x 1 | 1,302 / 1,746, 75% (1,621 acts failed) | 1,249 / 1,730, 72% (470 acts failed) |
+
+What they show:
+- **On one database, independent cases commit 16 to 77% of what separate databases commit.** It is worst when a few cases share many workers: two cases of eight workers each commit a fifth of what two databases commit.
+- **One predicate per case does not help, and costs more as cases grow.** Separating the predicates leaves the claims table, its key and the audit log shared. Why `apart` falls below `shared` from 4 cases on is not measured here.
+- **At default settings, a shared database runs out of serializable-lock memory** (`out of shared memory`, `not enough elements in RWConflictPool`, SQLSTATE 53200) with 16 concurrent writers. One database per case never did, at up to 64. The onset is not deterministic: the same point failed hundreds of acts in one run and none in another.
+- **PostgreSQL 19 and 18.7 do not differ** on these points.
+
 ### Embedder / CLI latency (`scripts/embedder_latency.sh`)
 
 Everything above runs in-process. A non-Rust embedder (the reference ETRM) drives Morpholog as `morpholog propose ...`, paying process spawn + parse + validate + a fresh connection + propose + commit + JSON on every call - none of which the in-process bench sees. The harness times the CLI end-to-end (N=50, starting from an empty ledger - state grows over the run - local PostgreSQL):
