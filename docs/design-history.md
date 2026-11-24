@@ -1651,3 +1651,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** the gas example's last rule (#834). A Trader User trades but nominates no flow (TPD C1.12), and the On-the-day Commodity Market's operator, not either party, nominates both sides of a market trade (D2.2.5).
 
 **Landed:** in example 27, a Trader User's output nomination and renomination are refused, and its trade nominations stand. `report_market_transaction` takes the operator's one notice as two pairs of trade nominations through the clearer, each pair effective at once, because the four are built from one notice and so correspond and are in time by construction. A Trader User may accept a physical offer but not post one (Annex D-1 4.9(b)). The independent reference was extended and frozen first. No platform change.
+
+### A sum through a condition that can raise
+
+**Forced by:** the InvenTree fork's pricing rerun on v0.0.21 (#807). Its order totals convert each line at the rate in force. The override gate reads that rate through a condition, `current_rate`, which compares instants and so can raise. A live view's sum could not call it, so the conversion was spelt out six more times.
+
+**Landed:** a live view's sum may call a condition that binds and whose body can raise. The kernel evaluates every branch of the call for each row before it projects, so each branch's ways of raising are lifted into the caller's row, in branch order, as a fully bound call's already were. A row that raises names the failure; another key keeps its value. Proof: the derived differential with a rates fragment over generated states, and a built state where a rate that cannot be ordered fails only the order with a line in its currency.
