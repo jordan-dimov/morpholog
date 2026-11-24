@@ -98,8 +98,10 @@ pub(crate) struct CasesArgs {
     repeat: usize,
 
     /// Every act also requires that its contract is not halted, a
-    /// predicate almost always empty, while a writer halts contracts no
-    /// worker uses.
+    /// predicate almost always empty. Each `Halted` predicate the
+    /// workers read has a writer of its own, halting contracts no worker
+    /// uses about four times a second, so each case's read is written as
+    /// often in every layout.
     #[arg(long)]
     halt: bool,
 
@@ -110,8 +112,10 @@ pub(crate) struct CasesArgs {
     sample_locks: bool,
 
     /// The server's log, written with `log_line_prefix = '%m [%p] %d '`.
-    /// Each point then counts its failed acts by the statement they were
-    /// running.
+    /// Each point then counts its failed attempts, retried ones included,
+    /// by the statement they were running. Only databases named with the
+    /// main database's name as a prefix count, so keep other work with
+    /// such names off the server while it runs.
     #[arg(long)]
     server_log: Option<std::path::PathBuf>,
 }
@@ -273,9 +277,11 @@ struct Point {
     independence_efficiency: Option<f64>,
     programme_hashes: Vec<String>,
     repeat: usize,
-    /// Failed acts by kind and the statement they were running, with
-    /// `--server-log`.
+    /// Failed attempts, retried ones included, by kind and the
+    /// statement they were running, with `--server-log`.
     failures_by_stage: Option<BTreeMap<String, u64>>,
+    /// Halts committed, with `--halt`.
+    halts: Option<usize>,
     /// The serializable read locks, with `--sample-locks`.
     locks: Option<diagnosis::Locks>,
 }
@@ -299,8 +305,14 @@ struct Identity {
 
 pub(crate) async fn run_cases(args: CasesArgs) -> Result<()> {
     check_reset_ack(args.reset, &args.database_url)?;
-    if args.cases.is_empty() || args.cases.contains(&0) || args.layout.is_empty() {
-        bail!("--cases needs counts above zero, and --layout at least one layout");
+    if args.cases.is_empty()
+        || args.cases.contains(&0)
+        || args.layout.is_empty()
+        || args.repeat == 0
+    {
+        bail!(
+            "--cases needs counts above zero, --layout at least one layout, and --repeat one run at least"
+        );
     }
     if let Some(w) = args.workers
         && let Some(c) = args.cases.iter().find(|c| w % **c != 0)
@@ -504,7 +516,9 @@ async fn targets(
         Layout::Databases => {
             let mut out = Vec::with_capacity(cases);
             for c in 0..cases {
-                let pool = owned.pool(main, options, c, per_case).await?;
+                let pool = owned
+                    .pool(main, options, c, per_case + usize::from(args.halt))
+                    .await?;
                 out.push(target(pool, "", vec![c])?);
             }
             out
@@ -522,12 +536,17 @@ async fn run_point(
     per_case: usize,
 ) -> Result<Point> {
     let workers = cases * per_case;
-    require_connections(main, workers + 2).await?;
+    let halters = match (args.halt, layout) {
+        (false, _) => 0,
+        (true, Layout::Shared) => 1,
+        (true, _) => cases,
+    };
+    require_connections(main, workers + halters + 2).await?;
     // Shared and apart workers draw on the main pool.
     let main = if layout == Layout::Databases {
         main.clone()
     } else {
-        connect(&main.connect_options(), workers + 2).await?
+        connect(&main.connect_options(), workers + halters + 2).await?
     };
     let targets = targets(args, options, owned, &main, layout, cases, per_case).await?;
 
@@ -566,7 +585,12 @@ async fn run_point(
     let mut log = args
         .server_log
         .as_deref()
-        .map(diagnosis::LogCursor::at_end)
+        .map(|path| {
+            diagnosis::LogCursor::at_end(
+                path,
+                main.connect_options().get_database().unwrap_or_default(),
+            )
+        })
         .transpose()?;
     let sampler = if args.sample_locks && layout != Layout::Databases {
         Some(diagnosis::Sampler::start(
@@ -583,10 +607,17 @@ async fn run_point(
         max_retries: args.max_retries,
         deadline: started + Duration::from_secs(args.seconds),
     };
-    let halting = args.halt.then(|| {
-        let t = Arc::clone(&targets[0]);
-        tokio::spawn(async move { halt_spares(&t, load.deadline).await })
-    });
+    let halting: Vec<_> = if args.halt {
+        targets
+            .iter()
+            .map(|t| {
+                let t = Arc::clone(t);
+                tokio::spawn(async move { halt_spares(&t, load.deadline).await })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let mut handles = Vec::with_capacity(workers);
     for t in &targets {
         for &case in &t.cases {
@@ -610,8 +641,10 @@ async fn run_point(
         tally.wasted += t.wasted;
     }
     let elapsed = started.elapsed();
-    if let Some(h) = halting {
-        h.await.context("join the halting writer")??;
+    let mut halts = args.halt.then_some(0);
+    for h in halting {
+        let n = h.await.context("join a halting writer")??;
+        halts = halts.map(|total| total + n);
     }
     let locks = match sampler {
         Some(s) => Some(s.finish().await?),
@@ -663,13 +696,15 @@ async fn run_point(
             .collect(),
         repeat: 0,
         failures_by_stage,
+        halts,
         locks,
     })
 }
 
 /// Halts contracts no worker trades, one every quarter second, so the
-/// predicate every act reads is written now and then but never matches.
-async fn halt_spares(target: &Target, deadline: Instant) -> Result<()> {
+/// predicate the target's acts read is written now and then but never
+/// matches. The halts committed.
+async fn halt_spares(target: &Target, deadline: Instant) -> Result<usize> {
     let mut spare = 0usize;
     while Instant::now() < deadline {
         let proposal = Proposal::gateway(&Transition {
@@ -689,7 +724,7 @@ async fn halt_spares(target: &Target, deadline: Instant) -> Result<()> {
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    Ok(())
+    Ok(spare)
 }
 
 /// The targets grouped by the database they live in, in first-seen
@@ -991,8 +1026,11 @@ fn render_row(p: &Point) -> String {
     );
     if let Some(stages) = &p.failures_by_stage {
         for (stage, n) in stages {
-            out.push_str(&format!("  {n} {stage}\n"));
+            out.push_str(&format!("  {n} attempts: {stage}\n"));
         }
+    }
+    if let Some(halts) = p.halts {
+        out.push_str(&format!("  {halts} halts committed\n"));
     }
     if let Some(locks) = &p.locks {
         out.push_str(&format!(

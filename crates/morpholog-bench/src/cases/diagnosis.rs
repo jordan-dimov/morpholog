@@ -1,6 +1,9 @@
-//! Where a point's conflicts sat: the statement each failed act was
+//! Where a point's conflicts sat: the statement each failed attempt was
 //! running, from the server's log, and the serializable read locks held
 //! while the workers ran. Both are optional, and neither is timed.
+//!
+//! The log says where PostgreSQL detected a failure, not which earlier
+//! read or write made the dependency.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom};
@@ -13,25 +16,29 @@ use anyhow::{Context, Result};
 use morpholog_postgres::PgPool;
 use serde::Serialize;
 
-/// Reads only what the server log gained since the last read.
+/// Reads only what the server log gained since the last read, and only
+/// the lines of databases named with the run's prefix.
 pub(super) struct LogCursor {
     path: PathBuf,
     offset: u64,
+    databases: String,
 }
 
 impl LogCursor {
     /// Starts at the log's end, so nothing written before counts.
-    pub(super) fn at_end(path: &Path) -> Result<Self> {
+    pub(super) fn at_end(path: &Path, databases: &str) -> Result<Self> {
         let offset = std::fs::metadata(path)
             .with_context(|| format!("read the server log {}", path.display()))?
             .len();
         Ok(LogCursor {
             path: path.to_path_buf(),
             offset,
+            databases: databases.to_string(),
         })
     }
 
-    /// Failed statements written since the last call, by kind and stage.
+    /// Failed attempts logged since the last call, by kind and stage. A
+    /// retried act that commits in the end still counts each attempt.
     pub(super) fn failures_since(&mut self) -> Result<BTreeMap<String, u64>> {
         let mut file = std::fs::File::open(&self.path)
             .with_context(|| format!("open {}", self.path.display()))?;
@@ -40,14 +47,15 @@ impl LogCursor {
         file.read_to_string(&mut text)
             .with_context(|| format!("read {}", self.path.display()))?;
         self.offset += text.len() as u64;
-        Ok(failures(&text))
+        Ok(failures(&text, &self.databases))
     }
 }
 
 /// Lines carry `log_line_prefix = '%m [%p] %d '`. An error line names
 /// what went wrong; the same process's next `STATEMENT` line names what
-/// it was running.
-fn failures(log: &str) -> BTreeMap<String, u64> {
+/// it was running. Lines of databases not named with `databases` as a
+/// prefix are skipped.
+fn failures(log: &str, databases: &str) -> BTreeMap<String, u64> {
     let mut pending: BTreeMap<&str, &str> = BTreeMap::new();
     let mut counts = BTreeMap::new();
     for line in log.lines() {
@@ -57,6 +65,9 @@ fn failures(log: &str) -> BTreeMap<String, u64> {
         let Some((pid, rest)) = rest.split_once("] ") else {
             continue;
         };
+        if !rest.starts_with(databases) {
+            continue;
+        }
         if let Some((_, message)) = rest.split_once("ERROR:  ") {
             if let Some(kind) = kind(message) {
                 pending.insert(pid, kind);
@@ -109,9 +120,20 @@ pub(super) struct Locks {
     peak_per_transaction: u64,
     /// The most held at once, across every transaction.
     peak_total: u64,
-    /// The relations held most, with the lock's grain and the mean count
-    /// a sample found.
-    by_relation: Vec<(String, String, f64)>,
+    /// Every relation and grain seen, held most first.
+    by_relation: Vec<Held>,
+}
+
+/// One relation's locks at one grain, as a mean over the samples.
+#[derive(Serialize)]
+struct Held {
+    relation: String,
+    grain: String,
+    mean: f64,
+    /// Of those, the locks on a target (the relation, a page or a tuple)
+    /// that another transaction held in the same sample. A write there
+    /// conflicts with every one of them.
+    mean_shared: f64,
 }
 
 impl Locks {
@@ -127,11 +149,22 @@ impl Locks {
         self.by_relation
             .iter()
             .take(4)
-            .map(|(relation, grain, mean)| format!("{relation} ({grain}) {mean:.1}"))
+            .map(|h| {
+                format!(
+                    "{} ({}) {:.1}, {:.1} shared",
+                    h.relation, h.grain, h.mean, h.mean_shared
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ")
     }
 }
+
+/// A lock's transaction, grain, relation, page and tuple.
+type Row = (String, String, String, Option<i64>, Option<i32>);
+
+/// What a lock is on: relation, grain, page and tuple.
+type Target<'a> = (&'a String, &'a String, Option<i64>, Option<i32>);
 
 pub(super) struct Sampler {
     stop: Arc<AtomicBool>,
@@ -145,10 +178,13 @@ impl Sampler {
         let stopping = Arc::clone(&stop);
         let handle = tokio::spawn(async move {
             let mut locks = Locks::default();
-            let mut held: BTreeMap<(String, String), u64> = BTreeMap::new();
+            // (relation, grain) -> (locks, locks another transaction shared)
+            let mut held: BTreeMap<(String, String), (u64, u64)> = BTreeMap::new();
             while !stopping.load(Ordering::Relaxed) {
-                let rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
-                    "SELECT l.virtualtransaction, l.locktype, l.relation::regclass::text
+                let rows: Vec<Row> = sqlx::query_as(
+                    "SELECT l.virtualtransaction, l.locktype,
+                            coalesce(l.relation::regclass::text, ''),
+                            l.page::bigint, l.tuple::int
                      FROM pg_locks l
                      WHERE l.mode = 'SIReadLock'
                        AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())",
@@ -157,11 +193,21 @@ impl Sampler {
                 .await
                 .context("sample pg_locks")?;
                 let mut per_transaction: BTreeMap<&str, u64> = BTreeMap::new();
-                for (transaction, locktype, relation) in &rows {
+                let mut per_target: BTreeMap<Target<'_>, u64> = BTreeMap::new();
+                for (transaction, locktype, relation, page, tuple) in &rows {
                     *per_transaction.entry(transaction).or_default() += 1;
-                    *held
-                        .entry((relation.clone().unwrap_or_default(), locktype.clone()))
+                    *per_target
+                        .entry((relation, locktype, *page, *tuple))
                         .or_default() += 1;
+                }
+                for (&(relation, locktype, _, _), &holders) in &per_target {
+                    let entry = held
+                        .entry((relation.clone(), locktype.clone()))
+                        .or_default();
+                    entry.0 += holders;
+                    if holders > 1 {
+                        entry.1 += holders;
+                    }
                 }
                 let peak = per_transaction.values().copied().max().unwrap_or(0);
                 locks.peak_per_transaction = locks.peak_per_transaction.max(peak);
@@ -170,12 +216,16 @@ impl Sampler {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
             let samples = locks.samples.max(1) as f64;
-            let mut by_relation: Vec<(String, String, f64)> = held
+            let mut by_relation: Vec<Held> = held
                 .into_iter()
-                .map(|((relation, grain), n)| (relation, grain, n as f64 / samples))
+                .map(|((relation, grain), (n, shared))| Held {
+                    relation,
+                    grain,
+                    mean: n as f64 / samples,
+                    mean_shared: shared as f64 / samples,
+                })
                 .collect();
-            by_relation.sort_by(|a, b| b.2.total_cmp(&a.2));
-            by_relation.truncate(8);
+            by_relation.sort_by(|a, b| b.mean.total_cmp(&a.mean));
             locks.by_relation = by_relation;
             pool.close().await;
             Ok(locks)
@@ -206,8 +256,10 @@ mod tests {
 2026-11-24 13:52:00.103 GMT [43] morpholog_bench STATEMENT:  COMMIT
 2026-11-24 13:52:00.104 GMT [44] morpholog_bench ERROR:  relation \"x\" does not exist
 2026-11-24 13:52:00.104 GMT [44] morpholog_bench STATEMENT:  SELECT * FROM x
+2026-11-24 13:52:00.105 GMT [45] inventree ERROR:  could not serialize access due to read/write dependencies among transactions
+2026-11-24 13:52:00.105 GMT [45] inventree STATEMENT:  COMMIT
 ";
-        let counts = failures(log);
+        let counts = failures(log, "morpholog_bench");
         assert_eq!(
             counts.into_iter().collect::<Vec<_>>(),
             [
