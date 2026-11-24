@@ -232,3 +232,67 @@ async fn bids_on_one_contract_conflict() {
         "one bid is aborted: {outcomes:?}"
     );
 }
+
+/// The control that must survive any change to how independent cases
+/// run: a bid at 100.50 and an ask at 100.40 on one contract. Each is
+/// admissible alone, since the book's bids stop at 90.99 and its asks
+/// start at 101.00, but together they cross it. Overlapping, the first
+/// decided and held before committing while the second runs to the end,
+/// at most one may commit. The other is aborted, and its retry is
+/// refused by the rule, so the book is never crossed.
+#[tokio::test]
+async fn a_bid_and_an_ask_that_cross_together_never_both_rest() {
+    let pool = pool().await;
+    let program = programme();
+    set_up(&pool, &program).await;
+    let contract = CONTRACTS[0];
+    let bid = proposal("rest", rest("new-bid", contract, "buy", "100.50"));
+    let ask = proposal("rest", rest("new-ask", contract, "sell", "100.40"));
+
+    let (decided, decided_rx) = oneshot::channel::<()>();
+    let (go, go_rx) = oneshot::channel::<()>();
+    let held = propose_against_pg_holding(&pool, &program, &bid, async move || {
+        decided.send(()).unwrap();
+        go_rx.await.unwrap();
+    });
+    let other = async {
+        decided_rx.await.unwrap();
+        let outcome = propose_against_pg(&pool, &program, &ask).await;
+        go.send(()).unwrap();
+        outcome
+    };
+    let (bid_outcome, ask_outcome) = tokio::join!(held, other);
+
+    let committed = |o: &Result<PgProposalOutcome, PgError>| {
+        matches!(o, Ok(PgProposalOutcome::Committed { .. }))
+    };
+    assert!(
+        !(committed(&bid_outcome) && committed(&ask_outcome)),
+        "both crossing orders committed"
+    );
+    for (proposal, outcome) in [(&bid, &bid_outcome), (&ask, &ask_outcome)] {
+        match outcome {
+            Ok(PgProposalOutcome::Committed { .. }) => {}
+            Err(PgError::SerializationFailure) => {
+                let retried = propose_against_pg(&pool, &program, proposal).await;
+                assert!(
+                    matches!(retried, Ok(PgProposalOutcome::Rejected { .. })),
+                    "the retry sees the other order and is refused: {retried:?}"
+                );
+            }
+            other => panic!("an overlapping order commits or is aborted: {other:?}"),
+        }
+    }
+    let resting: Vec<String> = sqlx::query_scalar(
+        "SELECT arguments -> 0 ->> 'value' FROM morpholog.claims
+         WHERE predicate_name = 'Resting' AND arguments -> 0 ->> 'value' LIKE 'new-%'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        resting.len(),
+        1,
+        "exactly one of the two rests: {resting:?}"
+    );
+}
