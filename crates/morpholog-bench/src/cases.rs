@@ -242,12 +242,6 @@ struct Identity {
     debug_assertions: bool,
 }
 
-#[derive(Serialize)]
-struct Report {
-    identity: Identity,
-    points: Vec<Point>,
-}
-
 pub(crate) async fn run_cases(args: CasesArgs) -> Result<()> {
     check_reset_ack(args.reset, &args.database_url)?;
     if args.cases.is_empty() || args.cases.contains(&0) || args.layout.is_empty() {
@@ -266,27 +260,37 @@ pub(crate) async fn run_cases(args: CasesArgs) -> Result<()> {
     require_migration_head(&main).await?;
     let identity = identity(&main, &args).await?;
 
-    let mut points = Vec::new();
+    // Each case count's rows go out as soon as its layouts are done, so a
+    // failure later in the sweep loses nothing already measured.
+    match args.format {
+        OutputFormat::Markdown => print!("{}", render_header(&identity)),
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::to_string(&identity).context("serialise the identity")?
+        ),
+    }
     for &cases in &args.cases {
         let per_case = args
             .workers
             .map_or(args.workers_per_case.unwrap_or(1), |w| w / cases);
+        let mut points = Vec::with_capacity(args.layout.len());
         for &layout in &args.layout {
-            let point = run_point(&args, &options, &main, layout, cases, per_case).await?;
-            points.push(point);
+            points.push(run_point(&args, &options, &main, layout, cases, per_case).await?);
         }
-    }
-    for i in 0..points.len() {
         let control = points
             .iter()
-            .find(|p| {
-                p.layout == Layout::Databases
-                    && p.cases == points[i].cases
-                    && p.workers_per_case == points[i].workers_per_case
-            })
-            .map(|p| p.rate);
-        points[i].independence_efficiency =
-            control.filter(|r| *r > 0.0).map(|r| points[i].rate / r);
+            .find(|p| p.layout == Layout::Databases)
+            .map(|p| p.rate)
+            .filter(|r| *r > 0.0);
+        for p in &mut points {
+            p.independence_efficiency = control.map(|r| p.rate / r);
+            match args.format {
+                OutputFormat::Markdown => print!("{}", render_row(p)),
+                OutputFormat::Json => {
+                    println!("{}", serde_json::to_string(p).context("serialise a point")?)
+                }
+            }
+        }
     }
     if args.layout.contains(&Layout::Databases) {
         drop_case_databases(
@@ -295,15 +299,6 @@ pub(crate) async fn run_cases(args: CasesArgs) -> Result<()> {
             args.cases.iter().max().copied().unwrap_or(0),
         )
         .await?;
-    }
-
-    let report = Report { identity, points };
-    match args.format {
-        OutputFormat::Markdown => print!("{}", render(&report)),
-        OutputFormat::Json => println!(
-            "{}",
-            serde_json::to_string_pretty(&report).context("serialise the report")?
-        ),
     }
     Ok(())
 }
@@ -319,6 +314,25 @@ async fn connect(options: &PgConnectOptions, connections: usize) -> Result<PgPoo
                 options.get_database().unwrap_or("the default database")
             )
         })
+}
+
+/// Refuses a point the server cannot hold, before its fixture is built:
+/// a connection refused mid-point would discard everything before it.
+async fn require_connections(main: &PgPool, needed: usize) -> Result<()> {
+    let free: i64 = sqlx::query_scalar(
+        "SELECT current_setting('max_connections')::int
+              - current_setting('superuser_reserved_connections')::int
+              - (SELECT count(*) FROM pg_stat_activity WHERE backend_type = 'client backend')",
+    )
+    .fetch_one(main)
+    .await
+    .context("count the server's free connections")?;
+    if usize::try_from(free).unwrap_or(0) < needed {
+        bail!(
+            "this point needs {needed} connections and the server has {free} free; raise max_connections or lower the workers"
+        );
+    }
+    Ok(())
 }
 
 fn case_database(options: &PgConnectOptions, case: usize) -> Result<String> {
@@ -408,7 +422,7 @@ async fn targets(
         Layout::Databases => {
             let mut out = Vec::with_capacity(cases);
             for c in 0..cases {
-                let pool = case_pool(main, options, c, per_case + 1).await?;
+                let pool = case_pool(main, options, c, per_case).await?;
                 out.push(target(pool, "", vec![c])?);
             }
             out
@@ -425,6 +439,7 @@ async fn run_point(
     per_case: usize,
 ) -> Result<Point> {
     let workers = cases * per_case;
+    require_connections(main, workers + 2).await?;
     // Shared and apart workers draw on the main pool.
     let main = if layout == Layout::Databases {
         main.clone()
@@ -763,8 +778,7 @@ async fn identity(pool: &PgPool, args: &CasesArgs) -> Result<Identity> {
     })
 }
 
-fn render(report: &Report) -> String {
-    let id = &report.identity;
+fn render_header(id: &Identity) -> String {
     let mut out = format!(
         "{}\nbinary sha256 {}, started {}, {} implementation, book {}, prices {:?}, {} s a point, load {}, governor {}\n\n",
         id.server_version,
@@ -781,33 +795,31 @@ fn render(report: &Report) -> String {
         "| Layout | Cases | Workers/case | Committed/s | Per case | Efficiency | Retries/commit | Exhausted | Failed | p50 ms | p95 ms | p99 ms | Wasted |\n\
          |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n",
     );
-    for p in &report.points {
+    out
+}
+
+fn render_row(p: &Point) -> String {
+    let mut out = format!(
+        "| {:?} | {} | {} | {:.1} | {:.1} | {} | {:.2} | {} | {} | {:.1} | {:.1} | {:.1} | {:.0}% |\n",
+        p.layout,
+        p.cases,
+        p.workers_per_case,
+        p.rate,
+        p.rate_per_case,
+        p.independence_efficiency
+            .map_or_else(|| "-".to_string(), |e| format!("{:.0}%", e * 100.0)),
+        p.retries_per_commit,
+        p.exhausted,
+        p.failed,
+        p.p50_ms,
+        p.p95_ms,
+        p.p99_ms,
+        p.wasted_share * 100.0,
+    );
+    if let Some(error) = &p.first_error {
         out.push_str(&format!(
-            "| {:?} | {} | {} | {:.1} | {:.1} | {} | {:.2} | {} | {} | {:.1} | {:.1} | {:.1} | {:.0}% |\n",
-            p.layout,
-            p.cases,
-            p.workers_per_case,
-            p.rate,
-            p.rate_per_case,
-            p.independence_efficiency
-                .map_or_else(|| "-".to_string(), |e| format!("{:.0}%", e * 100.0)),
-            p.retries_per_commit,
-            p.exhausted,
-            p.failed,
-            p.p50_ms,
-            p.p95_ms,
-            p.p99_ms,
-            p.wasted_share * 100.0,
-        ));
-    }
-    for p in report.points.iter().filter(|p| p.first_error.is_some()) {
-        out.push_str(&format!(
-            "\n{:?} at {} cases, {} a case: {} acts failed, first with: {}\n",
-            p.layout,
-            p.cases,
-            p.workers_per_case,
-            p.failed,
-            p.first_error.as_deref().unwrap_or_default()
+            "\n{:?} at {} cases, {} a case: {} acts failed, first with: {error}\n\n",
+            p.layout, p.cases, p.workers_per_case, p.failed
         ));
     }
     out
