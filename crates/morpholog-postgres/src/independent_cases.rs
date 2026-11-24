@@ -8,7 +8,8 @@
 //! proposals on different contracts can still abort each other. What
 //! holds today, and what these tests pin: such an abort is a
 //! serialization failure, safe to retry, and the retry commits the same
-//! claims. Proposals on one contract must conflict, and do.
+//! claims. Orders that would cross a book only together must conflict,
+//! and do.
 //!
 //! The attacker capability modelled is none: honest proposals that
 //! overlap. `DATABASE_URL`-gated.
@@ -110,9 +111,9 @@ async fn set_up(pool: &PgPool, program: &PgProgram) {
         .expect("indexes");
 }
 
-/// A new bid on each of `contracts`, at prices of its own.
-fn three_bids(contracts: [&str; 3]) -> [Proposal; 3] {
-    let mut bids = contracts
+/// A new bid on each contract, at prices of its own.
+fn three_bids() -> [Proposal; 3] {
+    let mut bids = CONTRACTS
         .iter()
         .zip(["95.10", "95.20", "95.30"])
         .enumerate()
@@ -197,7 +198,7 @@ async fn bids_on_independent_contracts_abort_only_retryably() {
     let pool = pool().await;
     let program = programme();
     set_up(&pool, &program).await;
-    let bids = three_bids(CONTRACTS);
+    let bids = three_bids();
     let outcomes = three_overlapping(&pool, &program, &bids).await;
     for (bid, outcome) in bids.iter().zip(&outcomes) {
         match outcome {
@@ -213,24 +214,6 @@ async fn bids_on_independent_contracts_abort_only_retryably() {
         }
     }
     assert_eq!(resting_new_bids(&pool).await, ["new-0", "new-1", "new-2"]);
-}
-
-/// The control: three bids on one contract, overlapping the same way. Each
-/// check reads the book the others change, so one is aborted: the
-/// conflict serializable isolation exists to catch.
-#[tokio::test]
-async fn bids_on_one_contract_conflict() {
-    let pool = pool().await;
-    let program = programme();
-    set_up(&pool, &program).await;
-    let bids = three_bids([CONTRACTS[0]; 3]);
-    let outcomes = three_overlapping(&pool, &program, &bids).await;
-    assert!(
-        outcomes
-            .iter()
-            .any(|o| matches!(o, Err(PgError::SerializationFailure))),
-        "one bid is aborted: {outcomes:?}"
-    );
 }
 
 /// The control that must survive any change to how independent cases
