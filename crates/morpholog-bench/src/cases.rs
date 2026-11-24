@@ -5,7 +5,8 @@
 //! two contracts' orders conflict. The question is what PostgreSQL's
 //! physical locking costs them anyway: the committed rate when the cases
 //! share one predicate, when each has its own predicate, and when each
-//! has its own database, which is the physical-independence control.
+//! has its own database, the control. That separates each case's
+//! database-local structures; the cases still share the server.
 //!
 //! Every point ends with a reconciliation: each submitted order's
 //! outcome against the history and the final book. A point that loses or
@@ -57,7 +58,7 @@ pub(crate) struct CasesArgs {
     )]
     layout: Vec<Layout>,
 
-    /// Resting orders on each case's book before the run.
+    /// Resting orders each case starts with; workers add to them.
     #[arg(long, default_value_t = 300)]
     book: usize,
 
@@ -77,7 +78,8 @@ pub(crate) struct CasesArgs {
     implementation: Implementation,
 
     /// The main database. The `databases` layout also creates
-    /// `<name>_case_<i>` on the same server and drops them at the end.
+    /// `<name>_cases_<run>_<i>` on the same server, under a name unique
+    /// to the run, and drops only those.
     #[arg(long, env = "DATABASE_URL")]
     database_url: String,
 
@@ -97,7 +99,8 @@ pub(crate) enum Layout {
     /// One predicate per case. Diagnostic only: it changes the
     /// programme, and the cases still share the claims table and the log.
     Apart,
-    /// One database per case: the physical-independence control.
+    /// One database per case: the control. It separates database-local
+    /// structures; the server is still shared.
     Databases,
 }
 
