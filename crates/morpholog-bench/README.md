@@ -36,7 +36,11 @@ The `cases` fixture is the order book of `independent_cases.rs`: `Resting` uniqu
 - `apart`: one predicate per case. It is a diagnostic, not a design: it changes the programme, and the cases still share the claims table, its key and the audit log;
 - `databases`: one database per case, `<name>_cases_<run>_<i>` beside the main one, under a name unique to the run. The run creates them, refuses one that already exists, and drops only its own, finished or not. It is the control. It separates each case's database-local structures, but the cases still share the server's memory, CPU and write-ahead log.
 
-The **independence efficiency** of a layout is its committed rate over the `databases` rate at the same point. `--workers 16` spreads a fixed load over the case counts, so only the cases' independence varies. `--workers-per-case 1` scales the cases, and its first point is the single-worker baseline. Bids sit below 100 and asks above it, so no order is refused; `--prices` spreads them distinctly, at two prices, or mostly at two. An act refused for want of a server resource (SQLSTATE class 53, such as a predicate-lock table too small for the transactions in flight) counts as failed, as an embedder would see it, and the point names the first message. Any other error stops the run. `--book` is the book each case starts with. Workers keep adding orders, so a faster layout ends a point with a larger book. Every point is reconciled before it reports, claim for claim, every figure included. The book must hold exactly the prepopulated and committed orders. Each must be asserted once in the history and nothing else asserted there, an abandoned or failed order never. The history must replay to the claims. `--format json` adds the binary's sha256, the server's version and predicate-lock settings, the load average and the CPU governor.
+The **independence efficiency** of a layout is its committed rate over the `databases` rate at the same point. `--workers 16` spreads a fixed load over the case counts, so only the cases' independence varies. `--workers-per-case 1` scales the cases, and its first point is the single-worker baseline. Bids sit below 100 and asks above it, so no order is refused; `--prices` spreads them distinctly, at two prices, or mostly at two. An act refused for want of a server resource (SQLSTATE class 53, such as a predicate-lock table too small for the transactions in flight) counts as failed, as an embedder would see it, and the point names the first message. Any other error stops the run. `--book` is the book each case starts with. Workers keep adding orders, so a faster layout ends a point with a larger book. Every point is reconciled before it reports, claim for claim, every figure included. The book must hold exactly the prepopulated and committed orders. Each must be asserted once in the history and nothing else asserted there, an abandoned or failed order never. The history must replay to the claims. `--format json` adds the binary's sha256, the server's version and predicate-lock settings, the load average and the CPU governor. Four options say where the conflicts sat, untimed:
+- `--server-log PATH` counts each point's failed acts by the statement they were running. Compiled checks name themselves in their SQL. It needs the log written with `log_line_prefix = '%m [%p] %d '`.
+- `--sample-locks` samples the serializable read locks every 50 ms, by relation and grain, with the most one transaction held.
+- `--halt` makes every act read a predicate that is almost always empty, while a writer adds to it now and then.
+- `--repeat N` runs each point N times, reversing the layout order each time.
 
 ## Running
 
@@ -352,6 +356,44 @@ What they show:
 - **One predicate per case does not help, and costs more as cases grow.** Separating the predicates leaves the claims table, its key and the audit log shared. Why `apart` falls below `shared` from 4 cases on is not measured here.
 - **At default settings, a shared database runs out of serializable-lock memory** (`out of shared memory`, `not enough elements in RWConflictPool`, SQLSTATE 53200) with 16 concurrent writers. One database per case never did, at up to 64. The onset is not deterministic: the same point failed hundreds of acts in one run and none in another.
 - **No material throughput difference between PostgreSQL 19.0 and 18.7** at the two points compared. That says nothing about other workloads.
+
+### Where independent cases conflict (2026-11-24, `cases` diagnostics, PostgreSQL 19.0)
+
+A user-owned cluster on its own port, at the shared settings of the runs above (2 GB of shared buffers, 100 connections), logging to a file for `--server-log`. Binary `75bb51a2`. A book of 30, 15 s a point, two repeats with the layout order reversed. The repeats differ by up to a third: `shared` at 16 x 1 gave 1,337/s once and 865/s once.
+
+**Raising the predicate-lock limit removes the promotion and recovers nothing.** At the default of 64 locks a transaction, a transaction peaks at 38 or 39 locks, past the per-relation limit of 32. So locks on the whole claims table are held, a mean of 36 to 38 a sample at 16 cases and 118 to 123 at 64, and each conflicts with every insert into claims. At 256, the whole-table lock drops out of the eight relations held most, and a transaction holds up to 135 locks. The efficiency does not move:
+
+| Cases x workers | Efficiency at 64 | Efficiency at 256 |
+|---|---:|---:|
+| 16 x 1 | 73%, 73% | 77%, 71% |
+| 64 x 1 | 53%, 58% | 53%, 51% |
+| 2 x 8 | 28%, 24% | 29%, 24% |
+
+At 64 cases acts still fail for want of lock memory at 256: 79 and 80 a point.
+
+**Where the failures are.** With one worker per case, every failure is a conflict between cases:
+- 49 to 70% at the compiled `never_crossed` check;
+- 16 to 28% at the audit insert;
+- 2 to 33% at commit;
+- little at the claim insert or the uniqueness check.
+
+**What the transactions hold.** At the default limit, the locks held most, across all transactions, are:
+- a page of the claims key;
+- a page of the `Resting` index by contract, the order index and the price index;
+- the claims table itself, at relation grain;
+- the audit order index (`audit_ordered_at_us`), at relation grain.
+
+These are the pages the `never_crossed` check reads and every order's insert writes. The check reads its contract's whole book, both sides, and the book grows during a point. At 2 x 8, where most conflicts are within a case, the same check takes 51 to 69% in both `shared` and `databases`, and the claim insert 12 to 33%.
+
+**Why one predicate per case is slower.** Each predicate brings its own partial indexes on the one claims table: 384 of them at 64 cases. Planning considers all of them. Warm, one keyed claims read plans in 0.1 ms with 8 indexes and 2.4 to 3.4 ms with 384, and a compiled check is planned on every act (#900). `apart`'s failures are 80 to 100% at the audit insert.
+
+**An empty predicate costs little here.** With `--halt` at 16 x 1, `shared` keeps 69 to 71% against 73 to 77% without it, and no failure falls on the new read.
+
+**The control that must survive.** `independent_cases.rs` now holds a bid and an ask that are each admissible alone and cross the book together. Overlapping, at most one commits and the other's retry is refused. Run under REPEATABLE READ, both commit, and the test goes red.
+
+What this points to, for #906: the cases conflict on index pages they all share, which their checks read and their inserts write, and on the audit insert. Lock promotion and empty predicates are not the cause. Two ways in, cheapest first:
+- a check that reads less than the whole book, since the rule's own answer is the best bid against the best ask;
+- index pages of a case's own.
 
 ### Embedder / CLI latency (`scripts/embedder_latency.sh`)
 
