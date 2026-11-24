@@ -29,6 +29,8 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
+mod diagnosis;
+
 use crate::{
     Implementation, OutputFormat, analyze_claims, check_reset_ack, establish,
     require_migration_head, reset_db,
@@ -89,6 +91,33 @@ pub(crate) struct CasesArgs {
 
     #[arg(long, value_enum, default_value = "markdown")]
     format: OutputFormat,
+
+    /// Runs of every point. Each repeat runs the layouts in the order
+    /// opposite to the one before, so drift falls on all of them.
+    #[arg(long, default_value_t = 1)]
+    repeat: usize,
+
+    /// Every act also requires that its contract is not halted, a
+    /// predicate almost always empty. Each `Halted` predicate the
+    /// workers read has a writer of its own, halting contracts no worker
+    /// uses about four times a second, so each case's read is written as
+    /// often in every layout.
+    #[arg(long)]
+    halt: bool,
+
+    /// Samples the serializable read locks every 50 ms while the workers
+    /// run, in the shared and apart layouts. It costs a connection and
+    /// a query each sample, so compare its rates with a run without it.
+    #[arg(long)]
+    sample_locks: bool,
+
+    /// The server's log, written with `log_line_prefix = '%m [%p] %d '`.
+    /// Each point then counts its failed attempts, retried ones included,
+    /// by the statement they were running. Only databases named with the
+    /// main database's name as a prefix count, so keep other work with
+    /// such names off the server while it runs.
+    #[arg(long)]
+    server_log: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Serialize)]
@@ -116,7 +145,24 @@ pub(crate) enum Prices {
     Skewed,
 }
 
-fn book_programme(suffix: &str) -> Result<Program> {
+fn book_programme(suffix: &str, halt: bool) -> Result<Program> {
+    let halting = if halt {
+        format!(
+            "
+predicate Halted{suffix}(contract: Subject)
+
+transformation halt(contract):
+    admit Halted{suffix}(contract)
+"
+        )
+    } else {
+        String::new()
+    };
+    let open = if halt {
+        format!("\n    require open: not Halted{suffix}(contract)")
+    } else {
+        String::new()
+    };
     let source = format!(
         "program book{suffix}
 
@@ -131,9 +177,9 @@ transformation list_contract(contract):
     admit Contract{suffix}(contract)
 
 transformation rest(order, contract, side, price: Decimal, qty: Decimal):
-    require listed: Contract{suffix}(contract)
+    require listed: Contract{suffix}(contract){open}
     admit Resting{suffix}(order, contract, side, price, qty)
-"
+{halting}"
     );
     morpholog_surface::parse_program(&source).map_err(|e| anyhow!("the book does not parse: {e:?}"))
 }
@@ -230,6 +276,14 @@ struct Point {
     /// This layout's rate over the `databases` rate at the same point.
     independence_efficiency: Option<f64>,
     programme_hashes: Vec<String>,
+    repeat: usize,
+    /// Failed attempts, retried ones included, by kind and the
+    /// statement they were running, with `--server-log`.
+    failures_by_stage: Option<BTreeMap<String, u64>>,
+    /// Halts committed, with `--halt`.
+    halts: Option<usize>,
+    /// The serializable read locks, with `--sample-locks`.
+    locks: Option<diagnosis::Locks>,
 }
 
 #[derive(Serialize)]
@@ -245,13 +299,20 @@ struct Identity {
     prices: Prices,
     seconds: u64,
     max_retries: usize,
+    halt: bool,
     debug_assertions: bool,
 }
 
 pub(crate) async fn run_cases(args: CasesArgs) -> Result<()> {
     check_reset_ack(args.reset, &args.database_url)?;
-    if args.cases.is_empty() || args.cases.contains(&0) || args.layout.is_empty() {
-        bail!("--cases needs counts above zero, and --layout at least one layout");
+    if args.cases.is_empty()
+        || args.cases.contains(&0)
+        || args.layout.is_empty()
+        || args.repeat == 0
+    {
+        bail!(
+            "--cases needs counts above zero, --layout at least one layout, and --repeat one run at least"
+        );
     }
     if let Some(w) = args.workers
         && let Some(c) = args.cases.iter().find(|c| w % **c != 0)
@@ -292,21 +353,30 @@ async fn sweep(
         let per_case = args
             .workers
             .map_or(args.workers_per_case.unwrap_or(1), |w| w / cases);
-        let mut points = Vec::with_capacity(args.layout.len());
-        for &layout in &args.layout {
-            points.push(run_point(args, options, owned, main, layout, cases, per_case).await?);
-        }
-        let control = points
-            .iter()
-            .find(|p| p.layout == Layout::Databases)
-            .map(|p| p.rate)
-            .filter(|r| *r > 0.0);
-        for p in &mut points {
-            p.independence_efficiency = control.map(|r| p.rate / r);
-            match args.format {
-                OutputFormat::Markdown => print!("{}", render_row(p)),
-                OutputFormat::Json => {
-                    println!("{}", serde_json::to_string(p).context("serialise a point")?)
+        for repeat in 0..args.repeat {
+            let mut layouts = args.layout.clone();
+            if repeat % 2 == 1 {
+                layouts.reverse();
+            }
+            let mut points = Vec::with_capacity(layouts.len());
+            for layout in layouts {
+                let mut point =
+                    run_point(args, options, owned, main, layout, cases, per_case).await?;
+                point.repeat = repeat;
+                points.push(point);
+            }
+            let control = points
+                .iter()
+                .find(|p| p.layout == Layout::Databases)
+                .map(|p| p.rate)
+                .filter(|r| *r > 0.0);
+            for p in &mut points {
+                p.independence_efficiency = control.map(|r| p.rate / r);
+                match args.format {
+                    OutputFormat::Markdown => print!("{}", render_row(p)),
+                    OutputFormat::Json => {
+                        println!("{}", serde_json::to_string(p).context("serialise a point")?)
+                    }
                 }
             }
         }
@@ -429,7 +499,7 @@ async fn targets(
     per_case: usize,
 ) -> Result<Vec<Target>> {
     let target = |pool: PgPool, suffix: &str, cases: Vec<usize>| -> Result<Target> {
-        let core = book_programme(suffix)?;
+        let core = book_programme(suffix, args.halt)?;
         Ok(Target {
             pool,
             program: args.implementation.program(core.clone())?,
@@ -446,7 +516,9 @@ async fn targets(
         Layout::Databases => {
             let mut out = Vec::with_capacity(cases);
             for c in 0..cases {
-                let pool = owned.pool(main, options, c, per_case).await?;
+                let pool = owned
+                    .pool(main, options, c, per_case + usize::from(args.halt))
+                    .await?;
                 out.push(target(pool, "", vec![c])?);
             }
             out
@@ -464,12 +536,17 @@ async fn run_point(
     per_case: usize,
 ) -> Result<Point> {
     let workers = cases * per_case;
-    require_connections(main, workers + 2).await?;
+    let halters = match (args.halt, layout) {
+        (false, _) => 0,
+        (true, Layout::Shared) => 1,
+        (true, _) => cases,
+    };
+    require_connections(main, workers + halters + 2).await?;
     // Shared and apart workers draw on the main pool.
     let main = if layout == Layout::Databases {
         main.clone()
     } else {
-        connect(&main.connect_options(), workers + 2).await?
+        connect(&main.connect_options(), workers + halters + 2).await?
     };
     let targets = targets(args, options, owned, &main, layout, cases, per_case).await?;
 
@@ -505,6 +582,23 @@ async fn run_point(
     }
 
     let targets: Vec<Arc<Target>> = targets.into_iter().map(Arc::new).collect();
+    let mut log = args
+        .server_log
+        .as_deref()
+        .map(|path| {
+            diagnosis::LogCursor::at_end(
+                path,
+                main.connect_options().get_database().unwrap_or_default(),
+            )
+        })
+        .transpose()?;
+    let sampler = if args.sample_locks && layout != Layout::Databases {
+        Some(diagnosis::Sampler::start(
+            connect(&main.connect_options(), 1).await?,
+        ))
+    } else {
+        None
+    };
     let started = Instant::now();
     let load = Load {
         per_case,
@@ -512,6 +606,17 @@ async fn run_point(
         prices: args.prices,
         max_retries: args.max_retries,
         deadline: started + Duration::from_secs(args.seconds),
+    };
+    let halting: Vec<_> = if args.halt {
+        targets
+            .iter()
+            .map(|t| {
+                let t = Arc::clone(t);
+                tokio::spawn(async move { halt_spares(&t, load.deadline).await })
+            })
+            .collect()
+    } else {
+        Vec::new()
     };
     let mut handles = Vec::with_capacity(workers);
     for t in &targets {
@@ -536,6 +641,15 @@ async fn run_point(
         tally.wasted += t.wasted;
     }
     let elapsed = started.elapsed();
+    let mut halts = args.halt.then_some(0);
+    for h in halting {
+        let n = h.await.context("join a halting writer")??;
+        halts = halts.map(|total| total + n);
+    }
+    let locks = match sampler {
+        Some(s) => Some(s.finish().await?),
+        None => None,
+    };
 
     for group in by_database(targets.iter().map(|t| &**t)) {
         reconcile(&group, args.book, args.prices, &tally).await?;
@@ -543,6 +657,11 @@ async fn run_point(
     for t in &targets {
         t.pool.close().await;
     }
+    // After the reconciliation, so the server has logged every failure.
+    let failures_by_stage = log
+        .as_mut()
+        .map(diagnosis::LogCursor::failures_since)
+        .transpose()?;
 
     let mut latencies = tally.latencies.clone();
     latencies.sort();
@@ -575,7 +694,37 @@ async fn run_point(
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect(),
+        repeat: 0,
+        failures_by_stage,
+        halts,
+        locks,
     })
+}
+
+/// Halts contracts no worker trades, one every quarter second, so the
+/// predicate the target's acts read is written now and then but never
+/// matches. The halts committed.
+async fn halt_spares(target: &Target, deadline: Instant) -> Result<usize> {
+    let mut spare = 0usize;
+    while Instant::now() < deadline {
+        let proposal = Proposal::gateway(&Transition {
+            transformation_name: TransformationName::from("halt"),
+            args: vec![EvalValue::Subject(Subject::from(
+                format!("spare_{spare}").as_str(),
+            ))],
+            actor: Subject::from("bench"),
+            decided_at: None,
+        });
+        match propose_against_pg(&target.pool, &target.program, &proposal).await {
+            Ok(PgProposalOutcome::Committed { .. }) => spare += 1,
+            Ok(PgProposalOutcome::Rejected { reason, .. }) => bail!("a halt was refused: {reason}"),
+            Err(PgError::SerializationFailure | PgError::DeadlockDetected) => {}
+            Err(PgError::Database(e)) if out_of_resources(&e) => {}
+            Err(e) => return Err(anyhow::Error::new(e).context("halt a spare contract")),
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    Ok(spare)
 }
 
 /// The targets grouped by the database they live in, in first-seen
@@ -832,6 +981,7 @@ async fn identity(pool: &PgPool, args: &CasesArgs) -> Result<Identity> {
         prices: args.prices,
         seconds: args.seconds,
         max_retries: args.max_retries,
+        halt: args.halt,
         debug_assertions: cfg!(debug_assertions),
     })
 }
@@ -874,6 +1024,22 @@ fn render_row(p: &Point) -> String {
         p.p99_ms,
         p.wasted_share * 100.0,
     );
+    if let Some(stages) = &p.failures_by_stage {
+        for (stage, n) in stages {
+            out.push_str(&format!("  {n} attempts: {stage}\n"));
+        }
+    }
+    if let Some(halts) = p.halts {
+        out.push_str(&format!("  {halts} halts committed\n"));
+    }
+    if let Some(locks) = &p.locks {
+        out.push_str(&format!(
+            "  locks: peak {} a transaction, {} at once; most held: {}\n",
+            locks.peak_per_transaction(),
+            locks.peak_total(),
+            locks.summary()
+        ));
+    }
     if let Some(error) = &p.first_error {
         out.push_str(&format!(
             "\n{:?} at {} cases, {} a case: {} acts failed, first with: {error}\n\n",
@@ -900,6 +1066,10 @@ pub(crate) fn smoke_args(database_url: String) -> CasesArgs {
         database_url,
         reset: true,
         format: OutputFormat::Json,
+        repeat: 2,
+        halt: true,
+        sample_locks: true,
+        server_log: None,
     }
 }
 

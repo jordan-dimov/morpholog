@@ -8,7 +8,8 @@
 //! proposals on different contracts can still abort each other. What
 //! holds today, and what these tests pin: such an abort is a
 //! serialization failure, safe to retry, and the retry commits the same
-//! claims. Proposals on one contract must conflict, and do.
+//! claims. Orders that would cross a book only together must conflict,
+//! and do.
 //!
 //! The attacker capability modelled is none: honest proposals that
 //! overlap. `DATABASE_URL`-gated.
@@ -110,9 +111,9 @@ async fn set_up(pool: &PgPool, program: &PgProgram) {
         .expect("indexes");
 }
 
-/// A new bid on each of `contracts`, at prices of its own.
-fn three_bids(contracts: [&str; 3]) -> [Proposal; 3] {
-    let mut bids = contracts
+/// A new bid on each contract, at prices of its own.
+fn three_bids() -> [Proposal; 3] {
+    let mut bids = CONTRACTS
         .iter()
         .zip(["95.10", "95.20", "95.30"])
         .enumerate()
@@ -197,7 +198,7 @@ async fn bids_on_independent_contracts_abort_only_retryably() {
     let pool = pool().await;
     let program = programme();
     set_up(&pool, &program).await;
-    let bids = three_bids(CONTRACTS);
+    let bids = three_bids();
     let outcomes = three_overlapping(&pool, &program, &bids).await;
     for (bid, outcome) in bids.iter().zip(&outcomes) {
         match outcome {
@@ -215,20 +216,66 @@ async fn bids_on_independent_contracts_abort_only_retryably() {
     assert_eq!(resting_new_bids(&pool).await, ["new-0", "new-1", "new-2"]);
 }
 
-/// The control: three bids on one contract, overlapping the same way. Each
-/// check reads the book the others change, so one is aborted: the
-/// conflict serializable isolation exists to catch.
+/// The control that must survive any change to how independent cases
+/// run: a bid at 100.50 and an ask at 100.40 on one contract. Each is
+/// admissible alone, since the book's bids stop at 90.99 and its asks
+/// start at 101.00, but together they cross it. Overlapping, the first
+/// decided and held before committing while the second runs to the end,
+/// at most one may commit. The other is aborted, and its retry is
+/// refused by the rule, so the book is never crossed.
 #[tokio::test]
-async fn bids_on_one_contract_conflict() {
+async fn a_bid_and_an_ask_that_cross_together_never_both_rest() {
     let pool = pool().await;
     let program = programme();
     set_up(&pool, &program).await;
-    let bids = three_bids([CONTRACTS[0]; 3]);
-    let outcomes = three_overlapping(&pool, &program, &bids).await;
+    let contract = CONTRACTS[0];
+    let bid = proposal("rest", rest("new-bid", contract, "buy", "100.50"));
+    let ask = proposal("rest", rest("new-ask", contract, "sell", "100.40"));
+
+    let (decided, decided_rx) = oneshot::channel::<()>();
+    let (go, go_rx) = oneshot::channel::<()>();
+    let held = propose_against_pg_holding(&pool, &program, &bid, async move || {
+        decided.send(()).unwrap();
+        go_rx.await.unwrap();
+    });
+    let other = async {
+        decided_rx.await.unwrap();
+        let outcome = propose_against_pg(&pool, &program, &ask).await;
+        go.send(()).unwrap();
+        outcome
+    };
+    let (bid_outcome, ask_outcome) = tokio::join!(held, other);
+
+    let committed = |o: &Result<PgProposalOutcome, PgError>| {
+        matches!(o, Ok(PgProposalOutcome::Committed { .. }))
+    };
     assert!(
-        outcomes
-            .iter()
-            .any(|o| matches!(o, Err(PgError::SerializationFailure))),
-        "one bid is aborted: {outcomes:?}"
+        !(committed(&bid_outcome) && committed(&ask_outcome)),
+        "both crossing orders committed"
+    );
+    for (proposal, outcome) in [(&bid, &bid_outcome), (&ask, &ask_outcome)] {
+        match outcome {
+            Ok(PgProposalOutcome::Committed { .. }) => {}
+            Err(PgError::SerializationFailure) => {
+                let retried = propose_against_pg(&pool, &program, proposal).await;
+                assert!(
+                    matches!(retried, Ok(PgProposalOutcome::Rejected { .. })),
+                    "the retry sees the other order and is refused: {retried:?}"
+                );
+            }
+            other => panic!("an overlapping order commits or is aborted: {other:?}"),
+        }
+    }
+    let resting: Vec<String> = sqlx::query_scalar(
+        "SELECT arguments -> 0 ->> 'value' FROM morpholog.claims
+         WHERE predicate_name = 'Resting' AND arguments -> 0 ->> 'value' LIKE 'new-%'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        resting.len(),
+        1,
+        "exactly one of the two rests: {resting:?}"
     );
 }
