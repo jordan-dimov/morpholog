@@ -16,6 +16,7 @@ A minimal-size compatibility smoke test (`cargo test -p morpholog-bench`, gated 
 | `read`  | same fixture | inline `list_claims` + `State::from_claims` + `enumerate_derived`, each phase timed separately | each layer of the read path, so the dominant cost is visible directly |
 | `as-of` | N fabricated audit rows (direct SQL, bypassing the kernel) | one `reconstruct_state_at` and one `list_derived_at` against a target transition | audit-log replay as a function of N, `--at <fraction>` (how far through the log the target sits), and `--retract-fraction K` or `--revise K` |
 | `contend` | optional `--prepopulate N` (ledger entries, or with `--disjoint` items per synthetic predicate), then W workers post concurrently | `--workers` x `--ops-per-worker` concurrent `propose_against_pg` calls, spread across `--periods P`, optionally `--disjoint` | throughput and the SERIALIZABLE 40001 retry rate under concurrency; whether value-level vs predicate-level partitioning relieves it |
+| `cases` | each case a contract with a book of `--book` resting orders, rested through the kernel so the history holds them | each worker rests non-crossing orders on its own case for `--seconds`, retrying 40001s; `--layout shared,apart,databases` | how much physical locking costs cases the rules keep independent: the committed rate, latency with retries, and each layout's rate over one database per case |
 | `kernel` | an in-memory ledger of N entries; no database, no `--reset` | one `propose` with the ledger's invariants, the same with none, and `--acts` sequential proposals each against the candidate the act before it produced | the kernel alone: what invariant evaluation against the book costs (the difference between the two proposals), and the interpreted core of `transact` |
 | `replay` | the `as-of` fixture | `coverage_replay` and `score_candidate` of the ledger against itself | the audit-analysis arc: what a replay that observes every audit row costs as the log grows |
 | `rehearse` | N fabricated audit rows of a register in the TEC shape (direct SQL, replayable row for row: every row decides `same`), `--revise K` keeping the live set at 2K claims, `--noise M` admitting M claims no rule reads before them, `--phases` timing the decision step by step | `list_audit_rows`, then `rehearse_recorded` over the rows in memory, then the report's serialisation, then the end-to-end `rehearse_candidate`, each timed apart, and inside the read and the end-to-end call their page queries, decoding, decisions and advances | what a rehearsal costs per row as the history grows, split between the read, the kernel's decisions and the report; `--refusing` rehearses a candidate that refuses most rows, so the diagnosis is on the clock too |
@@ -29,6 +30,13 @@ The `write` and `read` fixture distributes journal lines across `K` distinct acc
 The `as-of` fixture fabricates audit rows directly via SQL (one `INSERT ... SELECT ... FROM generate_series`), bypassing `propose_against_pg`: the bench measures replay cost, not write cost, and going through the kernel per row would make fixture build dominate. Each row carries a 3-claim payload (1 JournalEntry + 2 JournalLines) and a strictly-monotone `committed_at` so replay order is deterministic. `--retract-fraction K` (0-50) makes every `stride`-th transition retract the immediately-prior entry's payload instead of asserting a fresh one; the stride is at least 2 so a retract always targets a still-live assert. The purely-additive default is best-case for replay, so this axis is what would expose any non-linearity in the `ReplaySet` retract path. `--revise K` builds a different shape: the first K transitions admit K entries and every later one replaces one entry's current version (its date and line amounts change), so the live set stays at 3K claims however long the history grows. That is a register revised in vintages, NESO's TEC archive being the case that forced it: the answer stays small while the history before it does not.
 
 The `contend` fixture posts uniquely-keyed entries concurrently. In the default ledger workload, worker `w` posts into period `w mod P` (`--periods P`, default 1 = one shared period) but always shares the journal-line *predicate* footprint that `load_state` reads, so `--periods` partitions by value. With `--disjoint`, the workload becomes a synthetic one whose whole footprint is a single predicate `Bench_{w mod P}` (built via `ir_builder`, since the ledger's predicates are fixed), so `--periods` partitions by predicate and `--periods >= workers` makes the workers genuinely disjoint. Each proposal carries the retry loop a real embedder owns - the kernel and adapter never retry a 40001 - backing off and retrying up to `--max-retries` before an operation is recorded as failed. The pool is sized to the worker count so connections never serialise the workers ahead of SSI.
+
+The `cases` fixture is the order book of `independent_cases.rs`: `Resting` unique by order, the invariant that no contract's book is crossed, and a `rest` act gated on the contract being listed. Case-local admission checks each order against its own contract only, so no rule makes two cases conflict. What remains is physical. Three layouts tell it apart:
+- `shared`: every case in one `Resting`, today's shape;
+- `apart`: one predicate per case. It is a diagnostic, not a design: it changes the programme, and the cases still share the claims table, its key and the audit log;
+- `databases`: one database per case, `<name>_cases_<run>_<i>` beside the main one, under a name unique to the run. The run creates them, refuses one that already exists, and drops only its own, finished or not. It is the control. It separates each case's database-local structures, but the cases still share the server's memory, CPU and write-ahead log.
+
+The **independence efficiency** of a layout is its committed rate over the `databases` rate at the same point. `--workers 16` spreads a fixed load over the case counts, so only the cases' independence varies. `--workers-per-case 1` scales the cases, and its first point is the single-worker baseline. Bids sit below 100 and asks above it, so no order is refused; `--prices` spreads them distinctly, at two prices, or mostly at two. An act refused for want of a server resource (SQLSTATE class 53, such as a predicate-lock table too small for the transactions in flight) counts as failed, as an embedder would see it, and the point names the first message. Any other error stops the run. `--book` is the book each case starts with. Workers keep adding orders, so a faster layout ends a point with a larger book. Every point is reconciled before it reports, claim for claim, every figure included. The book must hold exactly the prepopulated and committed orders. Each must be asserted once in the history and nothing else asserted there, an abandoned or failed order never. The history must replay to the claims. `--format json` adds the binary's sha256, the server's version and predicate-lock settings, the load average and the CPU governor.
 
 ## Running
 
@@ -65,6 +73,10 @@ DATABASE_URL=postgres:///morpholog_bench \
 # predicate-disjoint workload (value-partition vs predicate-partition contrast):
 DATABASE_URL=postgres:///morpholog_bench \
   cargo run -p morpholog-bench --release -- contend --workers 16 --ops-per-worker 20 --disjoint --periods 16 --reset
+
+# independent cases, a fixed load of 16 workers, against one database per case:
+DATABASE_URL=postgres:///morpholog_bench \
+  cargo run -p morpholog-bench --release -- cases --cases 1,2,4,8,16 --workers 16 --layout shared,apart,databases --reset
 
 # cumulative core-import curve (small N - the journey is ~quadratic):
 DATABASE_URL=postgres:///morpholog_bench \
@@ -304,6 +316,42 @@ The law above was measured when a proposal read every predicate its body consult
 | interpreted (no indexes) | 16 | 8.1-8.2, 55 | 8.7-9.6, 40-42 |
 
 Two readings. With its index, a keyed read remembers only the index range it searched, so the shared-predicate case that anti-scaled runs at the disjoint case's speed: the unit of concurrency became the rows a body can observe, not the predicate. Without the index, a keyed read scans the predicate computing a key per row, slower than the old whole read and holding the same relation lock, so the interpreted ruler here measures keyed reads unindexed, not the interpreter; the ledger fixture moved nothing on either route, since its posting's only gate reads an empty predicate.
+
+### Independent cases on one record (2026-11-24, `cases`, PostgreSQL 19.0 and 18.7, compiled with indexes provisioned)
+
+Forced by #906: the CTENEX lab's contracts and the InvenTree lab's stock items abort each other on one database though no rule relates them. Both clusters run at defaults for serializable locking (64 predicate locks a transaction, 100 connections, 2 GB of shared buffers), on an Intel Core Ultra 7 155H laptop on mains power, with a one-core background job from another session running throughout. Its effect on the ratios is not quantified. Each case's book starts at the size given and grows as orders commit. Each point runs for 20 s. The efficiency is the layout's committed rate over one database per case at the same point.
+
+One worker per case, a book of 30 (binary `1d7e5653`, commit `dc226ec0`, PostgreSQL 19.0, 12:53 UTC):
+
+| Cases | `shared` | `apart` | `databases` | Efficiency, `shared` | Efficiency, `apart` |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 183/s | 182/s | 177/s | 103% | 103% |
+| 4 | 442/s | 210/s | 612/s | 72% | 34% |
+| 16 | 1,337/s | 1,026/s | 1,736/s | 77% | 59% |
+| 64 | 1,644/s, 645 acts failed | 466/s | 2,919/s | 56% | 16% |
+
+A fixed load of 16 workers, a book of 300 (binary `ba04f1ee`, commit `21f20dc5`, PostgreSQL 19.0, 11:41 UTC). The later commit changed only how the rows are printed and sized a case database's pool one connection smaller:
+
+| Cases x workers | `shared` | `apart` | `databases` | Efficiency, `shared` |
+|---|---:|---:|---:|---:|
+| 1 x 16 | not comparable: 3,516 acts failed | 459/s | 550/s | - |
+| 2 x 8 | 176/s | 175/s | 1,114/s | 16% |
+| 4 x 4 | 327/s | 324/s | 1,125/s | 29% |
+| 8 x 2 | 667/s | 581/s | 1,039/s | 64% |
+| 16 x 1 | 1,236/s | 977/s | 1,642/s | 75% |
+
+The same fixed load at a book of 30, PostgreSQL 18.7 (13:00 UTC) against 19.0 (12:58 UTC), binary `1d7e5653`:
+
+| Cases x workers | 18.7 `shared` / `databases` | 19.0 `shared` / `databases` |
+|---|---|---|
+| 2 x 8 | 187 / 943, 20% | 197 / 978, 20% |
+| 16 x 1 | 1,302 / 1,746, 75% (1,621 acts failed) | 1,249 / 1,730, 72% (470 acts failed) |
+
+What they show:
+- **On one database, independent cases commit 16 to 77% of what separate databases commit.** It is worst when a few cases share many workers: two cases of eight workers each commit a fifth of what two databases commit.
+- **One predicate per case does not help, and costs more as cases grow.** Separating the predicates leaves the claims table, its key and the audit log shared. Why `apart` falls below `shared` from 4 cases on is not measured here.
+- **At default settings, a shared database runs out of serializable-lock memory** (`out of shared memory`, `not enough elements in RWConflictPool`, SQLSTATE 53200) with 16 concurrent writers. One database per case never did, at up to 64. The onset is not deterministic: the same point failed hundreds of acts in one run and none in another.
+- **No material throughput difference between PostgreSQL 19.0 and 18.7** at the two points compared. That says nothing about other workloads.
 
 ### Embedder / CLI latency (`scripts/embedder_latency.sh`)
 

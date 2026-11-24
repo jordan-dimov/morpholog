@@ -7,6 +7,8 @@
 //! - `read` times the three phases of the read path over the same fixture.
 //! - `as-of` times replaying a fabricated audit log up to a chosen point.
 //! - `contend` times concurrent proposers, each with its own retry loop.
+//! - `cases` measures independent cases on one record against one
+//!   database per case.
 //! - `import` times N sequential commits from an empty book.
 //! - `wide` times a proposal and a read on a predicate with many arguments.
 //! - `suite` runs the fixed case matrix and prints one table
@@ -42,6 +44,8 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
+mod cases;
+
 #[derive(Parser, Debug)]
 #[command(version, about = "Morpholog scale-pressure benchmark", long_about = None)]
 struct Cli {
@@ -75,6 +79,13 @@ enum Command {
     /// serialization-conflict retry rate under concurrency - the axis
     /// the single-propose scenarios cannot see.
     Contend(ContendArgs),
+
+    /// Independent cases, each a contract with its own book, proposing
+    /// concurrently: on one shared predicate, one predicate per case, or
+    /// one database per case as the control. Reports the committed rate,
+    /// latency with retries, and each layout's rate over the control's,
+    /// and reconciles every order against the history and the book.
+    Cases(cases::CasesArgs),
 
     /// From an empty book, commit N entries sequentially through the
     /// kernel - the cumulative 0->N CORE import curve `write` cannot
@@ -670,6 +681,7 @@ async fn main() -> Result<()> {
         Command::Read(args) => run_read(args).await,
         Command::AsOf(args) => run_as_of(args).await,
         Command::Contend(args) => run_contend(args).await,
+        Command::Cases(args) => cases::run_cases(args).await,
         Command::Import(args) => run_import(args).await,
         Command::Wide(args) => run_wide(args).await,
         Command::Transact(args) => run_transact(args).await,
@@ -4681,6 +4693,9 @@ mod smoke {
             .await
             .expect("replay scenario smoke, compiled");
         }
+        cases::run_cases(cases::smoke_args(url.clone()))
+            .await
+            .expect("cases scenario smoke");
         // Past a hundred rows, so the refusing candidate refuses one.
         for (revise, refusing, noise) in [(0, false, 1000), (1, false, 0), (0, true, 0)] {
             run_rehearse(RehearseArgs {
