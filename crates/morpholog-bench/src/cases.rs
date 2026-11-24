@@ -108,7 +108,8 @@ pub(crate) enum Prices {
     Distinct,
     /// Every bid at one price, every ask at another.
     Uniform,
-    /// Nine orders in ten at the uniform prices, the rest distinct.
+    /// On each side, nine orders in ten at the uniform price, the rest
+    /// distinct.
     Skewed,
 }
 
@@ -141,7 +142,8 @@ fn order(n: usize, prices: Prices) -> (Subject, Decimal) {
     let spread = match prices {
         Prices::Distinct => true,
         Prices::Uniform => false,
-        Prices::Skewed => n.is_multiple_of(10),
+        // Counted within each side, so both sides get the exceptions.
+        Prices::Skewed => (n / 2).is_multiple_of(10),
     };
     let step = if spread {
         Decimal::new(i64::try_from(n).unwrap_or(i64::MAX) % 900_000 + 1, 6)
@@ -191,11 +193,12 @@ struct Target {
 
 #[derive(Default)]
 struct Tally {
-    committed: Vec<String>,
-    exhausted: Vec<String>,
-    /// Orders whose act failed because the server ran out of a resource,
-    /// as an embedder would see it, with the first such message.
-    failed: Vec<String>,
+    /// Orders as (case, position), by how their act ended.
+    committed: Vec<(usize, usize)>,
+    exhausted: Vec<(usize, usize)>,
+    /// Acts that failed because the server ran out of a resource, as an
+    /// embedder would see it, with the first such message.
+    failed: Vec<(usize, usize)>,
     first_error: Option<String>,
     latencies: Vec<Duration>,
     retries: u64,
@@ -269,13 +272,26 @@ pub(crate) async fn run_cases(args: CasesArgs) -> Result<()> {
             serde_json::to_string(&identity).context("serialise the identity")?
         ),
     }
+    let mut owned = Owned::new(&options)?;
+    let swept = sweep(&args, &options, &mut owned, &main).await;
+    // This run's databases go whether the sweep finished or not.
+    let dropped = owned.drop_all(&main).await;
+    swept.and(dropped)
+}
+
+async fn sweep(
+    args: &CasesArgs,
+    options: &PgConnectOptions,
+    owned: &mut Owned,
+    main: &PgPool,
+) -> Result<()> {
     for &cases in &args.cases {
         let per_case = args
             .workers
             .map_or(args.workers_per_case.unwrap_or(1), |w| w / cases);
         let mut points = Vec::with_capacity(args.layout.len());
         for &layout in &args.layout {
-            points.push(run_point(&args, &options, &main, layout, cases, per_case).await?);
+            points.push(run_point(args, options, owned, main, layout, cases, per_case).await?);
         }
         let control = points
             .iter()
@@ -291,14 +307,6 @@ pub(crate) async fn run_cases(args: CasesArgs) -> Result<()> {
                 }
             }
         }
-    }
-    if args.layout.contains(&Layout::Databases) {
-        drop_case_databases(
-            &main,
-            &options,
-            args.cases.iter().max().copied().unwrap_or(0),
-        )
-        .await?;
     }
     Ok(())
 }
@@ -335,61 +343,73 @@ async fn require_connections(main: &PgPool, needed: usize) -> Result<()> {
     Ok(())
 }
 
-fn case_database(options: &PgConnectOptions, case: usize) -> Result<String> {
-    let base = options
-        .get_database()
-        .ok_or_else(|| anyhow!("the database URL names no database"))?;
-    Ok(format!("{base}_case_{case}"))
+/// The case databases this run created, under a name no other run
+/// shares. Only these are ever reset or dropped.
+struct Owned {
+    prefix: String,
+    created: BTreeSet<usize>,
 }
 
-/// Creates the case's database if it is missing and brings it to the
-/// schema this binary expects.
-async fn case_pool(
-    main: &PgPool,
-    options: &PgConnectOptions,
-    case: usize,
-    connections: usize,
-) -> Result<PgPool> {
-    let name = case_database(options, case)?;
-    let exists: bool =
-        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)")
-            .bind(&name)
-            .fetch_one(main)
+impl Owned {
+    fn new(options: &PgConnectOptions) -> Result<Self> {
+        let base = options
+            .get_database()
+            .ok_or_else(|| anyhow!("the database URL names no database"))?;
+        let run = uuid::Uuid::now_v7().simple().to_string();
+        // The last characters of a v7 id are its random part.
+        Ok(Owned {
+            prefix: format!("{base}_cases_{}", &run[run.len() - 8..]),
+            created: BTreeSet::new(),
+        })
+    }
+
+    fn name(&self, case: usize) -> String {
+        format!("{}_{case}", self.prefix)
+    }
+
+    /// The case's database, created on first use. A database already
+    /// under the name is refused, never adopted.
+    async fn pool(
+        &mut self,
+        main: &PgPool,
+        options: &PgConnectOptions,
+        case: usize,
+        connections: usize,
+    ) -> Result<PgPool> {
+        let name = self.name(case);
+        if !self.created.contains(&case) {
+            // Safe: the name is quoted, and built from the main database's.
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "CREATE DATABASE {}",
+                quote_ident(&name)
+            )))
+            .execute(main)
             .await
-            .context("look up a case database")?;
-    if !exists {
-        // Safe: the name is quoted, and built from the main database's.
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "CREATE DATABASE {}",
-            quote_ident(&name)
-        )))
-        .execute(main)
-        .await
-        .with_context(|| format!("create {name}"))?;
+            .with_context(|| format!("create {name}, which must not exist yet"))?;
+            self.created.insert(case);
+            let pool = connect(&options.clone().database(&name), 1).await?;
+            morpholog_postgres::initialise_schema(&pool)
+                .await
+                .with_context(|| format!("initialise {name}"))?;
+            pool.close().await;
+        }
+        connect(&options.clone().database(&name), connections).await
     }
-    let pool = connect(&options.clone().database(&name), connections).await?;
-    morpholog_postgres::initialise_schema(&pool)
-        .await
-        .with_context(|| format!("initialise {name}"))?;
-    Ok(pool)
-}
 
-async fn drop_case_databases(
-    main: &PgPool,
-    options: &PgConnectOptions,
-    cases: usize,
-) -> Result<()> {
-    for case in 0..cases {
-        let name = case_database(options, case)?;
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "DROP DATABASE IF EXISTS {} WITH (FORCE)",
-            quote_ident(&name)
-        )))
-        .execute(main)
-        .await
-        .with_context(|| format!("drop {name}"))?;
+    async fn drop_all(&self, main: &PgPool) -> Result<()> {
+        for &case in &self.created {
+            let name = self.name(case);
+            // FORCE ends this run's own lingering connections.
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DROP DATABASE {} WITH (FORCE)",
+                quote_ident(&name)
+            )))
+            .execute(main)
+            .await
+            .with_context(|| format!("drop {name}"))?;
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 fn quote_ident(name: &str) -> String {
@@ -399,6 +419,7 @@ fn quote_ident(name: &str) -> String {
 async fn targets(
     args: &CasesArgs,
     options: &PgConnectOptions,
+    owned: &mut Owned,
     main: &PgPool,
     layout: Layout,
     cases: usize,
@@ -422,7 +443,7 @@ async fn targets(
         Layout::Databases => {
             let mut out = Vec::with_capacity(cases);
             for c in 0..cases {
-                let pool = case_pool(main, options, c, per_case).await?;
+                let pool = owned.pool(main, options, c, per_case).await?;
                 out.push(target(pool, "", vec![c])?);
             }
             out
@@ -433,6 +454,7 @@ async fn targets(
 async fn run_point(
     args: &CasesArgs,
     options: &PgConnectOptions,
+    owned: &mut Owned,
     main: &PgPool,
     layout: Layout,
     cases: usize,
@@ -446,7 +468,7 @@ async fn run_point(
     } else {
         connect(&main.connect_options(), workers + 2).await?
     };
-    let targets = targets(args, options, &main, layout, cases, per_case).await?;
+    let targets = targets(args, options, owned, &main, layout, cases, per_case).await?;
 
     // The fixture, outside the timing: each database emptied and its
     // indexes established, then each case listed and its book rested in
@@ -513,7 +535,7 @@ async fn run_point(
     let elapsed = started.elapsed();
 
     for group in by_database(targets.iter().map(|t| &**t)) {
-        reconcile(&group, args.book, &tally).await?;
+        reconcile(&group, args.book, args.prices, &tally).await?;
     }
     for t in &targets {
         t.pool.close().await;
@@ -604,7 +626,7 @@ async fn worker(target: &Target, case: usize, w: usize, load: Load) -> Result<Ta
             match propose_against_pg(&target.pool, &target.program, &proposal).await {
                 Ok(PgProposalOutcome::Committed { .. }) => {
                     tally.latencies.push(started.elapsed());
-                    tally.committed.push(order_id(case, n));
+                    tally.committed.push((case, n));
                     break;
                 }
                 Ok(PgProposalOutcome::Rejected { reason, .. }) => {
@@ -615,7 +637,7 @@ async fn worker(target: &Target, case: usize, w: usize, load: Load) -> Result<Ta
                     tally.wasted += tried.elapsed();
                     attempt += 1;
                     if attempt as usize > max_retries {
-                        tally.exhausted.push(order_id(case, n));
+                        tally.exhausted.push((case, n));
                         break;
                     }
                     // The contend scenario's backoff: linear, no jitter.
@@ -623,7 +645,7 @@ async fn worker(target: &Target, case: usize, w: usize, load: Load) -> Result<Ta
                 }
                 Err(PgError::Database(e)) if out_of_resources(&e) => {
                     tally.wasted += tried.elapsed();
-                    tally.failed.push(order_id(case, n));
+                    tally.failed.push((case, n));
                     tally.first_error.get_or_insert_with(|| e.to_string());
                     break;
                 }
@@ -643,72 +665,105 @@ fn out_of_resources(e: &sqlx::Error) -> bool {
         .is_some_and(|code| code.starts_with("53"))
 }
 
-/// Every order submitted to one database against what it holds: on
-/// the book and in the history exactly once if committed, nowhere if
-/// abandoned, and the history replaying to the claims.
-async fn reconcile(group: &[&Target], book: usize, tally: &Tally) -> Result<()> {
+/// A resting claim's arguments as text, decimals normalised, so a
+/// claim read back compares with the one the fixture submitted.
+fn rendered(args: &[EvalValue]) -> Result<Vec<String>> {
+    args.iter()
+        .map(|v| match v {
+            EvalValue::Subject(s) => Ok(s.to_string()),
+            EvalValue::Decimal(d) => Ok(d.normalize().to_string()),
+            other => Err(anyhow!(
+                "a resting claim with an argument of another kind: {other:?}"
+            )),
+        })
+        .collect()
+}
+
+fn expected_claim(case: usize, n: usize, prices: Prices) -> Vec<String> {
+    let (side, price) = order(n, prices);
+    vec![
+        order_id(case, n),
+        contract(case),
+        side.to_string(),
+        price.normalize().to_string(),
+        Decimal::ONE.to_string(),
+    ]
+}
+
+/// Every order submitted to one database against what it holds. The
+/// book must be exactly the prepopulated and committed orders, claim for
+/// claim. Each must be asserted once in the history and nothing else
+/// asserted there, an abandoned or failed order never, and the history
+/// must replay to the claims.
+async fn reconcile(group: &[&Target], book: usize, prices: Prices, tally: &Tally) -> Result<()> {
     let pool = &group[0].pool;
-    let order_of = |args: &[EvalValue]| match args.first() {
-        Some(EvalValue::Subject(s)) => Ok(s.to_string()),
-        other => Err(anyhow!("a resting order without a subject id: {other:?}")),
-    };
-    let mut asserted: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let mut asserted: BTreeMap<(String, Vec<String>), usize> = BTreeMap::new();
     for row in list_audit_rows(pool).await.context("read the history")? {
         for claim in &row.asserted_claims {
             let predicate = claim.predicate.as_str();
             if group.iter().any(|t| t.resting == predicate) {
                 *asserted
-                    .entry((predicate.to_string(), order_of(&claim.args)?))
+                    .entry((predicate.to_string(), rendered(&claim.args)?))
                     .or_default() += 1;
             }
         }
     }
+    let mut expected_anywhere = BTreeSet::new();
     for t in group {
-        let ours = |id: &&String| t.cases.iter().any(|c| id.starts_with(&format!("c{c}_o")));
-        let mut expected: BTreeSet<String> = t
+        let ours = |&&(case, _): &&(usize, usize)| t.cases.contains(&case);
+        let mut expected: BTreeSet<Vec<String>> = t
             .cases
             .iter()
-            .flat_map(|&c| (0..book).map(move |n| order_id(c, n)))
+            .flat_map(|&c| (0..book).map(move |n| expected_claim(c, n, prices)))
             .collect();
-        expected.extend(tally.committed.iter().filter(ours).cloned());
+        expected.extend(
+            tally
+                .committed
+                .iter()
+                .filter(ours)
+                .map(|&(c, n)| expected_claim(c, n, prices)),
+        );
 
         let claims = list_claims_for_predicates(pool, std::slice::from_ref(&t.resting))
             .await
             .context("read the book")?;
-        let mut held = BTreeSet::new();
-        for claim in &claims {
-            let id = order_of(&claim.args)?;
-            if t.cases.iter().any(|c| id.starts_with(&format!("c{c}_o")))
-                && !held.insert(id.clone())
-            {
-                bail!("order {id} is on the book twice");
-            }
+        let held: BTreeSet<Vec<String>> = claims
+            .iter()
+            .map(|c| rendered(&c.args))
+            .collect::<Result<_>>()?;
+        if held.len() != claims.len() {
+            bail!("{} holds the same resting claim twice", t.resting);
         }
         if held != expected {
             bail!(
-                "the book is not the committed orders: {} missing (first {:?}), {} unexpected (first {:?})",
+                "{} is not the committed orders: {} missing (first {:?}), {} unexpected (first {:?})",
+                t.resting,
                 expected.difference(&held).count(),
-                expected.difference(&held).take(5).collect::<Vec<_>>(),
+                expected.difference(&held).take(3).collect::<Vec<_>>(),
                 held.difference(&expected).count(),
-                held.difference(&expected).take(5).collect::<Vec<_>>()
+                held.difference(&expected).take(3).collect::<Vec<_>>()
             );
         }
-        for id in &expected {
-            match asserted.get(&(t.resting.clone(), id.clone())) {
+        for claim in &expected {
+            match asserted.get(&(t.resting.clone(), claim.clone())) {
                 Some(1) => {}
-                Some(n) => bail!("order {id} is asserted {n} times in the history"),
-                None => bail!("order {id} is on the book but not in the history"),
+                Some(n) => bail!("{claim:?} is asserted {n} times in the history"),
+                None => bail!("{claim:?} is on the book but not in the history"),
             }
         }
-        if let Some(id) = tally
-            .exhausted
-            .iter()
-            .chain(&tally.failed)
-            .filter(ours)
-            .find(|id| asserted.contains_key(&(t.resting.clone(), (*id).clone())))
-        {
-            bail!("order {id} was abandoned or failed but the history asserts it");
+        for &(c, n) in tally.exhausted.iter().chain(&tally.failed).filter(ours) {
+            let claim = expected_claim(c, n, prices);
+            if asserted.contains_key(&(t.resting.clone(), claim.clone())) {
+                bail!("{claim:?} was abandoned or failed but the history asserts it");
+            }
         }
+        expected_anywhere.extend(expected.into_iter().map(|c| (t.resting.clone(), c)));
+    }
+    if let Some((key, _)) = asserted
+        .iter()
+        .find(|(k, _)| !expected_anywhere.contains(*k))
+    {
+        bail!("the history asserts {key:?}, which no committed order submitted");
     }
     match verify_replay(pool, &mut |_| {})
         .await
@@ -865,6 +920,21 @@ mod tests {
             assert!(
                 best_bid < best_ask,
                 "{prices:?}: {best_bid} against {best_ask}"
+            );
+        }
+    }
+
+    #[test]
+    fn skewed_prices_spread_on_both_sides() {
+        for side in [0, 1] {
+            let spread: BTreeSet<_> = (side..200)
+                .step_by(2)
+                .map(|n| order(n, Prices::Skewed).1)
+                .collect();
+            assert_eq!(
+                spread.len(),
+                11,
+                "side {side}: the uniform price and ten exceptions"
             );
         }
     }
