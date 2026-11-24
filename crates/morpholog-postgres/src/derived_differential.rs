@@ -312,9 +312,27 @@ derived OrderInBase(order):
     value total = sum(q * p / r | Line(_, order, q, p, c) and current_rate(c, r))
 ";
 
+/// A sum through a call with two branches, each binding a weight and
+/// each able to raise: a stored instant of another kind cannot be
+/// compared with the cut-off.
+const BRANCHES: &str = "program branches
+predicate Order(order: Subject)
+predicate Line(line: Subject, order: Subject, quantity: Decimal, tag: Subject)
+predicate A(tag: Subject, at: Timestamp, weight: Decimal)
+predicate B(tag: Subject, at: Timestamp, weight: Decimal)
+predicate Cut(at: Timestamp)
+predicate Skip(tag: Subject)
+predicate Weighed(order: Subject, total: Decimal)
+define weight(t, w):
+    (A(t, at, w) and Cut(cut) and at strictly_before cut) or (B(t, at, w) and Cut(cut) and at strictly_before cut)
+derived Weighed(order):
+    over Order(order: order)
+    value total = sum(q * w | Line(_, order, q, t) and weight(t, w) and not Skip(t))
+";
+
 fn programs() -> Vec<Program> {
     let mut out: Vec<Program> = [
-        SPIKE, EDGES, ORDERS, MEMBERS, CHOICES, ROLES, EXTREMA, TOTALS, KEYED, RATES,
+        SPIKE, EDGES, ORDERS, MEMBERS, CHOICES, ROLES, EXTREMA, TOTALS, KEYED, RATES, BRANCHES,
     ]
     .iter()
     .map(|s| morpholog_surface::parse_program(s).expect("fragment parses"))
@@ -510,6 +528,7 @@ async fn live_views_compute_the_kernels_rows_over_generated_states() {
         "extrema",
         "totals",
         "rates",
+        "branches",
     ] {
         assert!(
             live.iter().any(|n| n == fragment),
@@ -763,6 +782,143 @@ async fn a_raising_call_under_a_sum_fails_the_orders_that_reach_it() {
         ],
         "only the order with a line in x reaches the rate that cannot be ordered"
     );
+}
+
+/// One order of the branches fragment: its tag's `A` and `B` rows as
+/// (instant, weight), whether a later conjunct drops the tag, and the
+/// live row's total, `None` for a failure.
+struct Case {
+    order: &'static str,
+    a: Vec<(EvalValue, i64)>,
+    b: Vec<(EvalValue, i64)>,
+    skip: bool,
+    total: Option<&'static str>,
+}
+
+impl Case {
+    fn claims(&self) -> Vec<ClaimInstance> {
+        let tag = format!("{}_tag", self.order);
+        let line = format!("{}_line", self.order);
+        let mut claims = vec![
+            claim_instance("Order", &[subj(self.order)]),
+            claim_instance("Line", &[subj(&line), subj(self.order), dec(5), subj(&tag)]),
+        ];
+        for (predicate, rows) in [("A", &self.a), ("B", &self.b)] {
+            for (at, w) in rows {
+                claims.push(claim_instance(
+                    predicate,
+                    &[subj(&tag), at.clone(), dec(*w)],
+                ));
+            }
+        }
+        if self.skip {
+            claims.push(claim_instance("Skip", &[subj(&tag)]));
+        }
+        claims
+    }
+}
+
+/// Each branch of a binding call raises on its own: a row fails when
+/// either branch raises, whether or not the other binds, and a later
+/// conjunct cannot hide the failure. Matches that agree count once. Each
+/// order is checked against the kernel over its own claims.
+#[tokio::test]
+async fn each_branch_of_a_raising_call_under_a_sum_raises_on_its_own() {
+    let pool = test_pool().await;
+    let branches = morpholog_surface::parse_program(BRANCHES).unwrap();
+    let v = branches.validated().unwrap();
+    let early = || ts("2026-01-01T00:00:00Z");
+    let late = || ts("2026-12-01T00:00:00Z");
+    let bad = || subj("soon");
+    let case = |order, a, b, skip, total| Case {
+        order,
+        a,
+        b,
+        skip,
+        total,
+    };
+    let cases = [
+        case(
+            "first_binds_second_raises",
+            vec![(early(), 2)],
+            vec![(bad(), 3)],
+            false,
+            None,
+        ),
+        case(
+            "first_raises_second_binds",
+            vec![(bad(), 2)],
+            vec![(early(), 3)],
+            false,
+            None,
+        ),
+        case(
+            "both_bind_the_same",
+            vec![(early(), 2)],
+            vec![(early(), 2)],
+            false,
+            Some("10"),
+        ),
+        case(
+            "both_bind_differently",
+            vec![(early(), 2)],
+            vec![(early(), 3)],
+            false,
+            Some("25"),
+        ),
+        case("neither_binds", vec![(late(), 2)], vec![], false, Some("0")),
+        case("only_a_failure", vec![(bad(), 2)], vec![], false, None),
+        case(
+            "dropped_after_the_failure",
+            vec![(bad(), 2)],
+            vec![],
+            true,
+            None,
+        ),
+    ];
+    let cut = claim_instance("Cut", &[ts("2026-06-01T00:00:00Z")]);
+
+    let mut all = vec![cut.clone()];
+    for case in &cases {
+        all.extend(case.claims());
+    }
+    assert_eq!(
+        agree(&pool, &v, &State::from_claims(all), "branches").await,
+        1
+    );
+    let live = live_rows(&pool, &v, "Weighed").await;
+
+    for case in &cases {
+        let (order, expected) = (case.order, case.total);
+        let mut own = case.claims();
+        own.push(cut.clone());
+        let kernel = v.enumerate_derived("Weighed", &State::from_claims(own));
+        let row = live
+            .iter()
+            .find(|(cells, _)| cells[0] == order)
+            .unwrap_or_else(|| panic!("{order}: no live row"));
+        match expected {
+            Some(total) => {
+                let rows = kernel
+                    .unwrap_or_else(|e| panic!("{order}: the kernel fails: {e}"))
+                    .unwrap();
+                assert_eq!(
+                    kernel_rows(&rows),
+                    std::slice::from_ref(row),
+                    "{order}: the live row is the kernel's"
+                );
+                assert_eq!(row.0[1], total, "{order}");
+            }
+            None => {
+                assert!(kernel.is_err(), "{order}: the kernel computes a total");
+                assert!(
+                    row.1.is_some(),
+                    "{order}: the live row computes {:?}",
+                    row.0[1]
+                );
+            }
+        }
+    }
 }
 
 /// One order whose lines raise and one whose lines do not (#802). The
