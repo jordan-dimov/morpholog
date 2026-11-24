@@ -193,6 +193,10 @@ struct Target {
 struct Tally {
     committed: Vec<String>,
     exhausted: Vec<String>,
+    /// Orders whose act failed because the server ran out of a resource,
+    /// as an embedder would see it, with the first such message.
+    failed: Vec<String>,
+    first_error: Option<String>,
     latencies: Vec<Duration>,
     retries: u64,
     wasted: Duration,
@@ -207,6 +211,8 @@ struct Point {
     seconds: f64,
     committed: usize,
     exhausted: usize,
+    failed: usize,
+    first_error: Option<String>,
     retries: u64,
     retries_per_commit: f64,
     rate: f64,
@@ -481,6 +487,10 @@ async fn run_point(
         let t = h.await.context("join a worker")??;
         tally.committed.extend(t.committed);
         tally.exhausted.extend(t.exhausted);
+        tally.failed.extend(t.failed);
+        if tally.first_error.is_none() {
+            tally.first_error = t.first_error;
+        }
         tally.latencies.extend(t.latencies);
         tally.retries += t.retries;
         tally.wasted += t.wasted;
@@ -508,6 +518,8 @@ async fn run_point(
         seconds,
         committed,
         exhausted: tally.exhausted.len(),
+        failed: tally.failed.len(),
+        first_error: tally.first_error.clone(),
         retries: tally.retries,
         retries_per_commit: tally.retries as f64 / committed.max(1) as f64,
         rate,
@@ -594,11 +606,26 @@ async fn worker(target: &Target, case: usize, w: usize, load: Load) -> Result<Ta
                     // The contend scenario's backoff: linear, no jitter.
                     tokio::time::sleep(Duration::from_micros(100 * attempt)).await;
                 }
+                Err(PgError::Database(e)) if out_of_resources(&e) => {
+                    tally.wasted += tried.elapsed();
+                    tally.failed.push(order_id(case, n));
+                    tally.first_error.get_or_insert_with(|| e.to_string());
+                    break;
+                }
                 Err(e) => return Err(anyhow::Error::new(e).context("rest an order")),
             }
         }
     }
     Ok(tally)
+}
+
+/// SQLSTATE class 53: the server ran out of memory, disk or
+/// connections. Under serializable isolation that includes a predicate
+/// lock table too small for the transactions in flight.
+fn out_of_resources(e: &sqlx::Error) -> bool {
+    e.as_database_error()
+        .and_then(sqlx::error::DatabaseError::code)
+        .is_some_and(|code| code.starts_with("53"))
 }
 
 /// Every order submitted to one database against what it holds: on
@@ -661,10 +688,11 @@ async fn reconcile(group: &[&Target], book: usize, tally: &Tally) -> Result<()> 
         if let Some(id) = tally
             .exhausted
             .iter()
+            .chain(&tally.failed)
             .filter(ours)
             .find(|id| asserted.contains_key(&(t.resting.clone(), (*id).clone())))
         {
-            bail!("order {id} was abandoned but the history asserts it");
+            bail!("order {id} was abandoned or failed but the history asserts it");
         }
     }
     match verify_replay(pool, &mut |_| {})
@@ -750,12 +778,12 @@ fn render(report: &Report) -> String {
         id.governor.as_deref().unwrap_or("unknown"),
     );
     out.push_str(
-        "| Layout | Cases | Workers/case | Committed/s | Per case | Efficiency | Retries/commit | Exhausted | p50 ms | p95 ms | p99 ms | Wasted |\n\
-         |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n",
+        "| Layout | Cases | Workers/case | Committed/s | Per case | Efficiency | Retries/commit | Exhausted | Failed | p50 ms | p95 ms | p99 ms | Wasted |\n\
+         |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n",
     );
     for p in &report.points {
         out.push_str(&format!(
-            "| {:?} | {} | {} | {:.1} | {:.1} | {} | {:.2} | {} | {:.1} | {:.1} | {:.1} | {:.0}% |\n",
+            "| {:?} | {} | {} | {:.1} | {:.1} | {} | {:.2} | {} | {} | {:.1} | {:.1} | {:.1} | {:.0}% |\n",
             p.layout,
             p.cases,
             p.workers_per_case,
@@ -765,10 +793,21 @@ fn render(report: &Report) -> String {
                 .map_or_else(|| "-".to_string(), |e| format!("{:.0}%", e * 100.0)),
             p.retries_per_commit,
             p.exhausted,
+            p.failed,
             p.p50_ms,
             p.p95_ms,
             p.p99_ms,
             p.wasted_share * 100.0,
+        ));
+    }
+    for p in report.points.iter().filter(|p| p.first_error.is_some()) {
+        out.push_str(&format!(
+            "\n{:?} at {} cases, {} a case: {} acts failed, first with: {}\n",
+            p.layout,
+            p.cases,
+            p.workers_per_case,
+            p.failed,
+            p.first_error.as_deref().unwrap_or_default()
         ));
     }
     out
