@@ -788,7 +788,7 @@ Measured on a read of one order by its key, joining a live derived view with fou
 | one kept connection, not prepared | 8.7 |
 | one kept connection, prepared | 0.23 |
 
-Keep one connection (or a pool) for the reads an application repeats, pass values as parameters, and let the driver prepare the statement. PostgreSQL plans it the first few times, then reuses a generic plan if it costs no more, as it did here.
+Keep one connection (or a pool) for the reads an application repeats, pass values as parameters, and let the driver prepare the statement. Preparing saves parsing; whether it saves planning is PostgreSQL's choice. It plans the first five executions for their values, then uses one generic plan only if its estimated cost is below their average, counted with an estimate of what planning them cost. Here it switched and kept the generic plan; a read whose good plan depends on the value may keep being planned. A prepared statement is also planned again after a schema change to a table it reads, or new statistics for one (`ANALYZE`, including autovacuum's).
 
 ```python
 import os
@@ -805,7 +805,7 @@ def order_state(order_id: str) -> dict | None:
     return conn.execute(ORDER, (order_id,), prepare=True).fetchone()
 ```
 
-psycopg prepares a query by itself after five executions on one connection (`prepare_threshold`); `prepare=True` does it from the first. Formatting a value into the SQL text defeats both: every key is a new statement. To check that a plan is reused, read `generic_plans` and `custom_plans` from `pg_prepared_statements` on that connection. Proposals still go through Morpholog; this connection is for the application's own reads.
+psycopg prepares a query by itself after five executions on one connection (`prepare_threshold`); `prepare=True` does it from the first. Formatting a value into the SQL text defeats both: every key is a new statement. So check rather than assume: `generic_plans` and `custom_plans` in `pg_prepared_statements` on that connection say which it did. Proposals still go through Morpholog; this connection is for the application's own reads.
 
 ### History views (`--history`)
 
