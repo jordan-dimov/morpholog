@@ -97,7 +97,7 @@ pub use disciplines::{
 };
 #[cfg(feature = "memo-differential")]
 pub use eval::set_memo;
-pub use eval::{EvalError, RenderedClaim, eval_value_over, ordered_compare_error};
+pub use eval::{EvalError, RenderedClaim, eval_value_over, ordered_compare_error, ordered_sums};
 pub use explain::{
     ErrorRejection, Explanation, GateKind, GateRejection, InvariantRejection, MissingClaim,
     Rejection, TransitionRef, Verdict,

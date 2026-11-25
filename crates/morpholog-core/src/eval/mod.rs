@@ -1753,6 +1753,7 @@ pub(crate) fn eval_builtin(builtin: Builtin, args: &[EvalValue]) -> Result<EvalV
 /// Exact running total of decimals: a big-integer count of units at the
 /// largest scale seen. Adding never overflows, so only the final total
 /// decides whether the sum fits, whatever the order.
+#[derive(Clone)]
 struct BigSum {
     units: num_bigint::BigInt,
     scale: u32,
@@ -2556,6 +2557,8 @@ fn compare_ordered(
 }
 
 mod memo;
+mod prefix;
+pub use prefix::ordered_sums;
 mod recursion;
 
 pub(crate) use memo::Memo;

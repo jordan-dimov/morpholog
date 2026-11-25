@@ -740,6 +740,10 @@ pub(crate) fn stage_delta_inner(
 
     let given = Some(transition);
     let definition_table = DefinitionTable::new(definitions);
+    // One memo for the whole body: every statement reads the same
+    // pre-state, and the key holds the bindings, so a figure or a
+    // grouped structure one statement computed is valid for the next.
+    let memo = Memo::default();
     for stmt in &transformation.body {
         match execute_stmt(
             vocabulary,
@@ -748,6 +752,7 @@ pub(crate) fn stage_delta_inner(
             &mut bindings,
             given,
             definition_table,
+            &memo,
             &mut asserted,
             &mut retracted,
             &mut emitted,
@@ -953,6 +958,7 @@ pub(crate) fn execute_stmt(
     bindings: &mut Bindings,
     transition: Option<&Transition>,
     definitions: DefinitionTable<'_>,
+    memo: &Memo,
     asserted: &mut Vec<ClaimInstance>,
     retracted: &mut Vec<ClaimInstance>,
     emitted: &mut Vec<IntentInstance>,
@@ -963,9 +969,8 @@ pub(crate) fn execute_stmt(
         Stmt::Require { prop: expr, name } => {
             // A body reads only the pre-state, so `pre(...)` here is
             // `PreStateUnavailable`.
-            let memo = Memo::default();
             let ctx = EvalContext::new(pre_state, None, bindings, transition, definitions)
-                .with_memo(&memo);
+                .with_memo(memo);
             let matches = find_matches(expr, &ctx)?;
             if matches.is_empty() {
                 let rendered = format::format_prop_inline(expr);
@@ -1008,9 +1013,8 @@ pub(crate) fn execute_stmt(
         Stmt::BindOne { prop: expr, name } => {
             // A unique match *replaces* the binding context rather than
             // extending it.
-            let memo = Memo::default();
             let ctx = EvalContext::new(pre_state, None, bindings, transition, definitions)
-                .with_memo(&memo);
+                .with_memo(memo);
             let mut matches = find_matches(expr, &ctx)?;
             match matches.len() {
                 0 => {
@@ -1072,9 +1076,8 @@ pub(crate) fn execute_stmt(
             }
         }
         Stmt::Let { name, value } => {
-            let memo = Memo::default();
             let ctx = EvalContext::new(pre_state, None, bindings, transition, definitions)
-                .with_memo(&memo);
+                .with_memo(memo);
             let v = eval_value(value, &ctx)?;
             if trace.is_on() {
                 trace.push(TraceEntry::Let {
@@ -1111,9 +1114,8 @@ pub(crate) fn execute_stmt(
             Ok(StmtOutcome::Continue)
         }
         Stmt::Retract { predicate, args } => {
-            let memo = Memo::default();
             let ctx = EvalContext::new(pre_state, None, bindings, transition, definitions)
-                .with_memo(&memo);
+                .with_memo(memo);
             let matched = matching_claims(predicate, args, &ctx)?;
             if trace.is_on() {
                 trace.push(TraceEntry::Retract {
@@ -1129,9 +1131,8 @@ pub(crate) fn execute_stmt(
             collection,
             body,
         } => {
-            let memo = Memo::default();
             let coll_ctx = EvalContext::new(pre_state, None, bindings, transition, definitions)
-                .with_memo(&memo);
+                .with_memo(memo);
             let coll_val = eval_value(collection, &coll_ctx)?;
             let EvalValue::Collection(items) = coll_val else {
                 return Err(EvalError::TypeMismatch("For expects a collection".into()));
@@ -1160,6 +1161,7 @@ pub(crate) fn execute_stmt(
                                 bindings,
                                 transition,
                                 definitions,
+                                memo,
                                 asserted,
                                 retracted,
                                 emitted,
@@ -1222,6 +1224,7 @@ pub(crate) fn execute_stmt(
                             bindings,
                             transition,
                             definitions,
+                            memo,
                             asserted,
                             retracted,
                             emitted,
@@ -1245,9 +1248,8 @@ pub(crate) fn execute_stmt(
             then,
             otherwise,
         } => {
-            let memo = Memo::default();
             let ctx = EvalContext::new(pre_state, None, bindings, transition, definitions)
-                .with_memo(&memo);
+                .with_memo(memo);
             let taken = !find_matches(when, &ctx)?.is_empty();
             let branch = if taken { then } else { otherwise };
             // The branch binds for itself alone: the outer bindings come
@@ -1262,6 +1264,7 @@ pub(crate) fn execute_stmt(
                 bindings,
                 transition,
                 definitions,
+                memo,
                 asserted,
                 retracted,
                 emitted,
@@ -1283,9 +1286,8 @@ pub(crate) fn execute_stmt(
             args,
             body,
         } => {
-            let memo = Memo::default();
             let ctx = EvalContext::new(pre_state, None, bindings, transition, definitions)
-                .with_memo(&memo);
+                .with_memo(memo);
             let mut claims = matching_claims(predicate, args, &ctx)?;
             // The order is the claims' own, never the state's: a subject
             // drawn in the second iteration is the same one on replay.
@@ -1311,6 +1313,7 @@ pub(crate) fn execute_stmt(
                     bindings,
                     transition,
                     definitions,
+                    memo,
                     asserted,
                     retracted,
                     emitted,
@@ -1366,6 +1369,7 @@ fn run_block(
     bindings: &mut Bindings,
     transition: Option<&Transition>,
     definitions: DefinitionTable<'_>,
+    memo: &Memo,
     asserted: &mut Vec<ClaimInstance>,
     retracted: &mut Vec<ClaimInstance>,
     emitted: &mut Vec<IntentInstance>,
@@ -1384,6 +1388,7 @@ fn run_block(
             bindings,
             transition,
             definitions,
+            memo,
             asserted,
             retracted,
             emitted,

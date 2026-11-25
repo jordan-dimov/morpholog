@@ -693,6 +693,13 @@ fn summary(
         out.push_str(&format!("    {name}: {because}\n"));
     }
     out.push_str(&whole_reads(p));
+    let ordered = morpholog_core::ordered_sums(p);
+    if !ordered.is_empty() {
+        out.push_str("  eligible ordered sums:\n");
+        for (place, order) in ordered {
+            out.push_str(&format!("    {place}: {order}\n"));
+        }
+    }
     out
 }
 

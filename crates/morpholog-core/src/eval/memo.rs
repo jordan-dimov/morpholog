@@ -21,6 +21,7 @@ use crate::fold::{Node, walk_value};
 use crate::ir::{Term, Unit, ValueExpr, Var};
 use crate::state::EvalValue;
 
+use super::prefix::{Group, Shape, recognise};
 use super::{EvalContext, EvalError};
 
 #[cfg(feature = "memo-differential")]
@@ -45,18 +46,24 @@ pub(crate) fn memo_on() -> bool {
 }
 
 /// Created where one evaluation starts and dropped where it ends: a
-/// gate statement, an invariant's judgement, a derived claim's rows.
+/// transformation's body, an invariant's judgement, a derived claim's rows.
 #[derive(Default)]
 pub(crate) struct Memo {
     /// Keyed by structure, not address: a node built during evaluation
     /// (an `xor` lowered on the fly) can reuse a freed address.
     entries: RefCell<HashMap<ValueExpr, Entry>>,
     computed: Cell<usize>,
+    groups_built: Cell<usize>,
+    probes_answered: Cell<usize>,
 }
 
 struct Entry {
     mentions: Rc<[Var]>,
     results: HashMap<Key, Result<EvalValue, EvalError>>,
+    /// The node as a sum over a set in an order, when it is one.
+    shape: Option<Rc<Shape>>,
+    /// Its sorted groups, keyed as `results` is with the probe left out.
+    groups: HashMap<Key, Rc<Group>>,
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -120,31 +127,8 @@ impl Memo {
         ctx: &EvalContext<'_>,
         compute: impl FnOnce() -> Result<EvalValue, EvalError>,
     ) -> Result<EvalValue, EvalError> {
-        let mentions = {
-            let mut entries = self.entries.borrow_mut();
-            match entries.get(node) {
-                Some(entry) => Rc::clone(&entry.mentions),
-                None => {
-                    let mentions = mentions(node);
-                    entries.insert(
-                        node.clone(),
-                        Entry {
-                            mentions: Rc::clone(&mentions),
-                            results: HashMap::new(),
-                        },
-                    );
-                    mentions
-                }
-            }
-        };
-        let key = Key {
-            state: ctx.state.address(),
-            transition: ctx.transition.is_some(),
-            values: mentions
-                .iter()
-                .map(|v| ctx.bindings.get(v).map(|b| exact(b)))
-                .collect(),
-        };
+        let (mentions, shape) = self.entry(node, ctx);
+        let key = key(&mentions, ctx, &[]);
         if let Some(found) = self
             .entries
             .borrow()
@@ -152,6 +136,10 @@ impl Memo {
             .and_then(|entry| entry.results.get(&key))
         {
             return found.clone();
+        }
+        if let Some(answer) = shape.and_then(|shape| self.prefix_sum(node, &mentions, &shape, ctx))
+        {
+            return answer;
         }
         let result = compute();
         self.computed.set(self.computed.get() + 1);
@@ -161,10 +149,89 @@ impl Memo {
         result
     }
 
+    /// The node's mentions and shape, recorded on first sight.
+    /// The node is cloned only the first time it is seen.
+    fn entry(&self, node: &ValueExpr, ctx: &EvalContext<'_>) -> (Rc<[Var]>, Option<Rc<Shape>>) {
+        if let Some(entry) = self.entries.borrow().get(node) {
+            return (Rc::clone(&entry.mentions), entry.shape.clone());
+        }
+        let entry = Entry {
+            mentions: mentions(node),
+            results: HashMap::new(),
+            shape: recognise(node, ctx.definitions).map(Rc::new),
+            groups: HashMap::new(),
+        };
+        let found = (Rc::clone(&entry.mentions), entry.shape.clone());
+        self.entries.borrow_mut().insert(node.clone(), entry);
+        found
+    }
+
+    /// The sum through its sorted group, built once per group, or `None`
+    /// for the direct path.
+    fn prefix_sum(
+        &self,
+        node: &ValueExpr,
+        mentions: &[Var],
+        shape: &Shape,
+        ctx: &EvalContext<'_>,
+    ) -> Option<Result<EvalValue, EvalError>> {
+        if !shape.applies(ctx.bindings) {
+            return None;
+        }
+        let group_key = key(mentions, ctx, &shape.probe_vars);
+        let known = self
+            .entries
+            .borrow()
+            .get(node)
+            .and_then(|entry| entry.groups.get(&group_key).cloned());
+        let group = match known {
+            Some(group) => group,
+            None => {
+                // No borrow is held while building: the source may
+                // evaluate other aggregates.
+                let group = Rc::new(shape.build(ctx));
+                self.groups_built.set(self.groups_built.get() + 1);
+                if let Some(entry) = self.entries.borrow_mut().get_mut(node) {
+                    entry.groups.insert(group_key, Rc::clone(&group));
+                }
+                group
+            }
+        };
+        let answer = shape.answer(&group, ctx.bindings)?;
+        self.probes_answered.set(self.probes_answered.get() + 1);
+        Some(answer)
+    }
+
     /// How many aggregates this evaluation actually computed.
     #[cfg(test)]
     pub(crate) fn computed(&self) -> usize {
         self.computed.get()
+    }
+
+    /// How many sorted groups it built, and how many sums they answered.
+    #[cfg(test)]
+    pub(crate) fn prefix_work(&self) -> (usize, usize) {
+        (self.groups_built.get(), self.probes_answered.get())
+    }
+}
+
+/// The key a result is kept under: the state, whether a transition is in
+/// context, and the exact value of each mentioned variable, `None` for
+/// one unbound or left out.
+fn key(mentions: &[Var], ctx: &EvalContext<'_>, leave_out: &[Var]) -> Key {
+    Key {
+        state: ctx.state.address(),
+        transition: ctx.transition.is_some(),
+        values: mentions
+            .iter()
+            .map(|v| {
+                if leave_out.contains(v) {
+                    None
+                } else {
+                    ctx.bindings.get(v).map(|b| exact(b))
+                }
+            })
+            .collect(),
     }
 }
 
