@@ -776,6 +776,37 @@ A value's `if(...)` is a `CASE`. As in the kernel, the test is always computed a
 
 **A figure several derived claims need is a value definition they all call.** A derived claim cannot read another derived claim, so the way to share a figure is not to compute it in one and read it from the other: name it once, `define completed_of(part) = (sum(q | Build(b, part) and Output(b, q)))`, and call `completed_of(part)` in each derived claim's `value` line. The kernel and a live view compute it the same way, so the figure is spelt once, and a derived claim that calls it renders live when the figure's body and the claim's own domain and values do.
 
+### Reading a view often: keep the connection, prepare the read
+
+A generated view is a relational expression over `morpholog.claims`, and a live derived view is a whole definition rendered as SQL. A selective read of one can take far longer to plan than to run: the planner expands every view it names and weighs the indexes `provision indexes` added to `claims` for each scan in it. A read sent as new text on a new connection is planned every time.
+
+Measured on a read of one order by its key, joining a live derived view with four base views (19 scans of `claims`, 41 indexes on it):
+
+| How the read is sent | ms a read |
+|---|---:|
+| a new connection for each read | 15.8 |
+| one kept connection, not prepared | 8.7 |
+| one kept connection, prepared | 0.23 |
+
+Keep one connection (or a pool) for the reads an application repeats, pass values as parameters, and let the driver prepare the statement. PostgreSQL plans it the first few times, then reuses a generic plan if it costs no more, as it did here.
+
+```python
+import os
+
+import psycopg
+from psycopg.rows import dict_row
+
+ORDER = 'SELECT status, remaining FROM morpholog_views.order_state WHERE "order" = %s'
+
+conn = psycopg.connect(os.environ["DATABASE_URL"], autocommit=True, row_factory=dict_row)
+
+def order_state(order_id: str) -> dict | None:
+    # One text whatever the key, so it is prepared once on this connection.
+    return conn.execute(ORDER, (order_id,), prepare=True).fetchone()
+```
+
+psycopg prepares a query by itself after five executions on one connection (`prepare_threshold`); `prepare=True` does it from the first. Formatting a value into the SQL text defeats both: every key is a new statement. To check that a plan is reused, read `generic_plans` and `custom_plans` from `pg_prepared_statements` on that connection. Proposals still go through Morpholog; this connection is for the application's own reads.
+
 ### History views (`--history`)
 
 ```sh
