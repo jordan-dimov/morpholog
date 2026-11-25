@@ -34,16 +34,15 @@ Deferred cases, provenance recorded so they arrive bench-first when wanted: the 
 
 The deliverable of a measurement is a **complexity-class claim** ("flat across a 100x state sweep", "linear in log length", "independent of unrelated-predicate count"), never a single number. Points invite tuning to the point; a curve shape across a ladder is much harder to game. Where an axis exists (`--noise-claims`, `--retract-fraction`, `--disjoint`, `--arity`), the suite runs its unflattering settings on purpose.
 
-## Cold, warm, steady and concurrent
+## First act, steady stream and concurrent
 
 An act costs different amounts depending on what came just before it, so a number says which it is:
 
-- **Cold first act** (`write/base`, `write/noise`): the database and its indexes rebuilt, then one proposal. Every plan is new. Useful for what an act costs after provisioning or a deploy; misleading as the cost of an act. Measured on the ledger at 10,000 entries: about 9 ms cold, about 3 ms in a stream.
-- **Warm single act** (`write/stream`'s `stream_first_act`): the first proposal on a pool that has just built the fixture.
+- **First act, cold plans** (`write/base`, `write/noise`, and `write/stream`'s `stream_first_act`): the database and its indexes rebuilt, then one proposal. Every statement is planned afresh, but the buffers are warm: building the fixture has just read its pages, so nothing here measures a cold cache. Useful for what an act costs after provisioning or a deploy; misleading as the cost of an act. Measured on the ledger at 10,000 entries: about 9 ms for the first act, about 3 ms in a stream.
 - **Steady stream** (`write/stream`'s `stream_act_median` and `stream_act_p95`): the acts after it, one after another on the warm pool. **This is the measure a runtime change is judged on.**
 - **Concurrent stream** (`contend`, and `cases` outside the suite): throughput, retries and tail latency under contention.
 
-The bench checks the conditions it assumes rather than trusting them: every scenario that establishes an index condition refuses an index on `claims` that is neither the schema's, a constraint's, nor one of Morpholog's compiled indexes, naming it. An index left behind by an experiment once made a baseline look twice as fast.
+The bench checks the conditions it assumes rather than trusting them: every scenario that establishes an index condition refuses an index on `claims` that is neither one the schema creates nor one of Morpholog's compiled indexes, naming it. A constraint's index counts. The compiled indexes are checked against what the programme requires; the schema's are recognised by name only. An index left behind by an experiment once made a baseline look twice as fast.
 
 ## Repeats, `first`, and `steady median`
 

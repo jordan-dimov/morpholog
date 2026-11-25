@@ -854,32 +854,30 @@ async fn establish(pool: &PgPool, implementation: Implementation, cores: &[Progr
     refuse_foreign_indexes(pool).await
 }
 
-/// The indexes the schema itself creates on `claims`, read from its text.
+/// The indexes the schema itself creates on `claims`: its primary key's,
+/// under PostgreSQL's default name, and those its text creates.
 fn schema_claims_indexes() -> Vec<&'static str> {
     const SCHEMA: &str = include_str!("../../morpholog-core/sql/schema.sql");
-    SCHEMA
-        .lines()
-        .filter_map(|line| {
-            let rest = line
-                .strip_prefix("CREATE INDEX ")
-                .or_else(|| line.strip_prefix("CREATE UNIQUE INDEX "))?;
-            let (name, on) = rest.split_once(' ')?;
-            on.starts_with("ON claims ").then_some(name)
-        })
-        .collect()
+    let created = SCHEMA.lines().filter_map(|line| {
+        let rest = line
+            .strip_prefix("CREATE INDEX ")
+            .or_else(|| line.strip_prefix("CREATE UNIQUE INDEX "))?;
+        let (name, on) = rest.split_once(' ')?;
+        on.starts_with("ON claims ").then_some(name)
+    });
+    std::iter::once("claims_pkey").chain(created).collect()
 }
 
 /// Any other index on `claims` changes plans, and so the timings: one
 /// left behind by an experiment once made a baseline look twice as fast.
-/// Constraint indexes and Morpholog's own compiled indexes are expected.
+/// A constraint's index counts too. Morpholog's compiled indexes are
+/// checked against their requirements by `establish`; the schema's are
+/// recognised by name, so one redefined under its own name passes.
 async fn refuse_foreign_indexes(pool: &PgPool) -> Result<()> {
     let names: Vec<String> = sqlx::query_scalar(
-        "SELECT i.indexname::text FROM pg_indexes i
-         WHERE i.schemaname = 'morpholog' AND i.tablename = 'claims'
-           AND i.indexname NOT LIKE 'morpholog_ci_%'
-           AND NOT EXISTS (
-               SELECT 1 FROM pg_constraint c
-               WHERE c.conindid = format('%I.%I', i.schemaname, i.indexname)::regclass)
+        "SELECT indexname::text FROM pg_indexes
+         WHERE schemaname = 'morpholog' AND tablename = 'claims'
+           AND indexname NOT LIKE 'morpholog_ci_%'
          ORDER BY 1",
     )
     .fetch_all(pool)
@@ -5010,6 +5008,38 @@ mod smoke {
             message.contains("the bench did not establish")
                 && message.contains("bench_smoke_foreign"),
             "the refusal names the index: {message}"
+        );
+
+        // A constraint's index changes plans as much as any other.
+        sqlx::raw_sql(
+            "ALTER TABLE morpholog.claims \
+             ADD CONSTRAINT bench_smoke_unique UNIQUE (arguments_hash, predicate_name)",
+        )
+        .execute(&pool)
+        .await
+        .expect("foreign constraint");
+        let refused = run_write_stream(WriteStreamArgs {
+            n: 1,
+            accounts: 2,
+            acts: 2,
+            database_url: url.clone(),
+            reset: true,
+            implementation: Implementation::CompiledIndexed,
+            repeat: 1,
+        })
+        .await;
+        sqlx::raw_sql("ALTER TABLE morpholog.claims DROP CONSTRAINT bench_smoke_unique")
+            .execute(&pool)
+            .await
+            .expect("drop foreign constraint");
+        let message = format!(
+            "{:?}",
+            refused.expect_err("a constraint's foreign index is refused")
+        );
+        assert!(
+            message.contains("the bench did not establish")
+                && message.contains("bench_smoke_unique"),
+            "the refusal names the constraint's index: {message}"
         );
 
         run_write_stream(WriteStreamArgs {
