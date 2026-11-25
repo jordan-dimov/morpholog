@@ -178,14 +178,19 @@ jobs:
           --exclude morpholog-outbox --exclude morpholog-bench
 
   test-cli:
-    name: test (cli)
+    name: test (cli, postgres ${{ matrix.postgres }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
+    strategy:
+      fail-fast: false
+      matrix:
+        # 18 is the minimum supported version; 19 the current one.
+        postgres: ["18", "19"]
+
     services:
       postgres:
-        # PostgreSQL 18 is the minimum supported version.
-        image: postgres:18
+        image: postgres:${{ matrix.postgres }}
         env:
           POSTGRES_PASSWORD: postgres
         ports:
@@ -222,14 +227,19 @@ jobs:
         run: cargo test -p morpholog-cli --all-targets --locked
 
   test-adapter:
-    name: test (adapter)
+    name: test (adapter, postgres ${{ matrix.postgres }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
+    strategy:
+      fail-fast: false
+      matrix:
+        # 18 is the minimum supported version; 19 the current one.
+        postgres: ["18", "19"]
+
     services:
       postgres:
-        # PostgreSQL 18 is the minimum supported version.
-        image: postgres:18
+        image: postgres:${{ matrix.postgres }}
         env:
           POSTGRES_PASSWORD: postgres
         ports:
@@ -268,8 +278,8 @@ jobs:
         run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -1 -f crates/morpholog-core/sql/schema.sql
 
       # The committed `.sqlx/` cache is generated against the PG 18 floor;
-      # check it against the live schema so a query that drifted from the
-      # schema fails CI here rather than at runtime.
+      # check it against the live schema on each version, so a query that
+      # drifted from the schema fails CI here rather than at runtime.
       - name: Install sqlx-cli
         uses: taiki-e/install-action@v2
         with:
@@ -295,8 +305,9 @@ jobs:
         run: cargo test -p morpholog-bench --all-targets --locked
 
   # The one check branch protection requires: green only when every
-  # test job is. It keeps its name across the split so the required
-  # check keeps covering the whole suite.
+  # test job is, on every PostgreSQL version. It keeps the name branch
+  # protection knows, so the required check keeps covering the whole
+  # suite; renaming it means changing the protection rule with it.
   test:
     name: test (postgres 18)
     needs: [test-sync, test-cli, test-adapter]
@@ -320,6 +331,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    # Only the worked embedder needs a database, so it runs against both
+    # versions here rather than the whole job twice.
     services:
       postgres:
         image: postgres:18
@@ -327,6 +340,17 @@ jobs:
           POSTGRES_PASSWORD: postgres
         ports:
           - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      postgres19:
+        image: postgres:19
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5433:5432
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -372,10 +396,17 @@ jobs:
           python -m pip install "ruff==$(sed -n 's/^RUFF_VERSION=//p' scripts/python_lint.sh)"
           ./scripts/python_lint.sh
 
-      - name: Worked embedder end to end
+      - name: Worked embedder end to end (postgres 18)
         env:
           MORPHOLOG_BIN: ${{ github.workspace }}/target/debug/morpholog
           PGPASSWORD: postgres
+        run: python examples/etrm_embedder/etrm_lifecycle.py
+
+      - name: Worked embedder end to end (postgres 19)
+        env:
+          MORPHOLOG_BIN: ${{ github.workspace }}/target/debug/morpholog
+          PGPASSWORD: postgres
+          DATABASE_URL: postgres://postgres:postgres@localhost:5433/postgres
         run: python examples/etrm_embedder/etrm_lifecycle.py
 
   coverage:
@@ -391,7 +422,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:18
+        image: postgres:19
         env:
           POSTGRES_PASSWORD: postgres
         ports:

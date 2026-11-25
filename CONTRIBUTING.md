@@ -91,7 +91,7 @@ git add .sqlx
 
 **Never hand-edit `.sqlx/`.** Those files are a generated contract between the queries and the schema; the only correct way to change them is to regenerate via the script above. A hand-edit that disagrees with the schema is exactly the drift the cache exists to catch.
 
-The checked contract is **PostgreSQL 18**, the stated floor: regenerate against a clean PG 18 database when you have one, and CI's PG 18 `cargo sqlx prepare --workspace --check` is the source of truth for floor compatibility. Precommit and CI run that check against the live schema to fail when the cache and the schema have drifted apart - so a forgotten regen is caught before merge.
+The checked contract is **PostgreSQL 18**, the stated floor: regenerate against a clean PG 18 database when you have one, and CI's PG 18 `cargo sqlx prepare --workspace --check` is the source of truth for floor compatibility. CI runs the database suites, and that check, on PostgreSQL 19 as well. Precommit and CI run that check against the live schema to fail when the cache and the schema have drifted apart - so a forgotten regen is caught before merge.
 
 ## Workspace layout
 
