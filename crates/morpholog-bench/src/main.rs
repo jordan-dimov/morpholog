@@ -56,8 +56,16 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Populate state with N entries, then time one propose_against_pg
-    /// call (post_simple_entry adding one more entry on top).
+    /// call (post_simple_entry adding one more entry on top). Each repeat
+    /// rebuilds the database and its indexes first, so this is the first
+    /// act after DDL, every plan cold; `write-stream` is the steady one.
     Write(ScenarioArgs),
+
+    /// Populate state with N entries once per repeat, then time ACTS
+    /// postings one after another on the warm pool: the first act, and
+    /// the median and 95th percentile of the rest. The measure to judge a
+    /// runtime change by.
+    WriteStream(WriteStreamArgs),
 
     /// Populate state with N entries, then time one list_derived call
     /// against the trial-balance derived claim.
@@ -266,6 +274,33 @@ struct CompareArgs {
     /// The candidate runs, from the same ruler.
     #[arg(long, num_args = 1.., required = true)]
     after: Vec<PathBuf>,
+}
+
+#[derive(clap::Args, Debug)]
+struct WriteStreamArgs {
+    /// Number of journal entries to pre-populate (`3 * N` claims).
+    n: usize,
+
+    /// Distinct accounts, as for `write`.
+    #[arg(long, default_value_t = 2)]
+    accounts: usize,
+
+    /// Postings in each repeat's stream.
+    #[arg(long, default_value_t = 50)]
+    acts: usize,
+
+    #[arg(long, env = "DATABASE_URL")]
+    database_url: String,
+
+    /// Required: acknowledge that the target database is truncated.
+    #[arg(long)]
+    reset: bool,
+
+    #[arg(long, value_enum, default_value = "interpreted")]
+    implementation: Implementation,
+
+    #[arg(long, default_value_t = 3)]
+    repeat: usize,
 }
 
 #[derive(clap::Args, Debug)]
@@ -678,6 +713,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Write(args) => run_write(args).await,
+        Command::WriteStream(args) => run_write_stream(args).await,
         Command::Read(args) => run_read(args).await,
         Command::AsOf(args) => run_as_of(args).await,
         Command::Contend(args) => run_contend(args).await,
@@ -815,7 +851,52 @@ async fn establish(pool: &PgPool, implementation: Implementation, cores: &[Progr
             ));
         }
     }
-    Ok(())
+    refuse_foreign_indexes(pool).await
+}
+
+/// The indexes the schema itself creates on `claims`: its primary key's,
+/// under PostgreSQL's default name, and those its text creates.
+fn schema_claims_indexes() -> Vec<&'static str> {
+    const SCHEMA: &str = include_str!("../../morpholog-core/sql/schema.sql");
+    let created = SCHEMA.lines().filter_map(|line| {
+        let rest = line
+            .strip_prefix("CREATE INDEX ")
+            .or_else(|| line.strip_prefix("CREATE UNIQUE INDEX "))?;
+        let (name, on) = rest.split_once(' ')?;
+        on.starts_with("ON claims ").then_some(name)
+    });
+    std::iter::once("claims_pkey").chain(created).collect()
+}
+
+/// Any other index on `claims` changes plans, and so the timings: one
+/// left behind by an experiment once made a baseline look twice as fast.
+/// A constraint's index counts too. Morpholog's compiled indexes are
+/// checked against their requirements by `establish`; the schema's are
+/// recognised by name, so one redefined under its own name passes.
+async fn refuse_foreign_indexes(pool: &PgPool) -> Result<()> {
+    let names: Vec<String> = sqlx::query_scalar(
+        "SELECT indexname::text FROM pg_indexes
+         WHERE schemaname = 'morpholog' AND tablename = 'claims'
+           AND indexname NOT LIKE 'morpholog_ci_%'
+         ORDER BY 1",
+    )
+    .fetch_all(pool)
+    .await
+    .context("listing the indexes on claims")?;
+    let own = schema_claims_indexes();
+    let foreign: Vec<String> = names
+        .into_iter()
+        .filter(|n| !own.contains(&n.as_str()))
+        .collect();
+    if foreign.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "claims holds indexes the bench did not establish and the schema does not create: {}. \
+             Drop them or use a fresh database: an index changes plans and so the timings",
+            foreign.join(", ")
+        ))
+    }
 }
 
 /// The bench establishes index conditions through the registry, so the
@@ -830,7 +911,7 @@ async fn require_migration_head(pool: &PgPool) -> Result<()> {
 /// Bumped only when what the benchmark measures changes (cases,
 /// fixtures, ladders, aggregation), never for a change in the code
 /// being measured. See docs/benchmarking.md.
-const SUITE_CONTRACT: u32 = 3;
+const SUITE_CONTRACT: u32 = 4;
 
 /// One metric of one case: named samples with a unit, in repeat order.
 /// `samples[0]` is the `first` reading, not a "cold" one: building the
@@ -1008,6 +1089,85 @@ async fn measure_write(
             Metric::ms("phase_load_state", &load),
             Metric::ms("phase_kernel", &kernel),
             Metric::ms("phase_finalise", &finalise),
+        ],
+    })
+}
+
+/// The write case as an application runs it: every repeat rebuilds the
+/// same pre-state once, then proposes `acts` postings one after another
+/// on the warm pool. `write/base` times the first act after a rebuild and
+/// its DDL, with every plan cold; this times the acts that follow, which
+/// is what a runtime change should be judged on. Each repeat contributes
+/// its stream's first act, and the median and 95th percentile of the rest.
+async fn measure_write_stream(
+    implementation: Implementation,
+    pool: &PgPool,
+    case: &str,
+    n: usize,
+    accounts: usize,
+    acts: usize,
+    repeat: usize,
+) -> Result<CaseResult> {
+    if acts < 2 {
+        return Err(anyhow!("a stream needs at least two acts, not {acts}"));
+    }
+    let cores: Vec<Program> = vec![double_entry_ledger::program()];
+    let pg = implementation.program(double_entry_ledger::program())?;
+    let mut first = Vec::with_capacity(repeat);
+    let mut median = Vec::with_capacity(repeat);
+    let mut p95 = Vec::with_capacity(repeat);
+    let (mut begin, mut load, mut kernel, mut finalise) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for r in 0..repeat {
+        reset_db(pool).await?;
+        establish(pool, implementation, &cores).await?;
+        insert_n_entries(pool, n, accounts).await?;
+        analyze_claims(pool).await?;
+        let mut stream = Vec::with_capacity(acts);
+        let mut phases = Vec::with_capacity(acts);
+        for a in 0..acts {
+            let transition = ledger_posting(&format!("entry_bench_stream_{r}_{a}"), "p_bench");
+            let t = Instant::now();
+            let timed = propose_against_pg_timed(pool, &pg, &Proposal::gateway(&transition))
+                .await
+                .context("propose_against_pg_timed")?;
+            stream.push(t.elapsed());
+            phases.push(timed.phases);
+            if !matches!(timed.outcome, PgProposalOutcome::Committed { .. }) {
+                return Err(anyhow!(
+                    "expected every posting in the stream to commit ({})",
+                    outcome_summary(&timed.outcome)
+                ));
+            }
+        }
+        first.push(stream[0]);
+        let mut rest = stream[1..].to_vec();
+        rest.sort();
+        median.push(rest[rest.len() / 2]);
+        p95.push(rest[(rest.len() * 95 / 100).min(rest.len() - 1)]);
+        let mid = |f: fn(&morpholog_postgres::ProposalPhases) -> Duration| {
+            let mut v: Vec<Duration> = phases[1..].iter().map(f).collect();
+            v.sort();
+            v[v.len() / 2]
+        };
+        begin.push(mid(|p| p.begin));
+        load.push(mid(|p| p.load));
+        kernel.push(mid(|p| p.kernel));
+        finalise.push(mid(|p| p.finalise));
+    }
+    Ok(CaseResult {
+        case: case.to_string(),
+        implementation: implementation.label(),
+        axis: "n",
+        point: n as u64,
+        metrics: vec![
+            Metric::ms("stream_first_act", &first),
+            Metric::ms("stream_act_median", &median),
+            Metric::ms("stream_act_p95", &p95),
+            Metric::ms("stream_phase_begin_tx", &begin),
+            Metric::ms("stream_phase_load_state", &load),
+            Metric::ms("stream_phase_kernel", &kernel),
+            Metric::ms("stream_phase_finalise", &finalise),
         ],
     })
 }
@@ -2313,6 +2473,29 @@ async fn run_write(args: ScenarioArgs) -> Result<()> {
         args.n,
         args.accounts,
         args.noise_claims,
+        args.repeat,
+    )
+    .await?;
+    print_case_human(&result);
+    Ok(())
+}
+
+async fn run_write_stream(args: WriteStreamArgs) -> Result<()> {
+    check_reset_ack(args.reset, &args.database_url)?;
+    require_positive_repeat(args.repeat)?;
+    let pool = connect(&args.database_url).await?;
+    require_migration_head(&pool).await?;
+    println!(
+        "scenario=write-stream n={} accounts={} acts={} repeat={}",
+        args.n, args.accounts, args.acts, args.repeat
+    );
+    let result = measure_write_stream(
+        args.implementation,
+        &pool,
+        "write/stream",
+        args.n,
+        args.accounts,
+        args.acts,
         args.repeat,
     )
     .await?;
@@ -3743,6 +3926,11 @@ enum CaseKind {
         n: usize,
         retract_fraction: usize,
     },
+    WriteStream {
+        n: usize,
+        accounts: usize,
+        acts: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -3779,6 +3967,10 @@ fn suite_plan(ladder: Ladder) -> Vec<CaseSpec> {
         Ladder::Quick => 100,
         Ladder::Full => 2_000,
     };
+    let stream_acts = match ladder {
+        Ladder::Quick => 50,
+        Ladder::Full => 200,
+    };
     let wide_arities: &[usize] = &[4, 7, 13];
     let wide_fixed_n = match ladder {
         Ladder::Quick => 1_000,
@@ -3793,6 +3985,14 @@ fn suite_plan(ladder: Ladder) -> Vec<CaseSpec> {
                 n,
                 accounts: 2,
                 noise: 0,
+            },
+        });
+        plan.push(CaseSpec {
+            case: "write/stream",
+            kind: CaseKind::WriteStream {
+                n,
+                accounts: 2,
+                acts: stream_acts,
             },
         });
         plan.push(CaseSpec {
@@ -3951,6 +4151,18 @@ async fn run_case(
                 *n,
                 *accounts,
                 *noise,
+                repeat,
+            )
+            .await
+        }
+        CaseKind::WriteStream { n, accounts, acts } => {
+            measure_write_stream(
+                implementation,
+                pool,
+                spec.case,
+                *n,
+                *accounts,
+                *acts,
                 repeat,
             )
             .await
@@ -4768,6 +4980,80 @@ mod smoke {
             "the refusal names the condition: {message}"
         );
 
+        // An index no requirement matches still changes plans: the bench
+        // refuses it in the indexed configuration too, naming it.
+        sqlx::raw_sql(
+            "CREATE INDEX bench_smoke_foreign ON morpholog.claims ((arguments -> 1)) \
+             WHERE predicate_name = 'JournalLine'",
+        )
+        .execute(&pool)
+        .await
+        .expect("foreign index");
+        let refused = run_write_stream(WriteStreamArgs {
+            n: 1,
+            accounts: 2,
+            acts: 2,
+            database_url: url.clone(),
+            reset: true,
+            implementation: Implementation::CompiledIndexed,
+            repeat: 1,
+        })
+        .await;
+        sqlx::raw_sql("DROP INDEX morpholog.bench_smoke_foreign")
+            .execute(&pool)
+            .await
+            .expect("drop foreign index");
+        let message = format!("{:?}", refused.expect_err("a foreign index is refused"));
+        assert!(
+            message.contains("the bench did not establish")
+                && message.contains("bench_smoke_foreign"),
+            "the refusal names the index: {message}"
+        );
+
+        // A constraint's index changes plans as much as any other.
+        sqlx::raw_sql(
+            "ALTER TABLE morpholog.claims \
+             ADD CONSTRAINT bench_smoke_unique UNIQUE (arguments_hash, predicate_name)",
+        )
+        .execute(&pool)
+        .await
+        .expect("foreign constraint");
+        let refused = run_write_stream(WriteStreamArgs {
+            n: 1,
+            accounts: 2,
+            acts: 2,
+            database_url: url.clone(),
+            reset: true,
+            implementation: Implementation::CompiledIndexed,
+            repeat: 1,
+        })
+        .await;
+        sqlx::raw_sql("ALTER TABLE morpholog.claims DROP CONSTRAINT bench_smoke_unique")
+            .execute(&pool)
+            .await
+            .expect("drop foreign constraint");
+        let message = format!(
+            "{:?}",
+            refused.expect_err("a constraint's foreign index is refused")
+        );
+        assert!(
+            message.contains("the bench did not establish")
+                && message.contains("bench_smoke_unique"),
+            "the refusal names the constraint's index: {message}"
+        );
+
+        run_write_stream(WriteStreamArgs {
+            n: 1,
+            accounts: 2,
+            acts: 3,
+            database_url: url.clone(),
+            reset: true,
+            implementation: Implementation::Interpreted,
+            repeat: 2,
+        })
+        .await
+        .expect("write-stream scenario smoke");
+
         run_read(ScenarioArgs {
             n: 1,
             accounts: 2,
@@ -4907,6 +5193,14 @@ mod smoke {
                 },
             },
             CaseSpec {
+                case: "write/stream",
+                kind: CaseKind::WriteStream {
+                    n: 1,
+                    accounts: 2,
+                    acts: 2,
+                },
+            },
+            CaseSpec {
                 case: "asof/assert",
                 kind: CaseKind::AsOf {
                     n: 2,
@@ -5039,7 +5333,7 @@ mod smoke {
     /// Pins fingerprints of the canonical plans under the current suite
     /// contract, so `suite_plan` cannot change without a contract bump.
     #[test]
-    fn the_canonical_matrix_is_frozen_under_contract_3() {
+    fn the_canonical_matrix_is_frozen_under_contract_4() {
         use sha2::{Digest, Sha256};
         let fingerprint = |ladder: Ladder| {
             let canonical: String = suite_plan(ladder)
@@ -5053,15 +5347,15 @@ mod smoke {
                 out
             })
         };
-        assert_eq!(SUITE_CONTRACT, 3, "bumping the contract re-pins these");
+        assert_eq!(SUITE_CONTRACT, 4, "bumping the contract re-pins these");
         assert_eq!(
             fingerprint(Ladder::Quick),
-            "e608af751464f895942db3ab82f59cb87a502e2742fa86d8e3c2b4de28353238",
+            "6054da7b81cc0ed3e9bfd4dd38172717443f9af9d0967b6952affc3470fea0e2",
             "the quick matrix changed without a contract bump"
         );
         assert_eq!(
             fingerprint(Ladder::Full),
-            "69b159fffb36ea5c8983d8f286c42ed63c8c50ec3b4b3e56dfeead5ff007c925",
+            "9dace9d32957cffc63fd27aaa55744a48232211999342e7426577ef571a5f715",
             "the full matrix changed without a contract bump"
         );
     }

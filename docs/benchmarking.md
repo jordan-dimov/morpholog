@@ -24,7 +24,7 @@ The three-way decomposition: `interpreted -> compiled` is what moving invariant 
 
 A scenario earns its place the way a worked example does: a real workload forced it, and the case carries that provenance (the suite prints the mapping above its table). The current families:
 
-- `write`, `read`, `asof`, `contend` - the original mechanism scenarios; their *complement* cases (`/noise`, `/grouped`, `/retract`, the workers=1 baseline) are deliberate controls, not defaults. `asof/revise` is the as-of shape a consumer forced: a register revised in vintages, its live set a hundredth of its history, so an as-of read's cost is history rather than answer. The concurrency law is held by **same-workload A/Bs**: `contend/shared` vs `contend/value-partitioned` (both ledger - value sharding does not relieve SSI pressure) and `contend/predicate-shared` vs `contend/disjoint` (both synthetic - footprint partitioning does). The two scaling curves use different workloads and never compare to each other. The controls are what let a reader say **why** a number moved, and they are the first thing a narrow optimisation regresses.
+- `write`, `read`, `asof`, `contend` - the original mechanism scenarios (`write/base` and `write/noise` time the first act after a rebuild and its DDL; `write/stream` times the acts that follow); their *complement* cases (`/noise`, `/grouped`, `/retract`, the workers=1 baseline) are deliberate controls, not defaults. `asof/revise` is the as-of shape a consumer forced: a register revised in vintages, its live set a hundredth of its history, so an as-of read's cost is history rather than answer. The concurrency law is held by **same-workload A/Bs**: `contend/shared` vs `contend/value-partitioned` (both ledger - value sharding does not relieve SSI pressure) and `contend/predicate-shared` vs `contend/disjoint` (both synthetic - footprint partitioning does). The two scaling curves use different workloads and never compare to each other. The controls are what let a reader say **why** a number moved, and they are the first thing a narrow optimisation regresses.
 - `import/core` - the in-process core of the embedder import/replay path (the workload that forced `propose --batch`; Redline's 130-act WAN seed; grid-mysteries' CI replay). Its ladder is deliberately small: per-commit cost grows with the book on the interpreted runtime, so the 0->N journey is roughly quadratic - the finding, not a reason to make the suite take days.
 - `wide/size`, `wide/arity` - the argument-count axis (the billing embedder's 13-ary `InvoiceLine`; the gallery tops out at 7-ary).
 
@@ -33,6 +33,16 @@ Deferred cases, provenance recorded so they arrive bench-first when wanted: the 
 ## Curves, not points
 
 The deliverable of a measurement is a **complexity-class claim** ("flat across a 100x state sweep", "linear in log length", "independent of unrelated-predicate count"), never a single number. Points invite tuning to the point; a curve shape across a ladder is much harder to game. Where an axis exists (`--noise-claims`, `--retract-fraction`, `--disjoint`, `--arity`), the suite runs its unflattering settings on purpose.
+
+## First act, steady stream and concurrent
+
+An act costs different amounts depending on what came just before it, so a number says which it is:
+
+- **First act, cold plans** (`write/base`, `write/noise`, and `write/stream`'s `stream_first_act`): the database and its indexes rebuilt, then one proposal. Every statement is planned afresh, but the buffers are warm: building the fixture has just read its pages, so nothing here measures a cold cache. Useful for what an act costs after provisioning or a deploy; misleading as the cost of an act. Measured on the ledger at 10,000 entries: about 9 ms for the first act, about 3 ms in a stream.
+- **Steady stream** (`write/stream`'s `stream_act_median` and `stream_act_p95`): the acts after it, one after another on the warm pool. **This is the measure a runtime change is judged on.**
+- **Concurrent stream** (`contend`, and `cases` outside the suite): throughput, retries and tail latency under contention.
+
+The bench checks the conditions it assumes rather than trusting them: every scenario that establishes an index condition refuses an index on `claims` that is neither one the schema creates nor one of Morpholog's compiled indexes, naming it. A constraint's index counts. The compiled indexes are checked against what the programme requires; the schema's are recognised by name only. An index left behind by an experiment once made a baseline look twice as fast.
 
 ## Repeats, `first`, and `steady median`
 
