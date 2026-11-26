@@ -14,8 +14,8 @@ use morpholog_postgres::{
 
 use crate::MigrateArgs;
 use crate::commands::{
-    AlreadyReported, connect_failed, preflight_code, preflight_failed, print_json, warn_if_open,
-    warn_if_roles_shared,
+    AlreadyReported, connect_failed, preflight_code, preflight_failed, print_json,
+    warn_if_roles_shared, warn_on_identity,
 };
 use morpholog_cli::envelopes::PreflightCode;
 
@@ -85,7 +85,7 @@ pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
     }
     // `--prepare` stops below the head, before the identity row exists.
     if report.is_current() {
-        warn_if_open(&pool).await?;
+        warn_on_identity(&pool).await?;
     }
     print_json(&report)?;
     // Also with nothing to apply: the index requirements come from the

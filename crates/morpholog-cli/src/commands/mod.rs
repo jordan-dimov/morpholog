@@ -368,17 +368,36 @@ pub(crate) fn read_anchor(
 }
 
 /// Say on stderr that the deployment is open, on every run that reads it,
-/// so a deployment nobody closed is never taken for a closed one.
-pub(crate) async fn warn_if_open(
+/// so a deployment nobody closed is never taken for a closed one; and
+/// that a closed one's root login is no longer the role it was closed
+/// under, before the root's first act is refused for it.
+pub(crate) async fn warn_on_identity(
     pool: &PgPool,
 ) -> anyhow::Result<morpholog_postgres::DeploymentIdentity> {
+    use morpholog_postgres::DeploymentIdentity;
     let identity = morpholog_postgres::deployment_identity(pool).await?;
-    if identity == morpholog_postgres::DeploymentIdentity::Open {
-        eprintln!(
+    match &identity {
+        DeploymentIdentity::Open => eprintln!(
             "note: this deployment is open: any login may assert an actor nobody \
              restricted. Close it, with its writers stopped, by \
              `morpholog init --skip-if-exists --root-actor ACTOR --root-login LOGIN`."
-        );
+        ),
+        DeploymentIdentity::Closed {
+            root_actor,
+            root_login,
+            root_login_matches: false,
+        } => eprintln!(
+            "warning: no role named `{root_login}` holds the OID this deployment was \
+             closed under, so acts as the root actor `{}` are refused. A restore onto \
+             another cluster gives roles new OIDs, and so does a role dropped and made \
+             again. Once you have checked that `{root_login}` is the intended principal, \
+             rebind it as the owner: UPDATE morpholog.deployment_identity SET \
+             root_login_oid = (SELECT oid FROM pg_roles WHERE rolname = '{}'); see \
+             docs/install.md, \"Restoring onto another cluster\"",
+            root_actor.as_str(),
+            root_login.replace('\'', "''"),
+        ),
+        DeploymentIdentity::Closed { .. } => {}
     }
     Ok(identity)
 }

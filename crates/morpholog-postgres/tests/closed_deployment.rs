@@ -132,7 +132,7 @@ async fn a_closed_deployment_admits_its_root_and_whom_the_root_grants() {
             close_and_grant(&admin, &root, &root_login, "risk_engine", &svc_login).await;
             assert!(matches!(
                 deployment_identity(&admin).await.unwrap(),
-                DeploymentIdentity::Closed { root_actor, root_login: l }
+                DeploymentIdentity::Closed { root_actor, root_login: l, root_login_matches: true }
                     if root_actor.as_str() == ROOT && l == root_login
             ));
 

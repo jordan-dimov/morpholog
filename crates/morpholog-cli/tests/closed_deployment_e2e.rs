@@ -247,3 +247,69 @@ async fn a_closed_init_that_fails_leaves_no_deployment() {
         assert_eq!(schema, None, "{login}: nothing was provisioned");
     }
 }
+
+/// A closed deployment restored onto another cluster holds its root
+/// login's old OID, so the root is refused. `check --database-url` and
+/// `migrate` say so before the first refused act, and the rebind they
+/// print, run as the owner, lets the root act again and stops the warning.
+/// The restore is modelled by the owner writing another OID into the
+/// identity row: the role keeps its name and gets a new OID.
+#[tokio::test(flavor = "current_thread")]
+async fn a_root_login_with_another_oid_is_named_and_rebound() {
+    let (admin, name, url) = scratch("rebind").await;
+    let me = common::session_user(&url).await;
+    let fixture = common::write_fixture("closed_e2e", PROGRAMME);
+    let file = fixture.to_str().unwrap();
+    let (status, _, stderr) = run(&[
+        "init",
+        "--database-url",
+        &url,
+        "--root-actor",
+        "root_admin",
+        "--root-login",
+        &me,
+    ]);
+    assert!(status.success(), "{stderr}");
+    let owner = PgPool::connect(&url).await.unwrap();
+    sqlx::raw_sql("UPDATE morpholog.deployment_identity SET root_login_oid = 1")
+        .execute(&owner)
+        .await
+        .unwrap();
+
+    let (_, _, check_moved) = run(&["check", file, "--database-url", &url]);
+    let (_, _, migrate_moved) = run(&["migrate", "--database-url", &url]);
+    let refused = note(&url, file, "root_admin");
+    let warning = format!("no role named `{me}` holds the OID");
+    let rebind = check_moved
+        .split("rebind it as the owner: ")
+        .nth(1)
+        .and_then(|rest| rest.split("; see docs/install.md").next())
+        .map(str::to_string);
+    if let Some(sql) = &rebind {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(sql.clone()))
+            .execute(&owner)
+            .await
+            .unwrap();
+    }
+    let (_, _, check_rebound) = run(&["check", file, "--database-url", &url]);
+    let (_, _, migrate_rebound) = run(&["migrate", "--database-url", &url]);
+    let as_root = note(&url, file, "root_admin");
+    owner.close().await;
+    drop_scratch(&admin, &name).await;
+
+    assert!(check_moved.contains(&warning), "{check_moved}");
+    assert!(migrate_moved.contains(&warning), "{migrate_moved}");
+    assert_eq!(refused.0.code(), Some(1), "{}", refused.2);
+    let refusal: serde_json::Value = serde_json::from_str(&refused.1).unwrap();
+    assert_eq!(refusal["code"], "actor_assertion_unauthorised", "{refusal}");
+    assert!(
+        rebind.is_some(),
+        "the warning prints the rebind: {check_moved}"
+    );
+    assert!(!check_rebound.contains("holds the OID"), "{check_rebound}");
+    assert!(
+        !migrate_rebound.contains("holds the OID"),
+        "{migrate_rebound}"
+    );
+    assert!(as_root.0.success(), "the rebound root acts: {}", as_root.2);
+}

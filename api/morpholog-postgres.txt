@@ -263,6 +263,7 @@ pub enum morpholog_postgres::DeploymentIdentity
 pub morpholog_postgres::DeploymentIdentity::Closed
 pub morpholog_postgres::DeploymentIdentity::Closed::root_actor: morpholog_core::ir::Subject
 pub morpholog_postgres::DeploymentIdentity::Closed::root_login: alloc::string::String
+pub morpholog_postgres::DeploymentIdentity::Closed::root_login_matches: bool
 pub morpholog_postgres::DeploymentIdentity::Open
 impl core::clone::Clone for morpholog_postgres::DeploymentIdentity
 pub fn morpholog_postgres::DeploymentIdentity::clone(&self) -> morpholog_postgres::DeploymentIdentity
