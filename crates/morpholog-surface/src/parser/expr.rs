@@ -495,38 +495,38 @@ where
         //
         // `0 <= rate <= 1` chains into an `and` of pairwise comparisons. Only ordered comparators
         // chain, all pointing the same way; a mixed chain is refused rather than guessed at.
+        let comparator = choice((
+            just(Token::Eq).to(CmpOp::Eq),
+            just(Token::Neq).to(CmpOp::Neq),
+            just(Token::Le).to(CmpOp::Compare(CompareOp::Le, OrderedDomain::Decimal)),
+            just(Token::Lt).to(CmpOp::Compare(CompareOp::Lt, OrderedDomain::Decimal)),
+            just(Token::Ge).to(CmpOp::Compare(CompareOp::Ge, OrderedDomain::Decimal)),
+            just(Token::Gt).to(CmpOp::Compare(CompareOp::Gt, OrderedDomain::Decimal)),
+            just(Token::KwOnOrBefore).to(CmpOp::Compare(CompareOp::Le, OrderedDomain::Date)),
+            just(Token::KwOnOrAfter).to(CmpOp::Compare(CompareOp::Ge, OrderedDomain::Date)),
+            // Contextual: identifiers everywhere else, so `before` and `after` stay
+            // usable as variable names.
+            contextual_cmp("before", CompareOp::Lt, OrderedDomain::Date),
+            contextual_cmp("after", CompareOp::Gt, OrderedDomain::Date),
+            contextual_cmp("at_or_before", CompareOp::Le, OrderedDomain::Timestamp),
+            contextual_cmp("strictly_before", CompareOp::Lt, OrderedDomain::Timestamp),
+            contextual_cmp("at_or_after", CompareOp::Ge, OrderedDomain::Timestamp),
+            contextual_cmp("strictly_after", CompareOp::Gt, OrderedDomain::Timestamp),
+            contextual_cmp("no_longer_than", CompareOp::Le, OrderedDomain::Duration),
+            contextual_cmp("shorter_than", CompareOp::Lt, OrderedDomain::Duration),
+            contextual_cmp("no_shorter_than", CompareOp::Ge, OrderedDomain::Duration),
+            contextual_cmp("longer_than", CompareOp::Gt, OrderedDomain::Duration),
+            just(Token::KwIn).to(CmpOp::In),
+        ));
         let value_comparison = arith
             .clone()
             .then(
-                choice((
-                    just(Token::Eq).to(CmpOp::Eq),
-                    just(Token::Neq).to(CmpOp::Neq),
-                    just(Token::Le).to(CmpOp::Compare(CompareOp::Le, OrderedDomain::Decimal)),
-                    just(Token::Lt).to(CmpOp::Compare(CompareOp::Lt, OrderedDomain::Decimal)),
-                    just(Token::Ge).to(CmpOp::Compare(CompareOp::Ge, OrderedDomain::Decimal)),
-                    just(Token::Gt).to(CmpOp::Compare(CompareOp::Gt, OrderedDomain::Decimal)),
-                    just(Token::KwOnOrBefore)
-                        .to(CmpOp::Compare(CompareOp::Le, OrderedDomain::Date)),
-                    just(Token::KwOnOrAfter)
-                        .to(CmpOp::Compare(CompareOp::Ge, OrderedDomain::Date)),
-                    // Contextual: identifiers everywhere else, so `before` and `after` stay
-                    // usable as variable names.
-                    contextual_cmp("before", CompareOp::Lt, OrderedDomain::Date),
-                    contextual_cmp("after", CompareOp::Gt, OrderedDomain::Date),
-                    contextual_cmp("at_or_before", CompareOp::Le, OrderedDomain::Timestamp),
-                    contextual_cmp("strictly_before", CompareOp::Lt, OrderedDomain::Timestamp),
-                    contextual_cmp("at_or_after", CompareOp::Ge, OrderedDomain::Timestamp),
-                    contextual_cmp("strictly_after", CompareOp::Gt, OrderedDomain::Timestamp),
-                    contextual_cmp("no_longer_than", CompareOp::Le, OrderedDomain::Duration),
-                    contextual_cmp("shorter_than", CompareOp::Lt, OrderedDomain::Duration),
-                    contextual_cmp("no_shorter_than", CompareOp::Ge, OrderedDomain::Duration),
-                    contextual_cmp("longer_than", CompareOp::Gt, OrderedDomain::Duration),
-                    just(Token::KwIn).to(CmpOp::In),
-                ))
-                .then(arith.clone())
-                .repeated()
-                .at_least(1)
-                .collect::<Vec<_>>(),
+                comparator
+                    .clone()
+                    .then(arith.clone())
+                    .repeated()
+                    .at_least(1)
+                    .collect::<Vec<_>>(),
             )
             .validate(|(lhs, links), e, emitter| {
                 let span: SimpleSpan = e.span();
@@ -611,6 +611,34 @@ where
                 Prop::Or(Vec::new())
             });
 
+        // Reached only once neither a claim or condition (plain-term arguments) nor a
+        // comparison fits: a call with a computed argument and no comparator after it.
+        let computed_call = ident
+            .then(
+                arith
+                    .clone()
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .collect::<Vec<ValueExpr>>()
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
+            )
+            .then_ignore(comparator.not())
+            .validate(|(name, _), e, emitter| {
+                emitter.emit(Rich::custom(
+                    e.span(),
+                    format!(
+                        "the arguments of `{name}` are plain terms, as a claim's are: a name, a \
+                         literal or a parameter, not a computed value. Name the value with \
+                         `let` and compare it with the field it constrains, or, for a \
+                         condition made of comparisons, write its comparison in place"
+                    ),
+                ));
+                Prop::Claim {
+                    predicate: name.into(),
+                    args: Vec::new(),
+                }
+            });
+
         // Value comparison first, so `amount <= 100` is not tried as a claim call.
         let comparison = choice((
             list_membership,
@@ -619,6 +647,7 @@ where
             claim_call,
             pre_expr,
             parenthesised_prop,
+            computed_call,
         ));
 
         // not_expr ::= "not" not_expr | comparison

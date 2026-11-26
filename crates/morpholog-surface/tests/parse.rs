@@ -1841,3 +1841,72 @@ transformation t(x):
         "the literal counterpart should have refined `x`"
     );
 }
+
+/// A computed value as a claim's or a condition's argument in a rule names the rule and both
+/// fixes, wherever a rule is written: an invariant, a definition, a `require`. A figure call
+/// with a computed argument that is compared still parses, and an unfinished comparison says
+/// nothing of plain terms.
+#[test]
+fn a_computed_rule_argument_names_the_rule() {
+    let head = "program book\n\
+                predicate Rest(side: Subject, trader: Subject, price: Decimal)\n\
+                define ahead(side, p, p2):\n    (side = #buy and p > p2) or (side = #sell and p < p2)\n\
+                define best(side) = (min(p | Rest(side, _, p)))\n";
+    let rule = "the arguments of `{}` are plain terms, as a claim's are";
+    for (body, callee) in [
+        (
+            "invariant i:\n    Rest(s, t, p) implies not ahead(s, best(s), p)\n",
+            "ahead",
+        ),
+        (
+            "invariant i:\n    Rest(s, t, p) implies not Rest(s, t, p + 1)\n",
+            "Rest",
+        ),
+        ("define d(s, p):\n    ahead(s, p * 2, p)\n", "ahead"),
+        (
+            "transformation t(s, p: Decimal):\n    require ahead(s, best(s), p)\n",
+            "ahead",
+        ),
+    ] {
+        let errors = parse_program(&format!("{head}{body}")).expect_err(body);
+        let message = rule.replace("{}", callee);
+        assert!(
+            errors.iter().any(|d| d.message.contains(&message)
+                && d.message
+                    .contains("compare it with the field it constrains")
+                && d.message.contains("write its comparison in place")),
+            "{body}: {errors:?}"
+        );
+    }
+    parse_program(&format!(
+        "{head}invariant i:\n    Rest(s, t, p) implies best(s) <= p + 1\n"
+    ))
+    .expect("a compared figure call with a computed argument parses");
+    let errors = parse_program(&format!("{head}invariant i:\n    best(s) + 1 <=\n"))
+        .expect_err("an unfinished comparison");
+    assert!(
+        errors.iter().all(|d| !d.message.contains("plain terms")),
+        "{errors:?}"
+    );
+}
+
+/// A computed `let` as a call's argument says to match a variable and compare it, and, since
+/// the call may be a condition that binds nothing, to write its comparison in place instead.
+#[test]
+fn a_computed_let_as_a_call_argument_names_the_in_place_comparison() {
+    let errors = parse_program(
+        "program book\n\
+         predicate Rest(side: Subject, trader: Subject, price: Decimal)\n\
+         define ahead(side, p, p2):\n    (side = #buy and p > p2) or (side = #sell and p < p2)\n\
+         invariant i:\n    let bp = (min(p | Rest(#buy, _, p)))\n    \
+         Rest(s, t, p) implies not ahead(s, bp, p)\n",
+    )
+    .expect_err("a computed let as a condition's argument");
+    assert!(
+        errors.iter().any(|d| d.message.contains(
+            "match a variable there and compare it with `bp` separately; if `ahead` is a \
+             condition made of comparisons, write its comparison in place with `bp` instead"
+        )),
+        "{errors:?}"
+    );
+}
