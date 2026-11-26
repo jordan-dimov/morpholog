@@ -513,6 +513,7 @@ class Morpholog:
         dry_run: bool = False,
         check: bool = False,
         prune: bool = False,
+        history: bool = False,
         with_programs: list[str] | None = None,
         timeout: float | None = None,
     ) -> envelopes.ProvisionReport:
@@ -540,6 +541,10 @@ class Morpholog:
             if not client.provision_indexes(check=True).is_current:
                 ...
 
+        `history` also builds the audit log's index that history views
+        and their lookups read through, reported as `report.history`;
+        with `check`, the report is current only once that index exists.
+
         ``timeout`` bounds this one call and defaults to unbounded,
         ignoring the client-wide timeout: an index build over a large
         table is the legitimate long case. A build cut short leaves an
@@ -553,6 +558,8 @@ class Morpholog:
             args.append("--check")
         if prune:
             args.append("--prune")
+        if history:
+            args.append("--history")
         proc = self._run(args, timeout=timeout)
         if not proc.stdout.strip():
             raise MorphologError(f"`{_redact_argv(args)}`:\n{self._redact_stderr(proc.stderr)}")

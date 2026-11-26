@@ -264,6 +264,11 @@ class AdapterDiscrimination(unittest.TestCase):
             argv = argv_after(lambda: self.client.provision_indexes(check=True))
             self.assertIn("--check", argv)
             self.assertNotIn("--dry-run", argv)
+            self.assertNotIn("--history", argv)
+
+            argv = argv_after(lambda: self.client.provision_indexes(check=True, history=True))
+            self.assertIn("--check", argv)
+            self.assertIn("--history", argv)
 
     def test_a_provisioning_conflict_is_a_report_not_a_raise(self):
         # The binary exits non-zero on a conflict with the report already

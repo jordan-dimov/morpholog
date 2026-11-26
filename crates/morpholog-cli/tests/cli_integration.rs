@@ -5773,6 +5773,60 @@ fn a_bare_database_name_is_told_the_url_form() {
     );
 }
 
+/// The generated Python client builds the audit log's history index and
+/// lets a deploy gate on it, through the real binary: a check is not
+/// current before the build and is after it.
+#[tokio::test(flavor = "current_thread")]
+async fn the_python_client_builds_and_checks_the_history_index() {
+    reset_db().await;
+    let pool = PgPool::connect(&database_url()).await.unwrap();
+    let drop = format!(
+        "DROP INDEX IF EXISTS morpholog.{}",
+        morpholog_postgres::HISTORY_INDEX
+    );
+    sqlx::raw_sql(sqlx::AssertSqlSafe(drop.clone()))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let probe = r#"
+import sys
+sys.path.insert(0, sys.argv[1])
+from python_client.adapter import Morpholog
+client = Morpholog(sys.argv[2], sys.argv[3], binary=sys.argv[4])
+before = client.provision_indexes(check=True, history=True)
+built = client.provision_indexes(history=True)
+after = client.provision_indexes(check=True, history=True)
+print(before.is_current, before.history.action, built.applied, built.history.action,
+      after.is_current, after.history.action)
+"#;
+    let output = Command::new("python3")
+        .args([
+            "-c",
+            probe,
+            common::repo_root()
+                .join("crates/morpholog-cli/templates")
+                .to_str()
+                .unwrap(),
+            &ledger_morph(),
+            &database_url(),
+            common::bin(),
+        ])
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .output()
+        .expect("python3 runs the client");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(drop))
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "False create True create True keep",
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// A database-backed report that cannot be produced says why by a code:
 /// `check --json`, `provision indexes --json` and `migrate` print one
 /// `preflight_error` on stdout, keep the prose on stderr, and exit 1.
