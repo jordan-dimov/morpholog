@@ -224,8 +224,10 @@ pub(crate) async fn connect(url: &str) -> anyhow::Result<PgPool> {
 pub(crate) async fn connect_unchecked(url: &str) -> anyhow::Result<PgPool> {
     // `postgres:///mydb` means "the OS user" to every other Postgres
     // tool; sqlx 0.9 alone reads it as `anonymous`.
-    let url = morpholog_postgres::with_connection_defaults(url);
-    PgPool::connect(&url).await.map_err(connect_failed)
+    let defaulted = morpholog_postgres::with_connection_defaults(url);
+    PgPool::connect(&defaulted)
+        .await
+        .map_err(|err| connect_failed(url, err))
 }
 
 /// `connect`, capped at one connection, for sessions. A lockstep session
@@ -233,10 +235,10 @@ pub(crate) async fn connect_unchecked(url: &str) -> anyhow::Result<PgPool> {
 /// hold a session open. Checked the same way, so a session on a database
 /// this binary cannot serve refuses before its ready line.
 pub(crate) async fn connect_single(url: &str) -> anyhow::Result<PgPool> {
-    let url = morpholog_postgres::with_connection_defaults(url);
-    let pool = morpholog_postgres::single_connection_pool(&url)
+    let defaulted = morpholog_postgres::with_connection_defaults(url);
+    let pool = morpholog_postgres::single_connection_pool(&defaulted)
         .await
-        .map_err(connect_failed)?;
+        .map_err(|err| connect_failed(url, err))?;
     morpholog_postgres::require_current_schema(&pool).await?;
     Ok(pool)
 }
@@ -244,24 +246,50 @@ pub(crate) async fn connect_single(url: &str) -> anyhow::Result<PgPool> {
 /// The connection itself failed, before any query. Its own type, so a
 /// command can tell it from every later failure without reading prose.
 #[derive(Debug)]
-pub(crate) struct ConnectFailed(Box<dyn std::error::Error + Send + Sync>);
+pub(crate) struct ConnectFailed {
+    source: Box<dyn std::error::Error + Send + Sync>,
+    hint: Option<String>,
+}
 
 impl std::fmt::Display for ConnectFailed {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("failed to connect to PostgreSQL")
+        f.write_str("failed to connect to PostgreSQL")?;
+        match &self.hint {
+            Some(hint) => write!(f, " ({hint})"),
+            None => Ok(()),
+        }
     }
 }
 
 impl std::error::Error for ConnectFailed {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&*self.0)
+        Some(&*self.source)
     }
 }
 
+/// `url` is the value as given. It is echoed only when it is a bare
+/// database name, which cannot carry a password.
 pub(crate) fn connect_failed(
+    url: &str,
     err: impl Into<Box<dyn std::error::Error + Send + Sync>>,
 ) -> anyhow::Error {
-    anyhow::Error::new(ConnectFailed(err.into()))
+    let bare_name = !url.is_empty()
+        && url
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '$'));
+    let hint = if url.contains("://") {
+        None
+    } else if bare_name {
+        Some(format!(
+            "`{url}` is a database name, not a URL: did you mean `postgres:///{url}`?"
+        ))
+    } else {
+        Some("the value is not a URL: give one such as `postgres:///DBNAME`".to_string())
+    };
+    anyhow::Error::new(ConnectFailed {
+        source: err.into(),
+        hint,
+    })
 }
 
 /// The published code for a failure met while connecting and asking

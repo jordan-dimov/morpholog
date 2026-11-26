@@ -27,7 +27,7 @@ pub(crate) async fn run(args: MigrateArgs) -> anyhow::Result<()> {
     // own second one.
     let pool = single_connection_pool(&with_connection_defaults(&args.db.database_url))
         .await
-        .map_err(|err| preflight_failed(true, connect_failed(err)))?;
+        .map_err(|err| preflight_failed(true, connect_failed(&args.db.database_url, err)))?;
 
     let mut before = match migration_status(&pool).await {
         // Only `--check` reports this state; `migrate` has nothing to apply.
