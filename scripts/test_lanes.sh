@@ -7,9 +7,10 @@
 # whole cluster, so the run first checks that no two tests can make the
 # same one.
 #
-# Each binary still runs its own tests one at a time, as under cargo.
-# Every binary runs; the script exits non-zero if any failed, and prints
-# each failing binary's output.
+# Each lane runs its tests one at a time, as under cargo; a binary of
+# many tests is split into several lanes (per_lane below). Every lane
+# runs; the script exits non-zero if any failed, and prints each failing
+# lane's output.
 #
 # Usage: scripts/test_lanes.sh [jobs]
 #   DATABASE_URL  the disposable cluster's database to copy (never :5432);
@@ -125,6 +126,67 @@ if $skipped_pg; then
     echo "  DATABASE_URL not set; skipping the PG-backed packages (${pg_packages[*]})."
 fi
 
+# A binary of more than `per_lane` tests is dealt round-robin into lanes
+# of at most that many, each lane its own process and its own database.
+# Every test whose function makes, drops or counts roles (role_pattern,
+# found in the sources beside the binary's root) goes in the first lane,
+# so a file's roles are still made one test at a time.
+per_lane=100
+python3 - "$work/run.tsv" "$work" "$per_lane" "$role_pattern" > "$work/lanes.tsv" <<'EOF'
+import os
+import re
+import subprocess
+import sys
+
+run_tsv, work, per_lane, role_pattern = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+role = re.compile(role_pattern, re.IGNORECASE)
+function = re.compile(r"\bfn\s+([A-Za-z0-9_]+)\s*[<(]")
+
+
+def role_functions(root):
+    names = set()
+    for base, _, files in os.walk(os.path.dirname(root)):
+        for name in files:
+            if not name.endswith(".rs"):
+                continue
+            text = open(os.path.join(base, name), encoding="utf-8").read()
+            starts = list(function.finditer(text))
+            for i, m in enumerate(starts):
+                end = starts[i + 1].start() if i + 1 < len(starts) else len(text)
+                if role.search(text, m.start(), end):
+                    names.add(m.group(1))
+    return names
+
+
+for n, line in enumerate(open(run_tsv, encoding="utf-8")):
+    package, directory, exe, src = line.rstrip("\n").split("\t")
+    listed = subprocess.run(
+        [exe, "--list", "--format", "terse"],
+        cwd=directory,
+        env={**os.environ, "CARGO_MANIFEST_DIR": directory},
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    tests = [t[: -len(": test")] for t in listed.splitlines() if t.endswith(": test")]
+    if len(tests) <= per_lane:
+        print("\t".join([package, directory, exe, src, "-", "-"]))
+        continue
+    makers = role_functions(src)
+    pinned = [t for t in tests if t.rsplit("::", 1)[-1] in makers]
+    rest = [t for t in tests if t not in set(pinned)]
+    lanes = [[] for _ in range(-(-len(tests) // per_lane))]
+    lanes[0] = pinned
+    for i, t in enumerate(rest, start=1 if pinned else 0):
+        lanes[i % len(lanes)].append(t)
+    for k, names in enumerate(lanes):
+        path = f"{work}/names.{n}.{k}"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("".join(t + "\n" for t in names))
+        label = f"{src} (lane {k + 1} of {len(lanes)})"
+        print("\t".join([package, directory, exe, label, path, str(len(names))]))
+EOF
+
 if [ -n "${DATABASE_URL:-}" ]; then
     source_db=${DATABASE_URL%%\?*}
     source_db=${source_db##*/}
@@ -137,11 +199,17 @@ if [ -n "${DATABASE_URL:-}" ]; then
     template="morpholog_lanes_${run}_tpl"
 fi
 
-# run_one INDEX PACKAGE DIR EXE SRC: run one binary, its own database if
-# PG-backed, its output to a file, its verdict to another.
+# run_one INDEX PACKAGE DIR EXE SRC NAMES COUNT: run one lane, its own
+# database if PG-backed, its output to a file, its verdict to another.
+# A lane of named tests runs exactly those, and fails unless libtest ran
+# that many.
 run_one() {
-    local index=$1 package=$2 dir=$3 exe=$4 src=$5
-    local log="$work/out.$index" env_url=()
+    local index=$1 package=$2 dir=$3 exe=$4 src=$5 names=$6 count=$7
+    local log="$work/out.$index" env_url=() filter=()
+    if [ "$names" != - ]; then
+        mapfile -t filter < "$names"
+        filter=(--exact "${filter[@]}")
+    fi
     if is_pg "$package"; then
         local db="morpholog_lanes_${run}_$index"
         psql -X -q "$(db_url postgres)" -c "CREATE DATABASE \"$db\" TEMPLATE \"$template\"" >/dev/null
@@ -150,8 +218,12 @@ run_one() {
     fi
     local start rc=0
     start=$(date +%s%N)
-    (cd "$dir" && env "${env_url[@]}" CARGO_MANIFEST_DIR="$dir" RUST_TEST_THREADS=1 "$exe") \
-        > "$log" 2>&1 || rc=$?
+    (cd "$dir" && env "${env_url[@]}" CARGO_MANIFEST_DIR="$dir" RUST_TEST_THREADS=1 \
+        "$exe" "${filter[@]}") > "$log" 2>&1 || rc=$?
+    if [ "$names" != - ] && ! grep -qE "^running $count tests?$" "$log"; then
+        echo "test_lanes: this lane was given $count tests, and libtest ran another number" >> "$log"
+        [ "$rc" != 0 ] || rc=1
+    fi
     printf '%s\t%s\t%s\t%s\n' "$rc" "$(($(date +%s%N) - start))" "$package" "$src" \
         > "$work/verdict.$index"
 }
@@ -159,15 +231,15 @@ export -f run_one is_pg db_url
 export work template run DATABASE_URL
 export pg_packages_list="${pg_packages[*]}"
 
-# run_line LINE: one binary, its fields tab-separated.
+# run_line LINE: one lane, its fields tab-separated.
 run_line() {
-    local index package dir exe src
-    IFS=$'\t' read -r index package dir exe src <<< "$1"
+    local index package dir exe src names count
+    IFS=$'\t' read -r index package dir exe src names count <<< "$1"
     read -r -a pg_packages <<< "$pg_packages_list"
-    run_one "$index" "$package" "$dir" "$exe" "$src"
+    run_one "$index" "$package" "$dir" "$exe" "$src" "$names" "$count"
 }
 export -f run_line
-awk -F'\t' '{ printf "%d\t%s\t%s\t%s\t%s\n", NR, $1, $2, $3, $4 }' "$work/run.tsv" \
+awk -F'\t' '{ printf "%d\t%s\n", NR, $0 }' "$work/lanes.tsv" \
     | xargs -P "$jobs" -d '\n' -I{} bash -c 'run_line "$1"' _ {}
 
 failed=0
@@ -183,7 +255,7 @@ for verdict in "$work"/verdict.*; do
         cat "$work/out.${verdict##*.}"
     fi
 done
-printf '\n%d test binaries, %d failed; summed binary time %ss\n' "$total" "$failed" \
+printf '\n%d test lanes, %d failed; summed lane time %ss\n' "$total" "$failed" \
     "$(awk -v ns="$summed" 'BEGIN { printf "%.1f", ns / 1e9 }')"
 echo "slowest:"
 cat "$work"/verdict.* | sort -t$'\t' -k2 -rn | head -6 \
