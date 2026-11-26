@@ -1440,9 +1440,9 @@ pub(crate) struct InspectAuditArgs {
 
     /// Decode each transition's asserted/retracted claims by declared
     /// field name under this `.morph` programme's authority. A
-    /// returned claim whose predicate is undeclared, or whose arity
-    /// disagrees with its declaration, is a hard error naming both
-    /// sides.
+    /// returned claim whose predicate is undeclared, whose arity
+    /// disagrees with its declaration, or whose field holds another kind
+    /// than the one declared, is a hard error naming both sides.
     #[arg(long, value_name = "FILE")]
     pub(crate) named: Option<PathBuf>,
 
@@ -1517,9 +1517,10 @@ pub(crate) struct InspectClaimsArgs {
     /// object using the declared vocabulary of this `.morph` file -
     /// the read-side mirror of `--args-named`. With it, the programme
     /// becomes the authority: a returned claim whose predicate is
-    /// undeclared, or whose arity disagrees with its declaration, is a
-    /// hard error naming both sides (programme/database skew), never a
-    /// silent skip. Composes with `--predicate` and `--as-of`.
+    /// undeclared, whose arity disagrees with its declaration, or whose
+    /// field holds another kind than the one declared, is a hard error
+    /// naming both sides (programme/database skew), never a silent skip
+    /// or a conversion. Composes with `--predicate` and `--as-of`.
     #[arg(long = "named", value_name = "FILE")]
     pub(crate) named: Option<PathBuf>,
 

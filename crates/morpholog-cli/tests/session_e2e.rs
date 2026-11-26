@@ -329,6 +329,61 @@ async fn operational_failure_aborts_with_a_nonzero_exit_not_a_receipt() {
     );
 }
 
+/// The fixture's `Account` with `opened_on` declared a Subject, though
+/// the fixture stores a Date there, and a derived claim that carries it.
+const SKEWED_FIXTURE: &str = "\
+program session_fixture
+
+predicate Account(account: Subject, opened_on: Subject)
+predicate Opened(account: Subject, opened_on: Subject)
+
+derived Opened(account, opened_on):
+    over Account(account, opened_on)
+";
+
+/// A session's named reads refuse a stored field of another kind than the
+/// programme declares, as the one-shot reads do: the session aborts, and
+/// the client gets no rows to decode.
+#[tokio::test]
+async fn a_named_read_of_a_field_of_another_kind_aborts_the_session() {
+    reset_db().await;
+    let fixture = common::write_fixture("session_fixture", FIXTURE);
+    let mut child = spawn_session(&fixture.path);
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "{}", REQUESTS[0]).unwrap();
+    drop(stdin);
+    let opened = child.wait_with_output().unwrap();
+    assert!(
+        String::from_utf8(opened.stdout)
+            .unwrap()
+            .contains("committed"),
+        "the account opens"
+    );
+
+    let skewed = common::write_fixture("session_skewed", SKEWED_FIXTURE);
+    for request in [
+        r#"{"named":true,"op":"claims","predicates":["Account"]}"#,
+        r#"{"name":"Opened","named":true,"op":"derived"}"#,
+        r#"{"named":true,"op":"audit"}"#,
+    ] {
+        let mut child = spawn_session(&skewed.path);
+        let mut stdin = child.stdin.take().unwrap();
+        writeln!(stdin, "{request}").unwrap();
+        drop(stdin);
+        let output = child.wait_with_output().unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(!output.status.success(), "{request} must abort: {stdout}");
+        assert_eq!(stdout.lines().count(), 1, "the ready line only: {stdout}");
+        assert!(
+            stderr.contains("field `opened_on` of claim")
+                && stderr.contains("holds Date")
+                && stderr.contains("declares it Subject"),
+            "{request} names the field and both kinds: {stderr}"
+        );
+    }
+}
+
 /// A programme whose actor policy allows one login only. The grant is a
 /// claim compared with `session_user` as text, so naming some other login
 /// makes this connection unauthorised, with no role switching.

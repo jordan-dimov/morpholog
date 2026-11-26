@@ -3704,6 +3704,86 @@ async fn inspect_claims_named_hard_errors_on_programme_database_skew() {
     );
 }
 
+/// A programme that declares a stored field another kind. The ledger
+/// stores `posting_date` as a Subject (`"2026-04-15"`); a programme that
+/// declares it a Date would read a value the kernel never governed as a
+/// date. Every named read refuses it before the kind is dropped, and a
+/// field declared `Any` still takes it.
+fn ledger_with_posting_date(kind: &str) -> tempfile::NamedTempFile {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    let source = format!(
+        "program other\n\
+         predicate JournalEntry(entry_id: Subject, posting_date: {kind}, period: Subject)\n\
+         predicate EntryPosted(entry_id: Subject, posting_date: {kind})\n\
+         derived EntryPosted(entry_id, posting_date):\n    \
+         over JournalEntry(entry_id: entry_id, posting_date: posting_date, ..)\n"
+    );
+    std::io::Write::write_all(&mut file, source.as_bytes()).unwrap();
+    file
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_named_read_refuses_a_stored_field_of_another_kind_on_every_surface() {
+    reset_db().await;
+    let tid = post_balanced_entry("entry_001", 100).to_string();
+    let date = ledger_with_posting_date("Date");
+    let date = date.path().to_str().unwrap();
+    let reads: [&[&str]; 4] = [
+        &[
+            "inspect",
+            "claims",
+            "--predicate",
+            "JournalEntry",
+            "--named",
+            date,
+        ],
+        &[
+            "inspect",
+            "claims",
+            "--predicate",
+            "JournalEntry",
+            "--as-of",
+            &tid,
+            "--named",
+            date,
+        ],
+        &["inspect", "audit", "--named", date],
+        &["inspect", "derived", date, "EntryPosted", "--named"],
+    ];
+    for read in reads {
+        let (status, stdout, stderr) = run_cli(read);
+        assert!(!status.success(), "{read:?} must refuse; stdout: {stdout}");
+        assert!(
+            stderr.contains("field `posting_date` of claim")
+                && stderr.contains("holds Subject")
+                && stderr.contains("declares it Date")
+                && stderr.contains("skew"),
+            "{read:?} names the field and both kinds: {stderr}"
+        );
+        assert!(
+            !stdout.contains("2026-04-15"),
+            "{read:?} printed the value: {stdout}"
+        );
+    }
+
+    let any = ledger_with_posting_date("Any");
+    let any = any.path().to_str().unwrap();
+    let (status, stdout, stderr) = run_cli(&[
+        "inspect",
+        "claims",
+        "--predicate",
+        "JournalEntry",
+        "--named",
+        any,
+    ]);
+    assert!(
+        status.success(),
+        "a field declared Any takes any kind: {stderr}"
+    );
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(rows[0]["args"]["posting_date"], "2026-04-15", "{stdout}");
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn quantity_params_flow_bare_through_the_named_codec_end_to_end() {
     reset_db().await;
