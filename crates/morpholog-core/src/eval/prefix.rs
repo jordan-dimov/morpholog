@@ -1241,4 +1241,34 @@ mod tests {
             assert_eq!(memo.prefix_work().1, from_group, "{why}");
         }
     }
+
+    /// One memo, a different `exists` at one address each time round: a
+    /// node built on the stack in a loop reuses its slot, so the memo
+    /// must not answer one from another's group.
+    #[test]
+    fn a_reused_address_is_not_taken_for_the_same_exists() {
+        let state = lots();
+        let memo = Memo::default();
+        let b = bind(&[("c", subject("c1")), ("k", decimal("2"))]);
+        for op in [
+            CompareOp::Lt,
+            CompareOp::Le,
+            CompareOp::Gt,
+            CompareOp::Ge,
+            CompareOp::Lt,
+        ] {
+            let test = exists(
+                "t",
+                and(vec![
+                    claim("Lot", vec![var("c"), var("k2"), var("q"), var("t")]),
+                    cmp(op, "k2", "k"),
+                ]),
+            );
+            assert_eq!(
+                holds(&test, &state, &[], &b, Some(&memo)),
+                holds(&test, &state, &[], &b, None),
+                "{op:?}"
+            );
+        }
+    }
 }
