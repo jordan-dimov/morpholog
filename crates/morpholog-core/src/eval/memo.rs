@@ -18,10 +18,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::fold::{Node, walk_value};
-use crate::ir::{Term, Unit, ValueExpr, Var};
+use crate::ir::{Prop, Term, Unit, ValueExpr, Var};
 use crate::state::EvalValue;
 
-use super::prefix::{Group, Shape, recognise};
+use super::prefix::{Group, Shape, exists_as_count, recognise};
 use super::{EvalContext, EvalError};
 
 #[cfg(feature = "memo-differential")]
@@ -52,6 +52,9 @@ pub(crate) struct Memo {
     /// Keyed by structure, not address: a node built during evaluation
     /// (an `xor` lowered on the fly) can reuse a freed address.
     entries: RefCell<HashMap<ValueExpr, Entry>>,
+    /// Each `exists` met, as the count it is answered through when that
+    /// count is a sum over a set in an order.
+    exists: RefCell<HashMap<Prop, Option<Rc<ValueExpr>>>>,
     computed: Cell<usize>,
     groups_built: Cell<usize>,
     probes_answered: Cell<usize>,
@@ -137,8 +140,12 @@ impl Memo {
         {
             return found.clone();
         }
-        if let Some(answer) = shape.and_then(|shape| self.prefix_sum(node, &mentions, &shape, ctx))
-        {
+        if let Some(answer) = shape.and_then(|shape| {
+            let group = self.group(node, &mentions, &shape, ctx)?;
+            let answer = shape.answer(&group, ctx.bindings)?;
+            self.probes_answered.set(self.probes_answered.get() + 1);
+            Some(answer)
+        }) {
             return answer;
         }
         let result = compute();
@@ -166,15 +173,39 @@ impl Memo {
         found
     }
 
-    /// The sum through its sorted group, built once per group, or `None`
-    /// for the direct path.
-    fn prefix_sum(
+    /// Whether `exists` holds, answered from the sorted group of the
+    /// count it asks, or `None` for the direct path.
+    pub(crate) fn exists(&self, exists: &Prop, ctx: &EvalContext<'_>) -> Option<bool> {
+        let known = self.exists.borrow().get(exists).cloned();
+        let count = match known {
+            Some(count) => count?,
+            None => {
+                let count = exists_as_count(exists)
+                    .filter(|count| recognise(count, ctx.definitions).is_some())
+                    .map(Rc::new);
+                self.exists
+                    .borrow_mut()
+                    .insert(exists.clone(), count.clone());
+                count?
+            }
+        };
+        let (mentions, shape) = self.entry(&count, ctx);
+        let shape = shape?;
+        let group = self.group(&count, &mentions, &shape, ctx)?;
+        let holds = shape.any_before(&group, ctx.bindings)?;
+        self.probes_answered.set(self.probes_answered.get() + 1);
+        Some(holds)
+    }
+
+    /// The sorted group for this entry, built once per group, or `None`
+    /// when the shape does not apply here.
+    fn group(
         &self,
         node: &ValueExpr,
         mentions: &[Var],
         shape: &Shape,
         ctx: &EvalContext<'_>,
-    ) -> Option<Result<EvalValue, EvalError>> {
+    ) -> Option<Rc<Group>> {
         if !shape.applies(ctx.bindings) {
             return None;
         }
@@ -197,9 +228,7 @@ impl Memo {
                 group
             }
         };
-        let answer = shape.answer(&group, ctx.bindings)?;
-        self.probes_answered.set(self.probes_answered.get() + 1);
-        Some(answer)
+        Some(group)
     }
 
     /// How many aggregates this evaluation actually computed.

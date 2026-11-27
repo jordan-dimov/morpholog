@@ -1,8 +1,10 @@
 //! A sum over a set in an order, asked once per row of the order, is
-//! answered from one sorted group per act, and that changes no result.
-//! A matching walk that takes from a book in price and time priority,
-//! and an allocation in rank order, decide the same streams of acts with
-//! the memo on and off: every outcome, trace and explanation, compared as
+//! answered from one sorted group per act, and so is an `exists` asking
+//! whether anything comes first; that changes no result. A matching walk
+//! that takes from a book in price and time priority, an allocation in
+//! rank order, and the same two orders asked as "nothing of mine ahead of
+//! this" and "nothing ranked before this", decide the same streams of acts
+//! with the memo on and off: every outcome, trace and explanation, compared as
 //! text so a decimal's scale counts. The books have equal prices, mixed
 //! scales, both sides and a trader meeting their own orders; some states
 //! hold a rank that is not a decimal, so the errors are compared too. Each
@@ -25,6 +27,8 @@ predicate Trade(trade: Subject, taker: Subject, maker: Subject, price: Decimal, 
 predicate Want(want: Subject, item: Subject, rank: Any, qty: Decimal)
 predicate Stock(item: Subject, qty: Decimal)
 predicate Allotted(want: Subject, qty: Decimal)
+predicate Clear(order: Subject)
+predicate First(want: Subject)
 
 -- (p, s) comes before (p2, s2) in the walk of the side `side` takes from.
 define before(side, p, s, p2, s2):
@@ -39,6 +43,10 @@ define ahead_of(contract, side, price, trader, p, s) = (sum(q2 | meets(contract,
     r2, rt2, p2, s2, q2) and rt2 != trader and before(side, p2, s2, p, s)))
 
 define ranked_before(item, r) = (sum(q2 | Want(w2, item, r2, q2) and r2 < r))
+
+-- Whether the trader has an order of their own the walk meets first.
+define own_ahead(contract, side, price, trader, p, s):
+    exists o: meets(contract, side, price, o, trader, p2, s2, _) and before(side, p2, s2, p, s)
 
 invariant allotments_follow_rank:
     Allotted(w, a) and Want(w, item, r, q) and Stock(item, st) implies a + ranked_before(item, r) <= st
@@ -66,6 +74,21 @@ transformation submit(order, contract, side, price: Decimal, quantity: Decimal):
                     if take < q:
                         let rest = q - take
                         admit Resting(r, contract, rt, #buy, p, s, rest)
+
+transformation clear(contract, side, price: Decimal):
+    if side = #buy:
+        for Resting(r, contract, rt, #sell, p, s, q):
+            if not own_ahead(contract, side, price, actor, p, s):
+                admit Clear(r)
+    if side = #sell:
+        for Resting(r, contract, rt, #buy, p, s, q):
+            if not own_ahead(contract, side, price, actor, p, s):
+                admit Clear(r)
+
+transformation first(item):
+    for Want(w, item, r, q):
+        if not (exists w2: Want(w2, item, r2, _) and r2 < r):
+            admit First(w)
 
 transformation allot(item):
     bind Stock(item, stock)
@@ -181,15 +204,30 @@ fn acts(seed: u64) -> Vec<(String, Vec<EvalValue>, String)> {
     for item in ["i1", "i2"] {
         out.push(("allot".to_string(), vec![subject(item)], "t0".to_string()));
     }
+    // Drawn apart, so the streams above stay as they were.
+    let mut d = Draw(seed ^ 0x51ed);
+    for _ in 0..3 {
+        let side = if d.next(2) == 0 { "buy" } else { "sell" };
+        let args = vec![
+            subject(if d.next(5) == 0 { "c2" } else { "c1" }),
+            subject(side),
+            price(&mut d),
+        ];
+        out.push(("clear".to_string(), args, format!("t{}", d.next(3))));
+    }
+    for item in ["i1", "i2"] {
+        out.push(("first".to_string(), vec![subject(item)], "t0".to_string()));
+    }
     out
 }
 
 /// Everything the kernel answers about one stream, as text, and how
-/// many trades it admitted.
-fn answers(program: &Program, seed: u64) -> (Vec<String>, usize) {
+/// many trades and clear or first orders it admitted.
+fn answers(program: &Program, seed: u64) -> (Vec<String>, usize, usize) {
     let mut pre = state(seed);
     let mut out = Vec::new();
     let mut trades = 0;
+    let mut firsts = 0;
     for (name, args, actor) in acts(seed) {
         let t = program
             .transformations
@@ -214,10 +252,14 @@ fn answers(program: &Program, seed: u64) -> (Vec<String>, usize) {
                 .iter()
                 .filter(|c| c.predicate.as_str() == "Trade")
                 .count();
+            firsts += asserted_claims
+                .iter()
+                .filter(|c| matches!(c.predicate.as_str(), "Clear" | "First"))
+                .count();
             pre = candidate_state;
         }
     }
-    (out, trades)
+    (out, trades, firsts)
 }
 
 #[test]
@@ -226,18 +268,27 @@ fn sorted_groups_change_no_answer() {
     program.validated().expect("the programme validates");
     let mut compared = 0;
     let mut trades = 0;
+    let mut firsts = 0;
+    let mut refused = 0;
     for seed in 0..120 {
         morpholog_core::set_memo(false);
-        let (off, _) = answers(&program, seed);
+        let (off, _, _) = answers(&program, seed);
         morpholog_core::set_memo(true);
-        let (on, traded) = answers(&program, seed);
+        let (on, traded, first) = answers(&program, seed);
         assert_eq!(on.len(), off.len());
         for (i, (on, off)) in on.iter().zip(&off).enumerate() {
             assert_eq!(on, off, "seed {seed}, answer {i}");
         }
         trades += traded;
+        firsts += first;
+        refused += on
+            .iter()
+            .filter(|a| a.contains("TypeMismatch") || a.contains("type_mismatch"))
+            .count();
         compared += on.len();
     }
-    assert!(compared >= 1900, "answers compared: {compared}");
+    assert!(compared >= 3000, "answers compared: {compared}");
     assert!(trades > 100, "trades admitted: {trades}");
+    assert!(firsts > 100, "clear and first orders admitted: {firsts}");
+    assert!(refused > 0, "errors compared: {refused}");
 }

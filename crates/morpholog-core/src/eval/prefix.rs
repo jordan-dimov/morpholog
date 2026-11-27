@@ -1,13 +1,16 @@
 //! A sum over a set, asked once per row of that set's order: "the total
-//! of everything before this one".
+//! of everything before this one", and its yes-or-no form, "is anything
+//! before this one".
 //!
 //! `sum(t | S and before(row, probe))` evaluated for many probes over the
 //! same `S` rereads and resums `S` for every probe. When the order is one
 //! the evaluator can sort by, the rows of `S` for one group of bound
 //! values are sorted once, with running totals, and each probe is a binary
-//! search. The answer is the direct path's, error for error: the shape is
-//! taken only where no comparison the direct path makes can raise, and
-//! anything else is left to it.
+//! search. `exists x: S and before(row, probe)` is the same question
+//! asked as a count, so it is answered from the same group: whether any
+//! row comes before the probe. The answer is the direct path's, error for
+//! error: the shape is taken only where no comparison the direct path
+//! makes can raise, and anything else is left to it.
 //!
 //! Two orders are recognised: one comparison between a row's key and the
 //! probe, and the guarded lexicographic order a book's walk uses, a call
@@ -114,6 +117,22 @@ pub(super) fn recognise(sum: &ValueExpr, definitions: DefinitionTable<'_>) -> Op
         row_vars,
         probe_vars,
         order,
+    })
+}
+
+/// `exists x: body` as the count `sum(1 | body)`, whose shape and groups
+/// it shares: it holds exactly when the count is not zero. An `exists`
+/// keeps no binding, so the count's rows are its witnesses.
+pub(super) fn exists_as_count(exists: &Prop) -> Option<ValueExpr> {
+    let Prop::Exists { body, .. } = exists else {
+        return None;
+    };
+    Some(ValueExpr::Sum {
+        value: Box::new(ValueExpr::Term(Term::Literal(Value::Decimal(
+            crate::ir::LiteralDecimal::from(Decimal::ONE),
+        )))),
+        body: body.clone(),
+        seed: SumSeed::Decimal,
     })
 }
 
@@ -425,24 +444,35 @@ fn decimal_keys(vars: &[&Var], bindings: &Bindings, negate: [bool; 2]) -> Option
     Some(out)
 }
 
-/// Where `program` sums over a set in an order the evaluator answers
-/// from one sorted group per evaluation: the definition, invariant,
-/// transformation or derived claim each such sum is written in, and the
-/// order, `one comparison` or `a guarded order`. Recognised from the text;
-/// a call whose bindings differ from the ones assumed still takes the
-/// direct path.
+/// Where `program` sums over a set in an order, or asks whether anything
+/// in it comes first, that the evaluator answers from one sorted group
+/// per evaluation: the definition, invariant, transformation or derived
+/// claim each is written in, and the order, `one comparison` or `a
+/// guarded order`, prefixed `exists, ` for an `exists`. Recognised from
+/// the text; a call whose bindings differ from the ones assumed still
+/// takes the direct path.
 pub fn ordered_sums(program: &crate::ir::Program) -> Vec<(String, &'static str)> {
     use crate::fold::{walk_stmt, walk_value};
     use crate::ir::DefinitionBody;
     let definitions = DefinitionTable::new(&program.definitions);
     let mut out: Vec<(String, &'static str)> = Vec::new();
     let mut note = |place: String, node: Node<'_>| {
-        if let Node::Value(sum @ ValueExpr::Sum { .. }) = node
-            && let Some(shape) = recognise(sum, definitions)
-        {
-            let kind = match shape.order {
-                Order::Single { .. } => "one comparison",
-                Order::Guarded { .. } => "a guarded order",
+        let (shape, exists) = match node {
+            Node::Value(sum @ ValueExpr::Sum { .. }) => (recognise(sum, definitions), false),
+            Node::Prop(p @ Prop::Exists { .. }) => (
+                exists_as_count(p).and_then(|count| recognise(&count, definitions)),
+                true,
+            ),
+            Node::Stmt(_) | Node::Prop(_) | Node::Value(_) | Node::Slot(_) | Node::Binder(_) => {
+                return;
+            }
+        };
+        if let Some(shape) = shape {
+            let kind = match (&shape.order, exists) {
+                (Order::Single { .. }, false) => "one comparison",
+                (Order::Guarded { .. }, false) => "a guarded order",
+                (Order::Single { .. }, true) => "exists, one comparison",
+                (Order::Guarded { .. }, true) => "exists, a guarded order",
             };
             if !out.iter().any(|(p, k)| *p == place && *k == kind) {
                 out.push((place, kind));
@@ -533,13 +563,35 @@ impl Shape {
         group: &Group,
         bindings: &Bindings,
     ) -> Option<Result<EvalValue, EvalError>> {
-        let Group::Sorted { keys, totals } = group else {
+        let Group::Sorted { totals, .. } = group else {
+            return None;
+        };
+        Some(match self.counted(group, bindings)? {
+            0 => Ok(EvalValue::Decimal(Decimal::ZERO)),
+            n => totals[n - 1]
+                .clone()
+                .into_decimal()
+                .map(EvalValue::Decimal)
+                .ok_or_else(EvalError::sum_out_of_decimal_range),
+        })
+    }
+
+    /// Whether any row comes before this entry's probe, or `None` for
+    /// the direct path.
+    pub(super) fn any_before(&self, group: &Group, bindings: &Bindings) -> Option<bool> {
+        Some(self.counted(group, bindings)? > 0)
+    }
+
+    /// How many of the group's rows the order counts for this entry's
+    /// probe, or `None` for the direct path.
+    fn counted(&self, group: &Group, bindings: &Bindings) -> Option<usize> {
+        let Group::Sorted { keys, .. } = group else {
             return None;
         };
         // Against no rows the direct path compares nothing, so the
         // probe is not looked at.
         if keys.is_empty() {
-            return Some(Ok(EvalValue::Decimal(Decimal::ZERO)));
+            return Some(0);
         }
         let (negate, inclusive) = direction(&self.order, bindings)?;
         let probe = decimal_keys(&keys_of(&self.order, false), bindings, negate)?;
@@ -555,15 +607,7 @@ impl Shape {
                 k < &probe
             }
         };
-        let n = keys.partition_point(counted);
-        Some(match n {
-            0 => Ok(EvalValue::Decimal(Decimal::ZERO)),
-            n => totals[n - 1]
-                .clone()
-                .into_decimal()
-                .map(EvalValue::Decimal)
-                .ok_or_else(EvalError::sum_out_of_decimal_range),
-        })
+        Some(keys.partition_point(counted))
     }
 }
 
@@ -571,10 +615,10 @@ impl Shape {
 mod tests {
     use crate::definitions::DefinitionTable;
     use crate::eval::memo::Memo;
-    use crate::eval::{EvalContext, eval_value};
+    use crate::eval::{EvalContext, eval_value, find_matches};
     use crate::ir::{CompareOp, Definition, OrderedDomain, Prop, ValueExpr};
     use crate::ir_builder::{
-        and, claim, defined, definition, eq, or, params, subj, sum, term, var,
+        and, claim, defined, definition, eq, exists, not, or, params, subj, sum, term, var,
     };
     use crate::state::{Bindings, Bound, ClaimInstance, EvalValue, State};
 
@@ -969,5 +1013,210 @@ mod tests {
             answer(&figure, &state, &[], &b, None)
         );
         assert_eq!(memo.prefix_work(), (0, 0));
+    }
+
+    /// Whether `test` holds, as text so an error counts, through `memo`
+    /// or through the direct path.
+    fn holds(
+        test: &Prop,
+        state: &State,
+        definitions: &[Definition],
+        bindings: &Bindings,
+        memo: Option<&Memo>,
+    ) -> String {
+        let ctx = EvalContext::new(
+            state,
+            None,
+            bindings,
+            None,
+            DefinitionTable::new(definitions),
+        );
+        let ctx = match memo {
+            Some(memo) => ctx.with_memo(memo),
+            None => ctx,
+        };
+        format!("{:?}", find_matches(test, &ctx).map(|m| !m.is_empty()))
+    }
+
+    /// "Is any lot before this key", under every comparison and with the
+    /// probe on either side, plain and negated: the direct path's answer
+    /// for every probe, one sorted group per group of bound values.
+    #[test]
+    fn exists_in_one_comparison_answers_as_the_direct_path() {
+        let state = lots();
+        let probes = ["0", "1", "2", "2.00", "2.5", "3", "7", "8"];
+        for op in [CompareOp::Lt, CompareOp::Le, CompareOp::Gt, CompareOp::Ge] {
+            for probe_left in [false, true] {
+                let order = if probe_left {
+                    cmp(op, "k", "k2")
+                } else {
+                    cmp(op, "k2", "k")
+                };
+                let some = exists(
+                    "t",
+                    and(vec![
+                        claim("Lot", vec![var("c"), var("k2"), var("q"), var("t")]),
+                        order,
+                    ]),
+                );
+                for test in [some.clone(), not(some)] {
+                    let memo = Memo::default();
+                    let mut asked = 0;
+                    for c in ["c1", "c2", "c3"] {
+                        for k in probes {
+                            let b = bind(&[("c", subject(c)), ("k", decimal(k))]);
+                            let direct = holds(&test, &state, &[], &b, None);
+                            let fast = holds(&test, &state, &[], &b, Some(&memo));
+                            assert_eq!(fast, direct, "{op:?} probe_left={probe_left} c={c} k={k}");
+                            asked += 1;
+                        }
+                    }
+                    assert_eq!(
+                        memo.prefix_work(),
+                        (3, asked),
+                        "{op:?} probe_left={probe_left}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// "Is any resting order ahead of this one" in the walk's order, both
+    /// directions and the row on either side of the call. A guard that
+    /// names neither direction is the direct path's.
+    #[test]
+    fn exists_in_the_guarded_order_answers_as_the_direct_path() {
+        let state = book();
+        let definitions = [before()];
+        for row_first in [true, false] {
+            let order = if row_first {
+                defined(
+                    "before",
+                    vec![var("g"), var("p2"), var("s2"), var("p"), var("s")],
+                )
+            } else {
+                defined(
+                    "before",
+                    vec![var("g"), var("p"), var("s"), var("p2"), var("s2")],
+                )
+            };
+            let test = not(exists(
+                "r2",
+                and(vec![
+                    claim("Rest", vec![var("r2"), var("p2"), var("s2"), var("q2")]),
+                    order,
+                ]),
+            ));
+            let memo = Memo::default();
+            let mut asked = 0;
+            for g in ["buy", "sell"] {
+                for p in ["99", "99.5", "100", "100.00", "100.5", "101", "102"] {
+                    for s in ["0", "1", "2", "4", "5", "9"] {
+                        let b = bind(&[("g", subject(g)), ("p", decimal(p)), ("s", decimal(s))]);
+                        let direct = holds(&test, &state, &definitions, &b, None);
+                        let fast = holds(&test, &state, &definitions, &b, Some(&memo));
+                        assert_eq!(fast, direct, "row_first={row_first} g={g} p={p} s={s}");
+                        asked += 1;
+                    }
+                }
+            }
+            assert_eq!(memo.prefix_work(), (2, asked), "row_first={row_first}");
+
+            let other = bind(&[
+                ("g", subject("hold")),
+                ("p", decimal("100")),
+                ("s", decimal("3")),
+            ]);
+            let memo = Memo::default();
+            assert_eq!(
+                holds(&test, &state, &definitions, &other, Some(&memo)),
+                holds(&test, &state, &definitions, &other, None),
+            );
+            assert_eq!(
+                memo.prefix_work(),
+                (0, 0),
+                "an unguarded order is not this one"
+            );
+        }
+    }
+
+    /// A key or a probe that is not a decimal, a source that raises, and
+    /// a row variable bound at entry: the direct path's answer, error
+    /// included, and no probe answered from a group, except over no rows,
+    /// where neither path looks at the probe.
+    #[test]
+    fn exists_off_the_fast_path_is_the_direct_paths() {
+        let state = State::from_claims(vec![
+            row(
+                "Lot",
+                vec![subject("odd"), decimal("1"), decimal("1"), subject("a")],
+            ),
+            row(
+                "Lot",
+                vec![subject("odd"), subject("two"), decimal("1"), subject("b")],
+            ),
+            row(
+                "Lot",
+                vec![subject("ok"), decimal("1"), decimal("1"), subject("a")],
+            ),
+        ]);
+        let some = |extra: Option<Prop>| {
+            let mut parts = vec![claim("Lot", vec![var("c"), var("k2"), var("q"), var("t")])];
+            parts.extend(extra);
+            parts.push(cmp(CompareOp::Lt, "k2", "k"));
+            exists("t", and(parts))
+        };
+        // `t < 5` compares a subject: the source itself raises.
+        let raising = Prop::Compare {
+            op: CompareOp::Lt,
+            domain: OrderedDomain::Decimal,
+            left: Box::new(term(var("t"))),
+            right: Box::new(term(crate::ir_builder::dec("5"))),
+        };
+        let cases: Vec<(Prop, Bindings, usize, &str)> = vec![
+            (
+                some(None),
+                bind(&[("c", subject("odd")), ("k", decimal("5"))]),
+                0,
+                "a key that is not a decimal",
+            ),
+            (
+                some(None),
+                bind(&[("c", subject("ok")), ("k", subject("x"))]),
+                0,
+                "a probe that is not a decimal",
+            ),
+            (
+                some(None),
+                bind(&[("c", subject("none")), ("k", subject("x"))]),
+                1,
+                "a probe that is not a decimal, over no rows",
+            ),
+            (
+                some(Some(raising)),
+                bind(&[("c", subject("ok")), ("k", decimal("5"))]),
+                0,
+                "a source that raises",
+            ),
+            (
+                some(None),
+                bind(&[
+                    ("c", subject("ok")),
+                    ("k", decimal("5")),
+                    ("k2", decimal("1")),
+                ]),
+                0,
+                "a row variable bound at entry",
+            ),
+        ];
+        for (test, b, from_group, why) in cases {
+            let memo = Memo::default();
+            assert_eq!(
+                holds(&test, &state, &[], &b, Some(&memo)),
+                holds(&test, &state, &[], &b, None),
+                "{why}"
+            );
+            assert_eq!(memo.prefix_work().1, from_group, "{why}");
+        }
     }
 }
