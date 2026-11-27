@@ -385,6 +385,56 @@ async fn two_provisioners_serialise() {
     );
 }
 
+/// A predicate whose `unique by` key is `fields` fields long, with one more
+/// field beside it.
+fn keyed_by(fields: usize) -> PgProgram {
+    let args: Vec<String> = (0..=fields).map(|i| format!("f{i}: Decimal")).collect();
+    let key: Vec<String> = (0..fields).map(|i| format!("f{i}")).collect();
+    let source = format!(
+        "program wide_key\npredicate Wide({})\n    unique by ({})\n",
+        args.join(", "),
+        key.join(", ")
+    );
+    pg_program(morpholog_surface::parse_program(&source).unwrap())
+}
+
+/// PostgreSQL holds at most 32 keys in an index. A uniqueness key of 32
+/// fields is one index over them; one of 33 keeps an index per field, as
+/// before keys had one. Both provision.
+#[tokio::test]
+async fn a_key_longer_than_an_index_holds_keeps_an_index_per_field() {
+    let pool = test_pool().await;
+    for (fields, expected) in [
+        (32, vec![(0..32).collect::<Vec<usize>>()]),
+        (33, (0..34).map(|p| vec![p]).collect()),
+    ] {
+        reset_db(&pool).await;
+        drop_our_indexes(&pool).await;
+        let program = keyed_by(fields);
+        let report = provision_indexes(&pool, &[&program], false).await.unwrap();
+        assert!(report.applied, "{fields} fields: {report:?}");
+        let positions: Vec<Vec<usize>> = report
+            .entries
+            .iter()
+            .map(|e| e.positions.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        assert_eq!(positions, expected, "{fields} fields");
+        assert!(
+            report
+                .entries
+                .iter()
+                .all(|e| e.action == IndexAction::Create),
+            "{report:?}"
+        );
+        let built = catalogue_names(&pool).await;
+        assert_eq!(built.len(), expected.len(), "{fields} fields: {built:?}");
+        assert!(built.iter().all(|(_, valid)| *valid), "{built:?}");
+    }
+    drop_our_indexes(&pool).await;
+}
+
 /// The registry holds a specification's positions as a list, and refuses
 /// one no specification can have: empty, negative, holding a null, nested,
 /// or naming a position twice. In both tables, whoever writes the row.

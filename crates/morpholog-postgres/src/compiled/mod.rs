@@ -2529,10 +2529,15 @@ fn compile_invariant(
     })
 }
 
+/// The most keys a PostgreSQL index holds, as a standard build compiles
+/// it (`SHOW max_index_keys`).
+const INDEX_MAX_KEYS: usize = 32;
+
 /// The index over a uniqueness rule's key, in field order, for a rule a
 /// declared discipline generated: two rows of one predicate that share
-/// the key fields' variables. Any other rule, or a generated one of
-/// another shape, has none, and keeps an index per position it seeks.
+/// the key fields' variables. Any other rule, a generated one of another
+/// shape, or a key of more fields than an index holds has none, and keeps
+/// an index per position it seeks.
 fn uniqueness_key(inv: &Invariant) -> Option<IndexSpec> {
     if inv.origin != InvariantOrigin::Discipline {
         return None;
@@ -2563,7 +2568,8 @@ fn uniqueness_key(inv: &Invariant) -> Option<IndexSpec> {
         .filter(|(_, pair)| matches!(pair, (Term::Var(x), Term::Var(y)) if x == y))
         .map(|(i, _)| i)
         .collect();
-    (!key.is_empty()).then(|| IndexSpec::over(predicate.clone(), key))
+    (!key.is_empty() && key.len() <= INDEX_MAX_KEYS)
+        .then(|| IndexSpec::over(predicate.clone(), key))
 }
 
 /// The dominant shape: `antecedent implies consequent`. Violation = an
