@@ -692,6 +692,11 @@ pub(crate) fn find_matches(p: &Prop, ctx: &EvalContext<'_>) -> Result<Vec<Bindin
             Ok(verdict(ctx.bindings, holds))
         }
         Prop::Exists { binding: _, body } => {
+            if let Some(memo) = ctx.memo
+                && let Some(holds) = memo.exists(p, ctx)
+            {
+                return Ok(verdict(ctx.bindings, holds));
+            }
             let m = find_matches(body, ctx)?;
             Ok(verdict(ctx.bindings, !m.is_empty()))
         }

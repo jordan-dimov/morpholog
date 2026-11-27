@@ -1778,8 +1778,9 @@ fn check_accepts_an_or_whose_branches_order_decimals_and_instants_each_their_way
     }
 }
 
-/// A running total in a fixed order is named where it is written, with
-/// the order, so an edit that makes it ineligible shows. Eligibility is
+/// A running total in a fixed order, and an `exists` asking whether
+/// anything comes first in one, is named where it is written, with the
+/// order, so an edit that makes it ineligible shows. Eligibility is
 /// read from the text: a call whose bindings or values do not fit still
 /// takes the direct path. A sum with no order condition is not listed,
 /// and a programme with none prints no such section.
@@ -1793,12 +1794,15 @@ fn check_verbose_names_the_running_totals_it_answers_from_one_sorted_group() {
          (side = #buy and p < p2) or (side = #sell and p > p2) or (p = p2 and s < s2)\n\
          define ahead_of(side, p, s) = (sum(q2 | Resting(r2, side, p2, s2, q2) and before(side, p2, s2, p, s)))\n\
          define everything(side) = (sum(q | Resting(_, side, _, _, q)))\n\
+         define first_in_walk(side, p, s):\n    \
+         not (exists r2: Resting(r2, side, p2, s2, _) and before(side, p2, s2, p, s))\n\
          transformation walk(side):\n    \
          for Resting(r, side, p, s, q):\n        \
          let ahead = ahead_of(side, p, s)\n        \
          let wanted = sum(w | Want(_, k, w) and k < q)\n        \
          let all = everything(side)\n        \
          let total = ahead + wanted + all\n        \
+         if first_in_walk(side, p, s):\n            \
          admit Seen(r, total)\n";
     let tmp = temp_morph(SOURCE);
     let out = Command::new(bin())
@@ -1814,8 +1818,9 @@ fn check_verbose_names_the_running_totals_it_answers_from_one_sorted_group() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.ends_with(
-            "  eligible ordered sums:\n    \
+            "  eligible ordered sums and tests:\n    \
              definition ahead_of: a guarded order\n    \
+             definition first_in_walk: exists, a guarded order\n    \
              transformation walk: one comparison\n"
         ),
         "got: {stdout}"
