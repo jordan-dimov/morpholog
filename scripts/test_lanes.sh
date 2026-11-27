@@ -7,8 +7,8 @@
 # whole cluster, so the run first checks that no two tests can make the
 # same one.
 #
-# Each lane runs its tests one at a time, as under cargo; a binary of
-# many tests is split into several lanes (per_lane below). Every lane
+# Each lane runs its tests one at a time, as under cargo; a few long
+# binaries are split into several lanes (split below). Every lane
 # runs; the script exits non-zero if any failed, and prints each failing
 # lane's output.
 #
@@ -126,40 +126,31 @@ if $skipped_pg; then
     echo "  DATABASE_URL not set; skipping the PG-backed packages (${pg_packages[*]})."
 fi
 
-# A binary of more than `per_lane` tests is dealt round-robin into lanes
-# of at most that many, each lane its own process and its own database.
-# Every test whose function makes, drops or counts roles (role_pattern,
-# found in the sources beside the binary's root) goes in the first lane,
-# so a file's roles are still made one test at a time.
+# These binaries are split round-robin into lanes of at most per_lane
+# tests, each lane its own process and its own database. The lanes of one
+# binary run at once, and roles belong to the whole cluster, so a binary
+# joins this list only once read for that: none of its tests makes a role
+# under a name another of its tests makes.
+split=(
+    crates/morpholog-postgres/src/lib.rs
+    crates/morpholog-cli/tests/cli_integration.rs
+)
+for f in "${split[@]}"; do
+    [ -f "$f" ] || { echo "test_lanes: $f, listed to split, is not there" >&2; exit 1; }
+done
 per_lane=100
-python3 - "$work/run.tsv" "$work" "$per_lane" "$role_pattern" > "$work/lanes.tsv" <<'EOF'
+python3 - "$work/run.tsv" "$work" "$per_lane" "${split[@]/#/$PWD/}" > "$work/lanes.tsv" <<'EOF'
 import os
-import re
 import subprocess
 import sys
 
-run_tsv, work, per_lane, role_pattern = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
-role = re.compile(role_pattern, re.IGNORECASE)
-function = re.compile(r"\bfn\s+([A-Za-z0-9_]+)\s*[<(]")
-
-
-def role_functions(root):
-    names = set()
-    for base, _, files in os.walk(os.path.dirname(root)):
-        for name in files:
-            if not name.endswith(".rs"):
-                continue
-            text = open(os.path.join(base, name), encoding="utf-8").read()
-            starts = list(function.finditer(text))
-            for i, m in enumerate(starts):
-                end = starts[i + 1].start() if i + 1 < len(starts) else len(text)
-                if role.search(text, m.start(), end):
-                    names.add(m.group(1))
-    return names
-
+run_tsv, work, per_lane, split = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4:]
 
 for n, line in enumerate(open(run_tsv, encoding="utf-8")):
     package, directory, exe, src = line.rstrip("\n").split("\t")
+    if src not in split:
+        print("\t".join([package, directory, exe, src, "-", "-"]))
+        continue
     listed = subprocess.run(
         [exe, "--list", "--format", "terse"],
         cwd=directory,
@@ -169,16 +160,8 @@ for n, line in enumerate(open(run_tsv, encoding="utf-8")):
         check=True,
     ).stdout
     tests = [t[: -len(": test")] for t in listed.splitlines() if t.endswith(": test")]
-    if len(tests) <= per_lane:
-        print("\t".join([package, directory, exe, src, "-", "-"]))
-        continue
-    makers = role_functions(src)
-    pinned = [t for t in tests if t.rsplit("::", 1)[-1] in makers]
-    rest = [t for t in tests if t not in set(pinned)]
-    lanes = [[] for _ in range(-(-len(tests) // per_lane))]
-    lanes[0] = pinned
-    for i, t in enumerate(rest, start=1 if pinned else 0):
-        lanes[i % len(lanes)].append(t)
+    count = -(-len(tests) // per_lane)
+    lanes = [tests[k::count] for k in range(count)]
     for k, names in enumerate(lanes):
         path = f"{work}/names.{n}.{k}"
         with open(path, "w", encoding="utf-8") as f:
