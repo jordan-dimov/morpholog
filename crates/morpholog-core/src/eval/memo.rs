@@ -21,7 +21,7 @@ use crate::fold::{Node, walk_value};
 use crate::ir::{Prop, Term, Unit, ValueExpr, Var};
 use crate::state::EvalValue;
 
-use super::prefix::{Group, Shape, exists_as_count, recognise};
+use super::prefix::{Group, Shape, exists_as_count, might_be_ordered, recognise};
 use super::{EvalContext, EvalError};
 
 #[cfg(feature = "memo-differential")]
@@ -176,6 +176,9 @@ impl Memo {
     /// Whether `exists` holds, answered from the sorted group of the
     /// count it asks, or `None` for the direct path.
     pub(crate) fn exists(&self, exists: &Prop, ctx: &EvalContext<'_>) -> Option<bool> {
+        if !might_be_ordered(exists) {
+            return None;
+        }
         let known = self.exists.borrow().get(exists).cloned();
         let count = match known {
             Some(count) => count?,

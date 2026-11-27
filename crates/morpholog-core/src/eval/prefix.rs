@@ -136,6 +136,28 @@ pub(super) fn exists_as_count(exists: &Prop) -> Option<ValueExpr> {
     })
 }
 
+/// Whether `exists` could be one recognised here, read without
+/// allocating: a conjunction ending in a decimal comparison or a call.
+/// Most `exists` are not, and this keeps them off the memo's hashed
+/// lookup.
+pub(super) fn might_be_ordered(exists: &Prop) -> bool {
+    let Prop::Exists { body, .. } = exists else {
+        return false;
+    };
+    let Prop::And(parts) = body.as_ref() else {
+        return false;
+    };
+    matches!(
+        parts.last(),
+        Some(
+            Prop::Compare {
+                domain: OrderedDomain::Decimal,
+                ..
+            } | Prop::Defined { .. }
+        )
+    )
+}
+
 fn flatten_and(p: &Prop) -> Vec<&Prop> {
     if let Prop::And(ps) = p {
         ps.iter().flat_map(flatten_and).collect()
