@@ -1249,7 +1249,9 @@ mod tests {
     fn a_reused_address_is_not_taken_for_the_same_exists() {
         let state = lots();
         let memo = Memo::default();
-        let b = bind(&[("c", subject("c1")), ("k", decimal("2"))]);
+        // At 1, `<` finds nothing and `<=` finds the lot keyed 1, so an
+        // answer from another comparison's group shows.
+        let b = bind(&[("c", subject("c1")), ("k", decimal("1"))]);
         for op in [
             CompareOp::Lt,
             CompareOp::Le,
