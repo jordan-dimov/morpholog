@@ -846,6 +846,8 @@ Whether two proposals conflict depends on what they read, not on what they mean.
 
 Both the keyed reads and the compiled checks seek through the indexes `provision indexes` builds, whichever route a programme runs on. Without them a keyed read falls back to scanning its predicate, and a compiled check scans the claims table, so concurrent proposals can conflict however disjoint their records are. A deployment that skips the step is correct and slow, and its concurrent writers retry as though they shared records.
 
+The check a `unique by` declaration generates seeks one index over the key's fields, in field order, and asks for no other: every case pins the whole key, so no field alone is a better way in. Given an index per field, the planner would choose by its statistics, and in a long batch it chose a field every row shares.
+
 All predicates live in one `claims` table. PostgreSQL remembers reads row by row, then page by page, and past a threshold as the whole table; a sequential scan, which it chooses for a tiny or empty table or for a predicate that is most of the table, remembers the whole table at once. So:
 
 - Two proposals that touch disjoint cases of the same predicates - two desks, two tenants, two periods - no longer conflict on what their bodies read, when those reads are keyed and the indexes are provisioned: a keyed read remembers only the index range it searched, which is also how the absence of a row is protected. They still conflict wherever either reads a predicate whole: an unkeyed pattern, a key a `let` produces, or, on the interpreted route, a predicate an invariant mentions.
