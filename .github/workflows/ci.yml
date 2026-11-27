@@ -229,7 +229,9 @@ jobs:
   test-adapter:
     name: test (adapter, postgres ${{ matrix.postgres }})
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Healthy runs reach ten minutes, mostly building and running the
+    # adapter suite; the limit is for a hang, not for a slow runner.
+    timeout-minutes: 20
 
     strategy:
       fail-fast: false
