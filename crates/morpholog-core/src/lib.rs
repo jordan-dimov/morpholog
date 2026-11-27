@@ -51,6 +51,7 @@ pub mod analysis;
 pub mod calendar;
 mod check;
 mod controls;
+mod cost;
 mod coverage;
 mod definitions;
 mod derive;
@@ -86,6 +87,7 @@ pub use controls::{
     ControlMatrix, GateControl, GateFrontLoad, GateRef, InvariantFrontLoad, TransformationControls,
     controls, render_controls,
 };
+pub use cost::grid_costs;
 pub use coverage::{
     CoverageReport, CoverageTracker, CoverageVerdict, InvariantCoverage, RefusalCause, RefusalKind,
     TransformationUsage, render_coverage,

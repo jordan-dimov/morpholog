@@ -636,43 +636,17 @@ pub fn lints(prepared: &PreparedProgram) -> Vec<Lint> {
 fn large_grid_findings(program: &Program, out: &mut Vec<Lint>) {
     use crate::check::grid;
     for (owner, _, nodes) in rules(program) {
-        let mut bounds: Vec<(&Var, &Var, jiff::SignedDuration)> = Vec::new();
+        let bounds = grid::window_bounds(&nodes);
         for node in &nodes {
-            if let fold::Node::Prop(prop) = node
-                && let Some(b) = grid::window_bound(prop)
+            if let fold::Node::Value(expr) = node
+                && let Some(size) = grid::grid_size(expr, &bounds)
+                && size.periods > LARGE_GRID_PERIODS
             {
-                bounds.push((b.until, b.from, b.bound));
-            }
-        }
-        for node in &nodes {
-            let fold::Node::Value(expr) = node else {
-                continue;
-            };
-            let Some((from, until, step)) = grid::grid_call(expr) else {
-                continue;
-            };
-            let (
-                ValueExpr::Term(Term::Var(from)),
-                ValueExpr::Term(Term::Var(until)),
-                ValueExpr::Term(Term::Literal(Value::Duration(step))),
-            ) = (from, until, step)
-            else {
-                continue;
-            };
-            let Some(bound) = bounds
-                .iter()
-                .find(|(u, f, _)| *u == until && *f == from)
-                .map(|(_, _, b)| *b)
-            else {
-                continue;
-            };
-            let periods = grid::max_periods(bound, *step);
-            if periods > LARGE_GRID_PERIODS {
                 out.push(Lint::LargeGrid {
                     owner: owner.clone(),
-                    bound: bound.to_string(),
-                    step: step.to_string(),
-                    periods,
+                    bound: size.bound.to_string(),
+                    step: size.step.to_string(),
+                    periods: size.periods,
                 });
             }
         }

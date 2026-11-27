@@ -700,6 +700,13 @@ fn summary(
             out.push_str(&format!("    {place}: {order}\n"));
         }
     }
+    let grids = morpholog_core::grid_costs(p);
+    if !grids.is_empty() {
+        out.push_str("  grid costs:\n");
+        for (place, cost) in grids {
+            out.push_str(&format!("    {place}: {cost}\n"));
+        }
+    }
     out
 }
 
