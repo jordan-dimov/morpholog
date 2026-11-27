@@ -52,9 +52,11 @@ pub(crate) struct Memo {
     /// Keyed by structure, not address: a node built during evaluation
     /// (an `xor` lowered on the fly) can reuse a freed address.
     entries: RefCell<HashMap<ValueExpr, Entry>>,
-    /// Each `exists` met, as the count it is answered through when that
-    /// count is a sum over a set in an order.
-    exists: RefCell<HashMap<Prop, Option<Rc<ValueExpr>>>>,
+    /// Each `exists` met, by address, with the node itself and the count
+    /// it is answered through when that count is a sum over a set in an
+    /// order. The address saves hashing the node on every call; the node
+    /// is compared on a hit, since a freed address can be reused.
+    exists: RefCell<HashMap<usize, (Prop, Option<Rc<ValueExpr>>)>>,
     computed: Cell<usize>,
     groups_built: Cell<usize>,
     probes_answered: Cell<usize>,
@@ -179,7 +181,13 @@ impl Memo {
         if !might_be_ordered(exists) {
             return None;
         }
-        let known = self.exists.borrow().get(exists).cloned();
+        let at = std::ptr::from_ref(exists).addr();
+        let known = self
+            .exists
+            .borrow()
+            .get(&at)
+            .filter(|(node, _)| node == exists)
+            .map(|(_, count)| count.clone());
         let count = match known {
             Some(count) => count?,
             None => {
@@ -188,7 +196,7 @@ impl Memo {
                     .map(Rc::new);
                 self.exists
                     .borrow_mut()
-                    .insert(exists.clone(), count.clone());
+                    .insert(at, (exists.clone(), count.clone()));
                 count?
             }
         };
