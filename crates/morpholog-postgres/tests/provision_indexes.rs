@@ -19,11 +19,11 @@ use morpholog_postgres::{
 };
 use sqlx::Row as _;
 
-/// The ledger's requirement: its compiled checks' seeks, the case columns
-/// of its lineage and entry-id checks, the two positions its
-/// transformations' gates key on, and the derived trial-balance row's join
-/// on the journal line's account, which a live view seeks on.
-const LEDGER_INDEXES: usize = 8;
+/// The ledger's requirement: its compiled checks' seeks, the key of each
+/// uniqueness rule (its lineage's and its entry ids'), the two positions
+/// its transformations' gates key on, and the derived trial-balance row's
+/// join on the journal line's account, which a live view seeks on.
+const LEDGER_INDEXES: usize = 6;
 
 fn ledger() -> PgProgram {
     pg_program(double_entry_ledger::program())
@@ -385,6 +385,101 @@ async fn two_provisioners_serialise() {
     );
 }
 
+/// A predicate whose `unique by` key is `fields` fields long, with one more
+/// field beside it.
+fn keyed_by(fields: usize) -> PgProgram {
+    let args: Vec<String> = (0..=fields).map(|i| format!("f{i}: Decimal")).collect();
+    let key: Vec<String> = (0..fields).map(|i| format!("f{i}")).collect();
+    let source = format!(
+        "program wide_key\npredicate Wide({})\n    unique by ({})\n",
+        args.join(", "),
+        key.join(", ")
+    );
+    pg_program(morpholog_surface::parse_program(&source).unwrap())
+}
+
+/// PostgreSQL holds at most 32 keys in an index. A uniqueness key of 32
+/// fields is one index over them; one of 33 keeps an index per field, as
+/// before keys had one. Both provision.
+#[tokio::test]
+async fn a_key_longer_than_an_index_holds_keeps_an_index_per_field() {
+    let pool = test_pool().await;
+    for (fields, expected) in [
+        (32, vec![(0..32).collect::<Vec<usize>>()]),
+        (33, (0..34).map(|p| vec![p]).collect()),
+    ] {
+        reset_db(&pool).await;
+        drop_our_indexes(&pool).await;
+        let program = keyed_by(fields);
+        let report = provision_indexes(&pool, &[&program], false).await.unwrap();
+        assert!(report.applied, "{fields} fields: {report:?}");
+        let positions: Vec<Vec<usize>> = report
+            .entries
+            .iter()
+            .map(|e| e.positions.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        assert_eq!(positions, expected, "{fields} fields");
+        assert!(
+            report
+                .entries
+                .iter()
+                .all(|e| e.action == IndexAction::Create),
+            "{report:?}"
+        );
+        let built = catalogue_names(&pool).await;
+        assert_eq!(built.len(), expected.len(), "{fields} fields: {built:?}");
+        assert!(built.iter().all(|(_, valid)| *valid), "{built:?}");
+    }
+    drop_our_indexes(&pool).await;
+}
+
+/// The registry holds a specification's positions as a list, and refuses
+/// one no specification can have: empty, negative, holding a null, nested,
+/// or naming a position twice. In both tables, whoever writes the row.
+#[tokio::test]
+async fn the_registry_refuses_a_list_of_positions_no_specification_has() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let write = |table: &'static str, positions: &'static str| {
+        let pool = pool.clone();
+        async move {
+            let sql = match table {
+                "managed_index" => format!(
+                    "INSERT INTO morpholog.managed_index
+                        (spec_digest, index_name, predicate_name, positions, representation,
+                         expression_sql, partial_predicate)
+                     VALUES ('d', 'n', 'P', '{positions}', 'r', 'e', 'p')"
+                ),
+                _ => format!(
+                    "INSERT INTO morpholog.index_requirement
+                        (program_identity, spec_digest, program_hash, positions)
+                     VALUES ('p', 'd', 'h', '{positions}')"
+                ),
+            };
+            let mut tx = pool.begin().await.unwrap();
+            let result = sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+                .execute(&mut *tx)
+                .await;
+            tx.rollback().await.unwrap();
+            result.map(|_| ()).map_err(|e| e.to_string())
+        }
+    };
+    for table in ["managed_index", "index_requirement"] {
+        for good in ["{3}", "{0,1,2}", "{2,0}"] {
+            assert_eq!(write(table, good).await, Ok(()), "{table} {good}");
+        }
+        for bad in ["{}", "{-1}", "{0,NULL}", "{{0},{1}}", "{1,1}", "{0,2,0}"] {
+            let refused = write(table, bad).await.unwrap_err();
+            assert!(
+                refused.contains("positions_check"),
+                "{table} {bad}: {refused}"
+            );
+        }
+    }
+}
+
 /// An interrupted concurrent build leaves an invalid index; the next run
 /// repairs it, and running again keeps the repaired one.
 #[tokio::test]
@@ -433,25 +528,25 @@ async fn an_interpreted_programme_requires_the_indexes_its_loads_seek_on() {
         morpholog_core::PreparedProgram::new(double_entry_ledger::program()).unwrap(),
     );
     let report = plan_indexes(&pool, &[&interpreted], false).await.unwrap();
-    let creates: Vec<(String, usize)> = report
+    let creates: Vec<(String, Vec<usize>)> = report
         .entries
         .iter()
         .filter(|e| e.action == IndexAction::Create)
-        .map(|e| (e.predicate.clone(), e.position))
+        .map(|e| (e.predicate.clone(), e.positions.clone()))
         .collect();
     // A posting keys its period gate on the period: PeriodClosed[0].
     assert!(
-        creates.contains(&("PeriodClosed".to_string(), 0)),
+        creates.contains(&("PeriodClosed".to_string(), vec![0])),
         "the posting's keyed read needs PeriodClosed[0], got {creates:?}"
     );
     // The compiled programme requires the same loads' indexes plus its
     // checks' own.
     let compiled_report = plan_indexes(&pool, &[&ledger()], false).await.unwrap();
-    let compiled_creates: Vec<(String, usize)> = compiled_report
+    let compiled_creates: Vec<(String, Vec<usize>)> = compiled_report
         .entries
         .iter()
         .filter(|e| e.action == IndexAction::Create)
-        .map(|e| (e.predicate.clone(), e.position))
+        .map(|e| (e.predicate.clone(), e.positions.clone()))
         .collect();
     for spec in &creates {
         assert!(
@@ -491,15 +586,15 @@ transformation put(k, v):
         "the `xor` keeps it interpreted"
     );
     let report = plan_indexes(&pool, &[&pg], false).await.unwrap();
-    let creates: Vec<(String, usize)> = report
+    let creates: Vec<(String, Vec<usize>)> = report
         .entries
         .iter()
         .filter(|e| e.action == IndexAction::Create)
-        .map(|e| (e.predicate.clone(), e.position))
+        .map(|e| (e.predicate.clone(), e.positions.clone()))
         .collect();
     assert_eq!(
         creates,
-        vec![("P".to_string(), 0)],
+        vec![("P".to_string(), vec![0])],
         "one coordinate of the admit, the first, and not the amount"
     );
 }
@@ -599,8 +694,11 @@ async fn statistics_are_planned_per_position_created_once_and_then_kept() {
     reset_db(&pool).await;
     drop_our_indexes(&pool).await;
     let plan = plan_indexes(&pool, &[&ledger()], false).await.unwrap();
-    let positions: std::collections::BTreeSet<usize> =
-        plan.entries.iter().map(|e| e.position).collect();
+    let positions: std::collections::BTreeSet<usize> = plan
+        .entries
+        .iter()
+        .flat_map(|e| e.positions.iter().copied())
+        .collect();
     let expected: Vec<String> = positions
         .iter()
         .map(|p| format!("morpholog_cs_vk1_p{p}"))
@@ -1056,7 +1154,7 @@ async fn a_position_left_unrecorded_is_read_from_the_managed_index() {
     provision_indexes(&pool, &[&ledger()], false).await.unwrap();
     let positions = statistics_positions(&pool).await;
     // As an older binary would record the ledger's own requirements.
-    sqlx::query("UPDATE morpholog.index_requirement SET position = NULL")
+    sqlx::query("UPDATE morpholog.index_requirement SET positions = NULL")
         .execute(&pool)
         .await
         .unwrap();
@@ -1086,7 +1184,7 @@ async fn a_registry_disagreeing_about_a_position_is_refused_before_any_change() 
         statistics_positions(&pool).await,
     );
     sqlx::query(
-        "UPDATE morpholog.index_requirement SET position = position + 1
+        "UPDATE morpholog.index_requirement SET positions = ARRAY[positions[1] + 1]
          WHERE spec_digest = (SELECT min(spec_digest) FROM morpholog.index_requirement)",
     )
     .execute(&pool)

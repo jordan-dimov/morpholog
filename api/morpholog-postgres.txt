@@ -1917,7 +1917,7 @@ pub morpholog_postgres::IndexPlanEntry::expression_sql: alloc::string::String
 pub morpholog_postgres::IndexPlanEntry::index_name: alloc::string::String
 pub morpholog_postgres::IndexPlanEntry::needed_by: alloc::vec::Vec<morpholog_postgres::IndexNeed>
 pub morpholog_postgres::IndexPlanEntry::partial_predicate_sql: alloc::string::String
-pub morpholog_postgres::IndexPlanEntry::position: usize
+pub morpholog_postgres::IndexPlanEntry::positions: alloc::vec::Vec<usize>
 pub morpholog_postgres::IndexPlanEntry::predicate: alloc::string::String
 pub morpholog_postgres::IndexPlanEntry::representation: &'static str
 pub morpholog_postgres::IndexPlanEntry::required_by: alloc::vec::Vec<alloc::string::String>

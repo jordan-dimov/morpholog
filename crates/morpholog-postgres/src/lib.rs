@@ -15,6 +15,8 @@ pub mod testing;
 mod completeness_race;
 #[cfg(test)]
 mod independent_cases;
+#[cfg(test)]
+mod unique_key_race;
 
 pub use sql_views::{
     ColumnDescription, DerivedSource, LookupDescription, RenderedViews, VIEW_SURFACE_FORMAT,

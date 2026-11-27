@@ -2761,6 +2761,14 @@ class IndexNeed:
         )
 
 
+def _index_position(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise EnvelopeError(
+            f"provisioned index.positions: expected a position, got {value!r}"
+        )
+    return value
+
+
 @dataclass(frozen=True)
 class ProvisionedIndex:
     """One index the call reconciled against the catalogue. ``detail`` is
@@ -2772,7 +2780,8 @@ class ProvisionedIndex:
     action: str
     name: str
     predicate: str
-    position: int
+    positions: list[int]
+    """The argument positions the index covers, in order."""
     required_by: list[str]
     needed_by: list[IndexNeed]
     detail: str = ""
@@ -2782,14 +2791,14 @@ class ProvisionedIndex:
         data = _strict(
             "provisioned index",
             payload,
-            {"action", "name", "predicate", "position", "required_by", "needed_by"},
+            {"action", "name", "predicate", "positions", "required_by", "needed_by"},
             {"detail"},
         )
         return cls(
             action=data.member("action", _INDEX_ACTIONS),
             name=data.text("name"),
             predicate=data.text("predicate"),
-            position=data.integer("position"),
+            positions=data.array("positions", _index_position, non_empty=True),
             required_by=data.texts("required_by"),
             needed_by=data.array("needed_by", IndexNeed.from_json),
             detail=data.optional_text("detail") or "",

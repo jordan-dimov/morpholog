@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO morpholog.managed_index\n                    (spec_digest, index_name, predicate_name, positions, representation,\n                     expression_sql, partial_predicate)\n                 VALUES ($1, $2, $3, $4, $5, $6, $7)\n                 ON CONFLICT (spec_digest) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Int4Array",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8b3b3ca7c85d1cfb375505eee34d80b043b055d092bf3d368e1bab0c9a0ac983"
+}

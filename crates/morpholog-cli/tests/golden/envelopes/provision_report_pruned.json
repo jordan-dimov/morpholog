@@ -13,7 +13,9 @@
           "program": "billing"
         }
       ],
-      "position": 0,
+      "positions": [
+        0
+      ],
       "predicate": "Invoice",
       "required_by": [
         "billing"
@@ -34,7 +36,9 @@
           "program": "ledger"
         }
       ],
-      "position": 0,
+      "positions": [
+        0
+      ],
       "predicate": "JournalEntry",
       "required_by": [
         "billing",
@@ -47,7 +51,9 @@
       "detail": "required by no programme; dropped",
       "name": "morpholog_ci_journalline_1_vk1_456789abcdef",
       "needed_by": [],
-      "position": 1,
+      "positions": [
+        1
+      ],
       "predicate": "JournalLine",
       "required_by": []
     }

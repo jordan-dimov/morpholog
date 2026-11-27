@@ -475,7 +475,8 @@ pub struct ProvisionedIndex<'a> {
     /// What in the programmes named in the call needs the index. Empty
     /// when only a programme outside the call needs it, or nothing does.
     pub needed_by: Vec<IndexNeed<'a>>,
-    pub position: usize,
+    /// The argument positions the index covers, in order.
+    pub positions: &'a [usize],
     pub predicate: &'a str,
     pub required_by: &'a [String],
 }
@@ -547,7 +548,7 @@ impl<'a> From<&'a morpholog_postgres::ProvisionReport> for ProvisionReport<'a> {
                             program: &n.program,
                         })
                         .collect(),
-                    position: e.position,
+                    positions: &e.positions,
                     predicate: &e.predicate,
                     required_by: &e.required_by,
                 })

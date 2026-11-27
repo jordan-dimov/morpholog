@@ -72,9 +72,9 @@ use std::fmt::Write as _;
 use morpholog_core::{Admission, EffectiveDelta, Outcome, StagedDelta, State, execution};
 use morpholog_core::{
     ClaimInstance, CompareOp, Compared, Definition, DefinitionName, EvalError, EvalValue, Impact,
-    ImpactPlan, Invariant, InvariantName, OrderedDomain, PredicateArgKind, PredicateDecl,
-    PredicateName, Prop, RejectionReason, SumSeed, Term, ValidatedProgram, Value, ValueExpr, Var,
-    WitnessBinding, ordered_compare_error,
+    ImpactPlan, Invariant, InvariantName, InvariantOrigin, OrderedDomain, PredicateArgKind,
+    PredicateDecl, PredicateName, Prop, RejectionReason, SumSeed, Term, ValidatedProgram, Value,
+    ValueExpr, Var, WitnessBinding, ordered_compare_error,
 };
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -745,16 +745,18 @@ fn decode_error(
 }
 
 /// One index the compiled SQL can seek on: a partial expression index
-/// over one argument position of one predicate, on the digest of the
-/// position's equality key. The digest keeps the entry bounded (a key
-/// holds the value whole, and a subject or a collection can exceed a
-/// btree entry). Correctness never depends on the index.
+/// over one or more argument positions of one predicate, in order, each on
+/// the digest of the position's equality key. The digest keeps each entry
+/// bounded (a key holds the value whole, and a subject or a collection can
+/// exceed a btree entry). Correctness never depends on the index.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct IndexSpec {
     pub(crate) predicate: PredicateName,
-    pub(crate) position: usize,
-    /// The indexed expression, unqualified, as it appears inside the
-    /// parentheses of `CREATE INDEX`.
+    /// Never empty, no position twice.
+    pub(crate) positions: Vec<usize>,
+    /// The indexed expressions, unqualified and comma-separated, as they
+    /// appear inside the parentheses of `CREATE INDEX` and as PostgreSQL's
+    /// `pg_get_expr` lists them.
     pub(crate) expression_sql: String,
     /// The partial-index predicate.
     pub(crate) partial_predicate_sql: String,
@@ -767,22 +769,45 @@ pub(crate) const SEEK_REPRESENTATION: &str = "value_key_v1_digest";
 
 impl IndexSpec {
     pub(crate) fn new(predicate: PredicateName, position: usize) -> Self {
-        let expression_sql = seek_expression("", position);
+        Self::over(predicate, vec![position])
+    }
+
+    /// An index over `positions`, in that order.
+    pub(crate) fn over(predicate: PredicateName, positions: Vec<usize>) -> Self {
+        debug_assert!(!positions.is_empty(), "an index over no position");
+        let expression_sql = positions
+            .iter()
+            .map(|p| seek_expression("", *p))
+            .collect::<Vec<_>>()
+            .join(", ");
         let partial_predicate_sql =
             format!("predicate_name = {}", quote_literal(predicate.as_str()));
         Self {
             predicate,
-            position,
+            positions,
             expression_sql,
             partial_predicate_sql,
         }
     }
 
-    /// The seek expression over a query alias (`qualifier` is the alias
-    /// followed by a dot), spelled as the compiled SQL spells it.
+    /// The positions joined by `sep`: one position is written as it was
+    /// before an index could have several, so its digest and name hold.
+    pub(crate) fn positions_joined(&self, sep: &str) -> String {
+        self.positions
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(sep)
+    }
+
+    /// The seek expressions over a query alias (`qualifier` is the alias
+    /// followed by a dot), spelled as the compiled SQL spells them.
     #[cfg_attr(not(test), expect(dead_code, reason = "only the differentials use it"))]
-    pub(crate) fn seek_expression(&self, qualifier: &str) -> String {
-        seek_expression(qualifier, self.position)
+    pub(crate) fn seek_expressions(&self, qualifier: &str) -> Vec<String> {
+        self.positions
+            .iter()
+            .map(|p| seek_expression(qualifier, *p))
+            .collect()
     }
 
     /// The digest of the whole canonical specification: same digest,
@@ -792,7 +817,7 @@ impl IndexSpec {
         let canonical = format!(
             "morpholog.claims\nbtree\n{}\n{}\n{}\n{}\n{}\n",
             self.predicate,
-            self.position,
+            self.positions_joined(","),
             SEEK_REPRESENTATION,
             self.expression_sql,
             self.partial_predicate_sql
@@ -801,8 +826,16 @@ impl IndexSpec {
     }
 
     /// The deterministic name: a readable reserved prefix plus the digest,
-    /// well under the identifier limit.
+    /// within PostgreSQL's 63-byte identifier limit, which would otherwise
+    /// cut the digest off. The readable parts give way, never the digest:
+    /// past eight positions they are written as a count.
     pub(crate) fn index_name(&self) -> String {
+        let joined = self.positions_joined("_");
+        let positions = if joined.len() <= 16 {
+            joined
+        } else {
+            format!("k{}", self.positions.len())
+        };
         let readable: String = self
             .predicate
             .as_str()
@@ -814,11 +847,10 @@ impl IndexSpec {
                     '_'
                 }
             })
-            .take(24)
+            .take(24.min(32 - positions.len()))
             .collect();
         format!(
-            "morpholog_ci_{readable}_{}_vk1_{}",
-            self.position,
+            "morpholog_ci_{readable}_{positions}_vk1_{}",
             &self.digest()[..12]
         )
     }
@@ -827,11 +859,21 @@ impl IndexSpec {
     /// cannot run inside a transaction.
     pub(crate) fn create_sql(&self) -> String {
         format!(
-            "CREATE INDEX CONCURRENTLY {} ON morpholog.claims USING btree (({})) WHERE {}",
+            "CREATE INDEX CONCURRENTLY {} ON morpholog.claims USING btree ({}) WHERE {}",
             quote_ident(&self.index_name()),
-            self.expression_sql,
+            self.key_list_sql(),
             self.partial_predicate_sql
         )
+    }
+
+    /// The parenthesised key list `CREATE INDEX` takes, each expression in
+    /// its own parentheses.
+    pub(crate) fn key_list_sql(&self) -> String {
+        self.positions
+            .iter()
+            .map(|p| format!("({})", seek_expression("", *p)))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -2446,17 +2488,32 @@ fn compile_invariant(
     };
 
     let plan = ImpactPlan::with_definitions(inv, definitions);
-    // The case-bound check seeks on the case's columns. Without their
-    // indexes it walks the predicate and takes the very lock the bound
-    // exists to avoid.
-    let mut case_indexes: Vec<IndexSpec> = plan
-        .case_variables()
-        .iter()
-        .filter_map(|var| case_cols.get(var))
-        .map(|col| IndexSpec::new(col.predicate.clone(), col.position))
-        .collect();
-    case_indexes.sort();
-    case_indexes.dedup();
+    let (required_indexes, case_indexes) = match uniqueness_key(inv) {
+        // Every case pins the key on the first row, and the second joins
+        // it on the key, so one index over the key serves the whole
+        // check. An index per field left the planner to guess which was
+        // selective, and it chose one every row shared.
+        Some(key) => (vec![key.clone()], vec![key]),
+        None => {
+            // The case-bound check seeks on the case's columns. Without
+            // their indexes it walks the predicate and takes the very
+            // lock the bound exists to avoid.
+            let mut case_indexes: Vec<IndexSpec> = plan
+                .case_variables()
+                .iter()
+                .filter_map(|var| case_cols.get(var))
+                .map(|col| IndexSpec::new(col.predicate.clone(), col.position))
+                .collect();
+            case_indexes.sort();
+            case_indexes.dedup();
+            let required = ctx
+                .required
+                .iter()
+                .map(|(predicate, position)| IndexSpec::new(predicate.clone(), *position))
+                .collect();
+            (required, case_indexes)
+        }
+    };
     Ok(CompiledInvariant {
         name: inv.name.clone(),
         version: inv.version,
@@ -2467,13 +2524,52 @@ fn compile_invariant(
         probe_scopes: error,
         diagnosis,
         values: ctx.values,
-        required_indexes: ctx
-            .required
-            .iter()
-            .map(|(predicate, position)| IndexSpec::new(predicate.clone(), *position))
-            .collect(),
+        required_indexes,
         case_indexes,
     })
+}
+
+/// The most keys a PostgreSQL index holds, as a standard build compiles
+/// it (`SHOW max_index_keys`).
+const INDEX_MAX_KEYS: usize = 32;
+
+/// The index over a uniqueness rule's key, in field order, for a rule a
+/// declared discipline generated: two rows of one predicate that share
+/// the key fields' variables. Any other rule, a generated one of another
+/// shape, or a key of more fields than an index holds has none, and keeps
+/// an index per position it seeks.
+fn uniqueness_key(inv: &Invariant) -> Option<IndexSpec> {
+    if inv.origin != InvariantOrigin::Discipline {
+        return None;
+    }
+    let Prop::Implies { left, .. } = &inv.body else {
+        return None;
+    };
+    let Prop::And(rows) = left.as_ref() else {
+        return None;
+    };
+    let [
+        Prop::Claim { predicate, args: a },
+        Prop::Claim {
+            predicate: other,
+            args: b,
+        },
+    ] = rows.as_slice()
+    else {
+        return None;
+    };
+    if predicate != other || a.len() != b.len() {
+        return None;
+    }
+    let key: Vec<usize> = a
+        .iter()
+        .zip(b)
+        .enumerate()
+        .filter(|(_, pair)| matches!(pair, (Term::Var(x), Term::Var(y)) if x == y))
+        .map(|(i, _)| i)
+        .collect();
+    (!key.is_empty() && key.len() <= INDEX_MAX_KEYS)
+        .then(|| IndexSpec::over(predicate.clone(), key))
 }
 
 /// The dominant shape: `antecedent implies consequent`. Violation = an

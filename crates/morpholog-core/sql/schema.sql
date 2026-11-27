@@ -751,11 +751,21 @@ CREATE INDEX outbox_pending_intent_next_attempt
 -- the command from the specifications the SQL compiler emits; the
 -- catalogue is the truth about what exists, and no correctness rests on
 -- either table - the compiled checks are right without any index.
+-- The positions a specification covers, in order: never empty, never
+-- negative, none twice.
+CREATE FUNCTION index_positions_valid(p integer[]) RETURNS boolean
+    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+    RETURN cardinality(p) > 0
+        AND array_ndims(p) = 1
+        AND array_position(p, NULL) IS NULL
+        AND 0 <= ALL (p)
+        AND cardinality(p) = (SELECT count(DISTINCT x) FROM unnest(p) AS x);
+
 CREATE TABLE managed_index (
     spec_digest        text        PRIMARY KEY,
     index_name         text        NOT NULL UNIQUE,
     predicate_name     text        NOT NULL,
-    position           integer     NOT NULL CHECK (position >= 0),
+    positions          integer[]   NOT NULL CHECK (index_positions_valid(positions)),
     representation     text        NOT NULL,
     expression_sql     text        NOT NULL,
     partial_predicate  text        NOT NULL,
@@ -767,11 +777,11 @@ CREATE TABLE index_requirement (
     spec_digest        text        NOT NULL,
     program_hash       text        NOT NULL,
     reconciled_at      timestamptz NOT NULL DEFAULT now(),
-    -- The argument position the specification seeks on: what says whether
+    -- The argument positions the specification seeks on: what says whether
     -- a statistics object is still needed. Nullable for a binary from before
-    -- it was recorded; resolved from the managed index of the same
+    -- they were recorded; resolved from the managed index of the same
     -- specification where one exists, otherwise unknown.
-    position           integer     CHECK (position >= 0),
+    positions          integer[]   CHECK (index_positions_valid(positions)),
     PRIMARY KEY (program_identity, spec_digest)
 );
 
@@ -1088,4 +1098,5 @@ INSERT INTO schema_migrations (version, name) VALUES
     (29, 'executor_role'),
     (30, 'state_snapshots'),
     (31, 'deployment_identity'),
-    (32, 'rejection_compared_branches');
+    (32, 'rejection_compared_branches'),
+    (33, 'index_positions');

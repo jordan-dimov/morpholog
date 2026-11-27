@@ -339,7 +339,7 @@ pub morpholog_cli::envelopes::ProvisionedIndex::action: morpholog_postgres::inde
 pub morpholog_cli::envelopes::ProvisionedIndex::detail: &'a str
 pub morpholog_cli::envelopes::ProvisionedIndex::name: &'a str
 pub morpholog_cli::envelopes::ProvisionedIndex::needed_by: alloc::vec::Vec<morpholog_cli::envelopes::IndexNeed<'a>>
-pub morpholog_cli::envelopes::ProvisionedIndex::position: usize
+pub morpholog_cli::envelopes::ProvisionedIndex::positions: &'a [usize]
 pub morpholog_cli::envelopes::ProvisionedIndex::predicate: &'a str
 pub morpholog_cli::envelopes::ProvisionedIndex::required_by: &'a [alloc::string::String]
 impl<'a> serde_core::ser::Serialize for morpholog_cli::envelopes::ProvisionedIndex<'a>

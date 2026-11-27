@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT r.program_identity AS \"identity!\", r.spec_digest AS \"digest!\",\n                  r.position AS \"recorded?\",\n                  (SELECT m.position FROM morpholog.managed_index m\n                    WHERE m.spec_digest = r.spec_digest) AS \"managed?\"\n           FROM morpholog.index_requirement r\n           WHERE NOT (r.program_identity = ANY($1))",
+  "query": "SELECT r.program_identity AS \"identity!\", r.spec_digest AS \"digest!\",\n                  r.positions AS \"recorded?\",\n                  (SELECT m.positions FROM morpholog.managed_index m\n                    WHERE m.spec_digest = r.spec_digest) AS \"managed?\"\n           FROM morpholog.index_requirement r\n           WHERE NOT (r.program_identity = ANY($1))",
   "describe": {
     "columns": [
       {
@@ -28,18 +28,18 @@
       {
         "ordinal": 2,
         "name": "recorded?",
-        "type_info": "Int4",
+        "type_info": "Int4Array",
         "origin": {
           "Table": {
             "table": "morpholog.index_requirement",
-            "name": "position"
+            "name": "positions"
           }
         }
       },
       {
         "ordinal": 3,
         "name": "managed?",
-        "type_info": "Int4",
+        "type_info": "Int4Array",
         "origin": "Expression"
       }
     ],
@@ -55,5 +55,5 @@
       null
     ]
   },
-  "hash": "267e2f74463dcf9fc6b3426a22ff0ca64509a2658dbee7d3fd14cf7a3e35527d"
+  "hash": "47279e3cbc66c37bb1adc1056bf1ca0983fc7380641271a02f5c2bc51290d52e"
 }

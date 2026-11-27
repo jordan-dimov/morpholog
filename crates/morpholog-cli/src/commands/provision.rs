@@ -142,7 +142,12 @@ fn print_plan(
             entry.action.to_string(),
             entry.index_name,
             entry.predicate,
-            entry.position,
+            entry
+                .positions
+                .iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
             entry.representation,
             detail(&entry.detail),
             needed_by
