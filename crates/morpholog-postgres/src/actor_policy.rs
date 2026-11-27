@@ -28,7 +28,9 @@
 //! gateways and credentials are. This is actor-assertion policy, not
 //! proof of authorship.
 
-use morpholog_core::{ClaimInstance, EvalValue, PredicateArgKind, Program, Subject, Transition};
+use morpholog_core::{
+    ClaimInstance, EvalValue, PredicateArgKind, Program, Subject, Transformation, Transition,
+};
 use sqlx::postgres::types::Oid;
 use sqlx::{PgPool, Postgres, Transaction};
 
@@ -234,6 +236,15 @@ pub(crate) async fn authorise(
         actor: actor.clone(),
         login_role: login_role.to_string(),
     })
+}
+
+/// Whether an act of `transformation` can admit or retract a claim under
+/// a reserved name, in any branch or loop body. Nothing else an act does
+/// changes what `authorise` reads.
+pub(crate) fn can_write_policy(transformation: &Transformation) -> bool {
+    morpholog_core::predicates_written_by(transformation)
+        .iter()
+        .any(|p| POLICY_PREDICATES.contains(&p.as_str()))
 }
 
 fn subject_value(value: &str) -> serde_json::Value {

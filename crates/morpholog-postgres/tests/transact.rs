@@ -46,6 +46,10 @@ transformation arm(person, login_role):
 
 transformation revoke(person, login_role):
     retract ActorAssertionAuthority(person, login_role)
+
+transformation revoke_if(person, login_role, now: Decimal):
+    if now = 1:
+        retract ActorAssertionAuthority(person, login_role)
 "#;
 
 fn fixture() -> Program {
@@ -283,6 +287,130 @@ async fn later_authorisation_reads_the_policy_as_earlier_acts_left_it() {
         .await,
         1,
         "x1 was never admitted"
+    );
+}
+
+/// B is restricted and granted to this connection's role, D restricted
+/// with no grant, C never restricted. The connection's role.
+async fn three_actors(pool: &PgPool, pg: &PgProgram) -> String {
+    let login_role: String = sqlx::query_scalar("SELECT session_user")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    for proposal in [
+        act("arm", "bootstrap", vec![subj("b"), subj(&login_role)]),
+        act("arm", "bootstrap", vec![subj("d"), subj(&login_role)]),
+        act("revoke", "bootstrap", vec![subj("d"), subj(&login_role)]),
+    ] {
+        let outcome = propose_against_pg(pool, pg, &proposal).await.unwrap();
+        assert!(matches!(outcome, PgProposalOutcome::Committed { .. }));
+    }
+    login_role
+}
+
+/// With no act able to change the policy, each actor is still judged at
+/// its first act, in act order: an actor with no grant is refused where
+/// it first appears, and a refusal before that is the batch's answer.
+#[tokio::test]
+async fn each_actor_is_authorised_at_its_first_act_in_act_order() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let pg = common::pg_program(fixture());
+    three_actors(&pool, &pg).await;
+
+    let outcome = propose_all_against_pg(
+        &pool,
+        &pg,
+        &[
+            act("open", "b", vec![subj("x1")]),
+            act("open", "c", vec![subj("x2")]),
+            act("open", "b", vec![subj("x3")]),
+            act("open", "c", vec![subj("x4")]),
+        ],
+    )
+    .await
+    .unwrap();
+    let PgAtomicOutcome::Committed { acts } = outcome else {
+        panic!("b and c may both act");
+    };
+    let actors: Vec<&str> = acts.iter().map(|a| a.actor.as_str()).collect();
+    assert_eq!(actors, ["b", "c", "b", "c"]);
+
+    let err = propose_all_against_pg(
+        &pool,
+        &pg,
+        &[
+            act("open", "b", vec![subj("y1")]),
+            act("open", "c", vec![subj("y2")]),
+            act("open", "d", vec![subj("y3")]),
+            act("open", "b", vec![subj("y4")]),
+        ],
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, PgError::ActorAssertionUnauthorised { actor, .. } if actor.as_str() == "d"),
+        "{err}"
+    );
+
+    let outcome = propose_all_against_pg(
+        &pool,
+        &pg,
+        &[
+            act("open", "b", vec![subj("z1")]),
+            act("post", "b", vec![subj("ghost"), dec(5)]),
+            act("open", "d", vec![subj("z3")]),
+        ],
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(outcome, PgAtomicOutcome::Rejected { act: 2, .. }),
+        "the gate at act 2 answers before d's first act: {outcome:?}"
+    );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM morpholog.claims WHERE predicate_name = 'Account'"
+        )
+        .await,
+        4,
+        "only the committed batch wrote"
+    );
+}
+
+/// A revocation in a branch counts as a policy write whether or not the
+/// branch is taken, so B's later act is judged again: refused when the
+/// branch revoked its grant, admitted when it did not.
+#[tokio::test]
+async fn a_revocation_inside_an_if_reaches_the_actor_s_later_act() {
+    let pool = test_pool().await;
+    reset_db(&pool).await;
+    let pg = common::pg_program(fixture());
+    let login_role = three_actors(&pool, &pg).await;
+
+    let batch = |now: i64| {
+        [
+            act("open", "b", vec![subj(&format!("x{now}a"))]),
+            act(
+                "revoke_if",
+                "bootstrap",
+                vec![subj("b"), subj(&login_role), dec(now)],
+            ),
+            act("open", "b", vec![subj(&format!("x{now}b"))]),
+        ]
+    };
+    let err = propose_all_against_pg(&pool, &pg, &batch(1))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, PgError::ActorAssertionUnauthorised { actor, .. } if actor.as_str() == "b"),
+        "{err}"
+    );
+    let outcome = propose_all_against_pg(&pool, &pg, &batch(0)).await.unwrap();
+    assert!(
+        matches!(outcome, PgAtomicOutcome::Committed { ref acts } if acts.len() == 3),
+        "{outcome:?}"
     );
 }
 

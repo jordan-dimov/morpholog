@@ -142,15 +142,24 @@ pub async fn propose_all_against_pg(
     }
     let mut state = load_state(&mut tx, &scope).await?;
 
+    // The batch runs on one login in one snapshot, so only its own acts
+    // can change the policy. When none can, an actor authorised once stays
+    // authorised; each is still authorised at its first act, in act order.
+    let policy_fixed = !acts
+        .iter()
+        .any(|(t, _)| crate::actor_policy::can_write_policy(t));
+    let mut authorised = std::collections::HashSet::from([&acts[0].1.actor]);
+
     let mut receipts = Vec::with_capacity(acts.len());
     // Every act's admissions so far, so an error query orders the batch's
     // rows as the kernel's candidate state holds them.
     let mut steps: Vec<DeltaStep> = Vec::new();
     for (index, (transformation, transition)) in acts.iter().enumerate() {
         let row = index as u64 + 1;
-        if index > 0 {
+        if index > 0 && !(policy_fixed && authorised.contains(&transition.actor)) {
             // Against the policy as the acts before this one left it.
             crate::actor_policy::authorise(&mut tx, &transition.actor, &login_role.name).await?;
+            authorised.insert(&transition.actor);
         }
         // Each act draws on its own, so its row records its own draws.
         let Drawn { decided, draws } =
