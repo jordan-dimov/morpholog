@@ -583,6 +583,19 @@ class Provisioning(unittest.TestCase):
         self.assertFalse(report.dry_run)
         self.assertIn("arguments -> 7", report.indexes[1].detail)
 
+    def test_an_index_names_the_positions_it_covers_in_order(self):
+        report = envelopes.ProvisionReport.from_json(golden("provision_report_applied.json"))
+        self.assertEqual(report.indexes[0].positions, [0])
+        payload = golden("provision_report_applied.json")
+        payload["indexes"][0]["positions"] = [2, 0, 1]
+        self.assertEqual(
+            envelopes.ProvisionReport.from_json(payload).indexes[0].positions, [2, 0, 1]
+        )
+        for refused in ([], [-1], ["0"], [True], 0):
+            payload["indexes"][0]["positions"] = refused
+            with self.assertRaises(envelopes.EnvelopeError, msg=repr(refused)):
+                envelopes.ProvisionReport.from_json(payload)
+
     def test_a_conflict_in_the_statistics_alone_is_a_conflict(self):
         payload = golden("provision_report_conflict.json")
         payload["indexes"][1]["action"] = "keep"

@@ -17,7 +17,9 @@
           "program": "ledger"
         }
       ],
-      "position": 0,
+      "positions": [
+        0
+      ],
       "predicate": "JournalEntry",
       "required_by": [
         "ledger"
@@ -34,7 +36,9 @@
           "program": "ledger"
         }
       ],
-      "position": 1,
+      "positions": [
+        1
+      ],
       "predicate": "JournalLine",
       "required_by": [
         "ledger"

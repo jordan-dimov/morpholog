@@ -1778,7 +1778,7 @@
     "provisioned_index": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["action", "name", "needed_by", "position", "predicate", "required_by"],
+      "required": ["action", "name", "needed_by", "positions", "predicate", "required_by"],
       "properties": {
         "action": {
           "enum": [
@@ -1801,7 +1801,13 @@
             }
           }
         },
-        "position": { "type": "integer" },
+        "positions": {
+          "description": "The argument positions the index covers, in order: one for an index over one position, several for a uniqueness key.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 0 }
+        },
         "predicate": { "type": "string" },
         "required_by": { "type": "array", "items": { "type": "string" } }
       }

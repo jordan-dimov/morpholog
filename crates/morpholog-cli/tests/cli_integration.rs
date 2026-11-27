@@ -5353,7 +5353,9 @@ async fn provision_indexes_names_the_rules_and_transformations_behind_each_index
             .as_array()
             .unwrap()
             .iter()
-            .find(|i| i["predicate"] == predicate && i["position"] == position)
+            .find(|i| {
+                i["predicate"] == predicate && i["positions"] == serde_json::json!([position])
+            })
             .unwrap_or_else(|| panic!("{predicate}[{position}]: {stdout}"));
         index["needed_by"]
             .as_array()
@@ -5389,7 +5391,7 @@ async fn provision_indexes_names_the_rules_and_transformations_behind_each_index
         sorted.sort();
         sorted.dedup();
         assert_eq!(keys.len(), sorted.len(), "each need once: {index}");
-        if index["predicate"] == "Limit" && index["position"] == 0 {
+        if index["predicate"] == "Limit" && index["positions"] == serde_json::json!([0]) {
             assert_eq!(*required_by, ["desk", "watch"], "{index}");
         }
     }
