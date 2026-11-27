@@ -5739,38 +5739,38 @@ async fn check_verbose_does_not_vouch_for_a_database_s_indexes() {
     assert!(!offline.contains("provisioning"), "{offline}");
 }
 
-/// A database name given where a URL belongs is answered with the URL it
-/// probably meant, still as a connection failure with its code. A value
-/// that is not a bare name is not echoed, since it may hold a password,
-/// and a real URL that fails to connect gets no hint.
+/// A database name given where a URL belongs is told the URL form, still
+/// as a connection failure with its code. The value is never echoed, since
+/// it may be a password, and a real URL that fails to connect gets no hint.
 #[test]
 fn a_bare_database_name_is_told_the_url_form() {
     let ledger = ledger_morph();
     let check = |url: &str| run_cli_no_db(&["check", "--json", &ledger, "--database-url", url]);
+    let hint = "give one such as `postgres:///DBNAME`";
 
-    let (status, stdout, stderr) = check("morpholog_dev");
-    assert_eq!(status.code(), Some(1), "{stderr}");
-    let error: Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(error["code"], "connect_failed", "{stdout}");
-    let hint = "did you mean `postgres:///morpholog_dev`?";
-    assert!(error["error"].as_str().unwrap().contains(hint), "{stdout}");
-    assert!(stderr.contains(hint), "{stderr}");
-
-    let (status, stdout, stderr) = check("ops:secret@db.example/ledger");
-    assert_eq!(status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("not a URL"), "{stderr}");
-    assert!(
-        !format!("{stdout}{stderr}").contains("secret"),
-        "{stdout}{stderr}"
-    );
+    // The last two are passwords set in the wrong place, and are never
+    // printed back.
+    for value in [
+        "morpholog_dev",
+        "MySecretPassword2026",
+        "ops:secret@db.example/ledger",
+    ] {
+        let (status, stdout, stderr) = check(value);
+        assert_eq!(status.code(), Some(1), "{stderr}");
+        let error: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(error["code"], "connect_failed", "{stdout}");
+        assert!(error["error"].as_str().unwrap().contains(hint), "{stdout}");
+        assert!(stderr.contains(hint), "{stderr}");
+        let printed = format!("{stdout}{stderr}");
+        for secret in [value, "secret", "Password"] {
+            assert!(!printed.contains(secret), "{value}: {printed}");
+        }
+    }
 
     let (status, stdout, stderr) = check("postgres:///nothing?port=1");
     assert_eq!(status.code(), Some(1), "{stderr}");
     assert!(stdout.contains("connect_failed"), "{stdout}");
-    assert!(
-        !stderr.contains("did you mean") && !stderr.contains("not a URL"),
-        "{stderr}"
-    );
+    assert!(!stderr.contains(hint), "{stderr}");
 }
 
 /// The generated Python client builds the audit log's history index and

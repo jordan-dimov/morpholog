@@ -248,16 +248,19 @@ pub(crate) async fn connect_single(url: &str) -> anyhow::Result<PgPool> {
 #[derive(Debug)]
 pub(crate) struct ConnectFailed {
     source: Box<dyn std::error::Error + Send + Sync>,
-    hint: Option<String>,
+    not_a_url: bool,
 }
 
 impl std::fmt::Display for ConnectFailed {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("failed to connect to PostgreSQL")?;
-        match &self.hint {
-            Some(hint) => write!(f, " ({hint})"),
-            None => Ok(()),
+        if self.not_a_url {
+            f.write_str(
+                " (the value is not a URL, as a bare database name is not: \
+                 give one such as `postgres:///DBNAME`)",
+            )?;
         }
+        Ok(())
     }
 }
 
@@ -267,28 +270,15 @@ impl std::error::Error for ConnectFailed {
     }
 }
 
-/// `url` is the value as given. It is echoed only when it is a bare
-/// database name, which cannot carry a password.
+/// `url` is the value as given, and is never echoed: a value that is not
+/// a URL may be a password set in the wrong place.
 pub(crate) fn connect_failed(
     url: &str,
     err: impl Into<Box<dyn std::error::Error + Send + Sync>>,
 ) -> anyhow::Error {
-    let bare_name = !url.is_empty()
-        && url
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '$'));
-    let hint = if url.contains("://") {
-        None
-    } else if bare_name {
-        Some(format!(
-            "`{url}` is a database name, not a URL: did you mean `postgres:///{url}`?"
-        ))
-    } else {
-        Some("the value is not a URL: give one such as `postgres:///DBNAME`".to_string())
-    };
     anyhow::Error::new(ConnectFailed {
         source: err.into(),
-        hint,
+        not_a_url: !url.contains("://"),
     })
 }
 
