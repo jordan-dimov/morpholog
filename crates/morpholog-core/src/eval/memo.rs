@@ -56,11 +56,14 @@ pub(crate) struct Memo {
     /// it is answered through when that count is a sum over a set in an
     /// order. The address saves hashing the node on every call; the node
     /// is compared on a hit, since a freed address can be reused.
-    exists: RefCell<HashMap<usize, (Prop, Option<Rc<ValueExpr>>)>>,
+    exists: RefCell<HashMap<usize, ExistsEntry>>,
     computed: Cell<usize>,
     groups_built: Cell<usize>,
     probes_answered: Cell<usize>,
 }
+
+/// An `exists`, and the count it is answered through, if any.
+type ExistsEntry = (Prop, Option<Rc<ValueExpr>>);
 
 struct Entry {
     mentions: Rc<[Var]>,
