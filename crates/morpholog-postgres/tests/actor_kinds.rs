@@ -307,6 +307,31 @@ async fn no_act_leaves_an_actor_two_kinds_and_no_kind_reaches_the_root() {
     .await;
 }
 
+/// The root moves a user to another kind between two of the user's acts
+/// in one batch, on a login granted the first kind only. The later act is
+/// judged against the moved kind and refused, and nothing commits.
+#[tokio::test]
+async fn a_kind_the_root_changes_mid_batch_reaches_the_actor_s_later_act() {
+    with_logins("mid", |admin, root, host, _service, logins| async move {
+        deploy(&admin, &root, &logins).await;
+        committed(&root, "grant_kind", &["user", &logins.root], ROOT).await;
+        committed(&host, "sign_up", &["ana@example.com", "user"], HOST).await;
+        let ana = account(&admin, "ana@example.com").await;
+        let p = program();
+        let batch = [
+            Proposal::gateway(&transition("note", &["first"], &ana)),
+            Proposal::gateway(&transition("reclassify", &[&ana, "user", "staff"], ROOT)),
+            Proposal::gateway(&transition("note", &["second"], &ana)),
+        ];
+        assert!(matches!(
+            propose_all_against_pg(&root, &p, &batch).await,
+            Err(PgError::ActorAssertionUnauthorised { actor, .. }) if actor.as_str() == ana
+        ));
+        committed(&root, "note", &["still a user"], &ana).await;
+    })
+    .await;
+}
+
 /// The acceptance side: open, policy writes are the programme's to gate
 /// and kinds grant nothing, as before. Closing refuses an actor that
 /// holds two kinds.
