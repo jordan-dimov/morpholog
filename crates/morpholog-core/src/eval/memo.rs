@@ -316,9 +316,9 @@ mod tests {
         assert!(holds(&rule, &state, &[], false).0);
     }
 
-    /// What `check -v` prints for a grid is what a full grid computes:
-    /// 25 points, each computing the copied figure once and the other
-    /// figure once. A window off the grid by half an hour meets every
+    /// Where nothing inside a point ranges over claims, what `check -v`
+    /// prints for a grid is what a full grid computes: 25 points, each
+    /// computing the copied figure once and the other figure once. A window off the grid by half an hour meets every
     /// period its bound allows.
     #[test]
     fn a_grid_computes_what_its_cost_line_says() {

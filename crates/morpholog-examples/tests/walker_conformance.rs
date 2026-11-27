@@ -323,7 +323,8 @@ transformation publish(day):
 
 /// A grid whose points reach a sum through a definition under `not`,
 /// and a `max` inside a conditional: the cost walk must follow the call
-/// and take both children.
+/// and take both children. A sum over two grids at once ranges over
+/// their product.
 const GRID_WITH_NESTED_FIGURES: &str = "\
 program grid_with_nested_figures
 predicate Day(day: Date, starts_at: Timestamp, ends_at: Timestamp)
@@ -340,6 +341,12 @@ transformation load(day, hour, mw):
     admit Load(day, hour, mw)
 transformation cap(mw):
     admit Cap(mw)
+transformation spread(day, starts_at, ends_at):
+    require ends_at - starts_at no_longer_than duration(PT2H)
+    let hours = periods(starts_at, ends_at, duration(PT1H))
+    let quarters = periods(starts_at, ends_at, duration(PT15M))
+    require sum(load_at(day, h) + load_at(day, q) | h in hours and q in quarters) <= 100
+    admit Day(day, starts_at, ends_at)
 ";
 
 /// A digest in a rule and in a gate, with a literal, case variables and
@@ -722,16 +729,23 @@ fn a_sum_inside_a_branch_receives_its_seed() {
 }
 
 /// The cost walk reaches the sum through the call under `not` and the
-/// `max` in the conditional's branch.
+/// `max` in the conditional's branch, and multiplies two grids one sum
+/// ranges over.
 #[test]
 fn the_grid_cost_reaches_every_nested_figure() {
     let program = parsed("grid_with_nested_figures", GRID_WITH_NESTED_FIGURES);
     assert_eq!(
         grid_costs(&program),
-        [(
-            "invariant `within_cap`".to_string(),
-            "up to 26 points x 1 sum and 1 max over Load".to_string()
-        )]
+        [
+            (
+                "transformation `spread`, statement 4".to_string(),
+                "up to 3 x 9 points x 2 sums over Load".to_string()
+            ),
+            (
+                "invariant `within_cap`".to_string(),
+                "up to 26 points x 1 sum and 1 max over Load".to_string()
+            )
+        ]
     );
 }
 

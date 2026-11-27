@@ -5,7 +5,9 @@
 use jiff::SignedDuration;
 
 use crate::fold::Node;
-use crate::ir::{ArithOp, Builtin, CompareOp, OrderedDomain, Prop, Term, Value, ValueExpr, Var};
+use crate::ir::{
+    ArithOp, Builtin, CompareOp, OrderedDomain, Prop, Stmt, Term, Value, ValueExpr, Var,
+};
 
 /// A gate of the form `until - from no_longer_than duration(...)` (or
 /// strictly shorter), or the same comparison written the other way
@@ -106,16 +108,29 @@ pub(crate) fn max_periods(bound: SignedDuration, step: SignedDuration) -> u128 {
     bound.div_ceil(step) + 1
 }
 
-/// The window bounds among `nodes`, the nodes of one rule or one
-/// definition body.
-pub(crate) fn window_bounds<'a>(nodes: &[Node<'a>]) -> Vec<WindowBound<'a>> {
-    nodes
-        .iter()
-        .filter_map(|node| match node {
-            Node::Prop(prop) => window_bound(prop),
-            Node::Stmt(_) | Node::Value(_) | Node::Slot(_) | Node::Binder(_) => None,
-        })
-        .collect()
+/// What one rule or one definition body says about the windows its
+/// grids range over: every window bound it states, and the names a `let`
+/// makes an alias of another or aliases.
+#[derive(Clone, Default)]
+pub(crate) struct Frame<'a> {
+    bounds: Vec<WindowBound<'a>>,
+    aliased: Vec<&'a Var>,
+}
+
+/// The frame of `nodes`, the nodes of one rule or one definition body.
+pub(crate) fn frame<'a>(nodes: &[Node<'a>]) -> Frame<'a> {
+    let mut frame = Frame::default();
+    for node in nodes {
+        match node {
+            Node::Prop(prop) => frame.bounds.extend(window_bound(prop)),
+            Node::Stmt(Stmt::Let {
+                name,
+                value: ValueExpr::Term(Term::Var(of)),
+            }) => frame.aliased.extend([name, of]),
+            Node::Stmt(_) | Node::Value(_) | Node::Slot(_) | Node::Binder(_) => {}
+        }
+    }
+    frame
 }
 
 /// A grid's size: the window bound and literal step that fix it, and the
@@ -126,9 +141,14 @@ pub(crate) struct GridSize {
     pub(crate) periods: u128,
 }
 
-/// The size of `expr` when it is a `periods` call over two variables one
-/// of `bounds` names, with a literal step.
-pub(crate) fn grid_size(expr: &ValueExpr, bounds: &[WindowBound<'_>]) -> Option<GridSize> {
+/// The size of `expr` when it is a `periods` call over two variables the
+/// frame bounds, with a literal step. Validation accepts a grid only
+/// after a bound that holds where it stands, matched through aliases and
+/// rebindings, and this match is by name. So the largest bound with the
+/// grid's names is taken, which is at least the one that holds, and a
+/// grid over an aliased name has no size here: its bound may be written
+/// with the other name.
+pub(crate) fn grid_size(expr: &ValueExpr, frame: &Frame<'_>) -> Option<GridSize> {
     let (from, until, step) = grid_call(expr)?;
     let (
         ValueExpr::Term(Term::Var(from)),
@@ -138,10 +158,15 @@ pub(crate) fn grid_size(expr: &ValueExpr, bounds: &[WindowBound<'_>]) -> Option<
     else {
         return None;
     };
-    let bound = bounds
+    if frame.aliased.contains(&from) || frame.aliased.contains(&until) {
+        return None;
+    }
+    let bound = frame
+        .bounds
         .iter()
-        .find(|b| b.until == until && b.from == from)?
-        .bound;
+        .filter(|b| b.until == until && b.from == from)
+        .map(|b| b.bound)
+        .max()?;
     Some(GridSize {
         bound,
         step: *step,

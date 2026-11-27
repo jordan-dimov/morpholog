@@ -636,10 +636,10 @@ pub fn lints(prepared: &PreparedProgram) -> Vec<Lint> {
 fn large_grid_findings(program: &Program, out: &mut Vec<Lint>) {
     use crate::check::grid;
     for (owner, _, nodes) in rules(program) {
-        let bounds = grid::window_bounds(&nodes);
+        let frame = grid::frame(&nodes);
         for node in &nodes {
             if let fold::Node::Value(expr) = node
-                && let Some(size) = grid::grid_size(expr, &bounds)
+                && let Some(size) = grid::grid_size(expr, &frame)
                 && size.periods > LARGE_GRID_PERIODS
             {
                 out.push(Lint::LargeGrid {
