@@ -357,6 +357,14 @@ pub(crate) fn read_anchor(
         .transpose()
 }
 
+/// Binds the root to the role that now holds its login's name. It names
+/// no role itself, so it needs no quoting, and it changes nothing when no
+/// such role exists or the OID already matches.
+const REBIND_ROOT_LOGIN: &str = "UPDATE morpholog.deployment_identity AS d \
+     SET root_login_oid = r.oid FROM pg_catalog.pg_roles AS r \
+     WHERE d.closed AND r.rolname = d.root_login \
+     AND d.root_login_oid IS DISTINCT FROM r.oid";
+
 /// Say on stderr that the deployment is open, on every run that reads it,
 /// so a deployment nobody closed is never taken for a closed one; and
 /// that a closed one's root login is no longer the role it was closed
@@ -379,13 +387,11 @@ pub(crate) async fn warn_on_identity(
         } => eprintln!(
             "warning: no role named `{root_login}` holds the OID this deployment was \
              closed under, so acts as the root actor `{}` are refused. A restore onto \
-             another cluster gives roles new OIDs, and so does a role dropped and made \
-             again. Once you have checked that `{root_login}` is the intended principal, \
-             rebind it as the owner: UPDATE morpholog.deployment_identity SET \
-             root_login_oid = (SELECT oid FROM pg_roles WHERE rolname = '{}'); see \
+             another cluster usually gives roles new OIDs, and so does a role dropped \
+             and made again. Once you have checked that `{root_login}` is the intended \
+             principal, rebind it as the owner: {REBIND_ROOT_LOGIN}; see \
              docs/install.md, \"Restoring onto another cluster\"",
             root_actor.as_str(),
-            root_login.replace('\'', "''"),
         ),
         DeploymentIdentity::Closed { .. } => {}
     }

@@ -302,9 +302,12 @@ async fn a_root_login_with_another_oid_is_named_and_rebound() {
     assert_eq!(refused.0.code(), Some(1), "{}", refused.2);
     let refusal: serde_json::Value = serde_json::from_str(&refused.1).unwrap();
     assert_eq!(refusal["code"], "actor_assertion_unauthorised", "{refusal}");
+    let rebind = rebind.expect("the warning prints the rebind");
+    let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let guide = std::fs::read_to_string(common::repo_root().join("docs/install.md")).unwrap();
     assert!(
-        rebind.is_some(),
-        "the warning prints the rebind: {check_moved}"
+        words(&guide).contains(&format!("{};", words(&rebind))),
+        "the install guide gives the rebind the warning prints: {rebind}"
     );
     assert!(!check_rebound.contains("holds the OID"), "{check_rebound}");
     assert!(

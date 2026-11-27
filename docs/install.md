@@ -316,16 +316,21 @@ deployment alone. If they don't, the next `migrate` warns.
 
 A closed deployment holds its root login by OID as well as by name, so a
 role dropped and made again under the same name is not the root. A
-`pg_dump` restore onto another cluster looks the same: the roles you
-recreate there by name get new OIDs, and the root actor is refused.
+`pg_dump` restore onto another cluster usually looks the same: the roles
+you recreate there by name get new OIDs, and the root actor is refused.
 `migrate` and `check --database-url` warn about it before the first act.
+The warning sees an OID that no longer matches. It cannot tell whether
+the database moved: a recreated role that happens to get the old OID is
+taken for the root.
 
 Check that the role of that name is the principal you mean to trust.
 Then, as the owner, rebind the root to it:
 
 ```sql
-UPDATE morpholog.deployment_identity
-SET root_login_oid = (SELECT oid FROM pg_roles WHERE rolname = '<root login>');
+UPDATE morpholog.deployment_identity AS d
+SET root_login_oid = r.oid FROM pg_catalog.pg_roles AS r
+WHERE d.closed AND r.rolname = d.root_login
+AND d.root_login_oid IS DISTINCT FROM r.oid;
 ```
 
 Only the root needs this. Grants to other logins are claims about actors,
