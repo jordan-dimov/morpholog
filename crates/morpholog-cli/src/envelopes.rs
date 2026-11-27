@@ -547,7 +547,7 @@ impl<'a> From<&'a morpholog_postgres::ProvisionReport> for ProvisionReport<'a> {
                             program: &n.program,
                         })
                         .collect(),
-                    position: e.position,
+                    position: e.positions[0],
                     predicate: &e.predicate,
                     required_by: &e.required_by,
                 })

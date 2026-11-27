@@ -26,8 +26,8 @@
 //! Indexes are built and dropped `CONCURRENTLY`, each as its own statement
 //! outside any transaction, so the table stays writable. A session advisory
 //! lock lets only one provisioner run at a time. Equivalence is structural:
-//! the expression and partial predicate as PostgreSQL renders them, the
-//! access method and the key count. Never `CREATE` strings or
+//! the expressions, in order, and the partial predicate as PostgreSQL renders
+//! them, the access method and the key count. Never `CREATE` strings or
 //! `IF NOT EXISTS`.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -110,10 +110,11 @@ pub struct IndexPlanEntry {
     pub action: IndexAction,
     pub index_name: String,
     pub predicate: String,
-    pub position: usize,
+    /// The argument positions the index covers, in order.
+    pub positions: Vec<usize>,
     pub representation: &'static str,
-    /// The indexed expression, as it appears inside `CREATE INDEX`'s
-    /// parentheses, and the partial predicate; empty on a stale entry.
+    /// The indexed expressions, comma-separated as `pg_get_expr` lists
+    /// them, and the partial predicate; empty on a stale entry.
     pub expression_sql: String,
     pub partial_predicate_sql: String,
     /// What the action rests on: the external index that satisfies, what
@@ -285,9 +286,10 @@ pub async fn provision_indexes(
 struct CatalogueIndex {
     name: String,
     valid: bool,
-    /// A btree over exactly one expression key: the only shape a
-    /// specification produces, so anything else cannot be equivalent.
-    single_expression_btree: bool,
+    /// For a btree whose every key is an expression and which includes
+    /// nothing else, how many keys: the only shape a specification
+    /// produces, so anything else cannot be equivalent.
+    expression_keys: Option<usize>,
     expression: Option<String>,
     partial: Option<String>,
 }
@@ -314,7 +316,10 @@ async fn catalogue(conn: &mut sqlx::PgConnection) -> Result<Vec<CatalogueIndex>,
         .map(|r| CatalogueIndex {
             name: r.name,
             valid: r.valid,
-            single_expression_btree: r.am == "btree" && r.keys == 1 && r.indkey == "0",
+            expression_keys: (r.am == "btree"
+                && r.indkey.split(' ').count() == r.keys as usize
+                && r.indkey.split(' ').all(|k| k == "0"))
+            .then_some(r.keys as usize),
             expression: r.expression,
             partial: r.partial,
         })
@@ -341,8 +346,9 @@ async fn normalise(
         .await
         .map_err(classify)?;
         sqlx::query(sqlx::AssertSqlSafe(format!(
-            "CREATE INDEX morpholog_index_probe_ix ON morpholog_index_probe USING btree (({})) WHERE {}",
-            spec.expression_sql, spec.partial_predicate_sql
+            "CREATE INDEX morpholog_index_probe_ix ON morpholog_index_probe USING btree ({}) WHERE {}",
+            spec.key_list_sql(),
+            spec.partial_predicate_sql
         )))
         .execute(&mut *conn)
         .await
@@ -371,7 +377,9 @@ fn classify_spec(
 ) -> (IndexAction, String) {
     let name = spec.index_name();
     let equivalent = |ix: &CatalogueIndex| {
-        ix.single_expression_btree && ix.expression == normalised.0 && ix.partial == normalised.1
+        ix.expression_keys == Some(spec.positions.len())
+            && ix.expression == normalised.0
+            && ix.partial == normalised.1
     };
     if let Some(ours) = catalogue.iter().find(|ix| ix.name == name) {
         if !equivalent(ours) {
@@ -608,10 +616,10 @@ async fn reconcile(
 struct Prospective {
     /// Who requires each specification, by spec digest.
     required: BTreeMap<String, BTreeSet<String>>,
-    /// The position each required specification seeks on, where known: a
-    /// named programme's specification says it, a recorded requirement may,
-    /// and the managed index of the same specification does.
-    position_of: BTreeMap<String, usize>,
+    /// The positions each required specification seeks on, where known: a
+    /// named programme's specification says them, a recorded requirement
+    /// may, and the managed index of the same specification does.
+    position_of: BTreeMap<String, Vec<usize>>,
     /// Outside identities with a requirement whose position none of those
     /// resolve.
     positions_unknown_for: Vec<String>,
@@ -630,7 +638,7 @@ impl Prospective {
     fn required_positions(&self) -> BTreeMap<usize, BTreeSet<String>> {
         let mut by_position: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();
         for (digest, identities) in &self.required {
-            if let Some(position) = self.position_of.get(digest) {
+            for position in self.position_of.get(digest).into_iter().flatten() {
                 by_position
                     .entry(*position)
                     .or_default()
@@ -651,8 +659,8 @@ async fn prospective_requirements(
     // the rows, which made the committed cache differ from a checked one.
     let outside = sqlx::query!(
         r#"SELECT r.program_identity AS "identity!", r.spec_digest AS "digest!",
-                  r.position AS "recorded?",
-                  (SELECT m.position FROM morpholog.managed_index m
+                  r.positions AS "recorded?",
+                  (SELECT m.positions FROM morpholog.managed_index m
                     WHERE m.spec_digest = r.spec_digest) AS "managed?"
            FROM morpholog.index_requirement r
            WHERE NOT (r.program_identity = ANY($1))"#,
@@ -662,20 +670,24 @@ async fn prospective_requirements(
     .await
     .map_err(classify_checked_query)?;
     let mut required: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut position_of: BTreeMap<String, usize> = BTreeMap::new();
-    // A position decides what a prune drops, so every source that knows
-    // one for a specification must say the same; a disagreement is
+    let mut position_of: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    // Positions decide what a prune drops, so every source that knows
+    // them for a specification must say the same; a disagreement is
     // refused before any change rather than settled by whichever came
     // first.
-    let mut learn = |digest: &str, position: i32, source: &str| -> Result<(), PgError> {
-        let position = usize::try_from(position).map_err(|_| {
-            PgError::InvalidState(format!(
-                "the {source} of specification {digest} records position {position}"
-            ))
-        })?;
-        match position_of.insert(digest.to_string(), position) {
-            Some(known) if known != position => Err(PgError::InvalidState(format!(
-                "specification {digest} seeks on position {known}, but the {source} records {position}; \
+    let mut learn = |digest: &str, positions: &[i32], source: &str| -> Result<(), PgError> {
+        let positions = positions
+            .iter()
+            .map(|p| usize::try_from(*p))
+            .collect::<Result<Vec<usize>, _>>()
+            .map_err(|_| {
+                PgError::InvalidState(format!(
+                    "the {source} of specification {digest} records positions {positions:?}"
+                ))
+            })?;
+        match position_of.insert(digest.to_string(), positions.clone()) {
+            Some(known) if known != positions => Err(PgError::InvalidState(format!(
+                "specification {digest} seeks on positions {known:?}, but the {source} records {positions:?}; \
                  provisioning refuses to drop anything until the registry agrees with itself"
             ))),
             _ => Ok(()),
@@ -687,7 +699,8 @@ async fn prospective_requirements(
                 .entry(spec.digest())
                 .or_default()
                 .insert(program.identity.clone());
-            learn(&spec.digest(), spec.position as i32, "named programme")?;
+            let positions: Vec<i32> = spec.positions.iter().map(|p| *p as i32).collect();
+            learn(&spec.digest(), &positions, "named programme")?;
         }
     }
     for row in &outside {
@@ -695,11 +708,11 @@ async fn prospective_requirements(
             .entry(row.digest.clone())
             .or_default()
             .insert(row.identity.clone());
-        if let Some(position) = row.managed {
-            learn(&row.digest, position, "managed index")?;
+        if let Some(positions) = &row.managed {
+            learn(&row.digest, positions, "managed index")?;
         }
-        if let Some(position) = row.recorded {
-            learn(&row.digest, position, "recorded requirement")?;
+        if let Some(positions) = &row.recorded {
+            learn(&row.digest, positions, "recorded requirement")?;
         }
     }
     let positions_unknown_for: Vec<String> = outside
@@ -828,7 +841,7 @@ async fn reconcile_locked(
             action,
             index_name: spec.index_name(),
             predicate: spec.predicate.to_string(),
-            position: spec.position,
+            positions: spec.positions.clone(),
             representation: crate::compiled::SEEK_REPRESENTATION,
             expression_sql: spec.expression_sql.clone(),
             partial_predicate_sql: spec.partial_predicate_sql.clone(),
@@ -843,7 +856,7 @@ async fn reconcile_locked(
     let current: BTreeSet<String> = specs.iter().map(IndexSpec::digest).collect();
     let managed = sqlx::query!(
         r#"SELECT m.spec_digest AS "digest!", m.index_name AS "index_name!",
-                  m.predicate_name AS "predicate!", m.position AS "position!",
+                  m.predicate_name AS "predicate!", m.positions AS "positions!",
                   m.representation AS "representation!"
            FROM morpholog.managed_index m
            ORDER BY m.index_name"#,
@@ -935,14 +948,18 @@ async fn reconcile_locked(
             }
             sqlx::query!(
                 "INSERT INTO morpholog.managed_index
-                    (spec_digest, index_name, predicate_name, position, representation,
+                    (spec_digest, index_name, predicate_name, positions, representation,
                      expression_sql, partial_predicate)
                  VALUES ($1, $2, $3, $4, $5, $6, $7)
                  ON CONFLICT (spec_digest) DO NOTHING",
                 spec.digest(),
                 spec.index_name(),
                 spec.predicate.as_str(),
-                spec.position as i32,
+                &spec
+                    .positions
+                    .iter()
+                    .map(|p| *p as i32)
+                    .collect::<Vec<i32>>(),
                 crate::compiled::SEEK_REPRESENTATION,
                 spec.expression_sql,
                 spec.partial_predicate_sql,
@@ -962,12 +979,16 @@ async fn reconcile_locked(
             for spec in program.specs() {
                 sqlx::query!(
                     "INSERT INTO morpholog.index_requirement
-                        (program_identity, spec_digest, program_hash, position)
+                        (program_identity, spec_digest, program_hash, positions)
                      VALUES ($1, $2, $3, $4)",
                     program.identity,
                     spec.digest(),
                     program.hash,
-                    spec.position as i32,
+                    &spec
+                        .positions
+                        .iter()
+                        .map(|p| *p as i32)
+                        .collect::<Vec<i32>>(),
                 )
                 .execute(&mut *tx)
                 .await
@@ -1001,7 +1022,7 @@ async fn reconcile_locked(
             action: IndexAction::Stale,
             index_name: row.index_name,
             predicate: row.predicate,
-            position: row.position as usize,
+            positions: row.positions.iter().map(|p| *p as usize).collect(),
             representation,
             expression_sql: String::new(),
             partial_predicate_sql: String::new(),
@@ -1181,7 +1202,7 @@ mod tests {
                 action: index,
                 index_name: "morpholog_ci_x".to_string(),
                 predicate: "P".to_string(),
-                position: 0,
+                positions: vec![0],
                 representation: "key",
                 expression_sql: String::new(),
                 partial_predicate_sql: String::new(),

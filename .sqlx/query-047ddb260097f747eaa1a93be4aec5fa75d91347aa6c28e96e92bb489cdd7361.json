@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT m.spec_digest AS \"digest!\", m.index_name AS \"index_name!\",\n                  m.predicate_name AS \"predicate!\", m.position AS \"position!\",\n                  m.representation AS \"representation!\"\n           FROM morpholog.managed_index m\n           ORDER BY m.index_name",
+  "query": "SELECT m.spec_digest AS \"digest!\", m.index_name AS \"index_name!\",\n                  m.predicate_name AS \"predicate!\", m.positions AS \"positions!\",\n                  m.representation AS \"representation!\"\n           FROM morpholog.managed_index m\n           ORDER BY m.index_name",
   "describe": {
     "columns": [
       {
@@ -38,12 +38,12 @@
       },
       {
         "ordinal": 3,
-        "name": "position!",
-        "type_info": "Int4",
+        "name": "positions!",
+        "type_info": "Int4Array",
         "origin": {
           "Table": {
             "table": "morpholog.managed_index",
-            "name": "position"
+            "name": "positions"
           }
         }
       },
@@ -70,5 +70,5 @@
       false
     ]
   },
-  "hash": "ffedf9444bfc5e2d177418a1ed3ce6e89b1682d90ece9c8960648759a03923c9"
+  "hash": "047ddb260097f747eaa1a93be4aec5fa75d91347aa6c28e96e92bb489cdd7361"
 }

@@ -413,12 +413,12 @@ LIMIT 1"#
     // No ordering seeks an index; the antecedent binds without filtering.
     // The case does: a delta bounds the check to its quantity.
     assert!(inv.required_indexes.is_empty());
-    let case: Vec<(String, usize)> = inv
+    let case: Vec<(String, Vec<usize>)> = inv
         .case_indexes
         .iter()
-        .map(|s| (s.predicate.to_string(), s.position))
+        .map(|s| (s.predicate.to_string(), s.positions.clone()))
         .collect();
-    assert_eq!(case, vec![("Terms".to_string(), 1)]);
+    assert_eq!(case, vec![("Terms".to_string(), vec![1])]);
 }
 
 #[test]
@@ -570,22 +570,53 @@ fn comment_safe_leaves_no_delimiter_standing() {
 /// SQL filters or joins on, in the representation the SQL reads it with.
 /// A witness-only position (the fork invariant's successor ids) is not a
 /// seek and is not indexed.
+/// A one-position specification keeps the digest and the name it had
+/// before a specification could cover several, so an upgrade rebuilds
+/// nothing: these are what the v0.0.21 release recorded for `Price[0]`.
+#[test]
+fn a_one_position_specification_keeps_its_released_digest_and_name() {
+    let spec = IndexSpec::new(PredicateName::from("Price"), 0);
+    assert_eq!(
+        spec.digest(),
+        "1f586f9bba64348f207c0e11984dcd5d0187b62449191083dea6ae4efb387939"
+    );
+    assert_eq!(spec.index_name(), "morpholog_ci_price_0_vk1_1f586f9bba64");
+}
+
+/// PostgreSQL cuts an identifier at 63 bytes, which would cut the digest
+/// a name carries, so every name fits whatever the key.
+#[test]
+fn every_index_name_fits_an_identifier() {
+    let long = PredicateName::from("AVeryLongPredicateNameThatGoesOnAndOn");
+    for count in 1..=40 {
+        let spec = IndexSpec::over(long.clone(), (100..100 + count).collect());
+        let name = spec.index_name();
+        assert!(name.len() <= 63, "{count} positions: {name}");
+        assert!(name.ends_with(&spec.digest()[..12]), "{name}");
+    }
+    let key = IndexSpec::over(PredicateName::from("Price"), vec![0, 1, 2]);
+    assert_eq!(
+        key.index_name(),
+        format!("morpholog_ci_price_0_1_2_vk1_{}", &key.digest()[..12])
+    );
+}
+
 #[test]
 fn ledger_required_indexes_are_pinned() {
     let specs = compiled(&ledger_program()).required_indexes();
-    let shape: Vec<(String, usize)> = specs
+    let shape: Vec<(String, Vec<usize>)> = specs
         .iter()
-        .map(|s| (s.predicate.to_string(), s.position))
+        .map(|s| (s.predicate.to_string(), s.positions.clone()))
         .collect();
     assert_eq!(
         shape,
         [
-            ("JournalEntry".to_string(), 0),
-            ("JournalEntry".to_string(), 1),
-            ("JournalEntry".to_string(), 2),
-            ("JournalLine".to_string(), 0),
-            ("Supersedes".to_string(), 0),
-            ("Supersedes".to_string(), 1),
+            ("JournalEntry".to_string(), vec![0]),
+            ("JournalEntry".to_string(), vec![1]),
+            ("JournalEntry".to_string(), vec![2]),
+            ("JournalLine".to_string(), vec![0]),
+            ("Supersedes".to_string(), vec![0]),
+            ("Supersedes".to_string(), vec![1]),
         ]
     );
     let first = &specs[0];
@@ -668,14 +699,17 @@ fn a_case_column_is_a_required_index() {
         )])
         .build();
     let set = compiled(&program);
-    let required: Vec<(String, usize)> = set
+    let required: Vec<(String, Vec<usize>)> = set
         .required_indexes()
         .iter()
-        .map(|s| (s.predicate.to_string(), s.position))
+        .map(|s| (s.predicate.to_string(), s.positions.clone()))
         .collect();
     assert_eq!(
         required,
-        vec![("Bounded".to_string(), 0), ("Bounded".to_string(), 1)]
+        vec![
+            ("Bounded".to_string(), vec![0]),
+            ("Bounded".to_string(), vec![1])
+        ]
     );
 }
 
@@ -848,19 +882,19 @@ LIMIT 1"#
     assert!(error.starts_with("SELECT CASE WHEN EXISTS (SELECT 1 FROM morpholog.claims t3 WHERE"));
     assert!(error.contains("\nFROM morpholog.claims t0, morpholog.claims t1\nWHERE (t0.predicate_name = 'Ask' AND t1.predicate_name = 'Terms' AND "));
     assert!(error.ends_with("\nORDER BY t0.arguments_hash, t1.arguments_hash\nLIMIT 1"));
-    let required: Vec<(String, usize)> = inv
+    let required: Vec<(String, Vec<usize>)> = inv
         .required_indexes
         .iter()
-        .map(|s| (s.predicate.to_string(), s.position))
+        .map(|s| (s.predicate.to_string(), s.positions.clone()))
         .collect();
     assert_eq!(
         required,
         vec![
-            ("Ask".to_string(), 0),
-            ("Good".to_string(), 0),
-            ("Good".to_string(), 1),
-            ("Terms".to_string(), 0),
-            ("Terms".to_string(), 2),
+            ("Ask".to_string(), vec![0]),
+            ("Good".to_string(), vec![0]),
+            ("Good".to_string(), vec![1]),
+            ("Terms".to_string(), vec![0]),
+            ("Terms".to_string(), vec![2]),
         ]
     );
 }

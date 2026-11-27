@@ -745,16 +745,18 @@ fn decode_error(
 }
 
 /// One index the compiled SQL can seek on: a partial expression index
-/// over one argument position of one predicate, on the digest of the
-/// position's equality key. The digest keeps the entry bounded (a key
-/// holds the value whole, and a subject or a collection can exceed a
-/// btree entry). Correctness never depends on the index.
+/// over one or more argument positions of one predicate, in order, each on
+/// the digest of the position's equality key. The digest keeps each entry
+/// bounded (a key holds the value whole, and a subject or a collection can
+/// exceed a btree entry). Correctness never depends on the index.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct IndexSpec {
     pub(crate) predicate: PredicateName,
-    pub(crate) position: usize,
-    /// The indexed expression, unqualified, as it appears inside the
-    /// parentheses of `CREATE INDEX`.
+    /// Never empty, no position twice.
+    pub(crate) positions: Vec<usize>,
+    /// The indexed expressions, unqualified and comma-separated, as they
+    /// appear inside the parentheses of `CREATE INDEX` and as PostgreSQL's
+    /// `pg_get_expr` lists them.
     pub(crate) expression_sql: String,
     /// The partial-index predicate.
     pub(crate) partial_predicate_sql: String,
@@ -767,22 +769,45 @@ pub(crate) const SEEK_REPRESENTATION: &str = "value_key_v1_digest";
 
 impl IndexSpec {
     pub(crate) fn new(predicate: PredicateName, position: usize) -> Self {
-        let expression_sql = seek_expression("", position);
+        Self::over(predicate, vec![position])
+    }
+
+    /// An index over `positions`, in that order.
+    pub(crate) fn over(predicate: PredicateName, positions: Vec<usize>) -> Self {
+        debug_assert!(!positions.is_empty(), "an index over no position");
+        let expression_sql = positions
+            .iter()
+            .map(|p| seek_expression("", *p))
+            .collect::<Vec<_>>()
+            .join(", ");
         let partial_predicate_sql =
             format!("predicate_name = {}", quote_literal(predicate.as_str()));
         Self {
             predicate,
-            position,
+            positions,
             expression_sql,
             partial_predicate_sql,
         }
     }
 
-    /// The seek expression over a query alias (`qualifier` is the alias
-    /// followed by a dot), spelled as the compiled SQL spells it.
+    /// The positions joined by `sep`: one position is written as it was
+    /// before an index could have several, so its digest and name hold.
+    pub(crate) fn positions_joined(&self, sep: &str) -> String {
+        self.positions
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(sep)
+    }
+
+    /// The seek expressions over a query alias (`qualifier` is the alias
+    /// followed by a dot), spelled as the compiled SQL spells them.
     #[cfg_attr(not(test), expect(dead_code, reason = "only the differentials use it"))]
-    pub(crate) fn seek_expression(&self, qualifier: &str) -> String {
-        seek_expression(qualifier, self.position)
+    pub(crate) fn seek_expressions(&self, qualifier: &str) -> Vec<String> {
+        self.positions
+            .iter()
+            .map(|p| seek_expression(qualifier, *p))
+            .collect()
     }
 
     /// The digest of the whole canonical specification: same digest,
@@ -792,7 +817,7 @@ impl IndexSpec {
         let canonical = format!(
             "morpholog.claims\nbtree\n{}\n{}\n{}\n{}\n{}\n",
             self.predicate,
-            self.position,
+            self.positions_joined(","),
             SEEK_REPRESENTATION,
             self.expression_sql,
             self.partial_predicate_sql
@@ -801,8 +826,16 @@ impl IndexSpec {
     }
 
     /// The deterministic name: a readable reserved prefix plus the digest,
-    /// well under the identifier limit.
+    /// within PostgreSQL's 63-byte identifier limit, which would otherwise
+    /// cut the digest off. The readable parts give way, never the digest:
+    /// past eight positions they are written as a count.
     pub(crate) fn index_name(&self) -> String {
+        let joined = self.positions_joined("_");
+        let positions = if joined.len() <= 16 {
+            joined
+        } else {
+            format!("k{}", self.positions.len())
+        };
         let readable: String = self
             .predicate
             .as_str()
@@ -814,11 +847,10 @@ impl IndexSpec {
                     '_'
                 }
             })
-            .take(24)
+            .take(24.min(32 - positions.len()))
             .collect();
         format!(
-            "morpholog_ci_{readable}_{}_vk1_{}",
-            self.position,
+            "morpholog_ci_{readable}_{positions}_vk1_{}",
             &self.digest()[..12]
         )
     }
@@ -827,11 +859,21 @@ impl IndexSpec {
     /// cannot run inside a transaction.
     pub(crate) fn create_sql(&self) -> String {
         format!(
-            "CREATE INDEX CONCURRENTLY {} ON morpholog.claims USING btree (({})) WHERE {}",
+            "CREATE INDEX CONCURRENTLY {} ON morpholog.claims USING btree ({}) WHERE {}",
             quote_ident(&self.index_name()),
-            self.expression_sql,
+            self.key_list_sql(),
             self.partial_predicate_sql
         )
+    }
+
+    /// The parenthesised key list `CREATE INDEX` takes, each expression in
+    /// its own parentheses.
+    pub(crate) fn key_list_sql(&self) -> String {
+        self.positions
+            .iter()
+            .map(|p| format!("({})", seek_expression("", *p)))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 

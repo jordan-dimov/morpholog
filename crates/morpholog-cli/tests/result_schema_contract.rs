@@ -876,7 +876,7 @@ fn provisioned_index(
         action,
         index_name: name.to_string(),
         predicate: predicate.to_string(),
-        position,
+        positions: vec![position],
         representation: "vk1",
         expression_sql: if reconciled {
             format!("morpholog.claim_digest(morpholog.value_key_v1(arguments -> {position}))")

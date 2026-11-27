@@ -152,7 +152,7 @@ async fn assert_required_indexes_used(pool: &PgPool, program: &Program, planner_
                 program.name,
                 inv.name,
                 spec.predicate,
-                spec.position,
+                spec.positions_joined(","),
                 crate::compiled::SEEK_REPRESENTATION
             );
         }
@@ -187,13 +187,18 @@ async fn every_required_index_is_eligible_for_every_whole_in_fragment_programme(
         populate_for_probes(&pool, &pg.required_indexes()).await;
         provision_indexes(&pool, &[&pg], false).await.unwrap();
         for spec in pg.required_indexes() {
-            // A seek spelled as the compiled SQL spells it, against the
-            // digest of a literal's key. A specification one position
-            // off would build an index this seek cannot use.
+            // A seek on every position, spelled as the compiled SQL spells
+            // it, against the digest of a literal's key. A specification
+            // one position off would build an index this seek cannot use.
+            let seeks: Vec<String> = spec
+                .seek_expressions("t0.")
+                .iter()
+                .map(|seek| format!("({seek}) = morpholog.claim_digest(morpholog.value_key_v1('{{\"type\":\"subject\",\"value\":\"probe\"}}'::jsonb))"))
+                .collect();
             let probe = format!(
-                "SELECT 1 FROM morpholog.claims t0 WHERE t0.{} AND ({}) = morpholog.claim_digest(morpholog.value_key_v1('{{\"type\":\"subject\",\"value\":\"probe\"}}'::jsonb))",
+                "SELECT 1 FROM morpholog.claims t0 WHERE t0.{} AND {}",
                 spec.partial_predicate_sql,
-                spec.seek_expression("t0.")
+                seeks.join(" AND ")
             );
             let used = indexes_in_plan(&pool, &probe, false).await;
             let name = spec.index_name();
@@ -202,7 +207,7 @@ async fn every_required_index_is_eligible_for_every_whole_in_fragment_programme(
                 "{}: a seek on {}[{}] {} does not use {name}; it uses {used:?}",
                 program.name,
                 spec.predicate,
-                spec.position,
+                spec.positions_joined(","),
                 crate::compiled::SEEK_REPRESENTATION
             );
         }
@@ -217,7 +222,7 @@ async fn populate_for_probes(pool: &PgPool, specs: &[crate::compiled::IndexSpec]
         std::collections::BTreeMap::new();
     for spec in specs {
         let arity = by_predicate.entry(spec.predicate.to_string()).or_default();
-        *arity = (*arity).max(spec.position + 1);
+        *arity = (*arity).max(spec.positions.iter().max().map_or(0, |p| p + 1));
     }
     for (predicate, arity) in by_predicate {
         let elements: Vec<String> = (0..arity)
@@ -419,7 +424,7 @@ async fn the_loader_seeks_through_the_provisioned_indexes() {
                             && patterns
                                 .iter()
                                 .flatten()
-                                .any(|(position, _)| *position == spec.position)
+                                .any(|(position, _)| spec.positions.contains(position))
                     })
                     .map(crate::compiled::IndexSpec::index_name)
                     .collect();
@@ -635,13 +640,13 @@ transformation record(item, amount):
     )
     .expect("parses");
     let pg = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
-    let required: BTreeSet<(String, usize)> = pg
+    let required: BTreeSet<(String, Vec<usize>)> = pg
         .required_indexes()
         .iter()
-        .map(|s| (s.predicate.to_string(), s.position))
+        .map(|s| (s.predicate.to_string(), s.positions.clone()))
         .collect();
     assert!(
-        required.contains(&("Bounded".to_string(), 1)),
+        required.contains(&("Bounded".to_string(), vec![1])),
         "the case column is a required index: {required:?}"
     );
     provision_indexes(&pool, &[&pg], false).await.unwrap();

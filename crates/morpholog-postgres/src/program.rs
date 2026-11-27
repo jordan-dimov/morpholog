@@ -296,19 +296,19 @@ transformation allocate(allocation, item, quantity):
         )
         .unwrap();
         let pg = PgProgram::new(PreparedProgram::new(program).unwrap());
-        let derived: Vec<(String, usize)> = pg
+        let derived: Vec<(String, Vec<usize>)> = pg
             .index_needs()
             .iter()
             .filter(|(_, by)| by.contains(&(NeedKind::Derived, "PartAllocated".to_string())))
-            .map(|(spec, _)| (spec.predicate.to_string(), spec.position))
+            .map(|(spec, _)| (spec.predicate.to_string(), spec.positions.clone()))
             .collect();
         assert_eq!(
             derived,
             [
-                ("Part".to_string(), 0),
-                ("SalesAllocation".to_string(), 1),
-                ("StockItem".to_string(), 0),
-                ("StockItem".to_string(), 1)
+                ("Part".to_string(), vec![0]),
+                ("SalesAllocation".to_string(), vec![1]),
+                ("StockItem".to_string(), vec![0]),
+                ("StockItem".to_string(), vec![1])
             ],
             "both sides of each join: the allocation's item to the stock item, the stock item's part to the key"
         );
