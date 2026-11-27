@@ -21,76 +21,35 @@ use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use sqlx::{Connection as _, PgConnection, PgPool};
 
 const RELEASE: &str = "v0.0.16";
 
-/// The release asset for this platform and its sha256, as published.
-fn asset() -> (&'static str, &'static str) {
-    match (std::env::consts::ARCH, std::env::consts::OS) {
-        ("x86_64", "linux") => (
-            "x86_64-unknown-linux-musl",
-            "3de51232a96398b9bdf006cc1a8abbe4d95737c49dfee752945f84290a9d9e71",
-        ),
-        ("aarch64", "linux") => (
-            "aarch64-unknown-linux-musl",
-            "8b061e999a0a32792ffcfd7ef9e81edb1ebe2ce993bc3e1b52344b2b571d56d7",
-        ),
-        ("aarch64", "macos") => (
-            "aarch64-apple-darwin",
-            "96ed2f2dcd0c8f40ee7709039d70c264bde96cfb078b35d76e6395d8f9737767",
-        ),
-        other => panic!("no {RELEASE} release asset for {other:?}"),
-    }
-}
+/// The release's assets, as published: architecture, OS, target triple
+/// and the archive's sha256.
+const ASSETS: &[(&str, &str, &str, &str)] = &[
+    (
+        "x86_64",
+        "linux",
+        "x86_64-unknown-linux-musl",
+        "3de51232a96398b9bdf006cc1a8abbe4d95737c49dfee752945f84290a9d9e71",
+    ),
+    (
+        "aarch64",
+        "linux",
+        "aarch64-unknown-linux-musl",
+        "8b061e999a0a32792ffcfd7ef9e81edb1ebe2ce993bc3e1b52344b2b571d56d7",
+    ),
+    (
+        "aarch64",
+        "macos",
+        "aarch64-apple-darwin",
+        "96ed2f2dcd0c8f40ee7709039d70c264bde96cfb078b35d76e6395d8f9737767",
+    ),
+];
 
-/// The released binary, downloaded once into the target directory and
-/// checked against its digest on every run. With no network and no copy
-/// yet, the test is skipped, except in CI, where it must run.
 fn old_binary() -> Option<PathBuf> {
-    let (target, digest) = asset();
-    let name = format!("morpholog-{RELEASE}-{target}");
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(&name);
-    std::fs::create_dir_all(&dir).unwrap();
-    let archive = dir.join(format!("{name}.tar.gz"));
-    if !archive.exists() {
-        let url = format!(
-            "https://github.com/jordan-dimov/morpholog/releases/download/{RELEASE}/{name}.tar.gz"
-        );
-        let partial = dir.join("download.partial");
-        let status = Command::new("curl")
-            .args(["-fsSL", "--retry", "3", "-o"])
-            .arg(&partial)
-            .arg(&url)
-            .status()
-            .expect("spawn curl");
-        if !status.success() {
-            assert!(std::env::var_os("CI").is_none(), "download {url}");
-            eprintln!("skipped: could not download {url}");
-            return None;
-        }
-        std::fs::rename(&partial, &archive).unwrap();
-    }
-    let actual: String = Sha256::digest(std::fs::read(&archive).unwrap())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    assert_eq!(
-        actual,
-        digest,
-        "{} is not the published asset",
-        archive.display()
-    );
-    let status = Command::new("tar")
-        .arg("-xzf")
-        .arg(&archive)
-        .arg("-C")
-        .arg(&dir)
-        .status()
-        .expect("spawn tar");
-    assert!(status.success(), "unpack {}", archive.display());
-    Some(dir.join(&name).join("morpholog"))
+    common::release_binary(RELEASE, ASSETS)
 }
 
 const PROGRAMME: &str = "program upgrade

@@ -72,9 +72,9 @@ use std::fmt::Write as _;
 use morpholog_core::{Admission, EffectiveDelta, Outcome, StagedDelta, State, execution};
 use morpholog_core::{
     ClaimInstance, CompareOp, Compared, Definition, DefinitionName, EvalError, EvalValue, Impact,
-    ImpactPlan, Invariant, InvariantName, OrderedDomain, PredicateArgKind, PredicateDecl,
-    PredicateName, Prop, RejectionReason, SumSeed, Term, ValidatedProgram, Value, ValueExpr, Var,
-    WitnessBinding, ordered_compare_error,
+    ImpactPlan, Invariant, InvariantName, InvariantOrigin, OrderedDomain, PredicateArgKind,
+    PredicateDecl, PredicateName, Prop, RejectionReason, SumSeed, Term, ValidatedProgram, Value,
+    ValueExpr, Var, WitnessBinding, ordered_compare_error,
 };
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -2488,17 +2488,32 @@ fn compile_invariant(
     };
 
     let plan = ImpactPlan::with_definitions(inv, definitions);
-    // The case-bound check seeks on the case's columns. Without their
-    // indexes it walks the predicate and takes the very lock the bound
-    // exists to avoid.
-    let mut case_indexes: Vec<IndexSpec> = plan
-        .case_variables()
-        .iter()
-        .filter_map(|var| case_cols.get(var))
-        .map(|col| IndexSpec::new(col.predicate.clone(), col.position))
-        .collect();
-    case_indexes.sort();
-    case_indexes.dedup();
+    let (required_indexes, case_indexes) = match uniqueness_key(inv) {
+        // Every case pins the key on the first row, and the second joins
+        // it on the key, so one index over the key serves the whole
+        // check. An index per field left the planner to guess which was
+        // selective, and it chose one every row shared.
+        Some(key) => (vec![key.clone()], vec![key]),
+        None => {
+            // The case-bound check seeks on the case's columns. Without
+            // their indexes it walks the predicate and takes the very
+            // lock the bound exists to avoid.
+            let mut case_indexes: Vec<IndexSpec> = plan
+                .case_variables()
+                .iter()
+                .filter_map(|var| case_cols.get(var))
+                .map(|col| IndexSpec::new(col.predicate.clone(), col.position))
+                .collect();
+            case_indexes.sort();
+            case_indexes.dedup();
+            let required = ctx
+                .required
+                .iter()
+                .map(|(predicate, position)| IndexSpec::new(predicate.clone(), *position))
+                .collect();
+            (required, case_indexes)
+        }
+    };
     Ok(CompiledInvariant {
         name: inv.name.clone(),
         version: inv.version,
@@ -2509,13 +2524,46 @@ fn compile_invariant(
         probe_scopes: error,
         diagnosis,
         values: ctx.values,
-        required_indexes: ctx
-            .required
-            .iter()
-            .map(|(predicate, position)| IndexSpec::new(predicate.clone(), *position))
-            .collect(),
+        required_indexes,
         case_indexes,
     })
+}
+
+/// The index over a uniqueness rule's key, in field order, for a rule a
+/// declared discipline generated: two rows of one predicate that share
+/// the key fields' variables. Any other rule, or a generated one of
+/// another shape, has none, and keeps an index per position it seeks.
+fn uniqueness_key(inv: &Invariant) -> Option<IndexSpec> {
+    if inv.origin != InvariantOrigin::Discipline {
+        return None;
+    }
+    let Prop::Implies { left, .. } = &inv.body else {
+        return None;
+    };
+    let Prop::And(rows) = left.as_ref() else {
+        return None;
+    };
+    let [
+        Prop::Claim { predicate, args: a },
+        Prop::Claim {
+            predicate: other,
+            args: b,
+        },
+    ] = rows.as_slice()
+    else {
+        return None;
+    };
+    if predicate != other || a.len() != b.len() {
+        return None;
+    }
+    let key: Vec<usize> = a
+        .iter()
+        .zip(b)
+        .enumerate()
+        .filter(|(_, pair)| matches!(pair, (Term::Var(x), Term::Var(y)) if x == y))
+        .map(|(i, _)| i)
+        .collect();
+    (!key.is_empty()).then(|| IndexSpec::over(predicate.clone(), key))
 }
 
 /// The dominant shape: `antecedent implies consequent`. Violation = an

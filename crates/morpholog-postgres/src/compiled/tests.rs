@@ -612,10 +612,7 @@ fn ledger_required_indexes_are_pinned() {
         shape,
         [
             ("JournalEntry".to_string(), vec![0]),
-            ("JournalEntry".to_string(), vec![1]),
-            ("JournalEntry".to_string(), vec![2]),
             ("JournalLine".to_string(), vec![0]),
-            ("Supersedes".to_string(), vec![0]),
             ("Supersedes".to_string(), vec![1]),
         ]
     );

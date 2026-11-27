@@ -32,7 +32,7 @@
 use std::collections::BTreeSet;
 
 use morpholog_core::{PreparedProgram, Program};
-use morpholog_test_support::{claim_instance, dec, subj};
+use morpholog_test_support::{claim_instance, date, dec, subj};
 use sqlx::Row as _;
 
 use crate::PgPool;
@@ -77,7 +77,39 @@ async fn indexes_in_plan_with(
     binds: &[serde_json::Value],
     planner_left_alone: bool,
 ) -> BTreeSet<String> {
+    explained_indexes(pool, "", sql, binds, planner_left_alone).await
+}
+
+/// As [`indexes_in_plan`], with `only` the one Morpholog index on the
+/// claims table, the rest dropped inside the rolled-back transaction: what
+/// an index can serve, whatever else could serve it too.
+async fn indexes_in_plan_alone(pool: &PgPool, sql: &str, only: &str) -> BTreeSet<String> {
+    let setup = format!(
+        "DO $$ DECLARE r record; BEGIN
+           FOR r IN SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+                    WHERE i.indrelid = 'morpholog.claims'::regclass
+                      AND c.relname LIKE 'morpholog\\_ci\\_%' AND c.relname <> '{only}' LOOP
+             EXECUTE format('DROP INDEX morpholog.%I', r.relname);
+           END LOOP;
+         END $$"
+    );
+    explained_indexes(pool, &setup, sql, &[], false).await
+}
+
+async fn explained_indexes(
+    pool: &PgPool,
+    setup: &str,
+    sql: &str,
+    binds: &[serde_json::Value],
+    planner_left_alone: bool,
+) -> BTreeSet<String> {
     let mut tx = pool.begin().await.unwrap();
+    if !setup.is_empty() {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(setup.to_string()))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
     if !planner_left_alone {
         sqlx::raw_sql("SET LOCAL enable_seqscan = off; SET LOCAL enable_bitmapscan = off")
             .execute(&mut *tx)
@@ -200,8 +232,8 @@ async fn every_required_index_is_eligible_for_every_whole_in_fragment_programme(
                 spec.partial_predicate_sql,
                 seeks.join(" AND ")
             );
-            let used = indexes_in_plan(&pool, &probe, false).await;
             let name = spec.index_name();
+            let used = indexes_in_plan_alone(&pool, &probe, &name).await;
             assert!(
                 used.contains(&name),
                 "{}: a seek on {}[{}] {} does not use {name}; it uses {used:?}",
@@ -697,6 +729,100 @@ transformation record(item, amount):
     assert_eq!(
         relation_locks, 0,
         "the case-bound check took a relation lock"
+    );
+}
+
+const PRICE_CURVE: &str = "program price_curve
+predicate PriceFile(file: Subject)
+predicate Price(file: Subject, date: Date, slot: Decimal, minute: Decimal, price: Decimal)
+    unique by (file, date, slot)
+transformation open_file(file):
+    require file_new: not PriceFile(file)
+    admit PriceFile(file)
+transformation set_price(file, date: Date, slot: Decimal, minute: Decimal, price: Decimal):
+    require file_open: PriceFile(file)
+    admit Price(file, date, slot, minute, price)
+";
+
+/// A `unique by` key of several fields: the uniqueness check seeks one
+/// index over the key, as provisioned beside the index on `file` that
+/// `set_price` needs, and no other. One file of a month of half-hourly
+/// prices, the statistics taken while the table was small, as in a long
+/// batch: with an index per field the planner sought on `file`, which
+/// every row shares.
+#[tokio::test]
+async fn a_uniqueness_check_seeks_its_key_index_whatever_the_statistics_say() {
+    let pool = test_pool().await;
+    reset(&pool).await;
+    let program = morpholog_surface::parse_program(PRICE_CURVE).expect("parses");
+    let pg = PgProgram::new(PreparedProgram::new(program.clone()).unwrap());
+    let price: BTreeSet<Vec<usize>> = pg
+        .required_indexes()
+        .iter()
+        .filter(|s| s.predicate.as_str() == "Price")
+        .map(|s| s.positions.clone())
+        .collect();
+    assert_eq!(
+        price,
+        BTreeSet::from([vec![0], vec![0, 1, 2]]),
+        "the key, and `file` for set_price"
+    );
+    provision_indexes(&pool, &[&pg], false).await.unwrap();
+    let rows = |days: i32| {
+        format!(
+            "INSERT INTO morpholog.claims (predicate_name, arguments, asserted_in)
+             SELECT 'Price',
+                    jsonb_build_array(
+                        jsonb_build_object('type', 'subject', 'value', 'file_1'),
+                        jsonb_build_object('type', 'date', 'value', to_char(date '2026-04-01' + d, 'YYYY-MM-DD')),
+                        jsonb_build_object('type', 'decimal', 'value', s::text),
+                        jsonb_build_object('type', 'decimal', 'value', (s * 30)::text),
+                        jsonb_build_object('type', 'decimal', 'value', (40 + s)::text)),
+                    gen_random_uuid()
+             FROM generate_series(0, {days} - 1) d, generate_series(0, 47) s"
+        )
+    };
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "{}; ANALYZE morpholog.claims;",
+        rows(2)
+    )))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql("DELETE FROM morpholog.claims WHERE predicate_name = 'Price'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(rows(30)))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let set = compiled_set(&program);
+    let inv = set
+        .invariants
+        .iter()
+        .find(|i| i.name.as_str() == "price_unique_by_file_date_slot")
+        .unwrap();
+    let admitted = claim_instance(
+        "Price",
+        &[
+            subj("file_1"),
+            date("2026-04-30"),
+            dec(47),
+            dec(1410),
+            dec(87),
+        ],
+    );
+    let CaseFilter::Bounded(cases) = inv.case_filter(&[admitted], &[]) else {
+        panic!("the admission bounds the rule to its key");
+    };
+    let sql = inv.violation_sql(Some(&cases.filter()));
+    let key = crate::compiled::IndexSpec::over("Price".into(), vec![0, 1, 2]).index_name();
+    let used = indexes_in_plan(&pool, &sql, true).await;
+    assert_eq!(
+        used,
+        BTreeSet::from([key]),
+        "the check seeks the key index alone"
     );
 }
 

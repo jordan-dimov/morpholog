@@ -19,11 +19,11 @@ use morpholog_postgres::{
 };
 use sqlx::Row as _;
 
-/// The ledger's requirement: its compiled checks' seeks, the case columns
-/// of its lineage and entry-id checks, the two positions its
-/// transformations' gates key on, and the derived trial-balance row's join
-/// on the journal line's account, which a live view seeks on.
-const LEDGER_INDEXES: usize = 8;
+/// The ledger's requirement: its compiled checks' seeks, the key of each
+/// uniqueness rule (its lineage's and its entry ids'), the two positions
+/// its transformations' gates key on, and the derived trial-balance row's
+/// join on the journal line's account, which a live view seeks on.
+const LEDGER_INDEXES: usize = 6;
 
 fn ledger() -> PgProgram {
     pg_program(double_entry_ledger::program())
