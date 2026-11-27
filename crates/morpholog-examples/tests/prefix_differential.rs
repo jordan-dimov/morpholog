@@ -1,13 +1,19 @@
 //! A sum over a set in an order, asked once per row of the order, is
 //! answered from one sorted group per act, and so is an `exists` asking
-//! whether anything comes first; that changes no result. A matching walk
-//! that takes from a book in price and time priority, an allocation in
-//! rank order, and the same two orders asked as "nothing of mine ahead of
-//! this" and "nothing ranked before this", decide the same streams of acts
-//! with the memo on and off: every outcome, trace and explanation, compared as
-//! text so a decimal's scale counts. The books have equal prices, mixed
-//! scales, both sides and a trader meeting their own orders; some states
-//! hold a rank that is not a decimal, so the errors are compared too. Each
+//! whether anything comes first; that changes no result. Three workloads
+//! decide the same streams of acts with the memo on and off:
+//! - a matching walk that takes from a book in price and time priority,
+//!   an allocation in rank order, and the same two orders asked as
+//!   "nothing of mine ahead of this" and "nothing ranked before this";
+//! - the embedder guide's shipment walk, which splits and empties items
+//!   in the shipment's recorded order;
+//! - a payment waterfall, which pays each tranche what the tranches
+//!   senior to it leave, and the most junior one what is left over.
+//!
+//! Every outcome, trace and explanation is compared as text, so a
+//! decimal's scale counts. The books have equal prices, mixed scales,
+//! both sides and a trader meeting their own orders; some states hold a
+//! rank that is not a decimal, so the errors are compared too. Each
 //! accepted act's state is the next act's pre-state. The switch is
 //! process-wide, so this binary holds this one test.
 
@@ -15,6 +21,8 @@
     clippy::expect_used,
     reason = "a helper here fails fast on a broken fixture, and clippy exempts only `#[test]` functions"
 )]
+
+use std::collections::BTreeMap;
 
 use morpholog_core::{ClaimInstance, EvalValue, Outcome, Program, State, Subject};
 use morpholog_surface::parse_program;
@@ -187,7 +195,7 @@ fn state(seed: u64) -> State {
 }
 
 /// The acts of one stream: orders on both sides, then the allocations.
-fn acts(seed: u64) -> Vec<(String, Vec<EvalValue>, String)> {
+fn acts(seed: u64) -> Acts {
     let mut d = Draw(seed ^ 0x9e37);
     let mut out = Vec::new();
     for n in 0..6 {
@@ -221,14 +229,164 @@ fn acts(seed: u64) -> Vec<(String, Vec<EvalValue>, String)> {
     out
 }
 
-/// Everything the kernel answers about one stream, as text, and how
-/// many trades and clear or first orders it admitted.
-fn answers(program: &Program, seed: u64) -> (Vec<String>, usize, usize) {
-    let mut pre = state(seed);
+/// The embedder guide's walk in a recorded order, as the guide prints it.
+fn shipping() -> Program {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/embedder-integration.md");
+    let guide = std::fs::read_to_string(&path).expect("docs/embedder-integration.md");
+    let block = guide
+        .split_once("### A walk in a recorded order")
+        .expect("the guide has the section")
+        .1
+        .split_once("```morph\n")
+        .expect("the section has a programme")
+        .1
+        .split_once("```")
+        .expect("the block closes")
+        .0;
+    parse_program(block).expect("the guide's programme parses")
+}
+
+/// Shipments whose allocations hold distinct places, over a few items,
+/// some drawn more than once in one shipment.
+fn shipping_state(seed: u64) -> State {
+    let mut d = Draw(seed ^ 0x5a17);
+    let mut claims = Vec::new();
+    for i in 0..4 {
+        claims.push(claim(
+            "Item",
+            vec![
+                subject(&format!("i{i}")),
+                decimal(&format!("{}", 1 + d.next(20))),
+            ],
+        ));
+    }
+    for s in ["s1", "s2"] {
+        let n = d.next(12);
+        claims.push(claim(
+            "Shipment",
+            vec![subject(s), decimal(&format!("{n}"))],
+        ));
+        for seq in 0..n {
+            claims.push(claim(
+                "Alloc",
+                vec![
+                    subject(&format!("{s}_a{seq}")),
+                    subject(s),
+                    subject(&format!("i{}", d.next(4))),
+                    decimal(&format!("{}", 1 + d.next(8))),
+                    decimal(&format!("{seq}")),
+                ],
+            ));
+        }
+    }
+    State::from_claims(claims)
+}
+
+/// More allocations, a merge now and then, then both shipments shipped.
+fn shipping_acts(seed: u64) -> Vec<(String, Vec<EvalValue>, String)> {
+    let mut d = Draw(seed ^ 0xc0de);
     let mut out = Vec::new();
-    let mut trades = 0;
-    let mut firsts = 0;
-    for (name, args, actor) in acts(seed) {
+    for n in 0..3 {
+        let args = vec![
+            subject(&format!("new{n}")),
+            subject(if d.next(2) == 0 { "s1" } else { "s2" }),
+            subject(&format!("i{}", d.next(4))),
+            decimal(&format!("{}", 1 + d.next(8))),
+        ];
+        out.push(("allocate".to_string(), args, "t0".to_string()));
+    }
+    if d.next(3) == 0 {
+        out.push((
+            "merge_stock".to_string(),
+            vec![subject("i1"), subject("i0")],
+            "t0".to_string(),
+        ));
+    }
+    for s in ["s1", "s2"] {
+        out.push(("ship".to_string(), vec![subject(s)], "t0".to_string()));
+    }
+    out
+}
+
+const WATERFALL: &str = "
+program waterfall
+
+predicate Tranche(tranche: Subject, deal: Subject, rank: Any, due: Decimal)
+predicate Cash(deal: Subject, amount: Decimal)
+predicate Paid(tranche: Subject, amount: Decimal)
+predicate Residual(tranche: Subject, amount: Decimal)
+
+-- What the tranches senior to this rank are owed.
+define owed_ahead(deal, rank) = (sum(d2 | Tranche(_, deal, r2, d2) and r2 < rank))
+
+-- Each tranche is paid what the senior tranches leave of the cash, up to
+-- its due; the most junior one also takes whatever is left after it.
+transformation pay(deal):
+    bind Cash(deal, cash)
+    for Tranche(t, deal, rank, due):
+        let ahead = owed_ahead(deal, rank)
+        if ahead < cash:
+            let paid = min(due, cash - ahead)
+            admit Paid(t, paid)
+        if not (exists t2: Tranche(t2, deal, r2, _) and r2 > rank):
+            let left = cash - ahead - due
+            if left > 0:
+                admit Residual(t, left)
+";
+
+/// Deals with tranches in rank order, ranks sometimes shared and written
+/// at two scales; some states hold a rank that is not a decimal.
+fn waterfall_state(seed: u64) -> State {
+    let mut d = Draw(seed ^ 0x7a7e);
+    let mut claims = Vec::new();
+    for deal in ["d1", "d2"] {
+        claims.push(claim(
+            "Cash",
+            vec![subject(deal), decimal(&format!("{}", d.next(60)))],
+        ));
+        for t in 0..(1 + d.next(6)) {
+            let rank = if seed % 9 == 4 && t == 0 {
+                subject("senior")
+            } else if d.next(2) == 0 {
+                decimal(&format!("{}", d.next(5)))
+            } else {
+                decimal(&format!("{}.0", d.next(5)))
+            };
+            claims.push(claim(
+                "Tranche",
+                vec![
+                    subject(&format!("{deal}_t{t}")),
+                    subject(deal),
+                    rank,
+                    decimal(&format!("{}", 1 + d.next(20))),
+                ],
+            ));
+        }
+    }
+    State::from_claims(claims)
+}
+
+fn waterfall_acts(_seed: u64) -> Vec<(String, Vec<EvalValue>, String)> {
+    ["d1", "d2"]
+        .into_iter()
+        .map(|deal| ("pay".to_string(), vec![subject(deal)], "t0".to_string()))
+        .collect()
+}
+
+type Acts = Vec<(String, Vec<EvalValue>, String)>;
+
+/// Everything the kernel answers about one stream, as text, and how many
+/// claims of each predicate its accepted acts admitted.
+fn answers(
+    program: &Program,
+    mut pre: State,
+    acts: Acts,
+    seed: u64,
+) -> (Vec<String>, BTreeMap<String, usize>) {
+    let mut out = Vec::new();
+    let mut admitted = BTreeMap::new();
+    for (name, args, actor) in acts {
         let t = program
             .transformations
             .iter()
@@ -248,47 +406,76 @@ fn answers(program: &Program, seed: u64) -> (Vec<String>, usize, usize) {
             ..
         }) = morpholog_test_support::propose(program, &transition, &pre, &mut drawn())
         {
-            trades += asserted_claims
-                .iter()
-                .filter(|c| c.predicate.as_str() == "Trade")
-                .count();
-            firsts += asserted_claims
-                .iter()
-                .filter(|c| matches!(c.predicate.as_str(), "Clear" | "First"))
-                .count();
+            for c in &asserted_claims {
+                *admitted.entry(c.predicate.to_string()).or_insert(0) += 1;
+            }
             pre = candidate_state;
         }
     }
-    (out, trades, firsts)
+    (out, admitted)
 }
 
-#[test]
-fn sorted_groups_change_no_answer() {
-    let program = parse_program(PROGRAM).expect("the programme parses");
+/// One workload's streams with the memo off and on: every answer the
+/// same, and how many claims of each predicate were admitted and how
+/// many answers were errors, over all its streams.
+fn compare(
+    name: &str,
+    program: &Program,
+    state: fn(u64) -> State,
+    acts: fn(u64) -> Acts,
+) -> (usize, BTreeMap<String, usize>, usize) {
     program.validated().expect("the programme validates");
+    assert!(
+        !morpholog_core::ordered_sums(program).is_empty(),
+        "{name}: the programme has shapes the sorted groups answer"
+    );
     let mut compared = 0;
-    let mut trades = 0;
-    let mut firsts = 0;
-    let mut refused = 0;
+    let mut admitted: BTreeMap<String, usize> = BTreeMap::new();
+    let mut errors = 0;
     for seed in 0..120 {
         morpholog_core::set_memo(false);
-        let (off, _, _) = answers(&program, seed);
+        let (off, _) = answers(program, state(seed), acts(seed), seed);
         morpholog_core::set_memo(true);
-        let (on, traded, first) = answers(&program, seed);
+        let (on, these) = answers(program, state(seed), acts(seed), seed);
         assert_eq!(on.len(), off.len());
         for (i, (on, off)) in on.iter().zip(&off).enumerate() {
-            assert_eq!(on, off, "seed {seed}, answer {i}");
+            assert_eq!(on, off, "{name}: seed {seed}, answer {i}");
         }
-        trades += traded;
-        firsts += first;
-        refused += on
+        for (p, n) in these {
+            *admitted.entry(p).or_insert(0) += n;
+        }
+        errors += on
             .iter()
             .filter(|a| a.contains("TypeMismatch") || a.contains("type_mismatch"))
             .count();
         compared += on.len();
     }
-    assert!(compared >= 3000, "answers compared: {compared}");
-    assert!(trades > 100, "trades admitted: {trades}");
-    assert!(firsts > 100, "clear and first orders admitted: {firsts}");
-    assert!(refused > 0, "errors compared: {refused}");
+    (compared, admitted, errors)
+}
+
+#[test]
+fn sorted_groups_change_no_answer() {
+    let count = |admitted: &BTreeMap<String, usize>, p: &str| admitted.get(p).copied().unwrap_or(0);
+
+    let book = parse_program(PROGRAM).expect("the programme parses");
+    let (compared, admitted, errors) = compare("book", &book, state, acts);
+    assert!(compared >= 3000, "book: answers compared: {compared}");
+    assert!(count(&admitted, "Trade") > 100, "book: {admitted:?}");
+    assert!(
+        count(&admitted, "Clear") + count(&admitted, "First") > 100,
+        "book: {admitted:?}"
+    );
+    assert!(errors > 0, "book: errors compared: {errors}");
+
+    let (compared, admitted, _) = compare("shipping", &shipping(), shipping_state, shipping_acts);
+    assert!(compared >= 1000, "shipping: answers compared: {compared}");
+    assert!(count(&admitted, "Shipped") > 300, "shipping: {admitted:?}");
+
+    let waterfall = parse_program(WATERFALL).expect("the programme parses");
+    let (compared, admitted, errors) =
+        compare("waterfall", &waterfall, waterfall_state, waterfall_acts);
+    assert!(compared >= 400, "waterfall: answers compared: {compared}");
+    assert!(count(&admitted, "Paid") > 100, "waterfall: {admitted:?}");
+    assert!(count(&admitted, "Residual") > 10, "waterfall: {admitted:?}");
+    assert!(errors > 0, "waterfall: errors compared: {errors}");
 }
