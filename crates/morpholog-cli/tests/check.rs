@@ -1821,3 +1821,159 @@ fn check_verbose_names_the_running_totals_it_answers_from_one_sorted_group() {
         "got: {stdout}"
     );
 }
+
+/// `check -v` prints the shape of the work over a grid: the most points
+/// the grid's bound allows, and the distinct aggregates each point
+/// reaches. A figure a `let` copies counts once, since one
+/// evaluation computes identical copies once. One definition called with
+/// two different arguments counts twice, and a grid inside a grid
+/// multiplies. A rule with no grid adds no section.
+#[test]
+fn check_verbose_prints_what_a_grid_can_cost() {
+    let verbose = |path: &std::path::Path| {
+        let out = Command::new(bin())
+            .args(["check", "--verbose"])
+            .arg(path)
+            .output()
+            .expect("morpholog check should run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    let example =
+        verbose(&repo_root().join("examples/23_delivery_hour_limits/delivery_hour_limits.morph"));
+    assert!(
+        example.ends_with(
+            "  grid costs:\n    \
+             transformation `capture`, statement 7 `hour_within_limit`: up to 745 points x 1 sum over Trade\n    \
+             transformation `capture_day`, statement 7 `hour_within_limit`: up to 26 points x 1 sum over Trade\n"
+        ),
+        "got: {example}"
+    );
+
+    const HEAD: &str = "program grid_costs\n\
+        predicate Trade(book: Subject, trade: Subject, mw: Decimal, starts_at: Timestamp, ends_at: Timestamp)\n\
+        predicate Limit(book: Subject, cap_mw: Decimal)\n\
+        define position_at(book, h) = (sum(m | Trade(book, _, m, s, e) and s at_or_before h and h strictly_before e))\n";
+    let grids = temp_morph(&format!(
+        "{HEAD}define three_times(book, h, cap):\n    \
+         let p = (position_at(book, h))\n    \
+         p + p + p <= cap\n\
+         transformation copies(book, trade, mw, starts_at, ends_at):\n    \
+         bind Limit(book, cap_mw)\n    \
+         require ends_at - starts_at no_longer_than duration(PT744H)\n    \
+         let hours = periods(starts_at, ends_at, duration(PT1H))\n    \
+         require copied: forall h in hours: three_times(book, h, cap_mw)\n    \
+         require two_books: forall h in hours: position_at(book, h) + position_at(trade, h) <= cap_mw\n    \
+         for q in periods(starts_at, ends_at, duration(PT15M)):\n        \
+         require forall h in hours: max(m | Trade(book, _, m, q, _)) + position_at(book, h) <= cap_mw\n    \
+         admit Trade(book, trade, mw, starts_at, ends_at)\n"
+    ));
+    let grids = verbose(grids.path());
+    assert!(
+        grids.ends_with(
+            "  grid costs:\n    \
+             transformation `copies`, statement 4 `copied`: up to 745 points x 1 sum over Trade\n    \
+             transformation `copies`, statement 5 `two_books`: up to 745 points x 2 sums over Trade\n    \
+             transformation `copies`, statement 6: up to 2977 x 745 points x 1 sum and 1 max over Trade\n"
+        ),
+        "got: {grids}"
+    );
+
+    let plain = temp_morph(&format!(
+        "{HEAD}transformation plain(book, trade, mw, starts_at, ends_at):\n    \
+         bind Limit(book, cap_mw)\n    \
+         require position_at(book, starts_at) + mw <= cap_mw\n    \
+         admit Trade(book, trade, mw, starts_at, ends_at)\n"
+    ));
+    let plain = verbose(plain.path());
+    assert!(!plain.contains("grid costs"), "got: {plain}");
+}
+
+/// The grid's size never comes out smaller than the bound that holds. A
+/// tighter bound inside an `if` holds only on that branch, so the largest
+/// bound naming the window counts. A window bound written through a
+/// `let` alias is not read, so that grid's size is unknown rather than
+/// taken from a bound that may not hold. Two grids one sum ranges over
+/// multiply, and an `exists` over a grid counts its points. A grid name
+/// two branches each bind with a `let` has an unknown size, since each
+/// branch's grid differs.
+#[test]
+fn check_verbose_grid_costs_never_understate_the_points() {
+    let costs = |body: &str| {
+        let tmp = temp_morph(&format!(
+            "program grid_bounds\n\
+             predicate Trade(book: Subject, mw: Decimal, starts_at: Timestamp, ends_at: Timestamp)\n\
+             transformation t(book, mw, starts_at, ends_at, short: Bool):\n\
+             {body}    \
+             admit Trade(book, mw, starts_at, ends_at)\n"
+        ));
+        let out = Command::new(bin())
+            .args(["check", "--verbose"])
+            .arg(tmp.path())
+            .output()
+            .expect("morpholog check should run");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        stdout
+            .split_once("  grid costs:\n")
+            .map(|(_, costs)| costs.to_string())
+            .unwrap_or_else(|| panic!("no grid costs in: {stdout}"))
+    };
+    const POSITION: &str =
+        "sum(m | Trade(book, m, s, e) and s at_or_before h and h strictly_before e)";
+
+    assert_eq!(
+        costs(&format!(
+            "    if short = true:\n        \
+             require ends_at - starts_at no_longer_than duration(PT1H)\n    \
+             require ends_at - starts_at no_longer_than duration(PT744H)\n    \
+             let hours = periods(starts_at, ends_at, duration(PT1H))\n    \
+             require forall h in hours: {POSITION} <= 10\n"
+        )),
+        "    transformation `t`, statement 4: up to 745 points x 1 sum over Trade\n"
+    );
+    assert_eq!(
+        costs(&format!(
+            "    let from = starts_at\n    \
+             require ends_at - from no_longer_than duration(PT744H)\n    \
+             if short = true:\n        \
+             require ends_at - starts_at no_longer_than duration(PT1H)\n    \
+             let hours = periods(starts_at, ends_at, duration(PT1H))\n    \
+             require forall h in hours: {POSITION} <= 10\n"
+        )),
+        "    transformation `t`, statement 5: up to an unknown number of points x 1 sum over Trade\n"
+    );
+    assert_eq!(
+        costs(
+            "    require ends_at - starts_at no_longer_than duration(PT24H)\n    \
+             let hours = periods(starts_at, ends_at, duration(PT1H))\n    \
+             let quarters = periods(starts_at, ends_at, duration(PT15M))\n    \
+             require sum(sum(m | Trade(book, m, h, q)) | h in hours and q in quarters) <= 10\n    \
+             require not (exists h: h in hours and not (sum(m | Trade(book, m, h, _)) <= 10))\n"
+        ),
+        "    transformation `t`, statement 4: up to 25 x 97 points x 1 sum over Trade\n    \
+         transformation `t`, statement 5: up to 25 points x 1 sum over Trade\n"
+    );
+    assert_eq!(
+        costs(&format!(
+            "    require ends_at - starts_at no_longer_than duration(PT24H)\n    \
+             if short = true:\n        \
+             let grid = periods(starts_at, ends_at, duration(PT1H))\n        \
+             require forall h in grid: {POSITION} <= 10\n    \
+             else:\n        \
+             let grid = periods(starts_at, ends_at, duration(PT15M))\n        \
+             require forall h in grid: {POSITION} <= 10\n"
+        )),
+        "    transformation `t`, statement 2: up to an unknown number of points x 1 sum over Trade\n    \
+         transformation `t`, statement 2: up to an unknown number of points x 1 sum over Trade\n"
+    );
+}

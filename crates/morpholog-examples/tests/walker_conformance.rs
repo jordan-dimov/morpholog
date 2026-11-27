@@ -14,7 +14,7 @@
 
 use morpholog_core::{
     CoverageTracker, PredicateName, PreparedProgram, Program, Stmt, controls,
-    format::format_program, lints, predicates_referenced_by_prop, related_parameters,
+    format::format_program, grid_costs, lints, predicates_referenced_by_prop, related_parameters,
     transformation_param_kinds,
 };
 use morpholog_surface::parse_program;
@@ -321,6 +321,34 @@ transformation publish(day):
     admit Published(day)
 ";
 
+/// A grid whose points reach a sum through a definition under `not`,
+/// and a `max` inside a conditional: the cost walk must follow the call
+/// and take both children. A sum over two grids at once ranges over
+/// their product.
+const GRID_WITH_NESTED_FIGURES: &str = "\
+program grid_with_nested_figures
+predicate Day(day: Date, starts_at: Timestamp, ends_at: Timestamp)
+predicate Load(day: Date, hour: Timestamp, mw: Decimal)
+predicate Cap(mw: Decimal)
+define load_at(d, h) = (sum(m | Load(d, h, m)))
+invariant within_cap:
+    Day(day, starts_at, ends_at) and Cap(cap)
+    implies ends_at - starts_at no_longer_than duration(PT25H)
+    and (forall h in periods(starts_at, ends_at, duration(PT1H)): not (load_at(day, h) > cap) and if(Load(day, h, _), max(m | Load(day, h, m)), 0) <= cap)
+transformation declare(day, starts_at, ends_at):
+    admit Day(day, starts_at, ends_at)
+transformation load(day, hour, mw):
+    admit Load(day, hour, mw)
+transformation cap(mw):
+    admit Cap(mw)
+transformation spread(day, starts_at, ends_at):
+    require ends_at - starts_at no_longer_than duration(PT2H)
+    let hours = periods(starts_at, ends_at, duration(PT1H))
+    let quarters = periods(starts_at, ends_at, duration(PT15M))
+    require sum(load_at(day, h) + load_at(day, q) | h in hours and q in quarters) <= 100
+    admit Day(day, starts_at, ends_at)
+";
+
 /// A digest in a rule and in a gate, with a literal, case variables and
 /// a figure among its arguments: every walker must descend a variadic
 /// call and read its result as a subject.
@@ -578,6 +606,7 @@ fn corpus() -> Vec<(&'static str, &'static str)> {
         ("figure_across_positions", FIGURE_ACROSS_POSITIONS),
         ("recursive_definition", RECURSIVE_DEFINITION),
         ("grid_in_a_rule", GRID_IN_A_RULE),
+        ("grid_with_nested_figures", GRID_WITH_NESTED_FIGURES),
         ("digest_in_rule_and_gate", DIGEST_IN_RULE_AND_GATE),
         ("unsupplied_through_defined", UNSUPPLIED_THROUGH_DEFINED),
         ("let_sugared_define", LET_SUGARED_DEFINE),
@@ -699,6 +728,27 @@ fn a_sum_inside_a_branch_receives_its_seed() {
     assert_eq!(*seed, SumSeed::Quantity("kWh".into()));
 }
 
+/// The cost walk reaches the sum through the call under `not` and the
+/// `max` in the conditional's branch, and multiplies two grids one sum
+/// ranges over.
+#[test]
+fn the_grid_cost_reaches_every_nested_figure() {
+    let program = parsed("grid_with_nested_figures", GRID_WITH_NESTED_FIGURES);
+    assert_eq!(
+        grid_costs(&program),
+        [
+            (
+                "transformation `spread`, statement 4".to_string(),
+                "up to 3 x 9 points x 2 sums over Load".to_string()
+            ),
+            (
+                "invariant `within_cap`".to_string(),
+                "up to 26 points x 1 sum and 1 max over Load".to_string()
+            )
+        ]
+    );
+}
+
 fn parsed(name: &str, source: &str) -> Program {
     let program =
         parse_program(source).unwrap_or_else(|e| panic!("corpus `{name}` must parse: {e:?}"));
@@ -724,6 +774,11 @@ fn every_fragment_survives_every_walker_deterministically() {
         let prepared = PreparedProgram::new(program.clone())
             .unwrap_or_else(|e| panic!("corpus `{name}` must compile: {e:?}"));
         assert_eq!(lints(&prepared), lints(&prepared), "`{name}`: lints drift");
+        assert_eq!(
+            grid_costs(&program),
+            grid_costs(&program),
+            "`{name}`: grid costs drift"
+        );
         assert_eq!(
             controls(&prepared),
             controls(&prepared),

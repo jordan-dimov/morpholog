@@ -316,6 +316,61 @@ mod tests {
         assert!(holds(&rule, &state, &[], false).0);
     }
 
+    /// Where nothing inside a point ranges over claims, what `check -v`
+    /// prints for a grid is what a full grid computes: 25 points, each
+    /// computing the copied figure once and the other figure once. A window off the grid by half an hour meets every
+    /// period its bound allows.
+    #[test]
+    fn a_grid_computes_what_its_cost_line_says() {
+        use crate::ir_builder::{
+            duration, duration_le, in_grid, invariant, periods, program, sub, timestamp,
+        };
+        let fills = sum(var("q"), claim("Fill", vec![var("h"), var("q")]));
+        let rule = and(vec![
+            claim("Window", vec![var("from"), var("until")]),
+            duration_le(
+                sub(term(var("until")), term(var("from"))),
+                term(duration("PT24H")),
+            ),
+            forall(
+                "h",
+                in_grid(
+                    var("h"),
+                    periods(
+                        term(var("from")),
+                        term(var("until")),
+                        term(duration("PT1H")),
+                    ),
+                ),
+                le(
+                    add(add(hour_total(), hour_total()), fills),
+                    term(crate::ir_builder::dec("1000")),
+                ),
+            ),
+        ]);
+        let p = program("grid")
+            .invariants(vec![invariant("per_hour", rule.clone())])
+            .build();
+        assert_eq!(
+            crate::grid_costs(&p),
+            [(
+                "invariant `per_hour`".to_string(),
+                "up to 25 points x 2 sums over Fill, Trade".to_string()
+            )]
+        );
+        let at = |t: &str| {
+            let crate::ir::Term::Literal(v) = timestamp(t) else {
+                unreachable!()
+            };
+            EvalValue::from(&v)
+        };
+        let state = State::from_claims(vec![row(
+            "Window",
+            vec![at("2026-03-01T00:30:00Z"), at("2026-03-02T00:30:00Z")],
+        )]);
+        assert_eq!(holds(&rule, &state, &[], true), (true, 25 * 2));
+    }
+
     /// The same figure under `7` and then `7.0` keeps each binding's own
     /// scale: the key is the value as written, not as compared. A `max`
     /// gives its value as written, where a sum's total is normalised.
