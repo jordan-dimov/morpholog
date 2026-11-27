@@ -3704,6 +3704,86 @@ async fn inspect_claims_named_hard_errors_on_programme_database_skew() {
     );
 }
 
+/// A programme that declares a stored field another kind. The ledger
+/// stores `posting_date` as a Subject (`"2026-04-15"`); a programme that
+/// declares it a Date would read a value the kernel never governed as a
+/// date. Every named read refuses it before the kind is dropped, and a
+/// field declared `Any` still takes it.
+fn ledger_with_posting_date(kind: &str) -> tempfile::NamedTempFile {
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    let source = format!(
+        "program other\n\
+         predicate JournalEntry(entry_id: Subject, posting_date: {kind}, period: Subject)\n\
+         predicate EntryPosted(entry_id: Subject, posting_date: {kind})\n\
+         derived EntryPosted(entry_id, posting_date):\n    \
+         over JournalEntry(entry_id: entry_id, posting_date: posting_date, ..)\n"
+    );
+    std::io::Write::write_all(&mut file, source.as_bytes()).unwrap();
+    file
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_named_read_refuses_a_stored_field_of_another_kind_on_every_surface() {
+    reset_db().await;
+    let tid = post_balanced_entry("entry_001", 100).to_string();
+    let date = ledger_with_posting_date("Date");
+    let date = date.path().to_str().unwrap();
+    let reads: [&[&str]; 4] = [
+        &[
+            "inspect",
+            "claims",
+            "--predicate",
+            "JournalEntry",
+            "--named",
+            date,
+        ],
+        &[
+            "inspect",
+            "claims",
+            "--predicate",
+            "JournalEntry",
+            "--as-of",
+            &tid,
+            "--named",
+            date,
+        ],
+        &["inspect", "audit", "--named", date],
+        &["inspect", "derived", date, "EntryPosted", "--named"],
+    ];
+    for read in reads {
+        let (status, stdout, stderr) = run_cli(read);
+        assert!(!status.success(), "{read:?} must refuse; stdout: {stdout}");
+        assert!(
+            stderr.contains("field `posting_date` of claim")
+                && stderr.contains("holds Subject")
+                && stderr.contains("declares it Date")
+                && stderr.contains("skew"),
+            "{read:?} names the field and both kinds: {stderr}"
+        );
+        assert!(
+            !stdout.contains("2026-04-15"),
+            "{read:?} printed the value: {stdout}"
+        );
+    }
+
+    let any = ledger_with_posting_date("Any");
+    let any = any.path().to_str().unwrap();
+    let (status, stdout, stderr) = run_cli(&[
+        "inspect",
+        "claims",
+        "--predicate",
+        "JournalEntry",
+        "--named",
+        any,
+    ]);
+    assert!(
+        status.success(),
+        "a field declared Any takes any kind: {stderr}"
+    );
+    let rows: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(rows[0]["args"]["posting_date"], "2026-04-15", "{stdout}");
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn quantity_params_flow_bare_through_the_named_codec_end_to_end() {
     reset_db().await;
@@ -5657,6 +5737,94 @@ async fn check_verbose_does_not_vouch_for_a_database_s_indexes() {
         .unwrap();
     let offline = String::from_utf8(offline.stdout).unwrap();
     assert!(!offline.contains("provisioning"), "{offline}");
+}
+
+/// A database name given where a URL belongs is told the URL form, still
+/// as a connection failure with its code. The value is never echoed, since
+/// it may be a password, and a real URL that fails to connect gets no hint.
+#[test]
+fn a_bare_database_name_is_told_the_url_form() {
+    let ledger = ledger_morph();
+    let check = |url: &str| run_cli_no_db(&["check", "--json", &ledger, "--database-url", url]);
+    let hint = "give one such as `postgres:///DBNAME`";
+
+    // The last two are passwords set in the wrong place, and are never
+    // printed back.
+    for value in [
+        "morpholog_dev",
+        "MySecretPassword2026",
+        "ops:secret@db.example/ledger",
+    ] {
+        let (status, stdout, stderr) = check(value);
+        assert_eq!(status.code(), Some(1), "{stderr}");
+        let error: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(error["code"], "connect_failed", "{stdout}");
+        assert!(error["error"].as_str().unwrap().contains(hint), "{stdout}");
+        assert!(stderr.contains(hint), "{stderr}");
+        let printed = format!("{stdout}{stderr}");
+        for secret in [value, "secret", "Password"] {
+            assert!(!printed.contains(secret), "{value}: {printed}");
+        }
+    }
+
+    let (status, stdout, stderr) = check("postgres:///nothing?port=1");
+    assert_eq!(status.code(), Some(1), "{stderr}");
+    assert!(stdout.contains("connect_failed"), "{stdout}");
+    assert!(!stderr.contains(hint), "{stderr}");
+}
+
+/// The generated Python client builds the audit log's history index and
+/// lets a deploy gate on it, through the real binary: a check is not
+/// current before the build and is after it.
+#[tokio::test(flavor = "current_thread")]
+async fn the_python_client_builds_and_checks_the_history_index() {
+    reset_db().await;
+    let pool = PgPool::connect(&database_url()).await.unwrap();
+    let drop = format!(
+        "DROP INDEX IF EXISTS morpholog.{}",
+        morpholog_postgres::HISTORY_INDEX
+    );
+    sqlx::raw_sql(sqlx::AssertSqlSafe(drop.clone()))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let probe = r#"
+import sys
+sys.path.insert(0, sys.argv[1])
+from python_client.adapter import Morpholog
+client = Morpholog(sys.argv[2], sys.argv[3], binary=sys.argv[4])
+before = client.provision_indexes(check=True, history=True)
+built = client.provision_indexes(history=True)
+after = client.provision_indexes(check=True, history=True)
+print(before.is_current, before.history.action, built.applied, built.history.action,
+      after.is_current, after.history.action)
+"#;
+    let output = Command::new("python3")
+        .args([
+            "-c",
+            probe,
+            common::repo_root()
+                .join("crates/morpholog-cli/templates")
+                .to_str()
+                .unwrap(),
+            &ledger_morph(),
+            &database_url(),
+            common::bin(),
+        ])
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .output()
+        .expect("python3 runs the client");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(drop))
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "False create True create True keep",
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// A database-backed report that cannot be produced says why by a code:

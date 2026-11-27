@@ -224,8 +224,10 @@ pub(crate) async fn connect(url: &str) -> anyhow::Result<PgPool> {
 pub(crate) async fn connect_unchecked(url: &str) -> anyhow::Result<PgPool> {
     // `postgres:///mydb` means "the OS user" to every other Postgres
     // tool; sqlx 0.9 alone reads it as `anonymous`.
-    let url = morpholog_postgres::with_connection_defaults(url);
-    PgPool::connect(&url).await.map_err(connect_failed)
+    let defaulted = morpholog_postgres::with_connection_defaults(url);
+    PgPool::connect(&defaulted)
+        .await
+        .map_err(|err| connect_failed(url, err))
 }
 
 /// `connect`, capped at one connection, for sessions. A lockstep session
@@ -233,10 +235,10 @@ pub(crate) async fn connect_unchecked(url: &str) -> anyhow::Result<PgPool> {
 /// hold a session open. Checked the same way, so a session on a database
 /// this binary cannot serve refuses before its ready line.
 pub(crate) async fn connect_single(url: &str) -> anyhow::Result<PgPool> {
-    let url = morpholog_postgres::with_connection_defaults(url);
-    let pool = morpholog_postgres::single_connection_pool(&url)
+    let defaulted = morpholog_postgres::with_connection_defaults(url);
+    let pool = morpholog_postgres::single_connection_pool(&defaulted)
         .await
-        .map_err(connect_failed)?;
+        .map_err(|err| connect_failed(url, err))?;
     morpholog_postgres::require_current_schema(&pool).await?;
     Ok(pool)
 }
@@ -244,24 +246,40 @@ pub(crate) async fn connect_single(url: &str) -> anyhow::Result<PgPool> {
 /// The connection itself failed, before any query. Its own type, so a
 /// command can tell it from every later failure without reading prose.
 #[derive(Debug)]
-pub(crate) struct ConnectFailed(Box<dyn std::error::Error + Send + Sync>);
+pub(crate) struct ConnectFailed {
+    source: Box<dyn std::error::Error + Send + Sync>,
+    not_a_url: bool,
+}
 
 impl std::fmt::Display for ConnectFailed {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("failed to connect to PostgreSQL")
+        f.write_str("failed to connect to PostgreSQL")?;
+        if self.not_a_url {
+            f.write_str(
+                " (the value is not a URL, as a bare database name is not: \
+                 give one such as `postgres:///DBNAME`)",
+            )?;
+        }
+        Ok(())
     }
 }
 
 impl std::error::Error for ConnectFailed {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&*self.0)
+        Some(&*self.source)
     }
 }
 
+/// `url` is the value as given, and is never echoed: a value that is not
+/// a URL may be a password set in the wrong place.
 pub(crate) fn connect_failed(
+    url: &str,
     err: impl Into<Box<dyn std::error::Error + Send + Sync>>,
 ) -> anyhow::Error {
-    anyhow::Error::new(ConnectFailed(err.into()))
+    anyhow::Error::new(ConnectFailed {
+        source: err.into(),
+        not_a_url: !url.contains("://"),
+    })
 }
 
 /// The published code for a failure met while connecting and asking
@@ -339,18 +357,43 @@ pub(crate) fn read_anchor(
         .transpose()
 }
 
+/// Binds the root to the role that now holds its login's name. It names
+/// no role itself, so it needs no quoting, and it changes nothing when no
+/// such role exists or the OID already matches.
+const REBIND_ROOT_LOGIN: &str = "UPDATE morpholog.deployment_identity AS d \
+     SET root_login_oid = r.oid FROM pg_catalog.pg_roles AS r \
+     WHERE d.closed AND r.rolname = d.root_login \
+     AND d.root_login_oid IS DISTINCT FROM r.oid";
+
 /// Say on stderr that the deployment is open, on every run that reads it,
-/// so a deployment nobody closed is never taken for a closed one.
-pub(crate) async fn warn_if_open(
+/// so a deployment nobody closed is never taken for a closed one; and
+/// that a closed one's root login is no longer the role it was closed
+/// under, before the root's first act is refused for it.
+pub(crate) async fn warn_on_identity(
     pool: &PgPool,
 ) -> anyhow::Result<morpholog_postgres::DeploymentIdentity> {
+    use morpholog_postgres::DeploymentIdentity;
     let identity = morpholog_postgres::deployment_identity(pool).await?;
-    if identity == morpholog_postgres::DeploymentIdentity::Open {
-        eprintln!(
+    match &identity {
+        DeploymentIdentity::Open => eprintln!(
             "note: this deployment is open: any login may assert an actor nobody \
              restricted. Close it, with its writers stopped, by \
              `morpholog init --skip-if-exists --root-actor ACTOR --root-login LOGIN`."
-        );
+        ),
+        DeploymentIdentity::Closed {
+            root_actor,
+            root_login,
+            root_login_matches: false,
+        } => eprintln!(
+            "warning: no role named `{root_login}` holds the OID this deployment was \
+             closed under, so acts as the root actor `{}` are refused. A restore onto \
+             another cluster usually gives roles new OIDs, and so does a role dropped \
+             and made again. Once you have checked that `{root_login}` is the intended \
+             principal, rebind it as the owner: {REBIND_ROOT_LOGIN}; see \
+             docs/install.md, \"Restoring onto another cluster\"",
+            root_actor.as_str(),
+        ),
+        DeploymentIdentity::Closed { .. } => {}
     }
     Ok(identity)
 }

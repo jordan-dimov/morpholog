@@ -403,13 +403,23 @@ pub enum DeploymentIdentity {
     Closed {
         root_actor: Subject,
         root_login: String,
+        /// Whether a role of that name holds the OID the deployment was
+        /// closed under. False after a restore onto another cluster, or a
+        /// role dropped and made again: the root is refused until the
+        /// owner rebinds it.
+        root_login_matches: bool,
     },
 }
 
 /// The deployment's identity row, read as a proposal reads it.
 pub async fn deployment_identity(pool: &PgPool) -> Result<DeploymentIdentity, PgError> {
+    // `IS NOT DISTINCT FROM` is never null, which sqlx cannot infer.
     let row = sqlx::query!(
-        r#"SELECT closed AS "closed!", root_actor, root_login FROM morpholog.deployment_identity"#
+        r#"SELECT closed AS "closed!", root_actor, root_login,
+                  root_login_oid IS NOT DISTINCT FROM
+                      (SELECT oid FROM pg_roles WHERE rolname = root_login)
+                      AS "root_login_matches!"
+           FROM morpholog.deployment_identity"#
     )
     .fetch_optional(pool)
     .await
@@ -419,6 +429,7 @@ pub async fn deployment_identity(pool: &PgPool) -> Result<DeploymentIdentity, Pg
         (true, Some(actor), Some(login)) => DeploymentIdentity::Closed {
             root_actor: Subject::from(actor),
             root_login: login,
+            root_login_matches: row.root_login_matches,
         },
         _ => DeploymentIdentity::Open,
     })

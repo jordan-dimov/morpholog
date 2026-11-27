@@ -24,7 +24,7 @@ use morpholog_postgres::{
 
 use crate::InitArgs;
 use crate::commands::{
-    AlreadyReported, connect_unchecked, print_json, warn_if_open, warn_if_roles_shared,
+    AlreadyReported, connect_unchecked, print_json, warn_if_roles_shared, warn_on_identity,
 };
 use morpholog_cli::envelopes::{InitReport, LeastPrivilegeReport};
 
@@ -123,7 +123,7 @@ pub(crate) async fn run(args: InitArgs) -> anyhow::Result<()> {
     {
         // An older schema has no identity row yet; `migrate` says it is
         // open once it has one.
-        warn_if_open(&pool).await?;
+        warn_on_identity(&pool).await?;
     }
     // Say whether there was actually a schema to drop.
     if let Some(dropped) = dropped {

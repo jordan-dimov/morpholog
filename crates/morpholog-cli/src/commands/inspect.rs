@@ -292,9 +292,11 @@ fn declared_predicates(program: &morpholog_core::Program) -> String {
 }
 
 /// Decode tagged claims into bare named objects using the programme's
-/// declarations, mirroring `--args-named`. An undeclared predicate or an
-/// arity mismatch means the programme and database disagree: an error
-/// naming both sides, never a silent skip.
+/// declarations, mirroring `--args-named`. An undeclared predicate, an
+/// arity mismatch or a field of another kind means the programme and
+/// database disagree: an error naming both sides, never a silent skip or
+/// a conversion. The kind rule is admission's,
+/// [`morpholog_core::PredicateArgKind::holds`].
 pub(crate) fn decode_claims_named(
     program: &morpholog_core::Program,
     file: &Path,
@@ -324,6 +326,24 @@ pub(crate) fn decode_claims_named(
                 claim.args.len(),
                 file.display(),
                 decl.args.len(),
+            );
+        }
+        // Checked here, while the value still carries its kind: the bare
+        // form cannot tell a Subject from the Date it looks like.
+        if let Some((arg, value)) = decl
+            .args
+            .iter()
+            .zip(claim.args.iter())
+            .find(|(arg, value)| !arg.kind.holds(&value.kind()))
+        {
+            bail!(
+                "field `{}` of claim `{}` holds {} but `{}` declares it {} \
+                 (programme/database skew)",
+                arg.name,
+                claim.predicate,
+                value.kind(),
+                file.display(),
+                arg.kind,
             );
         }
         let fields: serde_json::Map<String, serde_json::Value> = decl

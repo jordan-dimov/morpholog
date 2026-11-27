@@ -520,6 +520,12 @@ after the `bind`, as a claim's fields are. A parameter fixed by `=` is
 an input, not a result. A value a condition chooses is a figure, with
 `if(...)` in its body.
 
+A definition, like a rule, may open with `let` lines naming a figure:
+`let owed = (balance_of(account))`. A condition's arguments are plain
+terms, as a claim's are: a name, a literal or a parameter, never a
+computed value. So a figure a condition would take is named with `let`
+in the body that needs it, and compared there.
+
 **A tree the rules follow.** A condition may call itself. `descends_from`
 below holds when the record says so directly, or when the part's parent
 descends from the ancestor. It follows the tree as far as the tree goes

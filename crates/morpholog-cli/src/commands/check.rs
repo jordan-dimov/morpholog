@@ -242,7 +242,7 @@ async fn collect(args: &CheckArgs) -> anyhow::Result<Collected> {
     }
     if let Some(url) = &args.database_url {
         let pool = crate::commands::connect_or_report(url, args.json).await?;
-        let identity = crate::commands::warn_if_open(&pool).await?;
+        let identity = crate::commands::warn_on_identity(&pool).await?;
         out.identity = Some(match identity {
             morpholog_postgres::DeploymentIdentity::Open => "open",
             morpholog_postgres::DeploymentIdentity::Closed { .. } => "closed",

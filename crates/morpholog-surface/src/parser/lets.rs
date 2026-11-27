@@ -315,7 +315,17 @@ pub(super) fn substitute_in_prop(
         Prop::Claim { predicate, args } => {
             for (i, arg) in args.iter_mut().enumerate() {
                 let where_ = format!("as argument {} of `{predicate}`", i + 1);
+                let before = errors.len();
                 substitute_term_slot(arg, name, value, binding, &where_, errors);
+                // A condition's call is still claim-shaped here. One made only of
+                // comparisons binds nothing, so a variable matched there cannot be compared.
+                if let Some((_, message)) = errors.get_mut(before) {
+                    message.push_str(&format!(
+                        "; if `{predicate}` is a condition made of comparisons, write its \
+                         comparison in place with `{}` instead",
+                        binding.name
+                    ));
+                }
             }
         }
         Prop::Defined { name: callee, args } => {
