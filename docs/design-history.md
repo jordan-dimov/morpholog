@@ -1675,3 +1675,9 @@ The arc stopped there, deliberately. Every gallery invariant the compiler refuse
 **Forced by:** one price per act inside one `transact`, the shape two embedders use (#911, from #586's design work). Each act after the first read the actor policy again, three statements an act, though no act in the batch could change the answer.
 
 **Landed:** when no act in a `transact` can admit or retract a claim under a reserved policy name, in any branch or loop body, an actor authorised once is not authorised again in that batch. Each actor is still authorised at its first act, so the first refusal a batch meets does not move. A batch any of whose acts can write the policy is judged act by act, as before. The batch runs on one login in one snapshot, so nothing else can change what the check reads. On 1,440 prices in one batch the statements halved, 8,654 to 4,334, and the batch took 1.19 s against 1.39 s.
+
+### Case values stay literals
+
+**Forced by:** CTENEX's one-act decisions (#900). A case-bounded check writes the cases it touches into its SQL as literals, so its text is new on every act, and PostgreSQL parses and plans it again: 0.3 to 1.6 ms a check, most of its time.
+
+**Landed:** nothing; the case values stay literals. Bound as parameters, with the same indexes in every arm, on PostgreSQL 19, on the billing batch and on the exchange, the planning saved was lost another way. A generic plan read 2 to 7 times the buffers on every join shape, or was built once against a near-empty table and kept as it grew (21 s against 1.4 s for one billing batch). Automatic plan choice gained 14 to 19% on billing and 5 to 8% on the exchange with one writer a contract, but with three its larger reads nearly doubled the serialization failures and the rate fell 12 to 27%. Parameters with custom plans saved nothing. Planning a check is not all overhead: it buys reads confined to the case, and so fewer conflicts. The measurements are on the issue.
