@@ -152,10 +152,27 @@ impl<'a> Walk<'a> {
     }
 
     /// The grid `expr` is, directly or through a `let`, ranged over by
-    /// the node at `at`.
+    /// the node at `at`. A name two `let`s bind, in two branches say,
+    /// names a grid of unknown size: which one holds is the checker's
+    /// scopes, not read here.
     fn grid(&self, at: usize, expr: &'a ValueExpr) -> Option<Grid> {
         let expr = if let ValueExpr::Term(Term::Var(v)) = expr {
-            self.lets.iter().find(|(n, _)| *n == v)?.1
+            let values: Vec<&ValueExpr> = self
+                .lets
+                .iter()
+                .filter(|(n, _)| *n == v)
+                .map(|(_, e)| *e)
+                .collect();
+            match values.as_slice() {
+                [] => return None,
+                [one] => *one,
+                several => {
+                    return several
+                        .iter()
+                        .any(|e| grid::grid_call(e).is_some())
+                        .then_some(Grid { at, points: None });
+                }
+            }
         } else {
             expr
         };

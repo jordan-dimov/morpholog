@@ -1899,7 +1899,9 @@ fn check_verbose_prints_what_a_grid_can_cost() {
 /// bound naming the window counts. A window bound written through a
 /// `let` alias is not read, so that grid's size is unknown rather than
 /// taken from a bound that may not hold. Two grids one sum ranges over
-/// multiply, and an `exists` over a grid counts its points.
+/// multiply, and an `exists` over a grid counts its points. A grid name
+/// two branches each bind with a `let` has an unknown size, since each
+/// branch's grid differs.
 #[test]
 fn check_verbose_grid_costs_never_understate_the_points() {
     let costs = |body: &str| {
@@ -1960,5 +1962,18 @@ fn check_verbose_grid_costs_never_understate_the_points() {
         ),
         "    transformation `t`, statement 4: up to 25 x 97 points x 1 sum over Trade\n    \
          transformation `t`, statement 5: up to 25 points x 1 sum over Trade\n"
+    );
+    assert_eq!(
+        costs(&format!(
+            "    require ends_at - starts_at no_longer_than duration(PT24H)\n    \
+             if short = true:\n        \
+             let grid = periods(starts_at, ends_at, duration(PT1H))\n        \
+             require forall h in grid: {POSITION} <= 10\n    \
+             else:\n        \
+             let grid = periods(starts_at, ends_at, duration(PT15M))\n        \
+             require forall h in grid: {POSITION} <= 10\n"
+        )),
+        "    transformation `t`, statement 2: up to an unknown number of points x 1 sum over Trade\n    \
+         transformation `t`, statement 2: up to an unknown number of points x 1 sum over Trade\n"
     );
 }
